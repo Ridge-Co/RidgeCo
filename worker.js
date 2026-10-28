@@ -1145,6 +1145,7 @@ const _hubWorkerCore = {
         if (path === '/fi/summarize')             return await fiRoute(env, 'summarize', () => fiSummarize(env, body));
         if (path === '/fi/brand/save')            return await fiRoute(env, 'brand-save', () => fiBrandSave(env, body));
         if (path === '/fi/email-report')          return await fiRoute(env, 'email-report', () => fiEmailReport(env, request, body));
+        if (path === '/fi/urgent-send')           return await fiRoute(env, 'urgent-send', () => fiUrgentSend(env, body));
         if (path === '/fi/route')                 return await fiRoute(env, 'route', () => fiRouteNotes(env, body));
         if (path === '/fi/brand/scrape')          return await fiRoute(env, 'brand-scrape', () => fiBrandScrape(env, body));
         if (path === '/fi/read-label')            return await fiRoute(env, 'read-label', () => fiReadLabel(env, body));
@@ -23554,6 +23555,32 @@ async function gmailSendEmailWithAttachment(env, { to, subject, html, attachment
   return { sent: true, message_id: data.id };
 }
 
+// Multi-photo email with an optional Cc (Oct 28 2026, field-inspection urgent items). Staging never sends real mail with attachments:
+// it goes through gmailSendEmail's stub/redirect policy unchanged (recipient overridden, nothing reaches a real requester).
+async function gmailSendEmailMulti(env, { to, cc, subject, html, attachments }) {
+  if (!to) throw new Error('gmailSendEmailMulti: to required');
+  const atts = Array.isArray(attachments) ? attachments : [];
+  if (env.__STAGING__ ?? isStaging(env)) return await gmailSendEmail(env, { to, subject: (subject || '') + (atts.length ? ' [' + atts.length + ' photo(s) not attached on staging]' : ''), html });
+  const accessToken = await gmailAccessToken(env);
+  const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
+  const subjectEncoded = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject || '')))}?=`;
+  const boundary = 'ridgeco_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
+  const head = [`From: Ridge Co <${from}>`, `To: ${to}`].concat(cc ? [`Cc: ${cc}`] : [], [`Subject: ${subjectEncoded}`, 'MIME-Version: 1.0', `Content-Type: multipart/mixed; boundary="${boundary}"`, '', `--${boundary}`, 'Content-Type: text/html; charset="UTF-8"', '', html || '', '']);
+  const parts = head.slice();
+  for (const a of atts) {
+    const safeName = String(a.filename || 'photo.jpg').replace(/[^\w .-]/g, '_').slice(0, 80);
+    parts.push(`--${boundary}`, `Content-Type: ${a.mimeType || 'application/octet-stream'}; name="${safeName}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${safeName}"`, '', String(a.base64Data || '').replace(/(.{76})/g, '$1\r\n'), '');
+  }
+  parts.push(`--${boundary}--`);
+  const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw: _utf8B64url(parts.join('\r\n')) }),
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
+  return { sent: true, message_id: data.id };
+}
+
 // Read a receipt image/PDF with Claude vision → strict JSON. Money-facing ⇒ Claude (PAT-031).
 // Routed through routeAI (B-127) as of Aug 23 — moneyFacing:true pins this to REASON/Claude,
 // the same model this call has always used, so cost/behavior are unchanged. The only real
@@ -26908,7 +26935,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/owner/tenant-roster/preview') return true;
   if (path === '/owner/tenant-roster/apply') return !!(body && body.owner_id) && await isTestRecord(env, 'Owners', body.owner_id);
   // Oct 15 2026 (field inspection): the staging token may only write inspections whose id starts TEST-, brands named TEST- (never default, never a non-TEST brand); structure/summarize write nothing.
-  if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report') return String((body && body.id) || '').startsWith('TEST-');
+  if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report' || path === '/fi/urgent-send') return String((body && body.id) || '').startsWith('TEST-');
   if (path === '/fi/structure' || path === '/fi/summarize' || path === '/fi/route' || path === '/fi/brand/scrape' || path === '/fi/transcribe/json') return true; // AI / read-only: no sheet writes
   if (path === '/fi/reword') return true; // AI only: writes nothing
   if (path === '/admin/fi-premier-repair') { // staging may only repair a TEST- partner's links, to a TEST- inspection
@@ -40919,6 +40946,7 @@ function fiScrubDocForReport(doc) {
   if (!doc || typeof doc !== 'object') return doc;
   for (const a of (doc.areas || [])) for (const is of (a.issues || [])) {
     if (!is) continue;
+    delete is.flag_send; delete is.sent;   // 'send to the requester' flags and sent marks are for the phone only (Oct 28 2026), never on the public report
     if (is.ai === true) { for (const k of ['title', 'detail', 'likely_cause', 'recommended_fix']) if (typeof is[k] === 'string') is[k] = fiContractorize(is[k]); }
     else if (is.fix_source === 'suggested' && typeof is.recommended_fix === 'string') is.recommended_fix = fiContractorize(is.recommended_fix);   // catalog / AI-suggested fix text the inspector did not write (older inspections kept the old "Have an electrician" wording)
   }
@@ -41033,7 +41061,10 @@ function fiValidateDoc(doc) {
       else if ((a.issues || []).length > 60) errors.push(`areas[${i}] has too many issues (max 60)`);
       else (a.issues || []).forEach((is, j) => {
         if (!is || typeof is !== 'object' || !is.id || !is.title) errors.push(`areas[${i}].issues[${j}] needs id and title`);
-        else { if (!FI_TRADES.includes(is.trade)) errors.push(`areas[${i}].issues[${j}].trade invalid`); if (!FI_SEVERITIES.includes(is.severity)) errors.push(`areas[${i}].issues[${j}].severity invalid`); }
+        else { if (!FI_TRADES.includes(is.trade)) errors.push(`areas[${i}].issues[${j}].trade invalid`); if (!FI_SEVERITIES.includes(is.severity)) errors.push(`areas[${i}].issues[${j}].severity invalid`);
+          if (is.flag_send !== undefined && typeof is.flag_send !== 'boolean') errors.push(`areas[${i}].issues[${j}].flag_send must be true or false`);
+          if (is.sent !== undefined && (!is.sent || typeof is.sent !== 'object' || Array.isArray(is.sent) || typeof is.sent.at !== 'string' || String(is.sent.at).length > 40 || String(is.sent.to || '').length > 120)) errors.push(`areas[${i}].issues[${j}].sent invalid`);
+        }
       });
     });
   }
@@ -41224,6 +41255,15 @@ async function fiGetInspection(env, url) {
   try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'The saved inspection data could not be read. Do not overwrite it — contact Brett.'); }
   return json({ ok: true, inspection: fiInspHeaderOut(row.o), doc, drive_folder_url: row.o.Drive_Folder_URL || '' });
 }
+// True when the two saved docs differ ONLY in phone-only fields (the 'send to requester' flag / sent mark, and the touch timestamp).
+function fiPublicDocKey(serialized) {
+  try { const d = JSON.parse(serialized); delete d.updated; for (const a of (d.areas || [])) for (const is of (a.issues || [])) { delete is.flag_send; delete is.sent; } return JSON.stringify(d); }
+  catch (e) { return null; }
+}
+function fiOnlyPhoneMarksChanged(prevSerialized, nextSerialized) {
+  const a = fiPublicDocKey(prevSerialized), b = fiPublicDocKey(nextSerialized);
+  return a !== null && b !== null && a === b;
+}
 async function fiSave(env, body) {
   body = body || {};
   const id = String(body.id || '');
@@ -41248,7 +41288,7 @@ async function fiSave(env, body) {
   const hash = await fiSha256(serialized);
   const changed = !row || row.o.Doc_Hash !== hash;
   const wasPublished = !!row && row.o.Status === 'published';
-  const unpublish = wasPublished && changed;
+  const unpublish = wasPublished && changed && !fiOnlyPhoneMarksChanged(fiJoinRow(row.o), serialized);   // marking an item 'sent to the requester' (phone-only) must not hide a published report
   const now = new Date().toISOString();
   const newRev = (row ? Number(row.o.Rev) || 0 : 0) + 1;
   const chunks = fiChunk(serialized);
@@ -41474,6 +41514,142 @@ async function fiEmailReport(env, request, body) {
   const lt = await fiReadFresh(env, 'FI_Email_Log');
   await fiWriteRow(env, 'FI_Email_Log', lt.headers, { ID: 'em_' + inspRandToken(9), Inspection_ID: id, To_Email: to, Subject: mail.subject, Result: res && res.staged ? 'staged' : 'sent', Sent_At: new Date().toISOString() }, 0);
   return json({ ok: true, sent: !(res && res.staged), staged: !!(res && res.staged), to, subject: mail.subject });
+}
+// ── Urgent items to the requester (Oct 28 2026, Brett) ───────────────────────────────────────────────
+// Brett flags report items (or types a quick list of urgent ones on the phone) and this emails the requester on the linked booking
+// ahead of the report. Preview-first like the report email. The server takes the ITEMS from the saved inspection (never from the
+// request), so what is emailed is exactly what is in the report. Photos are attached from Drive. An optional text goes out ONLY
+// 9am-4pm ET (otherwise email only, nothing is queued). A client send_key makes a retry safe: the same key never sends twice.
+const FI_URGENT_MAX_ITEMS = 20, FI_URGENT_MAX_PHOTOS = 6, FI_URGENT_TEXT_FROM_H = 9, FI_URGENT_TEXT_TO_H = 16;
+const FI_URGENT_SEV_LABEL = { urgent: 'Urgent', high: 'High', medium: 'Medium', low: 'Low', info: 'Note' };
+function fiUrgentTextWindow(ms) {
+  const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' }).format(new Date(ms)));
+  return { open: h >= FI_URGENT_TEXT_FROM_H && h < FI_URGENT_TEXT_TO_H, hour: h };
+}
+function fiUrgentCollect(doc, ids) {
+  const items = [], pos = new Map(ids.map((x, i) => [x, i]));
+  for (const a of (doc.areas || [])) {
+    if (a.excluded) continue;
+    for (const is of (a.issues || [])) if (pos.has(is.id)) items.push({ id: is.id, area: String(a.name || ''), title: String(is.title || ''), detail: String(is.detail || ''), severity: is.severity, photo_ids: (is.photo_ids || []).map(String) });
+  }
+  items.sort((x, y) => pos.get(x.id) - pos.get(y.id));
+  const have = new Set(items.map(i => i.id));
+  return { items, missing: ids.filter(i => !have.has(i)) };
+}
+function fiUrgentFirstName(name) { const w = String(name || '').trim().split(/\s+/)[0] || ''; return /^[A-Za-z][A-Za-z'.-]{0,30}$/.test(w) ? w : ''; }
+function fiUrgentAddress(doc) { const p = doc.property || {}; return String(p.address || '').trim() + (p.unit_label ? ' #' + String(p.unit_label).replace(/^#/, '') : ''); }
+function fiBuildUrgentEmail(doc, items, note, who, photoCount, omitted) {
+  const addr = fiUrgentAddress(doc), n = items.length;
+  const subject = `${items.some(i => i.severity === 'urgent') ? 'Urgent: ' : ''}${n} item${n === 1 ? '' : 's'} at ${addr} - inspection update`;
+  const rows = items.map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid #e5e9f0"><div style="font-weight:700">${fiHtmlEsc(i.title)}</div><div style="color:#5b6573;font-size:13px">${fiHtmlEsc(i.area)} &middot; ${fiHtmlEsc(FI_URGENT_SEV_LABEL[i.severity] || '')}</div>${i.detail ? `<div style="margin-top:4px">${fiHtmlEsc(i.detail)}</div>` : ''}</td></tr>`).join('');
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1c2430"><div style="background:#b91c1c;color:#fff;padding:14px 20px;font-size:17px;font-weight:700">Inspection update: ${fiHtmlEsc(addr)}</div><div style="padding:18px 20px;line-height:1.5">`
+    + `<p style="margin:0 0 12px">Hi ${fiHtmlEsc(who || 'there')},</p>`
+    + `<p style="margin:0 0 12px">I found ${n === 1 ? 'an item' : n + ' items'} at this property that need${n === 1 ? 's' : ''} your attention before the full inspection report is ready.</p>`
+    + (note ? `<p style="margin:0 0 12px">${fiHtmlEsc(note).replace(/\n/g, '<br>')}</p>` : '')
+    + `<table style="width:100%;border-collapse:collapse;margin:8px 0 14px">${rows}</table>`
+    + (photoCount ? `<p style="margin:0 0 12px">${photoCount} photo${photoCount === 1 ? ' is' : 's are'} attached.${omitted ? ` ${omitted} more will be in the full report.` : ''}</p>` : '')
+    + `<p style="margin:0">The full report will follow. Reply here with any questions.</p><p style="margin:14px 0 0">Brett<br>Ridge Co</p></div></div>`;
+  return { subject, html };
+}
+function fiUrgentSmsBody(doc, items) {
+  const p = doc.property || {}, street = String(p.address || '').split(',')[0].trim() + (p.unit_label ? ' #' + String(p.unit_label).replace(/^#/, '') : '');   // short on purpose: street only, no city/zip
+  const n = items.length, first = String(items[0].title).replace(/[^\x20-\x7e]/g, '').slice(0, 70);
+  return `Ridge Co: ${n === 1 ? 'urgent inspection item' : n + ' urgent inspection items'} at ${street.replace(/[^\x20-\x7e]/g, '')}: ${first}${n > 1 ? ' (+' + (n - 1) + ' more)' : ''}. Details sent to your email.`;
+}
+async function fiUrgentSend(env, body) {
+  body = body || {};
+  const id = String(body.id || '');
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  const ids = Array.from(new Set((Array.isArray(body.issue_ids) ? body.issue_ids : []).map(String).filter(x => /^[A-Za-z0-9_-]{3,64}$/.test(x))));
+  if (!ids.length) return fiErr(400, 'no_items', 'Choose at least one item to send.');
+  if (ids.length > FI_URGENT_MAX_ITEMS) return fiErr(400, 'too_many', `Send at most ${FI_URGENT_MAX_ITEMS} items at a time.`);
+  const preview = body.preview !== false, alsoText = body.also_text === true;
+  const sendKey = String(body.send_key || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
+  if (!preview && sendKey.length < 8) return fiErr(400, 'no_send_key', 'Reload the page and try again (the send could not be made safe against doubles).');
+  const note = fiStr(body.note, 600).trim();
+  await fiEnsureTabs(env);
+  const { row } = await fiFindInspection(env, id);
+  if (!row) return fiErr(404, 'not_found', 'Inspection not found on the server.');
+  if (Number(body.rev) !== Number(row.o.Rev)) return fiErr(409, 'not_saved', 'This inspection has changes that have not finished saving. Wait for "Saved to server" and try again.');
+  let doc;
+  try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'The saved inspection could not be read.'); }
+  const { items, missing } = fiUrgentCollect(doc, ids);
+  if (missing.length) return fiErr(409, 'item_missing', 'Some of those items are not in the saved inspection yet or were removed. Wait for "Saved to server" and try again.');
+  const contact = (doc.booking && doc.booking.contact) || {};
+  const emailOk = e => /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(e);
+  const to = emailOk(String(contact.email || '').trim()) ? String(contact.email).trim() : (emailOk(String(body.to || '').trim()) ? String(body.to).trim() : '');
+  if (!to) return fiErr(400, 'no_recipient', 'This inspection has no booking contact with an email. Type the email address to send to.', { need_to: true });
+  const phone = normalizePhone(String(contact.phone || '')) || '';
+  const who = fiUrgentFirstName(contact.name);
+  // photos: from the chosen items, in order, capped; each must be fully uploaded
+  const pids = []; for (const it of items) for (const p of it.photo_ids) if (!pids.includes(p)) pids.push(p);
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const prow = new Map(pt.rows.filter(r => r.o.Inspection_ID === id && r.o.Active !== 'FALSE').map(r => [r.o.ID, r.o]));
+  const notUp = pids.filter(p => !prow.has(p));
+  if (notUp.length) return fiErr(409, 'photos_missing', `${notUp.length} photo${notUp.length === 1 ? ' has' : 's have'} not finished uploading. Wait a moment and try again.`);
+  const sendPids = pids.slice(0, FI_URGENT_MAX_PHOTOS), omitted = pids.length - sendPids.length;
+  const mail = fiBuildUrgentEmail(doc, items, note, who, sendPids.length, omitted);
+  const cc = (env.FI_URGENT_CC || 'brett@bmoremanagement.com');
+  const ccList = String(cc).toLowerCase() === to.toLowerCase() ? '' : cc;
+  const win = fiUrgentTextWindow(Date.now());
+  const textInfo = { available: !!phone && win.open, phone_on_file: !!phone, window_open: win.open, window: '9am-4pm ET' };
+  const smsBody = fiUrgentSmsBody(doc, items);
+  if (preview) return json({ ok: true, preview: true, to, cc: ccList, subject: mail.subject, html: mail.html, photo_count: sendPids.length, photos_omitted: omitted, text: Object.assign({ body: smsBody }, textInfo) });
+  // idempotency + in-progress guard: one FI_Email_Log row per send_key, written BEFORE anything is sent
+  const logId = 'ug_' + sendKey;
+  const lt = await fiReadFresh(env, 'FI_Email_Log');
+  const prior = lt.rows.find(r => r.o.ID === logId);
+  const nowIso = () => new Date().toISOString();
+  if (prior && /^sent/.test(prior.o.Result)) return json({ ok: true, already_sent: true, to, result: prior.o.Result, sent_at: prior.o.Sent_At, text: { requested: alsoText, sent: /text:sent|text:staged/.test(prior.o.Result) } });
+  if (prior && prior.o.Result === 'sending') {
+    const age = Date.now() - Date.parse(prior.o.Sent_At || 0);
+    return fiErr(409, age < 120000 ? 'in_progress' : 'unknown_state', age < 120000 ? 'This send is still being processed. Wait a moment, then check before sending again.' : 'An earlier attempt of this send did not finish, so it may or may not have gone out. Check your inbox (you are copied on every one) before sending again.');
+  }
+  const logRow = (result) => ({ ID: logId, Inspection_ID: id, To_Email: to, Subject: mail.subject, Result: result, Sent_At: nowIso() });
+  await fiWriteRow(env, 'FI_Email_Log', lt.headers, logRow('sending'), prior ? prior.rowNum : 0);
+  const cur = async () => { const t = await fiReadFresh(env, 'FI_Email_Log'); const r = t.rows.find(x => x.o.ID === logId); return { headers: t.headers, rowNum: r ? r.rowNum : 0 }; };
+  const finish = async (result) => { const c = await cur(); if (!c.rowNum) throw new Error('FI: the send log row for this send went missing'); await fiWriteRow(env, 'FI_Email_Log', c.headers, logRow(result), c.rowNum); };
+  // fetch photo bytes
+  const attachments = [];
+  try {
+    const token = await getAccessToken(env);
+    for (const p of sendPids) {
+      const ph = prow.get(p);
+      const dr = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(ph.Drive_File_ID)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!dr.ok) throw new Error('could not read a photo from Drive (HTTP ' + dr.status + ')');
+      attachments.push({ filename: `photo-${attachments.length + 1}.jpg`, mimeType: ph.Mime || 'image/jpeg', base64Data: bytesToB64(await dr.arrayBuffer()) });
+    }
+  } catch (e) {
+    try { await finish('failed: ' + String((e && e.message) || e).slice(0, 120)); } catch (e2) { console.error('fi urgent log failed:', e2 && e2.message); }
+    return fiErr(502, 'photo_read_failed', 'Nothing was sent. A photo could not be read: ' + String((e && e.message) || e).slice(0, 120) + '. Try again.');
+  }
+  let mres;
+  try { mres = await gmailSendEmailMulti(env, { to, cc: ccList, subject: mail.subject, html: mail.html, attachments }); }
+  catch (e) {
+    try { await finish('failed: ' + String((e && e.message) || e).slice(0, 120)); } catch (e2) { console.error('fi urgent log failed:', e2 && e2.message); }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_urgent_send_error', Skill_Or_Endpoint: '/fi/urgent-send', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (e3) { /* silent-ok: telemetry is best-effort, the caller already gets the error */ }
+    return fiErr(502, 'send_failed', 'The email was NOT sent: ' + String((e && e.message) || e).slice(0, 140));
+  }
+  const staged = !!(mres && mres.staged);
+  // optional text, only inside the window, after the email is safely out
+  const text = { requested: alsoText, sent: false, staged: false, reason: '' };
+  if (alsoText) {
+    if (!win.open) text.reason = 'Texts only go 9am-4pm ET, so this went by email only.';
+    else if (!phone) text.reason = 'There is no phone number on the booking, so this went by email only.';
+    else {
+      try {
+        const r = await sendSMS(env, phone, smsBody, { context: { message_type: 'fi_urgent', recipient_type: 'requester' } });
+        if (r && r.staged) { text.sent = true; text.staged = true; }
+        else if (r && r.sid) text.sent = true;
+        else text.reason = 'The text was not sent' + (r && (r.reason || r.error) ? ': ' + String(r.reason || r.error).slice(0, 120) : '') + '. The email did go out.';
+      } catch (e) { text.reason = 'The text failed (' + String((e && e.message) || e).slice(0, 100) + '). The email did go out.'; }
+      if (!text.sent) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_urgent_text_failed', Skill_Or_Endpoint: '/fi/urgent-send', Success: 'FALSE', Notes: text.reason.slice(0, 200) }); } catch (e3) { /* silent-ok: telemetry is best-effort, the caller sees text.reason */ } }
+    }
+  }
+  const result = (staged ? 'sent-staged' : 'sent') + (alsoText ? (text.sent ? ' text:' + (text.staged ? 'staged' : 'sent') : ' text:not-sent') : '');
+  let logged = true;
+  try { await finish(result); } catch (e) { logged = false; try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_urgent_log_error', Skill_Or_Endpoint: '/fi/urgent-send', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (e3) { /* silent-ok: the send itself succeeded and the caller is told logged:false */ } }
+  return json({ ok: true, sent: !staged, staged, to, cc: ccList, subject: mail.subject, photo_count: attachments.length, photos_omitted: omitted, sent_at: nowIso(), logged, text });
 }
 // ═══ Part 2 (Oct 15 2026, after field use): equipment info, brand capture from a website, voice-file transcription + routing, label reading ═══
 // Equipment kinds the phone offers. Keep field lists in sync with field-inspect.html (a unit test compares them).
