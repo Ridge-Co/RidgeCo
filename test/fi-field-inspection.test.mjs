@@ -239,7 +239,7 @@ const body = (r) => r.body;
 // ── wiring in worker.js ──
 {
   t('PUBLIC_PATHS has the two public routes', /'\/fi\/report','\/fi\/photo\/view',[^\]]*\]/.test(src));
-  for (const p of ['/fi/list', '/fi/inspection', '/fi/report', '/fi/photo/view', '/fi/save', '/fi/publish', '/fi/structure', '/fi/summarize', '/fi/brand/save', '/fi/email-report', '/fi/photo'])
+  for (const p of ['/fi/list', '/fi/inspection', '/fi/report', '/fi/photo/view', '/fi/save', '/fi/publish', '/fi/structure', '/fi/summarize', '/fi/brand/save', '/fi/email-report', '/fi/urgent-send', '/fi/photo'])
     t('route wired: ' + p, src.includes("path === '" + p + "'"));
   const wk = fs.readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
   t('NO CRON preserved', /crons\s*=\s*\[\s*\]/.test(wk));
