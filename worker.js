@@ -41506,7 +41506,9 @@ async function fiUrgentSend(env, body) {
   body = body || {};
   const id = String(body.id || '');
   if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
-  const ids = Array.from(new Set((Array.isArray(body.issue_ids) ? body.issue_ids : []).map(String).filter(x => /^[A-Za-z0-9_-]{3,64}$/.test(x))));
+  const rawIds = Array.from(new Set((Array.isArray(body.issue_ids) ? body.issue_ids : []).map(String)));
+  if (rawIds.some(x => !/^[A-Za-z0-9_-]{3,64}$/.test(x))) return fiErr(400, 'bad_items', 'One of the items has an invalid id. Reload the page and try again.');
+  const ids = rawIds;
   if (!ids.length) return fiErr(400, 'no_items', 'Choose at least one item to send.');
   if (ids.length > FI_URGENT_MAX_ITEMS) return fiErr(400, 'too_many', `Send at most ${FI_URGENT_MAX_ITEMS} items at a time.`);
   const preview = body.preview !== false, alsoText = body.also_text === true;
