@@ -403,7 +403,6 @@ function updateScheduleField(i,field,val){
 // above. If every row is locked, the neighbour below (or above, for the last row) is unlocked and absorbs
 // it so the total is always forced to 100%. Computed from the locked total, not from running deltas, so
 // typing "5" -> "50" -> "500" -> back to "50" always lands on the same answer.
-// Updates the other rows' boxes in place so the field you are typing in keeps focus.
 function rebalanceSchedule(editedIdx){
   var ms=scheduleState.milestones; if(!ms[editedIdx]) return;
   var r2=function(x){ return Math.round(x*100)/100; };
