@@ -42216,6 +42216,18 @@ async function fiPremierRepair(env, body) {
   if (cur) step('partner_owner_link', 'skipped', 'already linked to owner ' + ownerId);
   else if (dry) step('partner_owner_link', 'planned', 'set Hub_Owner_ID=' + ownerId);
   else { await updateRowVerified(env, 'Insp_Customers', custId, { Hub_Owner_ID: ownerId }); step('partner_owner_link', 'done', 'Hub_Owner_ID=' + ownerId); }
+  // 1b. ONLY when asked (copy_partner_contact:true, Brett's explicit yes Oct 28): copy the partner's contact phone / email onto the owner, BLANK cells only.
+  // Never touches names, PIN, SMS_* flags, billing or QuickBooks, and sends nothing; it only fills two empty cells, each read back.
+  if (body.copy_partner_contact === true) {
+    const ph = normalizePhone(cust.Contact_Phone || '') || '', em = String(cust.Contact_Email || '').trim();
+    const fill = {};
+    if (ph && !String(owner.Phone || '').trim()) fill.Phone = ph;
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em) && !String(owner.Email || '').trim()) fill.Email = em;
+    const keys = Object.keys(fill);
+    if (!keys.length) step('owner_contact', 'skipped', 'nothing to copy (the partner has no usable phone/email, or the owner already has them)');
+    else if (dry) step('owner_contact', 'planned', 'fill blank owner ' + ownerId + ' ' + keys.join(' + ') + ' from the partner contact');
+    else { await updateRowVerified(env, 'Owners', ownerId, fill); step('owner_contact', 'done', 'filled owner ' + ownerId + ' ' + keys.join(' + ')); }
+  }
   // 2. inspections <-> bookings (address + date must match)
   const bt = (await fiReadFresh(env, 'Insp_Bookings')).rows.map(r => r.o);
   const propRows = (await fiReadFresh(env, 'Properties')).rows.map(r => r.o);
