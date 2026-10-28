@@ -30005,8 +30005,9 @@ async function qbVendorTransactions(env, token, qboVendorId) {
 // UNLINKED Hub rows (blank QB_Bill_ID) are candidates. A WO with >1 QB bill is ambiguous (never
 // auto-linked). Also reports QB bills with no Hub row and Hub rows with no QB bill. Amount
 // mismatches are flagged, not resolved — linking never changes a dollar figure. Kept pure.
-function qbMatchBillsToHub(hubBills, qbBills) {
+function qbMatchBillsToHub(hubBills, qbBills, scopeBillsByWo) {
   const digits = s => String(s || '').replace(/\D/g, '');
+  const qbById = {}; for (const q of (qbBills || [])) qbById[String(q.id)] = q;
   const qbByWo = {};
   for (const q of (qbBills || [])) { const k = digits(q.doc); if (!k) continue; (qbByWo[k] = qbByWo[k] || []).push(q); }
   const alreadyLinked = new Set((hubBills || []).map(h => String(h.qb_bill_id || '').trim()).filter(Boolean));
