@@ -70,7 +70,7 @@ export function world() {
     throw new Error('fake fetch: ' + url);
   };
   const factory = new Function('h', 'sheetsRequest', 'ensureColumns', 'fetch', 'col', 'bytesToB64', `
-    const json = (data, status = 200) => ({ status, body: data });
+    const json = (data, status = 200) => ({ status, ok: status < 300, body: data, clone() { return this; }, json: async () => data });
     const CORS = {}; const env0 = {};
     const isStaging = () => true;
     const getAccessToken = async () => 'tok';
@@ -89,9 +89,28 @@ export function world() {
     const routeAI = async (env, job) => { h.calls.push('AI ' + job.type + ' customerFacing=' + job.customerFacing); if (h.ai instanceof Error) throw h.ai; return { result: typeof h.ai === 'function' ? h.ai(job) : h.ai, model_used: 'claude-test' }; };
     const gmailSendEmail = async (env, o) => { h.mail.push(o); return h.staged === false ? { sent: true } : { staged: true, sent: false }; };
     const logTelemetry = async (env, r) => { h.telemetry.push(r); };
+    const inspEnsureTabsOnce = async () => {};
+    const updateRowVerified = async (env, tab, id, fields) => {
+      if (h.updateFail) throw new Error(tab + ' row ' + id + ' did not keep: ' + Object.keys(fields).join(', '));
+      const tb = h.tabs[tab]; const ix = tb.headers.indexOf('ID'); const row = tb.rows.find(r => r && String(r[ix]) === String(id));
+      if (!row) throw new Error(tab + ' row ' + id + ' not found');
+      for (const [k, v] of Object.entries(fields)) { let ci = tb.headers.indexOf(k); if (ci < 0) { tb.headers.push(k); ci = tb.headers.length - 1; } while (row.length <= ci) row.push(''); row[ci] = String(v); }
+      return {};
+    };
+    const INSP_TZ = 'America/New_York';
+    ${grab('inspErr')}
+    ${grab('inspFmtEt')}
+    ${grab('inspFmtEtTime')}
+    ${grab('inspEtDate')}
+    ${grab('inspSizeVal')}
+    ${grab('inspCleanSize')}
+    ${grab('inspSizeText')}
+    ${src.slice(src.indexOf('const QB_ADDR_WORDS'), src.indexOf('\n};', src.indexOf('const QB_ADDR_WORDS')) + 3)}
+    ${grab('qbNormAddress')}
+    ${grab('normalizePhone')}
     ${aiCreditGuardPrelude()}
     ${block}
-    return { fiNormalizeEquipment, fiContractorize, fiScrubDocForReport, fiNormalizeSummary, fiTypeOut, FI_STRUCTURE_SYSTEM, FI_SUMMARY_SYSTEM, FI_ROUTE_SYSTEM, fiOwnerName, fiNormName, fiStreetOf, fiFolderSafe, fiInspFolderName, fiDirectory, fiPropertyCreate, fiDriveFindFolders, fiDriveEnsureFolder, fiWriteCells, fiInspectionFolder, fiFolderOrganize, fiDriveChildIds, fiFindInspection, fiReadFresh, FI_INSP_HEADERS, fiBrandScrape, fiParseBrandHtml, fiColorsFromCss, fiPickBrandColors, fiSafeUrl, fiFetchLimited, fiSniffImage, fiNormalizeEquipment, fiValidateEquipment, fiValidateVoiceNotes, FI_EQUIP_KINDS, fiEquipFields, fiTranscribe, fiTranscribeJson, FI_TRANSCRIBE_SYSTEM, fiAudioMime, fiRouteNotes, fiNormalizeRoute, fiBuildRoutePrompt, fiReadLabel, fiTypesList, fiTypesSave, fiTypesTouch, fiTypeClean, FI_TYPE_SEED, FI_TABS, FI_BRAND_HEADERS, fiBrandContactLine, fiBuildEmail, fiSave, fiPublish, fiReport, fiPhotoUpload, fiPhotoView, fiBrandSave, fiEmailReport, fiStructure, fiSummarize, fiList, fiGetInspection, fiRoute, fiNormalizeIssue, fiNormalizeIssues, fiExtractJson, fiValidateDoc, fiFingerprint, fiTradeRollup, fiPublishChecks, fiSerialize, fiChunk, fiJoinRow, fiBuildStructurePrompt, fiPhotoIds, fiIsAdmin, FI_DATA_CHUNK };
+    return { fiNormalizeEquipment, fiContractorize, fiScrubDocForReport, fiNormalizeSummary, fiTypeOut, FI_STRUCTURE_SYSTEM, FI_SUMMARY_SYSTEM, FI_ROUTE_SYSTEM, fiOwnerName, fiNormName, fiStreetOf, fiFolderSafe, fiInspFolderName, fiDirectory, fiPropertyCreate, fiDriveFindFolders, fiDriveEnsureFolder, fiWriteCells, fiInspectionFolder, fiFolderOrganize, fiDriveChildIds, fiFindInspection, fiReadFresh, FI_INSP_HEADERS, fiBrandScrape, fiParseBrandHtml, fiColorsFromCss, fiPickBrandColors, fiSafeUrl, fiFetchLimited, fiSniffImage, fiNormalizeEquipment, fiValidateEquipment, fiValidateVoiceNotes, FI_EQUIP_KINDS, fiEquipFields, fiTranscribe, fiTranscribeJson, FI_TRANSCRIBE_SYSTEM, fiAudioMime, fiRouteNotes, fiNormalizeRoute, fiBuildRoutePrompt, fiReadLabel, fiTypesList, fiTypesSave, fiTypesTouch, fiTypeClean, FI_TYPE_SEED, FI_TABS, FI_BRAND_HEADERS, fiBrandContactLine, fiBuildEmail, fiSave, fiPublish, fiReport, fiPhotoUpload, fiPhotoView, fiBrandSave, fiEmailReport, fiStructure, fiSummarize, fiList, fiGetInspection, fiRoute, fiNormalizeIssue, fiNormalizeIssues, fiExtractJson, fiValidateDoc, fiFingerprint, fiTradeRollup, fiPublishChecks, fiSerialize, fiChunk, fiJoinRow, fiBuildStructurePrompt, fiPhotoIds, fiIsAdmin, FI_DATA_CHUNK, fiBookings, fiBookingStart, fiPremierRepair, fiReword, fiBookingOut, fiBookingOwnerRow, fiBookingPropMatches, fiBookingAddrParts, fiValidateAccess, fiValidateVisit, inspCleanSize, inspSizeText, FI_REWORD_SYSTEM };
   `);
   const env = { WORKER_SECRET: 'sek', HUB_TEST_TOKEN: 'tst', SHEET_ID: 'S', DRIVE_PROPERTIES_ROOT: 'root' };
   return { h, env, ...factory(h, sheetsRequest, ensureColumns, fetch, new Function('return ' + grab('col'))(), new Function('return ' + grab('bytesToB64'))()) };

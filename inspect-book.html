@@ -16,7 +16,7 @@
   main{max-width:560px;margin:0 auto;padding:14px 14px 60px}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
   label{display:block;margin:12px 0 4px;font-size:13px;font-weight:600;color:var(--muted)}
-  input,textarea{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:16px;font-family:inherit;background:var(--surface);color:var(--text)}
+  input,textarea,select{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:16px;font-family:inherit;background:var(--surface);color:var(--text)}
   .row2{display:flex;gap:10px}.row2>div{flex:1}
   .btn{width:100%;margin-top:14px;padding:13px;border:none;border-radius:10px;background:var(--accent);color:#fff;font-size:16px;font-weight:600;cursor:pointer}
   .btn.ok{background:var(--ok)} .btn.ghost{background:var(--surface);color:var(--text);border:1px solid var(--border)} .btn.bad{background:var(--surface);color:var(--danger);border:1px solid var(--danger)}
@@ -156,14 +156,28 @@ function pick(i){
   $('contact').innerHTML='<div class="card"><b>'+esc(dayLabel(s.date))+' · '+esc(s.label)+'</b><div class="muted">'+esc(state.formatted)+'</div>'
     +'<label>Your name</label><input id="c-name" autocomplete="name">'
     +'<div class="row2"><div><label>Phone</label><input id="c-phone" type="tel" autocomplete="tel"></div><div><label>Email</label><input id="c-email" type="email" autocomplete="email"></div></div>'
+    +sizeFields()
     +'<label>Notes for Brett (access, tenant contact, etc.)</label><textarea id="c-notes" rows="3"></textarea>'
     +'<div id="c-err"></div><button class="btn ok" id="c-go" onclick="requestSlot()">Request this time</button>'
     +'<p class="muted">Brett approves each booking. The time is held on his calendar right away and you’ll get a confirmation by text/email.</p></div>';
   $('contact').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
+// Property size (levels / bedrooms / bathrooms). Required, but every one has an "I don’t know" bypass; for 2+ units the one answer means "each unit" (or "They vary").
+function sizeFields(){
+  var multi=state.units>1, rng=function(a,b,st){var o=[];for(var v=a;v<=b+1e-9;v+=st)o.push(String(v));return o;};
+  function sel(id,label,vals,nameOf){
+    return '<label>'+label+'</label><select id="'+id+'"><option value="">Choose…</option>'+vals.map(function(v){return '<option value="'+v+'">'+esc(nameOf?nameOf(v):v)+'</option>';}).join('')+(multi?'<option value="vary">They vary / not all the same</option>':'')+'<option value="unknown">I don’t know</option></select>';
+  }
+  return '<div style="margin-top:14px;padding-top:4px;border-top:1px solid var(--border)"><b>About the property</b><div class="muted">Required so Brett can plan — tap “I don’t know” for anything you are not sure of.'+(multi?' For several units, pick the size that applies to every unit, or “They vary”.':'')+'</div>'
+    +sel('s-lv',multi?'Levels in each building':'Levels (floors)',rng(1,5,1).concat(['6']),function(v){return v==='6'?'6 or more':v;})
+    +sel('s-bd',multi?'Bedrooms in each unit':'Bedrooms',rng(0,10,1),function(v){return v==='0'?'Studio / none':(v==='10'?'10 or more':v);})
+    +sel('s-ba',multi?'Bathrooms in each unit':'Bathrooms',rng(1,6,0.5),function(v){return v;})+'</div>';
+}
 function requestSlot(){
   var s=state.slots[state.picked], err=$('c-err'), btn=$('c-go');
-  var body={k:K,address:state.address,units:state.units,buildings:state.buildings,start_iso:s.start_iso,contact_name:$('c-name').value.trim(),contact_phone:$('c-phone').value.trim(),contact_email:$('c-email').value.trim(),notes:$('c-notes').value.trim()};
+  var sz={levels:$('s-lv').value,bedrooms:$('s-bd').value,bathrooms:$('s-ba').value};
+  if(!sz.levels||!sz.bedrooms||!sz.bathrooms){ err.innerHTML=banner('err','Please choose levels, bedrooms and bathrooms — or “I don’t know” for any you are not sure of.'); return; }
+  var body={k:K,address:state.address,units:state.units,buildings:state.buildings,levels:sz.levels,bedrooms:sz.bedrooms,bathrooms:sz.bathrooms,start_iso:s.start_iso,contact_name:$('c-name').value.trim(),contact_phone:$('c-phone').value.trim(),contact_email:$('c-email').value.trim(),notes:$('c-notes').value.trim()};
   btn.disabled=true; btn.textContent='Requesting…'; err.innerHTML='';
   call('POST','/insp-book/request',body).then(function(r){
     if(r.ok){
@@ -200,6 +214,12 @@ function cancelMine(){
 }
 
 // ── Brett: approve / decline from the texted link ───────────
+// Readable size line from the booking row (mirrors the Worker's inspSizeText); "" when nothing was given.
+function sizeText(b){
+  function one(v,s,p){v=String(v==null?'':v).trim().toLowerCase();if(!v||v==='unknown')return '';if(v==='vary')return p+' vary';return v+' '+(Number(v)===1?s:p);}
+  var multi=(+b.Units||1)>1, bb=[one(b.Bedrooms,'bed','beds'),one(b.Bathrooms,'bath','baths')].filter(Boolean).join(' / ');
+  return [bb&&(multi?'each unit: '+bb:bb),one(b.Levels,'level','levels')].filter(Boolean).join(', ');
+}
 function approveInit(){
   $('h-title').textContent='Inspection request'; $('h-sub').textContent='For Brett';
   call('GET','/insp-book/approval?a='+encodeURIComponent(A)).then(function(r){
@@ -209,7 +229,7 @@ function approveInit(){
     var done=b.Status!=='pending';
     setMain('<div class="card">'+(done?banner('warn','Already '+b.Status+'.'):'')
       +(!done&&conf.length?banner('err','Heads up — this booking now conflicts: '+conf.map(function(c){return c.title+' ('+c.when+')';}).join('; ')+'. Decline it, or approve anyway.'):'')
-      +(!done&&r.conflicts_error?banner('warn',r.conflicts_error):'')+'<dl><dt>Property</dt><dd>'+esc(b.Formatted_Address||b.Address)+'</dd><dt>When</dt><dd>'+esc(b.when)+'</dd><dt>Size</dt><dd>'+esc(b.Units)+' unit(s) / '+esc(b.Buildings)+' building(s) · '+esc(b.Duration_Min)+' min</dd>'+drive
+      +(!done&&r.conflicts_error?banner('warn',r.conflicts_error):'')+'<dl><dt>Property</dt><dd>'+esc(b.Formatted_Address||b.Address)+'</dd><dt>When</dt><dd>'+esc(b.when)+'</dd><dt>Size</dt><dd>'+esc(b.Units)+' unit(s) / '+esc(b.Buildings)+' building(s) · '+esc(b.Duration_Min)+' min</dd><dt>Property size</dt><dd>'+esc(sizeText(b)||'Not given (booked before size was asked, or all “I don’t know”)')+'</dd>'+drive
       +'<dt>Contact</dt><dd>'+esc(b.Contact_Name)+' '+esc(b.Contact_Phone)+' '+esc(b.Contact_Email)+'</dd>'+(b.Notes?'<dt>Notes</dt><dd>'+esc(b.Notes)+'</dd>':'')+'</dl>'
       +(done?'':'<div id="a-err"></div><label>Optional note to the partner</label><input id="a-note"><button class="btn ok" onclick="decide(\'approve\',this,'+(conf.length?'true':'false')+')">'+(conf.length?'Approve anyway':'Approve')+'</button><button class="btn bad" onclick="decide(\'decline\',this)">Decline</button>')+'</div>');
   }).catch(function(e){ setMain('<div class="card">'+netFail(e)+'</div>'); });
