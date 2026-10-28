@@ -164,7 +164,7 @@ await t('a failed email is reported plainly, nothing is marked sent, and the ret
 await t('no horizontal scroll, no page errors so far', async () => { await noH(A.pg, 'inspection'); assert.deepEqual(A.errs, []); await A.ctx.close(); });
 await t('slow photo upload: the send waits for it ("Saving and uploading photos…") and the photo is attached', async () => {
   const D = await openPage(OPEN), pg = D.pg; w.h.photoDelay = 3000;
-  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Handrail loose on front steps'); await pg.locator('#ug-text').blur();
+  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Handrail loose on front steps');
   const [fc] = await Promise.all([pg.waitForEvent('filechooser'), pg.click('#ug-photo')]); await fc.setFiles({ name: 'b.png', mimeType: 'image/png', buffer: PNG });
   await pg.waitForSelector('#sheet .thumb img'); await pg.click('#ug-go'); await pg.waitForSelector('#ug-prev'); const mail0 = w.h.multi.length;
   await pg.click('#ug-prev'); await pg.waitForSelector('#ug-busy'); assert.ok((await pg.locator('#ug-busy').innerText()).includes('uploading'));
