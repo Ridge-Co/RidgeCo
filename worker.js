@@ -41563,7 +41563,15 @@ async function fiUrgentSend(env, body) {
     return fiErr(409, age < 120000 ? 'in_progress' : 'unknown_state', age < 120000 ? 'This send is still being processed. Wait a moment, then check before sending again.' : 'An earlier attempt of this send did not finish, so it may or may not have gone out. Check your inbox (you are copied on every one) before sending again.');
   }
   const logRow = (result) => ({ ID: logId, Inspection_ID: id, To_Email: to, Subject: mail.subject, Result: result, Sent_At: nowIso() });
-  await fiWriteRow(env, 'FI_Email_Log', lt.headers, logRow('sending'), prior ? prior.rowNum : 0);
+  await fiWriteRow(env, 'FI_Email_Log', lt.headers, logRow('sending:' + nonce), prior ? prior.rowNum : 0);
+  // claim check: two requests with the same key can both pass the read above. Re-read: only the FIRST row with this id may send; a loser steps aside and says so.
+  const claim = await fiReadFresh(env, 'FI_Email_Log');
+  const mine = claim.rows.filter(r => r.o.ID === logId);
+  if (!mine.length || mine[0].o.Result !== 'sending:' + nonce) {
+    const own = mine.find(r => r.o.Result === 'sending:' + nonce);
+    if (own) { try { await fiWriteRow(env, 'FI_Email_Log', claim.headers, logRow('duplicate-blocked'), own.rowNum); } catch (e2) { console.error('fi urgent log failed:', e2 && e2.message); } }
+    return fiErr(409, 'in_progress', 'The same send is already being processed. Wait a moment, then check before sending again.');
+  }
   const cur = async () => { const t = await fiReadFresh(env, 'FI_Email_Log'); const r = t.rows.find(x => x.o.ID === logId); return { headers: t.headers, rowNum: r ? r.rowNum : 0 }; };
   const finish = async (result) => { const c = await cur(); if (!c.rowNum) throw new Error('FI: the send log row for this send went missing'); await fiWriteRow(env, 'FI_Email_Log', c.headers, logRow(result), c.rowNum); };
   // fetch photo bytes
