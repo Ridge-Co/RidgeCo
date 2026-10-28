@@ -179,6 +179,34 @@ const send = (w, id, rev, extra) => w.fiUrgentSend(w.env, Object.assign({ id, re
   t('a stale unfinished send is never auto-resent: tells him to check his inbox', old.status === 409 && old.body.error === 'unknown_state' && /inbox/.test(old.body.message) && a.w.h.multi.length === 1, old.body);
 }
 
+// ── 7b. review findings (independent validator, Oct 28): key bound to the items, concurrent same-key sends, photo labels ──
+{
+  const { w, rev, id } = await seed();
+  const a = await withNow(OPEN, () => send(w, id, rev, { issue_ids: ['is_aaa111'] }));
+  const b = await withNow(OPEN, () => send(w, id, rev, { issue_ids: ['is_bbb222'] }));   // SAME key, different item
+  t('same send_key but DIFFERENT items is a new send, not "already sent"', a.body.ok && b.body.ok && !b.body.already_sent && w.h.multi.length === 2 && /Leak under sink/.test(w.h.multi[1].html), b.body);
+  const c = await withNow(OPEN, () => send(w, id, rev, { issue_ids: ['is_bbb222', 'is_aaa111'] }));
+  const d = await withNow(OPEN, () => send(w, id, rev, { issue_ids: ['is_aaa111', 'is_bbb222'] }));
+  t('same items in a different order with the same key is the same send (idempotent)', c.body.ok && d.body.already_sent === true && w.h.multi.length === 3, d.body);
+}
+{
+  const { w, rev, id } = await seed();
+  const rs = await withNow(OPEN, () => Promise.all([send(w, id, rev, {}), send(w, id, rev, {})]));
+  t('two concurrent sends with the same key: exactly ONE email goes out', w.h.multi.length === 1, w.h.multi.length);
+  t('the loser is told it is in progress (not a success)', rs.filter(r => r.status === 409 && r.body.error === 'in_progress').length + rs.filter(r => r.status === 200 && r.body.ok).length === 2 && rs.some(r => r.status === 200), rs.map(r => r.body.error || r.body.ok));
+  const ids = w.h.tabs.FI_Email_Log.rows.filter(Boolean).map(r => r[4]);
+  t('no row is left stuck on "sending"', !ids.some(x => /^sending/.test(x)), ids);
+}
+{
+  const { w, rev, id } = await seed();
+  const r = await withNow(OPEN, () => send(w, id, rev, {}));
+  const html = w.h.multi[0].html;
+  t('email says which photos belong to which item', /Gas smell[\s\S]*Photos 1, 2 attached[\s\S]*Leak under sink/.test(html) && !/Photo[s]? \d attached/.test(html.split('Leak under sink')[1] || ''), html.slice(0, 900));
+  const pn = await seed(mkDoc(), ['ph_3']);
+  const rp = await withNow(OPEN, () => send(pn.w, pn.id, pn.rev, { issue_ids: ['is_ccc333'] }));
+  t('a jpeg photo is named .jpg', rp.body.ok && /\.jpg$/.test(pn.w.h.multi[0].attachments[0].filename));
+}
+
 // ── 8. photo cap + escaping ──
 {
   const d = mkDoc(); d.areas[0].issues[0].photo_ids = Array.from({ length: 8 }, (_, i) => 'ph_' + (10 + i)); d.areas[0].issues[0].title = 'Gas <b>smell</b> & "fire"'; d.areas[0].issues[0].detail = '<img src=x onerror=alert(1)>';
