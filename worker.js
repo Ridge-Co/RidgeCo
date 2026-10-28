@@ -40866,6 +40866,7 @@ function fiScrubDocForReport(doc) {
   if (!doc || typeof doc !== 'object') return doc;
   for (const a of (doc.areas || [])) for (const is of (a.issues || [])) {
     if (!is) continue;
+    delete is.flag_send; delete is.sent;   // 'send to the requester' flags and sent marks are for the phone only (Oct 28 2026), never on the public report
     if (is.ai === true) { for (const k of ['title', 'detail', 'likely_cause', 'recommended_fix']) if (typeof is[k] === 'string') is[k] = fiContractorize(is[k]); }
     else if (is.fix_source === 'suggested' && typeof is.recommended_fix === 'string') is.recommended_fix = fiContractorize(is.recommended_fix);   // catalog / AI-suggested fix text the inspector did not write (older inspections kept the old "Have an electrician" wording)
   }
