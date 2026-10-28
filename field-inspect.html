@@ -1222,6 +1222,7 @@ function viewInsp(){
   var h = '<div class="row"><button class="btn sm ghost" onclick="leaveInsp()">‹ All inspections</button>'+(rec.status==='published'?'<span class="pill ok">Published</span>':'<span class="pill">Draft</span>')+'</div>';
   h += '<h1 style="margin-bottom:2px">'+esc(doc.property.address)+(doc.property.unit_label?' · '+esc(unitText(doc.property.unit_label)):'')+'</h1><div class="muted">'+esc(doc.date||'')+' · '+esc(typeLabel(doc.type))+' · '+(b?'<span class="sw" style="background:'+esc(b.primary_color)+'"></span> '+esc(b.name):'')+(doc.pre1978?' · pre-1978':'')+'</div>';
   h += '<div class="card" style="margin-top:10px"><div class="row"><b>'+c.done+' of '+c.total+' areas done</b><button class="btn sm" onclick="openReview()">Review &amp; report ›</button></div></div>';
+  h += urgentCardHtml(doc);
   h += ownerCardHtml(doc);
   h += doc.booking ? bookingCardHtml(doc.booking) : bookingLinkHtml(doc);
   h += visitCardHtml(doc);
