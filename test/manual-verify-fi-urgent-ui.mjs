@@ -185,7 +185,7 @@ await t('no signal: told plainly, items stay flagged on the list, works once sig
 await t('outside 9am-4pm ET the text switch is disabled with the reason; email still goes', async () => {
   setServerTime(NIGHT);
   const B = await openPage(NIGHT); const pg = B.pg;
-  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Sparking outlet in bedroom'); await pg.locator('#ug-text').blur();
+  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Sparking outlet in bedroom');
   await pg.click('#ug-go'); await pg.waitForSelector('#ug-prev');
   assert.equal(await pg.locator('#ug-text-on').isDisabled(), true); assert.ok((await pg.locator('#sheet').innerText()).includes('9am–4pm ET'));
   const sms0 = w.h.sms.length, mail0 = w.h.multi.length;
