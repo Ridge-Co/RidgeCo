@@ -41541,7 +41541,8 @@ async function fiUrgentSend(env, body) {
   const notUp = pids.filter(p => !prow.has(p));
   if (notUp.length) return fiErr(409, 'photos_missing', `${notUp.length} photo${notUp.length === 1 ? ' has' : 's have'} not finished uploading. Wait a moment and try again.`);
   const sendPids = pids.slice(0, FI_URGENT_MAX_PHOTOS), omitted = pids.length - sendPids.length;
-  const mail = fiBuildUrgentEmail(doc, items, note, who, sendPids.length, omitted);
+  const photoNums = new Map(sendPids.map((p, i) => [p, i + 1]));
+  const mail = fiBuildUrgentEmail(doc, items, note, who, sendPids.length, omitted, photoNums);
   const cc = (env.FI_URGENT_CC || 'brett@bmoremanagement.com');
   const ccList = String(cc).toLowerCase() === to.toLowerCase() ? '' : cc;
   const win = fiUrgentTextWindow(Date.now());
