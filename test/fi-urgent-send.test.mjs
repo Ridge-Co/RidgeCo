@@ -249,7 +249,7 @@ function w0() { return world(); }
   t('the text window is checked before any SMS call', fn.indexOf('win.open') > -1 && fn.indexOf('win.open') < fn.indexOf('await sendSMS('));
   t('the text goes only after the email succeeded', fn.indexOf('await gmailSendEmailMulti(') < fn.indexOf('await sendSMS('));
   t('texts use sendSMS (global kill switch applies), never a queue that could hold/defer past 4pm', !/Message_Queue|smsGatedSend|enqueue/i.test(fn));
-  t('the log row is written BEFORE anything is sent', fn.indexOf("logRow('sending')") > -1 && fn.indexOf("logRow('sending')") < fn.indexOf('await gmailSendEmailMulti('));
+  t('the log row is written BEFORE anything is sent', fn.indexOf("logRow('sending:' + nonce)") > -1 && fn.indexOf("logRow('sending:' + nonce)") < fn.indexOf('await gmailSendEmailMulti(') && fn.indexOf("duplicate-blocked") < fn.indexOf('await gmailSendEmailMulti('));
   t('items come from the saved inspection, not the request body', /fiUrgentCollect\(doc, ids\)/.test(fn) && !/body\.items/.test(fn));
   const g = src.slice(src.indexOf('async function gmailSendEmailMulti('), src.indexOf('// Read a receipt image/PDF with Claude vision'));
   t('staging email goes through the stub/redirect policy, never a real send', /isStaging\(env\)\) return await gmailSendEmail\(/.test(g));
