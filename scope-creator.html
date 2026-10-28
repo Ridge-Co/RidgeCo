@@ -357,8 +357,21 @@ function applySchedulePreset(which){
   else if(which==='custom' && !scheduleState.milestones.length) scheduleState.milestones=scheduleDefault();
   renderSchedule();
 }
-function addScheduleRow(){ scheduleState.milestones.push({label:'Milestone', percent:0, trigger:'manual', vendor_paid:true, calc_mode:'percent', flat_customer_amount:null}); renderSchedule(); }
-function removeScheduleRow(i){ scheduleState.milestones.splice(i,1); renderSchedule(); }
+// Adding a milestone (Oct 27 2026): starts at 0% so NOTHING already set moves; it goes in just before the
+// Completion/Final row (not after it) so Final stays last.
+function addScheduleRow(){
+  var ms=scheduleState.milestones, row={label:'Milestone', percent:0, trigger:'manual', vendor_paid:true, calc_mode:'percent', flat_customer_amount:null};
+  if(ms.length>1 && ms[ms.length-1].trigger==='completion') ms.splice(ms.length-1,0,row); else ms.push(row);
+  scheduleState.note=''; renderSchedule();
+}
+// Removing a milestone hands its % to the next milestone down (the one that takes its place), so the
+// total stays 100% without touching anything else.
+function removeScheduleRow(i){
+  var ms=scheduleState.milestones, gone=+ms[i].percent||0;
+  ms.splice(i,1); scheduleState.note='';
+  if(ms.length){ var t=ms[Math.min(i,ms.length-1)]; t.percent=Math.round(((+t.percent||0)+gone)*100)/100; }
+  renderSchedule();
+}
 // Per-milestone vendor-pay + calc mode (Sep 28 2026, WO→Scope conversion, FEATURE_LOG rule 199).
 // vendor_paid (default true): unchecked = nothing is billed to the vendor for THIS milestone; its
 // vendor share rolls forward onto the next vendor-paid milestone (or the last one if none), never
