@@ -76,7 +76,7 @@ const send = (w, id, rev, extra) => w.fiUrgentSend(w.env, Object.assign({ id, re
   const R = async (b) => withNow(OPEN, () => w.fiUrgentSend(w.env, Object.assign({ id, rev, issue_ids: ['is_aaa111'], send_key: 'key12345678', preview: false }, b)));
   t('bad id', (await R({ id: 'x' })).body.error === 'bad_id');
   t('no items', (await R({ issue_ids: [] })).body.error === 'no_items');
-  t('junk ids are dropped (nothing left -> no_items)', (await R({ issue_ids: ['<script>'] })).body.error === 'no_items');
+  t('a junk id is refused outright (never silently dropped)', (await R({ issue_ids: ['<script>'] })).body.error === 'bad_items' && (await R({ issue_ids: ['is_aaa111', 'is.odd.id'] })).body.error === 'bad_items');
   t('too many items', (await R({ issue_ids: Array.from({ length: 21 }, (_, i) => 'is_' + String(i).padStart(4, '0')) })).body.error === 'too_many');
   t('stale rev -> not_saved', (await R({ rev: rev - 1 })).body.error === 'not_saved');
   t('unknown item -> item_missing', (await R({ issue_ids: ['is_zzz999'] })).body.error === 'item_missing');
