@@ -471,6 +471,7 @@ function renderScheduleTotal(){
   var cls = 'info';
   if(Math.abs(total-100)>0.1){ msg+=' — must equal 100% to save'; cls='err'; }
   else if(upfront > scheduleState.maxUpfrontPct+0.001){ msg += ' · ⚠ '+upfront.toFixed(2)+'% upfront is above the '+scheduleState.maxUpfrontPct+'% MD deposit cap — not blocked, your call, but confirm before sending'; cls='warn'; }
+  if(scheduleState.note && cls!=='err') msg += scheduleState.note;
   setStatus('schedule-total', msg, cls);
 }
 async function saveSchedule(){
