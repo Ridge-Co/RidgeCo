@@ -1082,19 +1082,25 @@ function renderUrgentNew(){
   var vis = doc.areas.filter(function(a){ return !a.excluded; });
   var h = '<h2>Send an urgent issue to '+esc(nm)+'</h2><div class="muted">One issue per line. They are added to this report as urgent items, and emailed to '+esc(nm)+' after you review the email.</div>';
   h += '<label class="fld">Area</label><select id="ug-area" onchange="urgentSetArea(this.value)">'+vis.map(function(a){ return '<option value="'+a.id+'"'+(a.id===u.areaId?' selected':'')+'>'+esc(a.name)+'</option>'; }).join('')+'</select>';
-  h += '<label class="fld">What did you find? (one per line)</label><textarea id="ug-text" style="min-height:120px" placeholder="Gas smell near the stove&#10;Exposed wiring in the attic" oninput="S.urg.text=this.value" onblur="renderUrgentNew()">'+esc(u.text)+'</textarea>';
-  h += '<label class="fld">Photos</label>';
-  if (u.photoIds.length){
-    h += u.photoIds.map(function(pid){
-      var chips = lines.slice(0,8).map(function(ln,i){ var on = (u.links[pid]||[]).indexOf(i)>-1; return '<button class="btn sm'+(on?' primary':'')+'" aria-label="photo belongs to item '+(i+1)+'" onclick="urgentLink(\''+pid+'\','+i+')">'+(i+1)+'</button>'; }).join('');
-      return '<div class="row" style="gap:10px;margin-bottom:8px"><div style="flex:none;width:72px">'+thumbHtml(pid,'void 0',false)+'</div><div style="flex:1"><div class="muted">'+(lines.length ? 'Belongs to item:' : 'Type the issues first, then tap which one this shows')+'</div><div class="chips" style="margin:4px 0">'+chips+'</div></div><button class="btn sm ghost" aria-label="remove photo" onclick="urgentDropPhoto(\''+pid+'\')">✕</button></div>';
-    }).join('')+'<div class="muted">A photo with nothing tapped goes with item 1. Up to 6 photos are emailed.</div>';
-  }
+  h += '<label class="fld">What did you find? (one per line)</label><textarea id="ug-text" style="min-height:120px" placeholder="Gas smell near the stove&#10;Exposed wiring in the attic" oninput="S.urg.text=this.value;urgentRefreshPhotos()">'+esc(u.text)+'</textarea>';
+  h += '<label class="fld">Photos</label><div id="ug-photos">'+urgPhotosHtml()+'</div>';
   h += '<div class="btns"><button class="btn" id="ug-photo" onclick="urgentPickPhotos()">📷 Add photos</button></div>';
   if (u.err) h += '<div class="banner err" id="ug-err">'+esc(u.err)+'</div>';
   h += '<div class="btns"><button class="btn primary" id="ug-go" onclick="urgentCreate()">Review email ›</button><button class="btn" onclick="urgentCancel()">Cancel</button></div>';
   openSheet(h);
 }
+function urgPhotosHtml(){
+  var u = S.urg, lines = urgLines(), h = '';
+  if (u.photoIds.length){
+    h += u.photoIds.map(function(pid){
+      var chips = lines.slice(0,8).map(function(ln,i){ var on = (u.links[pid]||[]).indexOf(i)>-1; return '<button class="btn sm'+(on?' primary':'')+'" aria-label="photo belongs to item '+(i+1)+'" onclick="urgentLink(\''+pid+'\','+i+')">'+(i+1)+'</button>'; }).join('');
+      return '<div class="row" style="gap:10px;margin-bottom:8px"><div style="flex:none;width:72px">'+thumbHtml(pid,'void 0',false)+'</div><div style="flex:1"><div class="muted">'+(lines.length ? 'Belongs to item:' : 'Type the issues first, then tap which one this shows')+'</div><div class="chips" style="margin:4px 0">'+chips+'</div></div><button class="btn sm ghost" aria-label="remove photo" onclick="urgentDropPhoto(\''+pid+'\')">✕</button></div>';
+    }).join('')+'<div class="muted">A photo with nothing tapped goes with item 1. Up to 6 photos are emailed. Only the first 8 lines can be tapped for a photo.</div>';
+  }
+  return h;
+}
+// Update ONLY the photo list while typing: re-rendering the whole sheet would swallow the first tap on a button (the keyboard closes and the button moves under the finger).
+function urgentRefreshPhotos(){ var el = $('ug-photos'); if (el) el.innerHTML = urgPhotosHtml(); }
 function urgentCancel(){ S.urg = null; closeSheet(); }
 function urgNorm(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
 function urgentCreate(){
@@ -1104,7 +1110,7 @@ function urgentCreate(){
   if (u.photoIds.length > 6) { u.err = 'Only 6 photos can be emailed. Remove some, or send them with the full report.'; renderUrgentNew(); return; }
   if (!claim('urgcreate')) return;
   var ids = [];
-  mut(function(doc){
+  try { mut(function(doc){
     var a = findArea(doc, u.areaId);
     lines.forEach(function(ln, i){
       var title = ln.slice(0,160), ex = (a.issues||[]).filter(function(x){ return urgNorm(x.title)===urgNorm(title); })[0];
@@ -1116,8 +1122,7 @@ function urgentCreate(){
       ids.push(is.id);
     });
     if (!a.condition || a.condition==='not_inspected') a.condition = 'fair';
-  });
-  release('urgcreate');
+  }); } finally { release('urgcreate'); }
   S.lastUrgArea = u.areaId; render();
   urgentOpenFlagged(ids);
 }
@@ -1132,7 +1137,7 @@ function urgentOpenFlagged(newIds){
 function urgCheckedIds(){ return S.urg.ids.filter(function(id){ return S.urg.checked[id]; }); }
 function urgItem(id){ var doc = S.rec.doc; for (var i=0;i<doc.areas.length;i++){ var a = doc.areas[i], is = (a.issues||[]).filter(function(x){ return x.id===id; })[0]; if (is) return { area:a, issue:is }; } return null; }
 function urgPhotoIds(ids){ var out = []; ids.forEach(function(id){ var it = urgItem(id); if (it) (it.issue.photo_ids||[]).forEach(function(p){ if (out.indexOf(p)<0) out.push(p); }); }); return out; }
-function urgentToggleItem(id, on){ S.urg.checked[id] = !!on; }
+function urgentToggleItem(id, on){ S.urg.checked[id] = !!on; S.urg.key = ''; S.urg.preview = null; }
 function renderUrgentReview(){
   var u = S.urg, doc = S.rec.doc, nm = reqName(doc), c = reqContact(doc);
   var h = '<h2>Send to '+esc(nm)+'</h2><div class="muted">Untick anything that should not go in this email. Ticked items are emailed together as one message for this property.</div>';

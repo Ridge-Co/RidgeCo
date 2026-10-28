@@ -77,11 +77,14 @@ await t('typed list + photo: items are created in the report, photo linked to it
   assert.equal(await pg.inputValue('#ug-area'), 'a_kit');
   await pg.selectOption('#ug-area', 'a_roof'); await pg.selectOption('#ug-area', 'a_kit');
   await pg.fill('#ug-text', 'Gas smell near the stove\nExposed wiring in the attic\n\n');
-  await pg.locator('#ug-text').blur();
   const [fc] = await Promise.all([pg.waitForEvent('filechooser'), pg.click('#ug-photo')]);
   await fc.setFiles({ name: 'a.png', mimeType: 'image/png', buffer: PNG });
   await pg.waitForSelector('#sheet .thumb img');
   assert.equal(await pg.locator('#sheet button[aria-label^="photo belongs to item"]').count(), 2, 'two chips for two lines (blank lines ignored)');
+  await pg.fill('#ug-text', 'Gas smell near the stove\nExposed wiring in the attic\nBroken window latch');   // typing after the photo was added updates the chips, and does not rebuild the sheet under the finger
+  assert.equal(await pg.locator('#sheet button[aria-label^="photo belongs to item"]').count(), 3, 'chips follow the typed lines');
+  await pg.fill('#ug-text', 'Gas smell near the stove\nExposed wiring in the attic\n\n');
+  assert.equal(await pg.locator('#sheet button[aria-label^="photo belongs to item"]').count(), 2);
   await pg.click('#sheet button[aria-label="photo belongs to item 2"]');
   await shot(pg, 'urg-1-compose'); await noH(pg, 'compose sheet');
   await pg.click('#ug-go'); await pg.waitForSelector('#ug-prev');
@@ -147,7 +150,7 @@ await t('tick "Send to Josiah" on a hand-made item -> banner -> review -> send (
 });
 await t('a failed email is reported plainly, nothing is marked sent, and the retry works once', async () => {
   const pg = A.pg;
-  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Water running down basement wall'); await pg.locator('#ug-text').blur();
+  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Water running down basement wall');
   await pg.click('#ug-go'); await pg.waitForSelector('#ug-prev'); await pg.click('#ug-prev'); await pg.waitForSelector('#ug-send');
   w.h.multiFail = 'Gmail 401'; const before = w.h.multi.length;
   await pg.click('#ug-send'); await pg.waitForSelector('#ug-err');
@@ -161,7 +164,7 @@ await t('a failed email is reported plainly, nothing is marked sent, and the ret
 await t('no horizontal scroll, no page errors so far', async () => { await noH(A.pg, 'inspection'); assert.deepEqual(A.errs, []); await A.ctx.close(); });
 await t('slow photo upload: the send waits for it ("Saving and uploading photos…") and the photo is attached', async () => {
   const D = await openPage(OPEN), pg = D.pg; w.h.photoDelay = 3000;
-  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Handrail loose on front steps'); await pg.locator('#ug-text').blur();
+  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Handrail loose on front steps');
   const [fc] = await Promise.all([pg.waitForEvent('filechooser'), pg.click('#ug-photo')]); await fc.setFiles({ name: 'b.png', mimeType: 'image/png', buffer: PNG });
   await pg.waitForSelector('#sheet .thumb img'); await pg.click('#ug-go'); await pg.waitForSelector('#ug-prev'); const mail0 = w.h.multi.length;
   await pg.click('#ug-prev'); await pg.waitForSelector('#ug-busy'); assert.ok((await pg.locator('#ug-busy').innerText()).includes('uploading'));
@@ -171,7 +174,7 @@ await t('slow photo upload: the send waits for it ("Saving and uploading photos�
 });
 await t('no signal: told plainly, items stay flagged on the list, works once signal is back', async () => {
   const E = await openPage(OPEN), pg = E.pg;
-  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Carbon monoxide detector missing'); await pg.locator('#ug-text').blur();
+  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Carbon monoxide detector missing');
   await pg.click('#ug-go'); await pg.waitForSelector('#ug-prev'); const mail0 = w.h.multi.length;
   await E.ctx.setOffline(true); await pg.click('#ug-prev'); await pg.waitForSelector('#ug-err');
   assert.ok((await pg.locator('#ug-err').innerText()).includes('No signal')); assert.equal(w.h.multi.length, mail0);
@@ -182,7 +185,7 @@ await t('no signal: told plainly, items stay flagged on the list, works once sig
 await t('outside 9am-4pm ET the text switch is disabled with the reason; email still goes', async () => {
   setServerTime(NIGHT);
   const B = await openPage(NIGHT); const pg = B.pg;
-  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Sparking outlet in bedroom'); await pg.locator('#ug-text').blur();
+  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Sparking outlet in bedroom');
   await pg.click('#ug-go'); await pg.waitForSelector('#ug-prev');
   assert.equal(await pg.locator('#ug-text-on').isDisabled(), true); assert.ok((await pg.locator('#sheet').innerText()).includes('9am–4pm ET'));
   const sms0 = w.h.sms.length, mail0 = w.h.multi.length;
@@ -194,7 +197,7 @@ await t('a booking with no email asks who to send to', async () => {
   const d = await serverDoc(); d.booking.contact.email = ''; const cur = await w.fiGetInspection(w.env, new URL('https://x/fi/inspection?id=' + ID));
   const sv = await w.fiSave(w.env, { id: ID, base_rev: cur.body.inspection.rev, doc: d }); assert.ok(sv.body.ok);
   const C = await openPage(OPEN); const pg = C.pg;
-  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Broken stair rail'); await pg.locator('#ug-text').blur();
+  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Broken stair rail');
   await pg.click('#ug-go'); await pg.waitForSelector('#ug-to');
   await pg.click('#ug-prev'); await pg.waitForSelector('#ug-err'); assert.ok((await pg.locator('#ug-err').innerText()).includes('Type an email'));
   await pg.fill('#ug-to', 'owner@example.test'); const mail0 = w.h.multi.length;

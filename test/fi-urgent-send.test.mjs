@@ -76,7 +76,7 @@ const send = (w, id, rev, extra) => w.fiUrgentSend(w.env, Object.assign({ id, re
   const R = async (b) => withNow(OPEN, () => w.fiUrgentSend(w.env, Object.assign({ id, rev, issue_ids: ['is_aaa111'], send_key: 'key12345678', preview: false }, b)));
   t('bad id', (await R({ id: 'x' })).body.error === 'bad_id');
   t('no items', (await R({ issue_ids: [] })).body.error === 'no_items');
-  t('junk ids are dropped (nothing left -> no_items)', (await R({ issue_ids: ['<script>'] })).body.error === 'no_items');
+  t('a junk id is refused outright (never silently dropped)', (await R({ issue_ids: ['<script>'] })).body.error === 'bad_items' && (await R({ issue_ids: ['is_aaa111', 'is.odd.id'] })).body.error === 'bad_items');
   t('too many items', (await R({ issue_ids: Array.from({ length: 21 }, (_, i) => 'is_' + String(i).padStart(4, '0')) })).body.error === 'too_many');
   t('stale rev -> not_saved', (await R({ rev: rev - 1 })).body.error === 'not_saved');
   t('unknown item -> item_missing', (await R({ issue_ids: ['is_zzz999'] })).body.error === 'item_missing');
@@ -113,7 +113,7 @@ const send = (w, id, rev, extra) => w.fiUrgentSend(w.env, Object.assign({ id, re
   t('one email, photos attached, Brett copied, note included', w.h.multi.length === 1 && w.h.multi[0].attachments.length === 2 && w.h.multi[0].cc === 'brett@bmoremanagement.com' && w.h.multi[0].html.includes('Please call me today.'));
   t('attachments are real base64 jpegs', w.h.multi[0].attachments.every(a => a.mimeType === 'image/jpeg' && a.base64Data === Buffer.from('BYTES').toString('base64') && /\.jpg$/.test(a.filename)));
   const log = w.h.tabs.FI_Email_Log.rows.filter(Boolean);
-  t('exactly one log row, keyed by the send key, final state', log.length === 1 && log[0][0] === 'ug_key12345678' && /^sent-staged/.test(log[0][4]), log);
+  t('exactly one log row, keyed by the send key, final state', log.length === 1 && /^ug_key12345678_[0-9a-f]{8}$/.test(log[0][0]) && /^sent-staged/.test(log[0][4]), log);
   t('no text unless asked', w.h.sms.length === 0 && r.body.text.requested === false);
   const again = await withNow(OPEN, () => send(w, id, rev, { note: 'Please call me today.' }));
   t('same send_key again: reports already_sent, sends nothing', again.body.ok && again.body.already_sent === true && w.h.multi.length === 1 && w.h.tabs.FI_Email_Log.rows.filter(Boolean).length === 1, again.body);
@@ -179,6 +179,34 @@ const send = (w, id, rev, extra) => w.fiUrgentSend(w.env, Object.assign({ id, re
   t('a stale unfinished send is never auto-resent: tells him to check his inbox', old.status === 409 && old.body.error === 'unknown_state' && /inbox/.test(old.body.message) && a.w.h.multi.length === 1, old.body);
 }
 
+// ── 7b. review findings (independent validator, Oct 28): key bound to the items, concurrent same-key sends, photo labels ──
+{
+  const { w, rev, id } = await seed();
+  const a = await withNow(OPEN, () => send(w, id, rev, { issue_ids: ['is_aaa111'] }));
+  const b = await withNow(OPEN, () => send(w, id, rev, { issue_ids: ['is_bbb222'] }));   // SAME key, different item
+  t('same send_key but DIFFERENT items is a new send, not "already sent"', a.body.ok && b.body.ok && !b.body.already_sent && w.h.multi.length === 2 && /Leak under sink/.test(w.h.multi[1].html), b.body);
+  const c = await withNow(OPEN, () => send(w, id, rev, { issue_ids: ['is_bbb222', 'is_aaa111'] }));
+  const d = await withNow(OPEN, () => send(w, id, rev, { issue_ids: ['is_aaa111', 'is_bbb222'] }));
+  t('same items in a different order with the same key is the same send (idempotent)', c.body.ok && d.body.already_sent === true && w.h.multi.length === 3, d.body);
+}
+{
+  const { w, rev, id } = await seed();
+  const rs = await withNow(OPEN, () => Promise.all([send(w, id, rev, {}), send(w, id, rev, {})]));
+  t('two concurrent sends with the same key: exactly ONE email goes out', w.h.multi.length === 1, w.h.multi.length);
+  t('the loser is told it is in progress (not a success)', rs.filter(r => r.status === 409 && r.body.error === 'in_progress').length + rs.filter(r => r.status === 200 && r.body.ok).length === 2 && rs.some(r => r.status === 200), rs.map(r => r.body.error || r.body.ok));
+  const ids = w.h.tabs.FI_Email_Log.rows.filter(Boolean).map(r => r[4]);
+  t('no row is left stuck on "sending"', !ids.some(x => /^sending/.test(x)), ids);
+}
+{
+  const { w, rev, id } = await seed();
+  const r = await withNow(OPEN, () => send(w, id, rev, {}));
+  const html = w.h.multi[0].html;
+  t('email says which photos belong to which item', /Gas smell[\s\S]*Photos 1, 2 attached[\s\S]*Leak under sink/.test(html) && !/Photo[s]? \d attached/.test(html.split('Leak under sink')[1] || ''), html.slice(0, 900));
+  const pn = await seed(mkDoc(), ['ph_3']);
+  const rp = await withNow(OPEN, () => send(pn.w, pn.id, pn.rev, { issue_ids: ['is_ccc333'] }));
+  t('a jpeg photo is named .jpg', rp.body.ok && /\.jpg$/.test(pn.w.h.multi[0].attachments[0].filename));
+}
+
 // ── 8. photo cap + escaping ──
 {
   const d = mkDoc(); d.areas[0].issues[0].photo_ids = Array.from({ length: 8 }, (_, i) => 'ph_' + (10 + i)); d.areas[0].issues[0].title = 'Gas <b>smell</b> & "fire"'; d.areas[0].issues[0].detail = '<img src=x onerror=alert(1)>';
@@ -221,7 +249,7 @@ function w0() { return world(); }
   t('the text window is checked before any SMS call', fn.indexOf('win.open') > -1 && fn.indexOf('win.open') < fn.indexOf('await sendSMS('));
   t('the text goes only after the email succeeded', fn.indexOf('await gmailSendEmailMulti(') < fn.indexOf('await sendSMS('));
   t('texts use sendSMS (global kill switch applies), never a queue that could hold/defer past 4pm', !/Message_Queue|smsGatedSend|enqueue/i.test(fn));
-  t('the log row is written BEFORE anything is sent', fn.indexOf("logRow('sending')") > -1 && fn.indexOf("logRow('sending')") < fn.indexOf('await gmailSendEmailMulti('));
+  t('the log row is written BEFORE anything is sent', fn.indexOf("logRow('sending:' + nonce)") > -1 && fn.indexOf("logRow('sending:' + nonce)") < fn.indexOf('await gmailSendEmailMulti(') && fn.indexOf("duplicate-blocked") < fn.indexOf('await gmailSendEmailMulti('));
   t('items come from the saved inspection, not the request body', /fiUrgentCollect\(doc, ids\)/.test(fn) && !/body\.items/.test(fn));
   const g = src.slice(src.indexOf('async function gmailSendEmailMulti('), src.indexOf('// Read a receipt image/PDF with Claude vision'));
   t('staging email goes through the stub/redirect policy, never a real send', /isStaging\(env\)\) return await gmailSendEmail\(/.test(g));

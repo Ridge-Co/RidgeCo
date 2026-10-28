@@ -41538,10 +41538,15 @@ function fiUrgentCollect(doc, ids) {
 }
 function fiUrgentFirstName(name) { const w = String(name || '').trim().split(/\s+/)[0] || ''; return /^[A-Za-z][A-Za-z'.-]{0,30}$/.test(w) ? w : ''; }
 function fiUrgentAddress(doc) { const p = doc.property || {}; return String(p.address || '').trim() + (p.unit_label ? ' #' + String(p.unit_label).replace(/^#/, '') : ''); }
-function fiBuildUrgentEmail(doc, items, note, who, photoCount, omitted) {
+// "Photo 2, 3" under an item so the requester can tell which attachment belongs to which item (only photos that are actually attached).
+function fiUrgentPhotoLine(item, photoNums) {
+  const ns = (item.photo_ids || []).map(p => photoNums && photoNums.get(p)).filter(Boolean);
+  return ns.length ? `<div style="margin-top:4px;color:#5b6573;font-size:13px">Photo${ns.length === 1 ? '' : 's'} ${ns.join(', ')} attached</div>` : '';
+}
+function fiBuildUrgentEmail(doc, items, note, who, photoCount, omitted, photoNums) {
   const addr = fiUrgentAddress(doc), n = items.length;
   const subject = `${items.some(i => i.severity === 'urgent') ? 'Urgent: ' : ''}${n} item${n === 1 ? '' : 's'} at ${addr} - inspection update`;
-  const rows = items.map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid #e5e9f0"><div style="font-weight:700">${fiHtmlEsc(i.title)}</div><div style="color:#5b6573;font-size:13px">${fiHtmlEsc(i.area)} &middot; ${fiHtmlEsc(FI_URGENT_SEV_LABEL[i.severity] || '')}</div>${i.detail ? `<div style="margin-top:4px">${fiHtmlEsc(i.detail)}</div>` : ''}</td></tr>`).join('');
+  const rows = items.map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid #e5e9f0"><div style="font-weight:700">${fiHtmlEsc(i.title)}</div><div style="color:#5b6573;font-size:13px">${fiHtmlEsc(i.area)} &middot; ${fiHtmlEsc(FI_URGENT_SEV_LABEL[i.severity] || '')}</div>${i.detail ? `<div style="margin-top:4px">${fiHtmlEsc(i.detail)}</div>` : ''}${fiUrgentPhotoLine(i, photoNums)}</td></tr>`).join('');
   const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1c2430"><div style="background:#b91c1c;color:#fff;padding:14px 20px;font-size:17px;font-weight:700">Inspection update: ${fiHtmlEsc(addr)}</div><div style="padding:18px 20px;line-height:1.5">`
     + `<p style="margin:0 0 12px">Hi ${fiHtmlEsc(who || 'there')},</p>`
     + `<p style="margin:0 0 12px">I found ${n === 1 ? 'an item' : n + ' items'} at this property that need${n === 1 ? 's' : ''} your attention before the full inspection report is ready.</p>`
@@ -41560,7 +41565,9 @@ async function fiUrgentSend(env, body) {
   body = body || {};
   const id = String(body.id || '');
   if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
-  const ids = Array.from(new Set((Array.isArray(body.issue_ids) ? body.issue_ids : []).map(String).filter(x => /^[A-Za-z0-9_-]{3,64}$/.test(x))));
+  const rawIds = Array.from(new Set((Array.isArray(body.issue_ids) ? body.issue_ids : []).map(String)));
+  if (rawIds.some(x => !/^[A-Za-z0-9_-]{3,64}$/.test(x))) return fiErr(400, 'bad_items', 'One of the items has an invalid id. Reload the page and try again.');
+  const ids = rawIds;
   if (!ids.length) return fiErr(400, 'no_items', 'Choose at least one item to send.');
   if (ids.length > FI_URGENT_MAX_ITEMS) return fiErr(400, 'too_many', `Send at most ${FI_URGENT_MAX_ITEMS} items at a time.`);
   const preview = body.preview !== false, alsoText = body.also_text === true;
@@ -41588,7 +41595,8 @@ async function fiUrgentSend(env, body) {
   const notUp = pids.filter(p => !prow.has(p));
   if (notUp.length) return fiErr(409, 'photos_missing', `${notUp.length} photo${notUp.length === 1 ? ' has' : 's have'} not finished uploading. Wait a moment and try again.`);
   const sendPids = pids.slice(0, FI_URGENT_MAX_PHOTOS), omitted = pids.length - sendPids.length;
-  const mail = fiBuildUrgentEmail(doc, items, note, who, sendPids.length, omitted);
+  const photoNums = new Map(sendPids.map((p, i) => [p, i + 1]));
+  const mail = fiBuildUrgentEmail(doc, items, note, who, sendPids.length, omitted, photoNums);
   const cc = (env.FI_URGENT_CC || 'brett@bmoremanagement.com');
   const ccList = String(cc).toLowerCase() === to.toLowerCase() ? '' : cc;
   const win = fiUrgentTextWindow(Date.now());
@@ -41596,17 +41604,28 @@ async function fiUrgentSend(env, body) {
   const smsBody = fiUrgentSmsBody(doc, items);
   if (preview) return json({ ok: true, preview: true, to, cc: ccList, subject: mail.subject, html: mail.html, photo_count: sendPids.length, photos_omitted: omitted, text: Object.assign({ body: smsBody }, textInfo) });
   // idempotency + in-progress guard: one FI_Email_Log row per send_key, written BEFORE anything is sent
-  const logId = 'ug_' + sendKey;
+  // The log id binds the key to WHAT is being sent (the sorted item ids): the same key with different items is a different send, never "already sent".
+  let hh = 2166136261; for (const ch of ids.slice().sort().join(',')) { hh ^= ch.charCodeAt(0); hh = Math.imul(hh, 16777619) >>> 0; }
+  const logId = 'ug_' + sendKey + '_' + hh.toString(16).padStart(8, '0');
+  const nonce = Math.random().toString(36).slice(2, 10);
   const lt = await fiReadFresh(env, 'FI_Email_Log');
   const prior = lt.rows.find(r => r.o.ID === logId);
   const nowIso = () => new Date().toISOString();
   if (prior && /^sent/.test(prior.o.Result)) return json({ ok: true, already_sent: true, to, result: prior.o.Result, sent_at: prior.o.Sent_At, text: { requested: alsoText, sent: /text:sent|text:staged/.test(prior.o.Result) } });
-  if (prior && prior.o.Result === 'sending') {
+  if (prior && /^sending/.test(prior.o.Result)) {
     const age = Date.now() - Date.parse(prior.o.Sent_At || 0);
     return fiErr(409, age < 120000 ? 'in_progress' : 'unknown_state', age < 120000 ? 'This send is still being processed. Wait a moment, then check before sending again.' : 'An earlier attempt of this send did not finish, so it may or may not have gone out. Check your inbox (you are copied on every one) before sending again.');
   }
   const logRow = (result) => ({ ID: logId, Inspection_ID: id, To_Email: to, Subject: mail.subject, Result: result, Sent_At: nowIso() });
-  await fiWriteRow(env, 'FI_Email_Log', lt.headers, logRow('sending'), prior ? prior.rowNum : 0);
+  await fiWriteRow(env, 'FI_Email_Log', lt.headers, logRow('sending:' + nonce), prior ? prior.rowNum : 0);
+  // claim check: two requests with the same key can both pass the read above. Re-read: only the FIRST row with this id may send; a loser steps aside and says so.
+  const claim = await fiReadFresh(env, 'FI_Email_Log');
+  const mine = claim.rows.filter(r => r.o.ID === logId);
+  if (!mine.length || mine[0].o.Result !== 'sending:' + nonce) {
+    const own = mine.find(r => r.o.Result === 'sending:' + nonce);
+    if (own) { try { await fiWriteRow(env, 'FI_Email_Log', claim.headers, logRow('duplicate-blocked'), own.rowNum); } catch (e2) { console.error('fi urgent log failed:', e2 && e2.message); } }
+    return fiErr(409, 'in_progress', 'The same send is already being processed. Wait a moment, then check before sending again.');
+  }
   const cur = async () => { const t = await fiReadFresh(env, 'FI_Email_Log'); const r = t.rows.find(x => x.o.ID === logId); return { headers: t.headers, rowNum: r ? r.rowNum : 0 }; };
   const finish = async (result) => { const c = await cur(); if (!c.rowNum) throw new Error('FI: the send log row for this send went missing'); await fiWriteRow(env, 'FI_Email_Log', c.headers, logRow(result), c.rowNum); };
   // fetch photo bytes
@@ -41617,7 +41636,7 @@ async function fiUrgentSend(env, body) {
       const ph = prow.get(p);
       const dr = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(ph.Drive_File_ID)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
       if (!dr.ok) throw new Error('could not read a photo from Drive (HTTP ' + dr.status + ')');
-      attachments.push({ filename: `photo-${attachments.length + 1}.jpg`, mimeType: ph.Mime || 'image/jpeg', base64Data: bytesToB64(await dr.arrayBuffer()) });
+      attachments.push({ filename: `photo-${attachments.length + 1}.${/png/i.test(ph.Mime || '') ? 'png' : (/webp/i.test(ph.Mime || '') ? 'webp' : 'jpg')}`, mimeType: ph.Mime || 'image/jpeg', base64Data: bytesToB64(await dr.arrayBuffer()) });
     }
   } catch (e) {
     try { await finish('failed: ' + String((e && e.message) || e).slice(0, 120)); } catch (e2) { console.error('fi urgent log failed:', e2 && e2.message); }
