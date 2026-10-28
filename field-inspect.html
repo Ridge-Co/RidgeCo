@@ -368,10 +368,11 @@ $('photo-in').addEventListener('change', function(ev){
       return dbPut('photos', row).then(function(){
         blobUrl[id] = URL.createObjectURL(blob); photoState[id] = { state:'pending', err:'' };
         mut(function(doc){ var a = findArea(doc, tg.areaId); (a.photo_ids = a.photo_ids||[]).push(id); });
+        if (tg.urgent && S.urg && S.urg.photoIds) S.urg.photoIds.push(id);
       });
     }).catch(function(e){ fails++; toast('Photo not added: '+e.message); });
   });
-  chain.then(function(){ render(); pumpPhotos(); if (!fails) toast(files.length+' photo'+(files.length>1?'s':'')+' added'); });
+  chain.then(function(){ render(); pumpPhotos(); if (tg.urgent && S.urg && S.urg.mode==='new') renderUrgentNew(); if (!fails) toast(files.length+' photo'+(files.length>1?'s':'')+' added'); });
 });
 function pumpPhotos(){
   if (S.pumping) return Promise.resolve(); if (!navigator.onLine) { setSync(); return Promise.resolve(); }
