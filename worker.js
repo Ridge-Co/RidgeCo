@@ -41484,7 +41484,12 @@ function fiUrgentCollect(doc, ids) {
 }
 function fiUrgentFirstName(name) { const w = String(name || '').trim().split(/\s+/)[0] || ''; return /^[A-Za-z][A-Za-z'.-]{0,30}$/.test(w) ? w : ''; }
 function fiUrgentAddress(doc) { const p = doc.property || {}; return String(p.address || '').trim() + (p.unit_label ? ' #' + String(p.unit_label).replace(/^#/, '') : ''); }
-function fiBuildUrgentEmail(doc, items, note, who, photoCount, omitted) {
+// "Photo 2, 3" under an item so the requester can tell which attachment belongs to which item (only photos that are actually attached).
+function fiUrgentPhotoLine(item, photoNums) {
+  const ns = (item.photo_ids || []).map(p => photoNums && photoNums.get(p)).filter(Boolean);
+  return ns.length ? `<div style="margin-top:4px;color:#5b6573;font-size:13px">Photo${ns.length === 1 ? '' : 's'} ${ns.join(', ')} attached</div>` : '';
+}
+function fiBuildUrgentEmail(doc, items, note, who, photoCount, omitted, photoNums) {
   const addr = fiUrgentAddress(doc), n = items.length;
   const subject = `${items.some(i => i.severity === 'urgent') ? 'Urgent: ' : ''}${n} item${n === 1 ? '' : 's'} at ${addr} - inspection update`;
   const rows = items.map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid #e5e9f0"><div style="font-weight:700">${fiHtmlEsc(i.title)}</div><div style="color:#5b6573;font-size:13px">${fiHtmlEsc(i.area)} &middot; ${fiHtmlEsc(FI_URGENT_SEV_LABEL[i.severity] || '')}</div>${i.detail ? `<div style="margin-top:4px">${fiHtmlEsc(i.detail)}</div>` : ''}</td></tr>`).join('');
