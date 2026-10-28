@@ -13,7 +13,7 @@ export function grab(name, isAsync = false) {
   return src.slice(i, j + 1);
 }
 export function world() {
-  const h = { tabs: {}, calls: [], ai: null, mail: [], driveSize: null, corrupt: null, telemetry: [], tok: 0 };
+  const h = { tabs: {}, calls: [], ai: null, mail: [], multi: [], sms: [], driveSize: null, corrupt: null, telemetry: [], tok: 0 };
   const T = (n) => (h.tabs[n] = h.tabs[n] || { headers: [], rows: [] });
   const sheetsRequest = async (env, method, path, body) => {
     h.calls.push(method + ' ' + path);
