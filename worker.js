@@ -41492,7 +41492,7 @@ function fiUrgentPhotoLine(item, photoNums) {
 function fiBuildUrgentEmail(doc, items, note, who, photoCount, omitted, photoNums) {
   const addr = fiUrgentAddress(doc), n = items.length;
   const subject = `${items.some(i => i.severity === 'urgent') ? 'Urgent: ' : ''}${n} item${n === 1 ? '' : 's'} at ${addr} - inspection update`;
-  const rows = items.map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid #e5e9f0"><div style="font-weight:700">${fiHtmlEsc(i.title)}</div><div style="color:#5b6573;font-size:13px">${fiHtmlEsc(i.area)} &middot; ${fiHtmlEsc(FI_URGENT_SEV_LABEL[i.severity] || '')}</div>${i.detail ? `<div style="margin-top:4px">${fiHtmlEsc(i.detail)}</div>` : ''}</td></tr>`).join('');
+  const rows = items.map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid #e5e9f0"><div style="font-weight:700">${fiHtmlEsc(i.title)}</div><div style="color:#5b6573;font-size:13px">${fiHtmlEsc(i.area)} &middot; ${fiHtmlEsc(FI_URGENT_SEV_LABEL[i.severity] || '')}</div>${i.detail ? `<div style="margin-top:4px">${fiHtmlEsc(i.detail)}</div>` : ''}${fiUrgentPhotoLine(i, photoNums)}</td></tr>`).join('');
   const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1c2430"><div style="background:#b91c1c;color:#fff;padding:14px 20px;font-size:17px;font-weight:700">Inspection update: ${fiHtmlEsc(addr)}</div><div style="padding:18px 20px;line-height:1.5">`
     + `<p style="margin:0 0 12px">Hi ${fiHtmlEsc(who || 'there')},</p>`
     + `<p style="margin:0 0 12px">I found ${n === 1 ? 'an item' : n + ' items'} at this property that need${n === 1 ? 's' : ''} your attention before the full inspection report is ready.</p>`
