@@ -1,4 +1,4 @@
-# PREMIER REPAIR ENDPOINT — Oct 27, 2026 — on `staging` ONLY (PRs #455, #456). BUILD_VERSION `2026-10-27.05-fi-premier-repair-guards`. FEATURE_LOG rule 235.
+# PREMIER REPAIR ENDPOINT — Oct 27-28, 2026 — on `staging` ONLY (PRs #455, #456, #459). BUILD_VERSION `2026-10-27.05-fi-premier-repair-guards`. FEATURE_LOG rule 235.
 
 ## 🟡 Built, staging-verified, independently validated. NOT merged to main. After Brett's go-ahead and the production deploy: run `hub_prod_post /admin/fi-premier-repair` dry run, read every step, then the real run (body in FEATURE_LOG 235). Then verify read-only with `hub_prod_get`. Brett said yes (Oct 28) to copying Josiah's phone/email onto owner #25: send `copy_partner_contact:true` in the same body (blank cells only).
 
