@@ -23555,6 +23555,32 @@ async function gmailSendEmailWithAttachment(env, { to, subject, html, attachment
   return { sent: true, message_id: data.id };
 }
 
+// Multi-photo email with an optional Cc (Oct 28 2026, field-inspection urgent items). Staging never sends real mail with attachments:
+// it goes through gmailSendEmail's stub/redirect policy unchanged (recipient overridden, nothing reaches a real requester).
+async function gmailSendEmailMulti(env, { to, cc, subject, html, attachments }) {
+  if (!to) throw new Error('gmailSendEmailMulti: to required');
+  const atts = Array.isArray(attachments) ? attachments : [];
+  if (env.__STAGING__ ?? isStaging(env)) return await gmailSendEmail(env, { to, subject: (subject || '') + (atts.length ? ' [' + atts.length + ' photo(s) not attached on staging]' : ''), html });
+  const accessToken = await gmailAccessToken(env);
+  const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
+  const subjectEncoded = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject || '')))}?=`;
+  const boundary = 'ridgeco_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
+  const head = [`From: Ridge Co <${from}>`, `To: ${to}`].concat(cc ? [`Cc: ${cc}`] : [], [`Subject: ${subjectEncoded}`, 'MIME-Version: 1.0', `Content-Type: multipart/mixed; boundary="${boundary}"`, '', `--${boundary}`, 'Content-Type: text/html; charset="UTF-8"', '', html || '', '']);
+  const parts = head.slice();
+  for (const a of atts) {
+    const safeName = String(a.filename || 'photo.jpg').replace(/[^\w .-]/g, '_').slice(0, 80);
+    parts.push(`--${boundary}`, `Content-Type: ${a.mimeType || 'application/octet-stream'}; name="${safeName}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${safeName}"`, '', String(a.base64Data || '').replace(/(.{76})/g, '$1\r\n'), '');
+  }
+  parts.push(`--${boundary}--`);
+  const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw: _utf8B64url(parts.join('\r\n')) }),
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
+  return { sent: true, message_id: data.id };
+}
+
 // Read a receipt image/PDF with Claude vision → strict JSON. Money-facing ⇒ Claude (PAT-031).
 // Routed through routeAI (B-127) as of Aug 23 — moneyFacing:true pins this to REASON/Claude,
 // the same model this call has always used, so cost/behavior are unchanged. The only real
