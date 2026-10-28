@@ -81,6 +81,10 @@ await t('typed list + photo: items are created in the report, photo linked to it
   await fc.setFiles({ name: 'a.png', mimeType: 'image/png', buffer: PNG });
   await pg.waitForSelector('#sheet .thumb img');
   assert.equal(await pg.locator('#sheet button[aria-label^="photo belongs to item"]').count(), 2, 'two chips for two lines (blank lines ignored)');
+  await pg.fill('#ug-text', 'Gas smell near the stove\nExposed wiring in the attic\nBroken window latch');   // typing after the photo was added updates the chips, and does not rebuild the sheet under the finger
+  assert.equal(await pg.locator('#sheet button[aria-label^="photo belongs to item"]').count(), 3, 'chips follow the typed lines');
+  await pg.fill('#ug-text', 'Gas smell near the stove\nExposed wiring in the attic\n\n');
+  assert.equal(await pg.locator('#sheet button[aria-label^="photo belongs to item"]').count(), 2);
   await pg.click('#sheet button[aria-label="photo belongs to item 2"]');
   await shot(pg, 'urg-1-compose'); await noH(pg, 'compose sheet');
   await pg.click('#ug-go'); await pg.waitForSelector('#ug-prev');
