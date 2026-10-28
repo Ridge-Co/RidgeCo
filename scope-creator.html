@@ -956,8 +956,8 @@ function renderItems(){
         '<div><label>Area</label><input class="f-area" value="'+esc(it.area)+'"></div>'+
         '<div><label>Trade</label><input class="f-trade" value="'+esc(it.trade)+'"></div>'+
         '<div><label>Qty</label><input class="f-qty" value="'+esc(it.qty)+'"></div>'+
-        '<div class="full"><label>Description</label><input class="f-desc" value="'+esc(it.description)+'"></div>'+
-        '<div class="full"><label>Note — private; never shown to the customer (like vendor cost above)</label><input class="f-note" value="'+esc(it.note)+'"></div>'+
+        '<div class="full"><label>Description</label><textarea class="f-desc" rows="'+rowsFor(it.description,4)+'" oninput="autoGrow(this)">\n'+esc(it.description)+'</textarea></div>'+
+        '<div class="full"><label>Note — private; never shown to the customer (like vendor cost above)</label><textarea class="f-note" rows="'+rowsFor(it.note,2)+'" oninput="autoGrow(this)">\n'+esc(it.note)+'</textarea></div>'+
         '<div class="full">'+variantsBlock(it)+'</div>'+
         '<button class="btn small danger del" onclick="removeItem(this)">Remove item</button>'+
       '</div></div>';
