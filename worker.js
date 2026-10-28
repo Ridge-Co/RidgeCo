@@ -30018,7 +30018,39 @@ function qbMatchBillsToHub(hubBills, qbBills, scopeBillsByWo) {
     if (String(h.qb_bill_id || '').trim()) continue;            // already linked — leave it
     const k = digits(h.wo_id);
     const matches = (k ? (qbByWo[k] || []) : []).filter(q => !alreadyLinked.has(String(q.id)) && !usedQb.has(String(q.id)));
-    if (!matches.length) { hubNoMatch.push({ row_id: h.row_id, wo_id: h.wo_id, property: h.property, hub_total: h.total }); continue; }
+    if (!matches.length) {
+      // No QB bill carries this WO number. But a signed-proposal job's bills were created BY the Hub
+      // (Payment_Milestones.QB_Bill_ID), usually with a blank DocNumber, so the Hub already knows which
+      // QB bills belong to the WO. One bill -> link it; several -> link the single OPEN one (that is the
+      // payable); anything else is ambiguous and never auto-linked. Amounts are still only flagged.
+      const sb = (k && scopeBillsByWo && scopeBillsByWo[k]) || [];
+      const seenSb = new Set(), cands = [];
+      for (const s of sb) {
+        const id = String(s.qb_bill_id || '').trim();
+        if (!id || seenSb.has(id)) continue;
+        seenSb.add(id);
+        const q = qbById[id];
+        if (q && !alreadyLinked.has(id) && !usedQb.has(id)) cands.push({ q, inv: String(s.qb_invoice_id || '').trim() });
+      }
+      if (cands.length) {
+        let pick = cands.length === 1 ? cands[0] : null;
+        if (!pick) { const open = cands.filter(c => !c.q.paid); if (open.length === 1) pick = open[0]; }
+        if (!pick) {
+          ambiguous.push({ row_id: h.row_id, wo_id: h.wo_id, property: h.property, hub_total: h.total, candidates: cands.map(c => ({ qb_bill_id: String(c.q.id), qb_doc: c.q.doc, qb_total: c.q.total, qb_paid: c.q.paid })) });
+          continue;
+        }
+        usedQb.add(String(pick.q.id));
+        links.push({
+          row_id: h.row_id, wo_id: h.wo_id, property: h.property,
+          qb_bill_id: String(pick.q.id), qb_doc: pick.q.doc || '', qb_total: pick.q.total, qb_paid: pick.q.paid, qb_balance: pick.q.balance,
+          hub_total: h.total, amount_mismatch: Math.abs((Number(pick.q.total) || 0) - (Number(h.total) || 0)) > 0.005,
+          via: 'scope_milestone', qb_invoice_id: pick.inv,
+          scope_bills: cands.map(c => ({ qb_bill_id: String(c.q.id), qb_total: c.q.total, qb_paid: c.q.paid })),
+        });
+        continue;
+      }
+      hubNoMatch.push({ row_id: h.row_id, wo_id: h.wo_id, property: h.property, hub_total: h.total }); continue;
+    }
     if (matches.length > 1) { ambiguous.push({ row_id: h.row_id, wo_id: h.wo_id, property: h.property, hub_total: h.total, candidates: matches.map(q => ({ qb_bill_id: String(q.id), qb_doc: q.doc, qb_total: q.total, qb_paid: q.paid })) }); continue; }
     const q = matches[0];
     usedQb.add(String(q.id));
