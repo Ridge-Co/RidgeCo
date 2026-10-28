@@ -30102,7 +30102,23 @@ async function qbLinkVendorBills(env, body) {
       return { id: String(x.Id), doc: x.DocNumber || '', total: +(Number(x.TotalAmt) || 0).toFixed(2), balance: +bal.toFixed(2), paid: bal <= 0.005 };
     });
 
-    const plan = qbMatchBillsToHub(hubBills, qbBills);
+    // The Hub's own record of which QB bills a signed-proposal job created: Payment_Milestones.QB_Bill_ID /
+    // QB_Invoice_ID, joined to the WO through Scopes.WO_ID. A missing tab just means no scope-based matches;
+    // any other read failure is surfaced as a warning, never swallowed.
+    const scopeBillsByWo = {}; const warnings = [];
+    try {
+      const [scopes, milestones] = await Promise.all([fetchTab(env, 'Scopes'), fetchTab(env, 'Payment_Milestones')]);
+      const woByScope = {};
+      for (const sc of (scopes || [])) { if (sc && sc.ID && sc.WO_ID) woByScope[String(sc.ID)] = String(sc.WO_ID).replace(/\D/g, ''); }
+      for (const m of (milestones || [])) {
+        if (String(m.Active || '').toUpperCase() === 'FALSE') continue;
+        const wk = woByScope[String(m.Scope_ID || '')], bid = String(m.QB_Bill_ID || '').trim();
+        if (!wk || !bid) continue;
+        (scopeBillsByWo[wk] = scopeBillsByWo[wk] || []).push({ qb_bill_id: bid, qb_invoice_id: String(m.QB_Invoice_ID || '').trim() });
+      }
+    } catch (e) { if (!isMissingTabError(e)) warnings.push('Could not read signed-proposal billing, so only bill-number matching was used: ' + ((e && e.message) || e)); }
+
+    const plan = qbMatchBillsToHub(hubBills, qbBills, scopeBillsByWo);
 
     if (!apply) {
       // Identify each QB-only bill: if a Work Order exists for that number, say what/where it is
