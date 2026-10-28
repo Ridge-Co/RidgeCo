@@ -89,6 +89,8 @@ export function world() {
     const routeAI = async (env, job) => { h.calls.push('AI ' + job.type + ' customerFacing=' + job.customerFacing); if (h.ai instanceof Error) throw h.ai; return { result: typeof h.ai === 'function' ? h.ai(job) : h.ai, model_used: 'claude-test' }; };
     const gmailSendEmail = async (env, o) => { h.mail.push(o); return h.staged === false ? { sent: true } : { staged: true, sent: false }; };
     const logTelemetry = async (env, r) => { h.telemetry.push(r); };
+    const gmailSendEmailMulti = async (env, o) => { if (h.multiFail) throw new Error(h.multiFail); h.multi.push(o); return h.staged === false ? { sent: true } : { staged: true, sent: false }; };
+    const sendSMS = async (env, to, msg, opts) => { h.sms.push({ to, msg, opts }); if (h.smsThrow) throw new Error(h.smsThrow); return h.smsResult !== undefined ? h.smsResult : { staged: true }; };
     const inspEnsureTabsOnce = async () => {};
     const updateRowVerified = async (env, tab, id, fields) => {
       if (h.updateFail) throw new Error(tab + ' row ' + id + ' did not keep: ' + Object.keys(fields).join(', '));
