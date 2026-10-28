@@ -132,6 +132,37 @@ const run = (w, body) => w.fiRoute(w.env, 'premier-repair', () => w.fiPremierRep
   t("an inspection already on a different property than the booking resolves to is refused", r.status === 409 && r.body.steps.some(s => /is on property 97/.test(s.detail)), r.body);
 }
 
+// ── 3c. owner contact copy (Brett's explicit yes, Oct 28): opt-in, blank cells only, phone + email only ──
+{
+  const w = await seed(), oh = w.h.tabs.Owners.headers, row25 = () => w.h.tabs.Owners.rows.find(x => x[0] === '25');
+  const before = snap(w);
+  const base = { customer_id: '2', owner_id: '25', links: [] };
+  const off = await run(w, Object.assign({}, base, { dry_run: false }));
+  t('without the flag the owner is never touched', off.body.ok && JSON.stringify(w.h.tabs.Owners.rows) === JSON.stringify(JSON.parse(before)[0]) && !off.body.steps.some(s => s.what === 'owner_contact'), off.body);
+  const str = await run(w, Object.assign({}, base, { dry_run: false, copy_partner_contact: 'true' }));
+  t('only a real boolean true enables the copy', !str.body.steps.some(s => s.what === 'owner_contact') && row25()[oh.indexOf('Phone')] === '');
+  const dry = await run(w, Object.assign({}, base, { copy_partner_contact: true }));
+  t('dry run plans the copy and writes nothing', dry.body.steps.some(s => s.what === 'owner_contact' && s.status === 'planned' && /Phone \+ Email/.test(s.detail)) && row25()[oh.indexOf('Phone')] === '' && row25()[oh.indexOf('Email')] === '', dry.body);
+  const before2 = row25().slice();
+  const real = await run(w, Object.assign({}, base, { dry_run: false, copy_partner_contact: true }));
+  t('real run fills the blank Phone + Email from the partner contact', real.status === 200 && real.body.steps.some(s => s.what === 'owner_contact' && s.status === 'done') && row25()[oh.indexOf('Phone')] === '+16674158226' && row25()[oh.indexOf('Email')] === 'josiah@example.test', real.body);
+  const changed = row25().map((v, i) => v !== before2[i] ? oh[i] : null).filter(Boolean);
+  t('...and nothing else on the owner row changed (name, active, etc.)', changed.sort().join(',') === 'Email,Phone', changed);
+  const again = await run(w, Object.assign({}, base, { dry_run: false, copy_partner_contact: true }));
+  t('second run skips (idempotent)', again.body.steps.some(s => s.what === 'owner_contact' && s.status === 'skipped'));
+}
+{
+  const w = await seed(), oh = w.h.tabs.Owners.headers, row25 = () => w.h.tabs.Owners.rows.find(x => x[0] === '25');
+  row25()[oh.indexOf('Phone')] = '+14105550000';
+  const r = await run(w, { customer_id: '2', owner_id: '25', links: [], dry_run: false, copy_partner_contact: true });
+  t('an existing owner phone is NEVER overwritten (email still filled)', row25()[oh.indexOf('Phone')] === '+14105550000' && row25()[oh.indexOf('Email')] === 'josiah@example.test' && r.body.steps.some(s => s.what === 'owner_contact' && /Email/.test(s.detail) && !/Phone/.test(s.detail)), r.body);
+  const w2 = await seed(); const ch = w2.h.tabs.Insp_Customers.headers;
+  w2.h.tabs.Insp_Customers.rows.find(x => x[0] === '2')[ch.indexOf('Contact_Email')] = 'not-an-email';
+  w2.h.tabs.Insp_Customers.rows.find(x => x[0] === '2')[ch.indexOf('Contact_Phone')] = '';
+  const r2 = await run(w2, { customer_id: '2', owner_id: '25', links: [], dry_run: false, copy_partner_contact: true });
+  t('no usable phone / email on the partner -> nothing copied, reported as skipped', r2.body.steps.some(s => s.what === 'owner_contact' && s.status === 'skipped') && w2.h.tabs.Owners.rows.find(x => x[0] === '25')[w2.h.tabs.Owners.headers.indexOf('Phone')] === '');
+}
+
 // ── 4. fault injection: a failed write is reported and never claims success ──
 {
   const w = await seed();
