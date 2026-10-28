@@ -962,7 +962,12 @@ function renderItems(){
         '<button class="btn small danger del" onclick="removeItem(this)">Remove item</button>'+
       '</div></div>';
   }).join('');
+  wrap.querySelectorAll('textarea.f-desc,textarea.f-note').forEach(autoGrow);
 }
+// Oct 27 2026: size a multi-line field to its content. rowsFor() is the starting guess (works even while the
+// section is hidden and scrollHeight is 0); autoGrow() then fits it exactly once it is visible and on every keystroke.
+function rowsFor(txt,min){ var n=String(txt||'').split('\n').reduce(function(a,l){ return a+Math.max(1,Math.ceil(l.length/85)); },0); return Math.min(16,Math.max(min,n)); }
+function autoGrow(t){ if(!t) return; t.style.height='auto'; var h=t.scrollHeight; t.style.height=h>0?(h+2)+'px':''; }
 function addVariant(btn){
   var wrap=btn.closest('.variants'); var rows=wrap.querySelector('.variant-rows');
   var existing=rows.querySelectorAll('.vrow');
