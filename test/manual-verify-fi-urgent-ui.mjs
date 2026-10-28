@@ -77,7 +77,6 @@ await t('typed list + photo: items are created in the report, photo linked to it
   assert.equal(await pg.inputValue('#ug-area'), 'a_kit');
   await pg.selectOption('#ug-area', 'a_roof'); await pg.selectOption('#ug-area', 'a_kit');
   await pg.fill('#ug-text', 'Gas smell near the stove\nExposed wiring in the attic\n\n');
-  await pg.locator('#ug-text').blur();
   const [fc] = await Promise.all([pg.waitForEvent('filechooser'), pg.click('#ug-photo')]);
   await fc.setFiles({ name: 'a.png', mimeType: 'image/png', buffer: PNG });
   await pg.waitForSelector('#sheet .thumb img');
