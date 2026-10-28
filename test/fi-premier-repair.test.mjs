@@ -174,6 +174,11 @@ const run = (w, body) => w.fiRoute(w.env, 'premier-repair', () => w.fiPremierRep
   w.h.updateFail = false;
   const ok = await run(w, { customer_id: '2', owner_id: '25', links: LINKS, dry_run: false });
   t('happy path reports nothing', ok.status === 200 && w.h.telemetry.length === 1);
+  // the owner contact write failing (partner already linked, so the owner write is the only write): 500 + telemetry, owner cells untouched
+  const w3 = await seed(); w3.h.tabs.Insp_Customers.rows.find(x => x[0] === '2')[w3.h.tabs.Insp_Customers.headers.indexOf('Hub_Owner_ID')] = '25';
+  w3.h.updateFail = true;
+  const oc = await run(w3, { customer_id: '2', owner_id: '25', links: [], dry_run: false, copy_partner_contact: true });
+  t('owner contact write fails -> 500 (not a success), reported, owner cells still blank', oc.status === 500 && oc.body.ok === false && w3.h.telemetry.some(x => x.Success === 'FALSE' && /premier-repair/.test(x.Skill_Or_Endpoint)) && w3.h.tabs.Owners.rows.find(x => x[0] === '25')[w3.h.tabs.Owners.headers.indexOf('Phone')] === '', oc.body);
   // a property write that does not persist: the Gilmor link must stop, claim nothing, edit nothing
   const w2 = await seed(); w2.h.dropAdd = 'Properties';
   const lost = await run(w2, { customer_id: '2', owner_id: '25', dry_run: false, links: [{ booking_id: '2', inspection_id: 'fi_gilmor00001', doc: true }] });
