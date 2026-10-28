@@ -87,5 +87,60 @@ const { qbMatchBillsToHub } = new Function(
      r.links.length===1 && r.hubNoMatch.length===1 && r.links[0].qb_bill_id==='x');
 }
 
+{
+  // Signed-proposal jobs (Cesar's WO-1246 roof + WO-1227): the Hub created the QB bills itself with a BLANK
+  // DocNumber, so doc-number matching finds nothing — the milestone record (scopeBillsByWo) is what links them.
+  const hub = [
+    { row_id:'126', wo_id:'WO-1246', qb_bill_id:'', total:2900 },
+    { row_id:'124', wo_id:'WO-1227', qb_bill_id:'', total:800 },
+  ];
+  const qb = [
+    { id:'7948', doc:'', total:1148.4, balance:0, paid:true },
+    { id:'7972', doc:'', total:1740, balance:1740, paid:false },
+    { id:'7902', doc:'', total:283.39, balance:0, paid:true },
+    { id:'7999', doc:'', total:556.61, balance:556.61, paid:false },
+  ];
+  const sb = {
+    '1246': [{ qb_bill_id:'7948', qb_invoice_id:'7947' }, { qb_bill_id:'7972', qb_invoice_id:'7971' }],
+    '1227': [{ qb_bill_id:'7902', qb_invoice_id:'7901' }, { qb_bill_id:'7999', qb_invoice_id:'7998' }],
+  };
+  const r = qbMatchBillsToHub(hub, qb, sb);
+  const l126 = r.links.find(l => l.row_id === '126'), l124 = r.links.find(l => l.row_id === '124');
+  t('scope job links the OPEN final bill, not the paid deposit bill', l126 && l126.qb_bill_id === '7972' && l126.qb_paid === false);
+  t('scope job also carries the matching customer invoice for the same milestone', l126 && l126.qb_invoice_id === '7971' && l126.via === 'scope_milestone');
+  t('the second scope job links its open bill too (WO-1227 -> 7999 / invoice 7998)', l124 && l124.qb_bill_id === '7999' && l124.qb_invoice_id === '7998');
+  t('Hub total 2900 vs the open bill 1740 is flagged, never changed', l126 && l126.amount_mismatch === true && l126.hub_total === 2900 && l126.qb_total === 1740);
+  t('every candidate bill is shown so the split is visible', l126 && l126.scope_bills.length === 2);
+  t('nothing left ambiguous or unmatched', r.ambiguous.length === 0 && r.hubNoMatch.length === 0);
+}
+{
+  // doc-number match still wins over the milestone fallback
+  const hub = [{ row_id:'h1', wo_id:'WO-1052', qb_bill_id:'', total:100 }];
+  const qb = [{ id:'a', doc:'WO-1052', total:100, balance:0, paid:true }, { id:'b', doc:'', total:50, balance:50, paid:false }];
+  const r = qbMatchBillsToHub(hub, qb, { '1052': [{ qb_bill_id:'b', qb_invoice_id:'9' }] });
+  t('a bill-number match is used first; the milestone fallback is not consulted', r.links.length === 1 && r.links[0].qb_bill_id === 'a' && !r.links[0].via);
+}
+{
+  // two OPEN bills, or two PAID bills, on one scope WO -> never guess
+  const hub = [{ row_id:'h1', wo_id:'WO-1', qb_bill_id:'', total:100 }, { row_id:'h2', wo_id:'WO-2', qb_bill_id:'', total:100 }];
+  const qb = [
+    { id:'a', doc:'', total:50, balance:50, paid:false }, { id:'b', doc:'', total:50, balance:50, paid:false },
+    { id:'c', doc:'', total:50, balance:0, paid:true }, { id:'d', doc:'', total:50, balance:0, paid:true },
+  ];
+  const r = qbMatchBillsToHub(hub, qb, { '1': [{ qb_bill_id:'a' }, { qb_bill_id:'b' }], '2': [{ qb_bill_id:'c' }, { qb_bill_id:'d' }] });
+  t('two open scope bills on one WO are ambiguous', r.links.length === 0 && r.ambiguous.length === 2);
+}
+{
+  // single scope bill, already-linked and other-vendor bills
+  const hub = [{ row_id:'h1', wo_id:'WO-1', qb_bill_id:'', total:100 }, { row_id:'h2', wo_id:'WO-2', qb_bill_id:'', total:100 }, { row_id:'h3', wo_id:'WO-3', qb_bill_id:'z', total:100 }];
+  const qb = [{ id:'a', doc:'', total:100, balance:0, paid:true }, { id:'z', doc:'', total:100, balance:0, paid:true }];
+  const r = qbMatchBillsToHub(hub, qb, { '1': [{ qb_bill_id:'a', qb_invoice_id:'' }], '2': [{ qb_bill_id:'NOT-THIS-VENDORS' }], '3': [{ qb_bill_id:'z' }] });
+  t('one scope bill links (even when paid), with no invoice stamped when none is known', r.links.length === 1 && r.links[0].qb_bill_id === 'a' && r.links[0].qb_invoice_id === '');
+  t('a scope bill that is not in this vendor\'s QuickBooks list is ignored', r.hubNoMatch.length === 1 && r.hubNoMatch[0].row_id === 'h2');
+  t('an already-linked Hub row is left alone', !r.links.find(l => l.row_id === 'h3'));
+  const same = qbMatchBillsToHub([{ row_id:'x', wo_id:'WO-1', qb_bill_id:'', total:1 }, { row_id:'y', wo_id:'WO-1', qb_bill_id:'', total:1 }], [{ id:'a', doc:'', total:1, balance:0, paid:true }], { '1': [{ qb_bill_id:'a' }] });
+  t('one scope bill is claimed by only one Hub row', same.links.length === 1 && same.hubNoMatch.length === 1);
+}
+
 console.log(`\nvendor-reconcile: ${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
