@@ -66,7 +66,7 @@ export function world() {
         return R(200, { id: mid[1], parents: f.parents.slice() });
       }
     }
-    if (String(url).includes('alt=media')) return { ok: h.driveOk !== false, body: h.driveOk === false ? null : 'BYTES', status: 200 };
+    if (String(url).includes('alt=media')) return { ok: h.driveOk !== false, body: h.driveOk === false ? null : 'BYTES', status: h.driveOk === false ? 500 : 200, arrayBuffer: async () => new TextEncoder().encode('BYTES').buffer };
     throw new Error('fake fetch: ' + url);
   };
   const factory = new Function('h', 'sheetsRequest', 'ensureColumns', 'fetch', 'col', 'bytesToB64', `
