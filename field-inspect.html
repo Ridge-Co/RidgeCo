@@ -1082,14 +1082,8 @@ function renderUrgentNew(){
   var vis = doc.areas.filter(function(a){ return !a.excluded; });
   var h = '<h2>Send an urgent issue to '+esc(nm)+'</h2><div class="muted">One issue per line. They are added to this report as urgent items, and emailed to '+esc(nm)+' after you review the email.</div>';
   h += '<label class="fld">Area</label><select id="ug-area" onchange="urgentSetArea(this.value)">'+vis.map(function(a){ return '<option value="'+a.id+'"'+(a.id===u.areaId?' selected':'')+'>'+esc(a.name)+'</option>'; }).join('')+'</select>';
-  h += '<label class="fld">What did you find? (one per line)</label><textarea id="ug-text" style="min-height:120px" placeholder="Gas smell near the stove&#10;Exposed wiring in the attic" oninput="S.urg.text=this.value" onblur="renderUrgentNew()">'+esc(u.text)+'</textarea>';
-  h += '<label class="fld">Photos</label>';
-  if (u.photoIds.length){
-    h += u.photoIds.map(function(pid){
-      var chips = lines.slice(0,8).map(function(ln,i){ var on = (u.links[pid]||[]).indexOf(i)>-1; return '<button class="btn sm'+(on?' primary':'')+'" aria-label="photo belongs to item '+(i+1)+'" onclick="urgentLink(\''+pid+'\','+i+')">'+(i+1)+'</button>'; }).join('');
-      return '<div class="row" style="gap:10px;margin-bottom:8px"><div style="flex:none;width:72px">'+thumbHtml(pid,'void 0',false)+'</div><div style="flex:1"><div class="muted">'+(lines.length ? 'Belongs to item:' : 'Type the issues first, then tap which one this shows')+'</div><div class="chips" style="margin:4px 0">'+chips+'</div></div><button class="btn sm ghost" aria-label="remove photo" onclick="urgentDropPhoto(\''+pid+'\')">✕</button></div>';
-    }).join('')+'<div class="muted">A photo with nothing tapped goes with item 1. Up to 6 photos are emailed.</div>';
-  }
+  h += '<label class="fld">What did you find? (one per line)</label><textarea id="ug-text" style="min-height:120px" placeholder="Gas smell near the stove&#10;Exposed wiring in the attic" oninput="S.urg.text=this.value;urgentRefreshPhotos()">'+esc(u.text)+'</textarea>';
+  h += '<label class="fld">Photos</label><div id="ug-photos">'+urgPhotosHtml()+'</div>';
   h += '<div class="btns"><button class="btn" id="ug-photo" onclick="urgentPickPhotos()">📷 Add photos</button></div>';
   if (u.err) h += '<div class="banner err" id="ug-err">'+esc(u.err)+'</div>';
   h += '<div class="btns"><button class="btn primary" id="ug-go" onclick="urgentCreate()">Review email ›</button><button class="btn" onclick="urgentCancel()">Cancel</button></div>';
