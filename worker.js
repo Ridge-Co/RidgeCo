@@ -41208,7 +41208,7 @@ async function fiSave(env, body) {
   const hash = await fiSha256(serialized);
   const changed = !row || row.o.Doc_Hash !== hash;
   const wasPublished = !!row && row.o.Status === 'published';
-  const unpublish = wasPublished && changed;
+  const unpublish = wasPublished && changed && !fiOnlyPhoneMarksChanged(fiJoinRow(row.o), serialized);   // marking an item 'sent to the requester' (phone-only) must not hide a published report
   const now = new Date().toISOString();
   const newRev = (row ? Number(row.o.Rev) || 0 : 0) + 1;
   const chunks = fiChunk(serialized);
