@@ -1263,7 +1263,7 @@ function renderCustomerPreview(items, schedule){
   };
   var itemHtml=function(it,plus){
     var vs=it.variants||[];
-    var h='<div class="pv-item"><b>'+esc(it.description||'')+'</b>';
+    var h='<div class="pv-item"><b style="white-space:pre-line;">'+esc(it.description||'')+'</b>';
     if(vs.length>1){ h+='<div style="font-size:11px;color:var(--muted);">Customer picks ONE:</div>'+vs.map(function(v){ return '<div class="pv-opt"><span>○ '+esc(v.label||'Option')+'</span><span>'+(plus?'+':'')+money(v.price)+'</span></div>'; }).join(''); }
     else if(vs[0]){ h+='<div class="pv-opt"><span></span><span>'+(plus?'+':'')+money(vs[0].price)+'</span></div>'; }
     return h+'</div>';
