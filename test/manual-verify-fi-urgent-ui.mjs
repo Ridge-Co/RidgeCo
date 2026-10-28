@@ -150,7 +150,7 @@ await t('tick "Send to Josiah" on a hand-made item -> banner -> review -> send (
 });
 await t('a failed email is reported plainly, nothing is marked sent, and the retry works once', async () => {
   const pg = A.pg;
-  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Water running down basement wall'); await pg.locator('#ug-text').blur();
+  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Water running down basement wall');
   await pg.click('#ug-go'); await pg.waitForSelector('#ug-prev'); await pg.click('#ug-prev'); await pg.waitForSelector('#ug-send');
   w.h.multiFail = 'Gmail 401'; const before = w.h.multi.length;
   await pg.click('#ug-send'); await pg.waitForSelector('#ug-err');
