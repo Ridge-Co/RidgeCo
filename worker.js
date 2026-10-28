@@ -30137,7 +30137,7 @@ async function qbLinkVendorBills(env, body) {
       return json({ ok: true, applied: false, vendor: { id: vid, name: qbVendorDisplayName(vrow || {}) },
         link_count: plan.links.length, ambiguous_count: plan.ambiguous.length,
         hub_no_match_count: plan.hubNoMatch.length, qb_no_hub_count: qbNoHub.length,
-        links: plan.links, ambiguous: plan.ambiguous, hub_no_match: plan.hubNoMatch, qb_no_hub: qbNoHub });
+        links: plan.links, ambiguous: plan.ambiguous, hub_no_match: plan.hubNoMatch, qb_no_hub: qbNoHub, warnings });
     }
 
     const byRow = {}; for (const l of plan.links) byRow[l.row_id] = l;
