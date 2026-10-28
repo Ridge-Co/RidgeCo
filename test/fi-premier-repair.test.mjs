@@ -189,7 +189,9 @@ const run = (w, body) => w.fiRoute(w.env, 'premier-repair', () => w.fiPremierRep
   const a = src.indexOf("path === '/admin/fi-premier-repair') { // staging may only"), seg = src.slice(a, a + 700);
   t('staging guard: a dry run is free, a real run needs a TEST- partner and TEST- inspections', a > 0 && /dry_run !== false\) return true/.test(seg) && /startsWith\('TEST-'\)/.test(seg));
   const fn = src.slice(src.indexOf('async function fiPremierRepair'), src.indexOf("// Neutral, factual rewording of the inspector's own note"));
-  t('never writes the Owners tab at all (no phone / email / name / money / QuickBooks)', !/updateRowVerified\(env, 'Owners'|updateRow\(env, 'Owners'|addRow\(env, 'Owners'/.test(fn));
+  const ownerWrites = fn.match(/updateRowVerified\(env, 'Owners'[^;]*;|updateRow\(env, 'Owners'|addRow\(env, 'Owners'/g) || [];
+  t('the ONLY Owners write is the opt-in blank-cell fill of Phone/Email (read back), inside the copy_partner_contact block', ownerWrites.length === 1 && /updateRowVerified\(env, 'Owners', ownerId, fill\)/.test(ownerWrites[0]) && fn.indexOf("copy_partner_contact === true") < fn.indexOf("updateRowVerified(env, 'Owners'") && /if \(ph && !String\(owner\.Phone/.test(fn) && /!String\(owner\.Email/.test(fn), ownerWrites);
+  t('the staging guard keeps a contact copy on TEST- owners only', /copy_partner_contact === true\) \{[^}]*startsWith\('TEST-'\)/.test(src.slice(src.indexOf("path === '/admin/fi-premier-repair') { // staging may only"), src.indexOf("path === '/admin/fi-premier-repair') { // staging may only") + 1100)));
   t('never creates an owner', !/addRow\(env, 'Owners'/.test(fn) && !/owner:\s*\{\s*name/.test(fn));
 }
 console.log(`fi-premier-repair: ${pass} passed, ${fail} failed`);
