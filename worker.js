@@ -30145,10 +30145,15 @@ async function qbLinkVendorBills(env, body) {
     const ids = wanted.slice(0, 50);
     const remaining = wanted.length - ids.length;
     const updated = [], failed = [];
+    // updateRow silently drops a field whose header is missing, so make sure the link columns exist first
+    // (appended at the END, never reordering) and then write each row with a read-back check.
+    if (ids.length) await ensureColumns(env, 'Vendor_Bills', ['QB_Bill_ID', 'QB_Invoice_ID']);
     for (const id of ids) {
       const l = byRow[id];
       try {
-        await updateRow(env, 'Vendor_Bills', id, { QB_Bill_ID: l.qb_bill_id });
+        const fields = { QB_Bill_ID: l.qb_bill_id };
+        if (l.qb_invoice_id) fields.QB_Invoice_ID = l.qb_invoice_id;
+        await updateRowVerified(env, 'Vendor_Bills', id, fields);
         updated.push({ row_id: id, wo_id: l.wo_id, qb_bill_id: l.qb_bill_id, qb_doc: l.qb_doc, qb_paid: l.qb_paid });
       } catch (e) { failed.push({ row_id: id, wo_id: l.wo_id, error: e.message }); }
     }
