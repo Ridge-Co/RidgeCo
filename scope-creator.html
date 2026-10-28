@@ -394,24 +394,43 @@ function updateScheduleField(i,field,val){
   else m[field] = val;
   renderScheduleTotal();
 }
-// Auto-rebalance (Oct 13 2026, Brett: "when I change the payment schedule, the other milestones did not
-// recalculate"): after editing one milestone's %, the OTHER milestones share what is left of 100%,
-// in proportion to what they had (equal shares if they were all 0). The row you typed is never touched.
+// Cascade (Oct 27 2026, Brett: "the moment I added a milestone it became impossible to keep the deposit the
+// same or the final ... hold the first at the listed amount unless I change it, then add the next amount to
+// the next part ... force 100% as a cascade, not whack-a-mole"). Replaces the Oct 13 proportional rebalance,
+// which rescaled EVERY other row on every keystroke.
+// Rules: a % you type is "locked" (m.locked) and never moves again on its own; the first row is held from the start. Other untouched rows are the only
+// ones that take up slack, nearest row BELOW the edited one first, then (if there is none) the nearest row
+// above. If every row is locked, the neighbour below (or above, for the last row) is unlocked and absorbs
+// it so the total is always forced to 100%. Computed from the locked total, not from running deltas, so
+// typing "5" -> "50" -> "500" -> back to "50" always lands on the same answer.
 // Updates the other rows' boxes in place so the field you are typing in keeps focus.
 function rebalanceSchedule(editedIdx){
-  var ms=scheduleState.milestones;
-  var others=[]; ms.forEach(function(m,j){ if(j!==editedIdx) others.push(j); });
-  if(!others.length) return;
-  var remaining=Math.max(0, 100-(+ms[editedIdx].percent||0));
-  var sumOthers=others.reduce(function(s,j){ return s+(+ms[j].percent||0); },0);
-  var running=0;
-  others.forEach(function(j,k){
-    var v;
-    if(k===others.length-1) v=Math.round((remaining-running)*100)/100;           // last other row absorbs rounding
-    else v=Math.round((sumOthers>0 ? remaining*(+ms[j].percent||0)/sumOthers : remaining/others.length)*100)/100;
-    if(v<0) v=0;
-    ms[j].percent=v; running+=v;
-  });
+  var ms=scheduleState.milestones; if(!ms[editedIdx]) return;
+  var r2=function(x){ return Math.round(x*100)/100; };
+  scheduleState.note='';
+  ms[editedIdx].locked=true;
+  // The first row (the Deposit) counts as held at its listed amount from the start, until you change it.
+  var held=function(j){ return ms[j].locked===true || (j===0 && ms[j].locked!==false); };
+  var free=[]; ms.forEach(function(m,j){ if(!held(j)) free.push(j); });
+  if(!free.length){
+    var plug = editedIdx<ms.length-1 ? editedIdx+1 : editedIdx-1;
+    if(plug<0) return;                                   // single milestone: nothing to balance against
+    ms[plug].locked=false; free=[plug];
+    scheduleState.note=' · "'+(ms[plug].label||'Milestone')+'" adjusted to keep 100% (every other row was already set)';
+  }
+  var lockedSum=0; ms.forEach(function(m,j){ if(held(j)) lockedSum+=(+m.percent||0); });
+  var target=Math.max(0, r2(100-lockedSum));
+  var cur=r2(free.reduce(function(s,j){ return s+(+ms[j].percent||0); },0));
+  var D=r2(target-cur);
+  var order=free.filter(function(j){ return j>editedIdx; }).concat(free.filter(function(j){ return j<editedIdx; }).reverse());
+  if(D>0) ms[order[0]].percent=r2((+ms[order[0]].percent||0)+D);
+  else if(D<0){
+    var need=-D;
+    for(var k=0;k<order.length && need>0.0001;k++){
+      var j=order[k], have=+ms[j].percent||0, take=Math.min(need,have);
+      ms[j].percent=r2(have-take); need=r2(need-take);
+    }
+  }
   var host=document.getElementById('schedule-rows');
   var boxes=(host&&host.querySelectorAll)?host.querySelectorAll('input[data-pct]'):[];
   for(var b=0;b<boxes.length;b++){ if(b!==editedIdx && ms[b]) boxes[b].value=ms[b].percent; }
