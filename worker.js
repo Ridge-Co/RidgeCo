@@ -41175,6 +41175,15 @@ async function fiGetInspection(env, url) {
   try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'The saved inspection data could not be read. Do not overwrite it — contact Brett.'); }
   return json({ ok: true, inspection: fiInspHeaderOut(row.o), doc, drive_folder_url: row.o.Drive_Folder_URL || '' });
 }
+// True when the two saved docs differ ONLY in phone-only fields (the 'send to requester' flag / sent mark, and the touch timestamp).
+function fiPublicDocKey(serialized) {
+  try { const d = JSON.parse(serialized); delete d.updated; for (const a of (d.areas || [])) for (const is of (a.issues || [])) { delete is.flag_send; delete is.sent; } return JSON.stringify(d); }
+  catch (e) { return null; }
+}
+function fiOnlyPhoneMarksChanged(prevSerialized, nextSerialized) {
+  const a = fiPublicDocKey(prevSerialized), b = fiPublicDocKey(nextSerialized);
+  return a !== null && b !== null && a === b;
+}
 async function fiSave(env, body) {
   body = body || {};
   const id = String(body.id || '');
