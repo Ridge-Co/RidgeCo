@@ -174,7 +174,7 @@ await t('slow photo upload: the send waits for it ("Saving and uploading photosâ
 });
 await t('no signal: told plainly, items stay flagged on the list, works once signal is back', async () => {
   const E = await openPage(OPEN), pg = E.pg;
-  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Carbon monoxide detector missing'); await pg.locator('#ug-text').blur();
+  await pg.click('#urg-new'); await pg.waitForSelector('#ug-text'); await pg.fill('#ug-text', 'Carbon monoxide detector missing');
   await pg.click('#ug-go'); await pg.waitForSelector('#ug-prev'); const mail0 = w.h.multi.length;
   await E.ctx.setOffline(true); await pg.click('#ug-prev'); await pg.waitForSelector('#ug-err');
   assert.ok((await pg.locator('#ug-err').innerText()).includes('No signal')); assert.equal(w.h.multi.length, mail0);
