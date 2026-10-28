@@ -1110,7 +1110,7 @@ function urgentCreate(){
   if (u.photoIds.length > 6) { u.err = 'Only 6 photos can be emailed. Remove some, or send them with the full report.'; renderUrgentNew(); return; }
   if (!claim('urgcreate')) return;
   var ids = [];
-  mut(function(doc){
+  try { mut(function(doc){
     var a = findArea(doc, u.areaId);
     lines.forEach(function(ln, i){
       var title = ln.slice(0,160), ex = (a.issues||[]).filter(function(x){ return urgNorm(x.title)===urgNorm(title); })[0];
