@@ -368,10 +368,11 @@ $('photo-in').addEventListener('change', function(ev){
       return dbPut('photos', row).then(function(){
         blobUrl[id] = URL.createObjectURL(blob); photoState[id] = { state:'pending', err:'' };
         mut(function(doc){ var a = findArea(doc, tg.areaId); (a.photo_ids = a.photo_ids||[]).push(id); });
+        if (tg.urgent && S.urg && S.urg.photoIds) S.urg.photoIds.push(id);
       });
     }).catch(function(e){ fails++; toast('Photo not added: '+e.message); });
   });
-  chain.then(function(){ render(); pumpPhotos(); if (!fails) toast(files.length+' photo'+(files.length>1?'s':'')+' added'); });
+  chain.then(function(){ render(); pumpPhotos(); if (tg.urgent && S.urg && S.urg.mode==='new') renderUrgentNew(); if (!fails) toast(files.length+' photo'+(files.length>1?'s':'')+' added'); });
 });
 function pumpPhotos(){
   if (S.pumping) return Promise.resolve(); if (!navigator.onLine) { setSync(); return Promise.resolve(); }
@@ -1030,6 +1031,204 @@ function emailSend(){
     .catch(function(e){ release('emsend'); $('em-send').disabled=false; toast('Send failed: '+e.message); });
 }
 
+// ---- urgent items to the requester (Oct 28 2026) ----
+// Type a quick list (one issue per line) + photos -> the items are added to the report (flagged "to send") and emailed to the requester
+// on the booking. Or tick "send" on any report item and send the waiting ones from the banner on the inspection page. Email always;
+// a text is an optional extra and only goes 9am-4pm ET (the server enforces it; the phone only mirrors it so the choice is honest).
+var TRADE_GUESS = [
+  ['safety', /\b(gas|smoke|carbon|monoxide|co detector|fire|mold|mildew|asbestos|lead|hazard|unsafe)\b/i],
+  ['electrical', /\b(outlet|wire|wiring|spark|sparking|breaker|electric|electrical|panel|socket|shock)\b/i],
+  ['plumbing', /\b(leak|leaking|leaks|pipe|pipes|faucet|toilet|drain|sink|sewer|water|flood|flooding|burst|clog|clogged)\b/i],
+  ['hvac', /\b(furnace|boiler|heater|heat pump|thermostat|duct|ducts|a\/c|air condition\w*|no heat)\b/i],
+  ['roofing', /\b(roof|gutter|gutters|shingle|shingles|flashing|downspout)\b/i],
+  ['pest', /\b(roach|roaches|cockroach\w*|mice|mouse|rat|rats|bed ?bugs?|pests?|termites?|infest\w*|wasps?|hornets?)\b/i],
+  ['structural', /\b(foundation|sagging|joist|joists|beam|collapse\w*|structural|settling)\b/i],
+  ['windows_doors', /\b(window|windows|door|doors|lock|deadbolt)\b/i],
+  ['appliances', /\b(stove|oven|range|refrigerator|fridge|dishwasher|washer|dryer|disposal)\b/i]
+];
+function guessTrade(t){ for (var i=0;i<TRADE_GUESS.length;i++) if (TRADE_GUESS[i][1].test(t)) return TRADE_GUESS[i][0]; return 'general'; }
+function reqName(doc){ var c = doc && doc.booking && doc.booking.contact; var w = String((c && c.name) || '').trim().split(/\s+/)[0]; return w || 'the requester'; }
+function reqContact(doc){ return (doc && doc.booking && doc.booking.contact) || {}; }
+function hasReqEmail(doc){ return /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(String(reqContact(doc).email||'').trim()); }
+function etHourNow(){ try { return Number(new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'numeric',hourCycle:'h23'}).format(new Date())); } catch(e){ return -1; } }
+function textWindowOpen(){ var h = etHourNow(); return h >= 9 && h < 16; }
+function unsentFlagged(doc){
+  var out = [];
+  doc.areas.forEach(function(a){ if (a.excluded) return; (a.issues||[]).forEach(function(is){ if (is.flag_send && !is.sent) out.push({ area:a, issue:is }); }); });
+  return out;
+}
+function sentWhen(s){ try { return new Date(s.at).toLocaleString('en-US',{ timeZone:'America/New_York', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch(e){ return ''; } }
+function urgentCardHtml(doc){
+  var un = unsentFlagged(doc), nm = reqName(doc), h = '';
+  if (un.length) h += '<div class="banner warn" id="urg-banner"><b>'+un.length+' item'+(un.length===1?'':'s')+' waiting to send to '+esc(nm)+'</b><div class="muted" style="color:inherit">Marked “send” but not sent yet.</div><button class="btn primary block" style="margin-top:8px" onclick="urgentOpenFlagged()">Review &amp; send ›</button></div>';
+  h += '<div class="card"><div class="row"><b>🚨 Urgent issues</b><button class="btn sm" id="urg-new" onclick="urgentNew()">＋ Send an urgent issue</button></div><div class="muted">Type what you found and add photos. It is added to the report and emailed to '+esc(nm)+' now. You can also tick “Send to '+esc(nm)+'” on any item in the report.</div></div>';
+  return h;
+}
+function urgentToggleFlag(on){ if (on){ editing.flag_send = true; delete editing.sent; } else { editing.flag_send = false; } }
+function urgentNew(){
+  var doc = S.rec.doc, vis = doc.areas.filter(function(a){ return !a.excluded; });
+  if (!vis.length){ toast('Add an area first'); return; }
+  var last = S.lastUrgArea && findArea(doc, S.lastUrgArea);
+  S.urg = { mode:'new', areaId: (last && !last.excluded) ? last.id : vis[0].id, text:'', photoIds:[], links:{}, ids:[], checked:{}, note:'', alsoText:false, key:'', to:'', err:'', busy:'' };
+  renderUrgentNew();
+}
+function urgLines(){ return String(S.urg.text||'').split('\n').map(function(x){ return x.trim(); }).filter(Boolean); }
+function urgentSetArea(v){ S.urg.areaId = v; S.lastUrgArea = v; }
+function urgentPickPhotos(){ photoTarget = { areaId:S.urg.areaId, urgent:true }; var inp = $('photo-in'); inp.value=''; inp.click(); }
+function urgentLink(pid, i){ var l = S.urg.links[pid] = S.urg.links[pid]||[]; var k = l.indexOf(i); if (k>-1) l.splice(k,1); else l.push(i); renderUrgentNew(); }
+function urgentDropPhoto(pid){ S.urg.photoIds = S.urg.photoIds.filter(function(x){ return x!==pid; }); delete S.urg.links[pid]; renderUrgentNew(); }
+function renderUrgentNew(){
+  var u = S.urg, doc = S.rec.doc, nm = reqName(doc), lines = urgLines();
+  var vis = doc.areas.filter(function(a){ return !a.excluded; });
+  var h = '<h2>Send an urgent issue to '+esc(nm)+'</h2><div class="muted">One issue per line. They are added to this report as urgent items, and emailed to '+esc(nm)+' after you review the email.</div>';
+  h += '<label class="fld">Area</label><select id="ug-area" onchange="urgentSetArea(this.value)">'+vis.map(function(a){ return '<option value="'+a.id+'"'+(a.id===u.areaId?' selected':'')+'>'+esc(a.name)+'</option>'; }).join('')+'</select>';
+  h += '<label class="fld">What did you find? (one per line)</label><textarea id="ug-text" style="min-height:120px" placeholder="Gas smell near the stove&#10;Exposed wiring in the attic" oninput="S.urg.text=this.value;urgentRefreshPhotos()">'+esc(u.text)+'</textarea>';
+  h += '<label class="fld">Photos</label><div id="ug-photos">'+urgPhotosHtml()+'</div>';
+  h += '<div class="btns"><button class="btn" id="ug-photo" onclick="urgentPickPhotos()">📷 Add photos</button></div>';
+  if (u.err) h += '<div class="banner err" id="ug-err">'+esc(u.err)+'</div>';
+  h += '<div class="btns"><button class="btn primary" id="ug-go" onclick="urgentCreate()">Review email ›</button><button class="btn" onclick="urgentCancel()">Cancel</button></div>';
+  openSheet(h);
+}
+function urgPhotosHtml(){
+  var u = S.urg, lines = urgLines(), h = '';
+  if (u.photoIds.length){
+    h += u.photoIds.map(function(pid){
+      var chips = lines.slice(0,8).map(function(ln,i){ var on = (u.links[pid]||[]).indexOf(i)>-1; return '<button class="btn sm'+(on?' primary':'')+'" aria-label="photo belongs to item '+(i+1)+'" onclick="urgentLink(\''+pid+'\','+i+')">'+(i+1)+'</button>'; }).join('');
+      return '<div class="row" style="gap:10px;margin-bottom:8px"><div style="flex:none;width:72px">'+thumbHtml(pid,'void 0',false)+'</div><div style="flex:1"><div class="muted">'+(lines.length ? 'Belongs to item:' : 'Type the issues first, then tap which one this shows')+'</div><div class="chips" style="margin:4px 0">'+chips+'</div></div><button class="btn sm ghost" aria-label="remove photo" onclick="urgentDropPhoto(\''+pid+'\')">✕</button></div>';
+    }).join('')+'<div class="muted">A photo with nothing tapped goes with item 1. Up to 6 photos are emailed. Only the first 8 lines can be tapped for a photo.</div>';
+  }
+  return h;
+}
+// Update ONLY the photo list while typing: re-rendering the whole sheet would swallow the first tap on a button (the keyboard closes and the button moves under the finger).
+function urgentRefreshPhotos(){ var el = $('ug-photos'); if (el) el.innerHTML = urgPhotosHtml(); }
+function urgentCancel(){ S.urg = null; closeSheet(); }
+function urgNorm(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
+function urgentCreate(){
+  var u = S.urg, lines = urgLines();
+  if (!lines.length){ u.err = 'Type at least one issue first.'; renderUrgentNew(); return; }
+  if (lines.length > 20){ u.err = 'Send at most 20 items at a time.'; renderUrgentNew(); return; }
+  if (u.photoIds.length > 6) { u.err = 'Only 6 photos can be emailed. Remove some, or send them with the full report.'; renderUrgentNew(); return; }
+  if (!claim('urgcreate')) return;
+  var ids = [];
+  try { mut(function(doc){
+    var a = findArea(doc, u.areaId);
+    lines.forEach(function(ln, i){
+      var title = ln.slice(0,160), ex = (a.issues||[]).filter(function(x){ return urgNorm(x.title)===urgNorm(title); })[0];
+      var phs = u.photoIds.filter(function(pid){ var l = u.links[pid]||[]; return l.length ? l.indexOf(i)>-1 : i===0; });
+      var is = ex;
+      if (!is){ is = { id:'is_'+rid(8), title:title, trade:guessTrade(title), severity:'urgent', detail:'', likely_cause:'', recommended_fix:'', fix_source:'inspector', wo:false, photo_ids:[], src:'urgent' }; if (is.trade==='tenant_action') is.tenant_action = true; a.issues = a.issues||[]; a.issues.push(is); }
+      is.flag_send = true; delete is.sent; is.photo_ids = is.photo_ids||[];
+      phs.forEach(function(pid){ if (is.photo_ids.indexOf(pid)<0) is.photo_ids.push(pid); });
+      ids.push(is.id);
+    });
+    if (!a.condition || a.condition==='not_inspected') a.condition = 'fair';
+  }); } finally { release('urgcreate'); }
+  S.lastUrgArea = u.areaId; render();
+  urgentOpenFlagged(ids);
+}
+function urgentOpenFlagged(newIds){
+  var doc = S.rec.doc, un = unsentFlagged(doc);
+  if (!un.length){ toast('Nothing is waiting to send'); return; }
+  var prev = S.urg && S.urg.mode === 'review' ? S.urg : null;
+  S.urg = { mode:'review', ids: un.map(function(x){ return x.issue.id; }), checked:{}, note: prev ? prev.note : '', alsoText:false, key:'', to: prev ? prev.to : '', err:'', preview:null };
+  un.forEach(function(x){ S.urg.checked[x.issue.id] = true; });
+  renderUrgentReview();
+}
+function urgCheckedIds(){ return S.urg.ids.filter(function(id){ return S.urg.checked[id]; }); }
+function urgItem(id){ var doc = S.rec.doc; for (var i=0;i<doc.areas.length;i++){ var a = doc.areas[i], is = (a.issues||[]).filter(function(x){ return x.id===id; })[0]; if (is) return { area:a, issue:is }; } return null; }
+function urgPhotoIds(ids){ var out = []; ids.forEach(function(id){ var it = urgItem(id); if (it) (it.issue.photo_ids||[]).forEach(function(p){ if (out.indexOf(p)<0) out.push(p); }); }); return out; }
+function urgentToggleItem(id, on){ S.urg.checked[id] = !!on; S.urg.key = ''; S.urg.preview = null; }
+function renderUrgentReview(){
+  var u = S.urg, doc = S.rec.doc, nm = reqName(doc), c = reqContact(doc);
+  var h = '<h2>Send to '+esc(nm)+'</h2><div class="muted">Untick anything that should not go in this email. Ticked items are emailed together as one message for this property.</div>';
+  h += u.ids.map(function(id){
+    var it = urgItem(id); if (!it) return '';
+    var np = (it.issue.photo_ids||[]).length;
+    return '<div class="toggle"><span><b>'+esc(it.issue.title)+'</b><div class="muted">'+esc(it.area.name)+' · '+esc(SEV_LABEL[it.issue.severity]||'')+(np?' · 📷 '+np:'')+'</div></span><input type="checkbox" aria-label="send '+esc(it.issue.title)+'"'+(u.checked[id]?' checked':'')+' onchange="urgentToggleItem(\''+id+'\',this.checked)"></div>';
+  }).join('');
+  h += '<label class="fld">Short note (optional)</label><textarea id="ug-note" style="min-height:60px" placeholder="e.g. Please call me today." oninput="S.urg.note=this.value">'+esc(u.note)+'</textarea>';
+  if (!hasReqEmail(doc)) h += '<label class="fld">Send to (no email on the booking)</label><input id="ug-to" type="email" inputmode="email" autocapitalize="off" placeholder="name@example.com" value="'+esc(u.to)+'" oninput="S.urg.to=this.value">';
+  else h += '<div class="muted" style="margin-top:8px">To: '+esc(c.name||'')+' &lt;'+esc(c.email)+'&gt;. A copy comes to you.</div>';
+  var ph = String(c.phone||'').trim(), win = textWindowOpen();
+  if (ph) h += '<div class="toggle"><span>Also text '+esc(nm)+'<div class="muted">'+(win ? 'The email is always sent. This adds a short text about the same items.' : 'Texts only go 9am–4pm ET. It is outside that time, so this will go by email only.')+'</div></span><input type="checkbox" id="ug-text-on" aria-label="also text"'+(u.alsoText && win?' checked':'')+(win?'':' disabled')+' onchange="S.urg.alsoText=this.checked"></div>';
+  if (u.err) h += '<div class="banner err" id="ug-err">'+esc(u.err)+'</div>';
+  if (u.busy) h += '<div class="banner info" id="ug-busy">'+esc(u.busy)+'</div>';
+  h += '<div class="btns"><button class="btn primary" id="ug-prev"'+(u.busy?' disabled':'')+' onclick="urgentPreview()">Preview email ›</button><button class="btn" onclick="urgentCancel()">Close</button></div><div class="muted">Closing keeps the items flagged — they stay on the list at the top of the inspection.</div>';
+  openSheet(h);
+}
+function urgentEnsureSaved(photoIds){
+  return new Promise(function(resolve, reject){
+    var t0 = Date.now();
+    if (!navigator.onLine){ reject(new Error('No signal. The items are saved on this phone; send when you have service.')); return; }
+    if (S.rec.dirty || !S.rec.base_rev) syncNow(true);
+    pumpPhotos();
+    (function tick(){
+      var rec = S.rec, ss = S.sync; if (!rec){ reject(new Error('The inspection was closed.')); return; }
+      if (ss.conflict){ reject(new Error('A newer version of this inspection is on the server. Resolve that first (see the bar at the top).')); return; }
+      var pend = (photoIds||[]).filter(function(p){ return photoState[p]; });
+      var bad = pend.filter(function(p){ return photoState[p].state==='error'; });
+      if (bad.length){ reject(new Error('A photo failed to upload: '+photoState[bad[0]].err+' (use Retry photos in the bar at the top)')); return; }
+      if (ss.state==='error' && !ss.syncing){ reject(new Error('Not saved to the server: '+ss.msg)); return; }
+      if (!rec.dirty && !ss.syncing && rec.base_rev && !pend.length){ resolve(); return; }
+      if (Date.now()-t0 > 90000){ reject(new Error('Still saving. Wait for “Saved to server” in the bar at the top, then try again.')); return; }
+      if (rec.dirty && !ss.syncing) syncNow(true);
+      if (pend.length && !S.pumping) pumpPhotos();
+      setTimeout(tick, 600);
+    })();
+  });
+}
+function urgentBody(preview){
+  var u = S.urg, ids = urgCheckedIds();
+  var b = { id:S.rec.id, rev:S.rec.base_rev, issue_ids:ids, note:u.note||'', also_text: !!(u.alsoText && textWindowOpen()), preview: preview };
+  if (u.to && !hasReqEmail(S.rec.doc)) b.to = u.to.trim();
+  if (!preview) b.send_key = u.key;
+  return b;
+}
+function urgentPreview(){
+  var u = S.urg, ids = urgCheckedIds();
+  if (!ids.length){ u.err = 'Tick at least one item.'; renderUrgentReview(); return; }
+  if (!hasReqEmail(S.rec.doc) && !/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(String(u.to||'').trim())){ u.err = 'Type an email address to send to.'; renderUrgentReview(); return; }
+  if (!claim('urgprev')) return;
+  u.err = ''; u.busy = 'Saving and uploading photos…'; renderUrgentReview();
+  urgentEnsureSaved(urgPhotoIds(ids)).then(function(){ return api('POST','/fi/urgent-send', urgentBody(true)); }).then(function(r){
+    release('urgprev'); u.busy = ''; u.preview = r; if (!u.key) u.key = 'u'+rid(14); renderUrgentPreview();
+  }).catch(function(e){ release('urgprev'); u.busy = ''; u.err = e.message; renderUrgentReview(); });
+}
+function renderUrgentPreview(){
+  var u = S.urg, r = u.preview, nm = reqName(S.rec.doc), tx = r.text || {};
+  var h = '<h2>Email preview</h2><div class="muted">To: '+esc(r.to)+(r.cc?'<br>Copy to: '+esc(r.cc):'')+'<br>Subject: '+esc(r.subject)+'<br>📷 '+r.photo_count+' photo'+(r.photo_count===1?'':'s')+' attached'+(r.photos_omitted?' ('+r.photos_omitted+' more stay in the report)':'')+'</div>';
+  h += '<div style="border:1px solid var(--border);border-radius:10px;margin:10px 0;overflow:hidden">'+r.html+'</div>';
+  if (u.alsoText){
+    if (tx.available) h += '<div class="banner info" id="ug-textinfo"><b>Also texting '+esc(nm)+':</b><div>'+esc(tx.body)+'</div></div>';
+    else h += '<div class="banner warn" id="ug-textinfo">No text will go: '+(tx.window_open===false?'texts only go 9am–4pm ET.':'there is no phone number on the booking.')+' The email still goes.</div>';
+  }
+  if (u.err) h += '<div class="banner err" id="ug-err">'+esc(u.err)+'</div>';
+  h += '<div class="btns"><button class="btn go" id="ug-send" onclick="urgentSend()">Send now</button><button class="btn" onclick="renderUrgentReview()">‹ Back</button></div>';
+  openSheet(h);
+}
+function urgentSend(){
+  var u = S.urg, ids = urgCheckedIds();
+  if (!claim('urgsend')) return; var btn = $('ug-send'); if (btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
+  urgentEnsureSaved(urgPhotoIds(ids)).then(function(){ return api('POST','/fi/urgent-send', urgentBody(false)); }).then(function(r){
+    release('urgsend');
+    var at = r.sent_at || new Date().toISOString();
+    mut(function(doc){ ids.forEach(function(id){ doc.areas.forEach(function(a){ (a.issues||[]).forEach(function(is){ if (is.id===id){ is.flag_send = true; is.sent = { at:at, to:String(r.to||'').slice(0,120), via:(r.text && r.text.sent)?'email+text':'email' }; } }); }); }); });
+    S.urg.result = r; render(); renderUrgentResult(r, ids.length);
+  }).catch(function(e){ release('urgsend'); u.err = e.message; if (e.code==='no_recipient'){ u.to = ''; renderUrgentReview(); } else renderUrgentPreview(); });
+}
+function renderUrgentResult(r, n){
+  var u = S.urg, nm = reqName(S.rec.doc), staged = r.staged === true;
+  var h = '<h2>'+(staged ? 'Test mode: nothing was really sent' : (r.already_sent ? 'Already sent' : '✓ Sent to '+esc(nm)))+'</h2>';
+  h += '<div class="banner '+(staged?'warn':'ok')+'">'+(r.already_sent ? 'This email had already gone out, so it was not sent twice.' : (staged ? 'This is the staging site, so no real email or text was sent.' : esc(String(n))+' item'+(n===1?'':'s')+' emailed to '+esc(r.to||'')+(r.cc?' (copy to you)':'')+'.'))+'</div>';
+  if (u.alsoText){
+    var t = r.text||{};
+    h += t.sent ? '<div class="banner ok">Text sent to '+esc(nm)+'.</div>' : '<div class="banner warn" id="ug-textres">Text not sent. '+esc(t.reason||'')+'</div>';
+  }
+  if (r.logged === false) h += '<div class="banner warn">The email went out, but the send record could not be saved. Do not send it again.</div>';
+  h += '<div class="muted">The items are marked “sent” on the report page. The final report does not mention this email.</div><div class="btns"><button class="btn primary" onclick="urgentCancel()">Done</button></div>';
+  openSheet(h);
+}
+
 // ---- brands ----
 function openBrands(){ S.view='brands'; render(); refreshList().then(function(){ if (S.view==='brands') render(); }); }
 function viewBrands(){
@@ -1221,6 +1420,7 @@ function viewInsp(){
   var h = '<div class="row"><button class="btn sm ghost" onclick="leaveInsp()">‹ All inspections</button>'+(rec.status==='published'?'<span class="pill ok">Published</span>':'<span class="pill">Draft</span>')+'</div>';
   h += '<h1 style="margin-bottom:2px">'+esc(doc.property.address)+(doc.property.unit_label?' · '+esc(unitText(doc.property.unit_label)):'')+'</h1><div class="muted">'+esc(doc.date||'')+' · '+esc(typeLabel(doc.type))+' · '+(b?'<span class="sw" style="background:'+esc(b.primary_color)+'"></span> '+esc(b.name):'')+(doc.pre1978?' · pre-1978':'')+'</div>';
   h += '<div class="card" style="margin-top:10px"><div class="row"><b>'+c.done+' of '+c.total+' areas done</b><button class="btn sm" onclick="openReview()">Review &amp; report ›</button></div></div>';
+  h += urgentCardHtml(doc);
   h += ownerCardHtml(doc);
   h += doc.booking ? bookingCardHtml(doc.booking) : bookingLinkHtml(doc);
   h += visitCardHtml(doc);
@@ -1364,7 +1564,7 @@ function thumbHtml(id, onclick, selected){
   return '<button class="thumb'+(selected?' chk':'')+'" onclick="'+onclick+'" aria-label="photo">'+(src?'<img src="'+esc(src)+'" alt="photo" onerror="this.parentNode.title=\'Photo could not be loaded\';this.style.display=\'none\'">':'')+(st&&st.state!=='done'?'<span class="b">'+(st.state==='error'?'⚠ retry':'⏳')+'</span>':'')+'</button>';
 }
 function issueCard(is){
-  return '<div class="issue '+esc(is.severity)+'" onclick="editIssue(\''+is.id+'\')"><div class="t">'+esc(is.title)+'</div><div class="f"><span class="pill">'+esc(TRADE_LABEL[is.trade]||is.trade)+'</span> <span class="pill">'+esc(SEV_LABEL[is.severity]||is.severity)+'</span>'+(is.issue_type?' <span class="pill type">'+esc(is.issue_type)+'</span>':'')+(is.wo?' <span class="pill new">work order</span>':'')+'</div>'+(is.recommended_fix?'<div class="f">Fix: '+esc(is.recommended_fix)+'</div>':'')+'</div>';
+  return '<div class="issue '+esc(is.severity)+'" onclick="editIssue(\''+is.id+'\')"><div class="t">'+esc(is.title)+'</div><div class="f"><span class="pill">'+esc(TRADE_LABEL[is.trade]||is.trade)+'</span> <span class="pill">'+esc(SEV_LABEL[is.severity]||is.severity)+'</span>'+(is.issue_type?' <span class="pill type">'+esc(is.issue_type)+'</span>':'')+(is.wo?' <span class="pill new">work order</span>':'')+(is.sent?' <span class="pill ok">sent '+esc(sentWhen(is.sent))+'</span>':(is.flag_send?' <span class="pill warn">to send</span>':''))+'</div>'+(is.recommended_fix?'<div class="f">Fix: '+esc(is.recommended_fix)+'</div>':'')+'</div>';
 }
 
 // ---- photos: select, move, remove ----
@@ -1594,6 +1794,7 @@ function renderIssueSheet(){
     +'<label class="fld">Likely cause</label><input value="'+esc(is.likely_cause)+'" oninput="editing.likely_cause=this.value">'
     +'<label class="fld">Recommended fix</label><textarea style="min-height:70px" oninput="editing.recommended_fix=this.value">'+esc(is.recommended_fix)+'</textarea>'
     +'<div class="toggle"><span>Flag for a work order<div class="muted">Just a flag for now — nothing is created</div></span><input type="checkbox"'+(is.wo?' checked':'')+' onchange="editing.wo=this.checked"></div>';
+  h += '<div class="toggle"><span>Send to '+esc(reqName(S.rec.doc))+'<div class="muted">'+(is.sent?'Already sent '+esc(sentWhen(is.sent))+'. Tick to send it again.':'Adds it to the “to send” list on the inspection page. Nothing is sent yet.')+'</div></span><input type="checkbox" aria-label="send to the requester"'+(is.flag_send&&!is.sent?' checked':'')+' onchange="urgentToggleFlag(this.checked)"></div>';
   if ((a.photo_ids||[]).length){ h += '<label class="fld">Photos for this issue (tap to attach)</label><div class="thumbs">'+a.photo_ids.map(function(p){ var on = (is.photo_ids||[]).indexOf(p)>-1; return '<button class="thumb'+(on?' sel':'')+'" onclick="toggleIssuePhoto(\''+p+'\')" aria-label="photo">'+(photoSrc(p)?'<img src="'+esc(photoSrc(p))+'" alt="">':'')+(on?'<span class="b">✓</span>':'')+'</button>'; }).join('')+'</div>'; }
   h += '<div class="btns"><button class="btn primary" onclick="saveIssue()">Save</button><button class="btn" onclick="closeSheet()">Cancel</button>'+(is.isNew?'':'<button class="btn danger" id="ie-del" onclick="deleteIssueStep()">Delete</button>')+'</div>';
   openSheet(h);
