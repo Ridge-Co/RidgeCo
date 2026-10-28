@@ -41558,7 +41558,7 @@ async function fiUrgentSend(env, body) {
   const prior = lt.rows.find(r => r.o.ID === logId);
   const nowIso = () => new Date().toISOString();
   if (prior && /^sent/.test(prior.o.Result)) return json({ ok: true, already_sent: true, to, result: prior.o.Result, sent_at: prior.o.Sent_At, text: { requested: alsoText, sent: /text:sent|text:staged/.test(prior.o.Result) } });
-  if (prior && prior.o.Result === 'sending') {
+  if (prior && /^sending/.test(prior.o.Result)) {
     const age = Date.now() - Date.parse(prior.o.Sent_At || 0);
     return fiErr(409, age < 120000 ? 'in_progress' : 'unknown_state', age < 120000 ? 'This send is still being processed. Wait a moment, then check before sending again.' : 'An earlier attempt of this send did not finish, so it may or may not have gone out. Check your inbox (you are copied on every one) before sending again.');
   }
