@@ -1137,7 +1137,7 @@ function urgentOpenFlagged(newIds){
 function urgCheckedIds(){ return S.urg.ids.filter(function(id){ return S.urg.checked[id]; }); }
 function urgItem(id){ var doc = S.rec.doc; for (var i=0;i<doc.areas.length;i++){ var a = doc.areas[i], is = (a.issues||[]).filter(function(x){ return x.id===id; })[0]; if (is) return { area:a, issue:is }; } return null; }
 function urgPhotoIds(ids){ var out = []; ids.forEach(function(id){ var it = urgItem(id); if (it) (it.issue.photo_ids||[]).forEach(function(p){ if (out.indexOf(p)<0) out.push(p); }); }); return out; }
-function urgentToggleItem(id, on){ S.urg.checked[id] = !!on; }
+function urgentToggleItem(id, on){ S.urg.checked[id] = !!on; S.urg.key = ''; S.urg.preview = null; }
 function renderUrgentReview(){
   var u = S.urg, doc = S.rec.doc, nm = reqName(doc), c = reqContact(doc);
   var h = '<h2>Send to '+esc(nm)+'</h2><div class="muted">Untick anything that should not go in this email. Ticked items are emailed together as one message for this property.</div>';
