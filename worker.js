@@ -115,7 +115,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-28.01-fi-premier-repair-contact';
+const BUILD_VERSION = '2026-10-28.02-link-scope-bills';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -30005,8 +30005,9 @@ async function qbVendorTransactions(env, token, qboVendorId) {
 // UNLINKED Hub rows (blank QB_Bill_ID) are candidates. A WO with >1 QB bill is ambiguous (never
 // auto-linked). Also reports QB bills with no Hub row and Hub rows with no QB bill. Amount
 // mismatches are flagged, not resolved — linking never changes a dollar figure. Kept pure.
-function qbMatchBillsToHub(hubBills, qbBills) {
+function qbMatchBillsToHub(hubBills, qbBills, scopeBillsByWo) {
   const digits = s => String(s || '').replace(/\D/g, '');
+  const qbById = {}; for (const q of (qbBills || [])) qbById[String(q.id)] = q;
   const qbByWo = {};
   for (const q of (qbBills || [])) { const k = digits(q.doc); if (!k) continue; (qbByWo[k] = qbByWo[k] || []).push(q); }
   const alreadyLinked = new Set((hubBills || []).map(h => String(h.qb_bill_id || '').trim()).filter(Boolean));
@@ -30017,7 +30018,39 @@ function qbMatchBillsToHub(hubBills, qbBills) {
     if (String(h.qb_bill_id || '').trim()) continue;            // already linked — leave it
     const k = digits(h.wo_id);
     const matches = (k ? (qbByWo[k] || []) : []).filter(q => !alreadyLinked.has(String(q.id)) && !usedQb.has(String(q.id)));
-    if (!matches.length) { hubNoMatch.push({ row_id: h.row_id, wo_id: h.wo_id, property: h.property, hub_total: h.total }); continue; }
+    if (!matches.length) {
+      // No QB bill carries this WO number. But a signed-proposal job's bills were created BY the Hub
+      // (Payment_Milestones.QB_Bill_ID), usually with a blank DocNumber, so the Hub already knows which
+      // QB bills belong to the WO. One bill -> link it; several -> link the single OPEN one (that is the
+      // payable); anything else is ambiguous and never auto-linked. Amounts are still only flagged.
+      const sb = (k && scopeBillsByWo && scopeBillsByWo[k]) || [];
+      const seenSb = new Set(), cands = [];
+      for (const s of sb) {
+        const id = String(s.qb_bill_id || '').trim();
+        if (!id || seenSb.has(id)) continue;
+        seenSb.add(id);
+        const q = qbById[id];
+        if (q && !alreadyLinked.has(id) && !usedQb.has(id)) cands.push({ q, inv: String(s.qb_invoice_id || '').trim() });
+      }
+      if (cands.length) {
+        let pick = cands.length === 1 ? cands[0] : null;
+        if (!pick) { const open = cands.filter(c => !c.q.paid); if (open.length === 1) pick = open[0]; }
+        if (!pick) {
+          ambiguous.push({ row_id: h.row_id, wo_id: h.wo_id, property: h.property, hub_total: h.total, candidates: cands.map(c => ({ qb_bill_id: String(c.q.id), qb_doc: c.q.doc, qb_total: c.q.total, qb_paid: c.q.paid })) });
+          continue;
+        }
+        usedQb.add(String(pick.q.id));
+        links.push({
+          row_id: h.row_id, wo_id: h.wo_id, property: h.property,
+          qb_bill_id: String(pick.q.id), qb_doc: pick.q.doc || '', qb_total: pick.q.total, qb_paid: pick.q.paid, qb_balance: pick.q.balance,
+          hub_total: h.total, amount_mismatch: Math.abs((Number(pick.q.total) || 0) - (Number(h.total) || 0)) > 0.005,
+          via: 'scope_milestone', qb_invoice_id: pick.inv,
+          scope_bills: cands.map(c => ({ qb_bill_id: String(c.q.id), qb_total: c.q.total, qb_paid: c.q.paid })),
+        });
+        continue;
+      }
+      hubNoMatch.push({ row_id: h.row_id, wo_id: h.wo_id, property: h.property, hub_total: h.total }); continue;
+    }
     if (matches.length > 1) { ambiguous.push({ row_id: h.row_id, wo_id: h.wo_id, property: h.property, hub_total: h.total, candidates: matches.map(q => ({ qb_bill_id: String(q.id), qb_doc: q.doc, qb_total: q.total, qb_paid: q.paid })) }); continue; }
     const q = matches[0];
     usedQb.add(String(q.id));
@@ -30069,7 +30102,23 @@ async function qbLinkVendorBills(env, body) {
       return { id: String(x.Id), doc: x.DocNumber || '', total: +(Number(x.TotalAmt) || 0).toFixed(2), balance: +bal.toFixed(2), paid: bal <= 0.005 };
     });
 
-    const plan = qbMatchBillsToHub(hubBills, qbBills);
+    // The Hub's own record of which QB bills a signed-proposal job created: Payment_Milestones.QB_Bill_ID /
+    // QB_Invoice_ID, joined to the WO through Scopes.WO_ID. A missing tab just means no scope-based matches;
+    // any other read failure is surfaced as a warning, never swallowed.
+    const scopeBillsByWo = {}; const warnings = [];
+    try {
+      const [scopes, milestones] = await Promise.all([fetchTab(env, 'Scopes'), fetchTab(env, 'Payment_Milestones')]);
+      const woByScope = {};
+      for (const sc of (scopes || [])) { if (sc && sc.ID && sc.WO_ID) woByScope[String(sc.ID)] = String(sc.WO_ID).replace(/\D/g, ''); }
+      for (const m of (milestones || [])) {
+        if (String(m.Active || '').toUpperCase() === 'FALSE') continue;
+        const wk = woByScope[String(m.Scope_ID || '')], bid = String(m.QB_Bill_ID || '').trim();
+        if (!wk || !bid) continue;
+        (scopeBillsByWo[wk] = scopeBillsByWo[wk] || []).push({ qb_bill_id: bid, qb_invoice_id: String(m.QB_Invoice_ID || '').trim() });
+      }
+    } catch (e) { if (!isMissingTabError(e)) warnings.push('Could not read signed-proposal billing, so only bill-number matching was used: ' + ((e && e.message) || e)); }
+
+    const plan = qbMatchBillsToHub(hubBills, qbBills, scopeBillsByWo);
 
     if (!apply) {
       // Identify each QB-only bill: if a Work Order exists for that number, say what/where it is
@@ -30088,7 +30137,7 @@ async function qbLinkVendorBills(env, body) {
       return json({ ok: true, applied: false, vendor: { id: vid, name: qbVendorDisplayName(vrow || {}) },
         link_count: plan.links.length, ambiguous_count: plan.ambiguous.length,
         hub_no_match_count: plan.hubNoMatch.length, qb_no_hub_count: qbNoHub.length,
-        links: plan.links, ambiguous: plan.ambiguous, hub_no_match: plan.hubNoMatch, qb_no_hub: qbNoHub });
+        links: plan.links, ambiguous: plan.ambiguous, hub_no_match: plan.hubNoMatch, qb_no_hub: qbNoHub, warnings });
     }
 
     const byRow = {}; for (const l of plan.links) byRow[l.row_id] = l;
@@ -30096,10 +30145,15 @@ async function qbLinkVendorBills(env, body) {
     const ids = wanted.slice(0, 50);
     const remaining = wanted.length - ids.length;
     const updated = [], failed = [];
+    // updateRow silently drops a field whose header is missing, so make sure the link columns exist first
+    // (appended at the END, never reordering) and then write each row with a read-back check.
+    if (ids.length) await ensureColumns(env, 'Vendor_Bills', ['QB_Bill_ID', 'QB_Invoice_ID']);
     for (const id of ids) {
       const l = byRow[id];
       try {
-        await updateRow(env, 'Vendor_Bills', id, { QB_Bill_ID: l.qb_bill_id });
+        const fields = { QB_Bill_ID: l.qb_bill_id };
+        if (l.qb_invoice_id) fields.QB_Invoice_ID = l.qb_invoice_id;
+        await updateRowVerified(env, 'Vendor_Bills', id, fields);
         updated.push({ row_id: id, wo_id: l.wo_id, qb_bill_id: l.qb_bill_id, qb_doc: l.qb_doc, qb_paid: l.qb_paid });
       } catch (e) { failed.push({ row_id: id, wo_id: l.wo_id, error: e.message }); }
     }
