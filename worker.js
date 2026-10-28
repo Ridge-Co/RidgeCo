@@ -41550,7 +41550,10 @@ async function fiUrgentSend(env, body) {
   const smsBody = fiUrgentSmsBody(doc, items);
   if (preview) return json({ ok: true, preview: true, to, cc: ccList, subject: mail.subject, html: mail.html, photo_count: sendPids.length, photos_omitted: omitted, text: Object.assign({ body: smsBody }, textInfo) });
   // idempotency + in-progress guard: one FI_Email_Log row per send_key, written BEFORE anything is sent
-  const logId = 'ug_' + sendKey;
+  // The log id binds the key to WHAT is being sent (the sorted item ids): the same key with different items is a different send, never "already sent".
+  let hh = 2166136261; for (const ch of ids.slice().sort().join(',')) { hh ^= ch.charCodeAt(0); hh = Math.imul(hh, 16777619) >>> 0; }
+  const logId = 'ug_' + sendKey + '_' + hh.toString(16).padStart(8, '0');
+  const nonce = Math.random().toString(36).slice(2, 10);
   const lt = await fiReadFresh(env, 'FI_Email_Log');
   const prior = lt.rows.find(r => r.o.ID === logId);
   const nowIso = () => new Date().toISOString();
