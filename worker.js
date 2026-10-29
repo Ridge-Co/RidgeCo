@@ -39496,7 +39496,7 @@ async function strChangeContinue(ctx, row) {
       else complete = await stageFns[stage](ctx, J);
     } catch (e) {
       state.errors.push({ step: 'stage_' + stage, error: `The step "${STR_STAGE_TEXT[stage]}" hit a problem: ${strErrText(e)}` });
-      if (state.tries[stage] >= 3) { complete = true; if (stage === 'sheets') for (const k of Object.keys(state.ires)) if (state.ires[k].status === 'pending') state.ires[k] = { status: 'failed', reason: 'The schedule change did not save (see the error below).' }; }
+      if (state.tries[stage] >= 3) { complete = true; if (stage === 'sheets') { for (const k of Object.keys(state.ires)) if (state.ires[k].status === 'pending' && !state.ires[k].unv) state.ires[k] = { status: 'failed', reason: 'The schedule change did not save (see the error below).' }; strGiveUpUnverified(J); } }
       else { const er = state.errors.pop(); state.warnings.push('Hiccup (tried again): ' + er.error); break; }
     }
     state.errors.push(...ctx.errors.splice(0));
