@@ -39258,9 +39258,12 @@ async function strStageSheets(ctx, J) {
   if (isMark) { for (const it of toDo.filter(x => ires[x.ref].status === 'pending')) { markChanges.push({ cleaner, date: it.date, mark: req.mark, source: 'admin' }); markIt.set(cleaner.ID + '|' + it.date, it); } }
   else for (const it of toDo.filter(x => done(x) && !ires[x.ref].mk)) for (const m of it.marks) { markChanges.push({ cleaner: ctx.st.cmap[m.cleaner_id], date: m.date, mark: m.mark, source: 'admin_swap' }); markIt.set(m.cleaner_id + '|' + m.date, it); }
   if (markChanges.length) {
-    const r = await strMarkBatch(ctx, markChanges.filter(m => m.cleaner));
-    if (isMark) { for (const it of toDo) { const f = r.failed.find(x => x.key === cleaner.ID + '|' + it.date); if (f) fail(it, 'Could not save the mark: ' + f.error); else ires[it.ref] = { status: 'done', reason: '' }; } }
-    else for (const f of r.failed) { const it = markIt.get(f.key); state.errors.push({ step: 'backup_mark', error: `${it ? it.label : f.key}: the assignment went through but a backup mark did not save (${f.error}).` }); if (it) ires[it.ref].flag = 'mark_failed'; }
+    const r = await strMarkBatch(ctx, markChanges.filter(m => m.cleaner), { soft: true }), unvKeys = new Map(r.unverified.map(u => [u.key, u.error]));
+    if (isMark) { for (const it of toDo.filter(x => ires[x.ref].status === 'pending')) { const k = cleaner.ID + '|' + it.date, f = r.failed.find(x => x.key === k); if (f) fail(it, 'Could not save the mark: ' + f.error); else if (unvKeys.has(k)) ires[it.ref] = { status: 'pending', reason: '', unv: unvKeys.get(k) }; else ires[it.ref] = { status: 'done', reason: '' }; } }
+    else {
+      for (const f of r.failed) { const it = markIt.get(f.key); state.errors.push({ step: 'backup_mark', error: `${it ? it.label : f.key}: the assignment went through but a backup mark did not save (${f.error}).` }); if (it) ires[it.ref].flag = 'mark_failed'; }
+      for (const it of new Set(markIt.values())) { const bad = [...unvKeys.keys()].find(k => markIt.get(k) === it); if (bad) ires[it.ref].mku = unvKeys.get(bad); else { delete ires[it.ref].mku; ires[it.ref].mk = 1; } } // mk = this date's backup marks are settled; mku = written but not yet read back
+    }
   }
   if (isMark && req.mark === 'out') { // close waiting offers the cleaner can no longer take; the scheduler asks the next cleaner on its next run
     const upd = []; for (const it of toDo.filter(done)) for (const o of it.offers_declined) upd.push({ id: o.id, fields: { Status: 'declined', Responded_At: iso, Note: 'marked out by Brett' } });
