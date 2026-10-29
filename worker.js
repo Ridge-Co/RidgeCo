@@ -19469,11 +19469,36 @@ function sheetsQuotaBusyError(e) {
   const m = String((e && e.message) || e || '');
   return /^Sheets API error on GET /.test(m) && /quota exceeded|read requests per minute|RESOURCE_EXHAUSTED|\b429\b/i.test(m);
 }
+// Oct 29 2026 (queue 215/216/222). PURE. sheetsQuotaBusyError is anchored on "Sheets API error on GET", so it missed a read-quota error that a job had
+// WRAPPED: nested in a list (`ok:false [{"stage":"deposit_sweep_read","error":"Sheets API error on GET ..."}]`, `2 error(s): [...]`) or behind a plain label
+// ("Held cleaner texts could not be processed: Sheets API error on GET ..."). Those were filed as P0/P1 failures instead of the calm P2 sheets_quota_busy row.
+// Rule: EVERY error found must be a read-quota error. A list that also holds ONE real error (a write that failed, a bug, a telemetry write on POST) is NOT
+// busy, and a list with an `"error":` value we cannot read (an object, null, a cut-off tail that is not a quota message) is NOT busy either: when unsure it stays loud.
+const SHEETS_QUOTA_LABEL_RE = /^[A-Za-z][^"{}\[\]]{0,150}?:\s+(?=Sheets API error on GET )/;
+function sheetsQuotaBusyText(text) {
+  const m = String((text && text.message) || text || '');
+  if (!m) return false;
+  const one = v => {
+    const s = String(v || '').replace(SHEETS_QUOTA_LABEL_RE, '');
+    return sheetsQuotaBusyError(s) && (s.match(/Sheets API error on /g) || []).length === 1;   // exactly one Sheets error, and it is the GET quota one
+  };
+  if (one(m)) return true;
+  // The scheduler cuts a job's error text at 300 characters. A list that is cut off may have lost a second, REAL error after the quota one, so a text that does not
+  // close (end in a closing bracket) is never assumed busy here; schedStep flags such runs from the structured result instead, see schedBodyIsQuotaBusy. When unsure: loud.
+  if (!/[\]\x7d]\s*$/.test(m)) return false;   // (\x7d is a closing curly brace, written this way so the function's braces stay balanced for the tests that slice it out)
+  const vals = [], re = /"error":"((?:[^"\\]|\\.)*)"/g;
+  let x;
+  while ((x = re.exec(m))) vals.push(x[1].replace(/\\(.)/g, '$1'));   // undo JSON backslash escapes (the value is only compared against the quota pattern)
+  const total = (m.match(/"error"\s*:/g) || []).length;
+  return vals.length > 0 && vals.length === total && vals.every(one);
+}
 // Oct 22 2026. PURE. A scheduler job's errors ([{step, error}]) where EVERY entry is the shared Sheets read quota ("busy"), not a bug in the job.
 // Such a run is retried on the next tick; it is a calm P2 "sheets_quota_busy" row, not a P0 "scheduler_job" failure that pages Brett.
 // (A job that stays unable to run is still caught loudly: the "Scheduled job X is overdue" condition is P0.)
+// Oct 29 2026: an entry's error may be the raw message OR a job's wrapped text with the quota error nested inside (see sheetsQuotaBusyText).
+// An entry schedStep flagged has its structured verdict honoured either way (schedBodyIsQuotaBusy); the cut-off text alone can neither prove nor disprove it.
 function schedErrorsAreQuotaBusy(errors) {
-  return Array.isArray(errors) && errors.length > 0 && errors.every(x => x && sheetsQuotaBusyError(x.error));
+  return Array.isArray(errors) && errors.length > 0 && errors.every(x => x && (x.quota_busy === true || (x.quota_busy !== false && sheetsQuotaBusyText(x.error))));
 }
 function aiCreditIsPausedError(e) { return !!e && e.code === AI_CREDIT_CODE; }
 
