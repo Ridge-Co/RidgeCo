@@ -279,6 +279,51 @@ for (const [label, res] of [['sent:false gate-blocked', { sent: false, gate_snap
   t('...and it is in warnings', res.warnings.some(x => x.stage === 'vendor_bill_missing' && /WO-1227/.test(x.ref)));
 }
 
+// ── Oct 29 2026 (queue 222): Google's shared READ quota stops the sweep's reads -> calm P2 answer, not its own P1 deposit_sweep_read row ──────────────
+{
+  const QUOTA = "Sheets API error on GET /values/Scopes: Quota exceeded for quota metric 'Read requests' and limit 'Read requests per minute per user' of service 'sheets.googleapis.com' for consumer 'project_number:664428332384'.";
+  // the real scheduler plumbing around the sweep (schedStep -> schedBadness -> schedErrorsAreQuotaBusy), run on the sweep's real answer
+  const sched = new Function(
+    grab(wsrc, 'function sheetsQuotaBusyError(') + '\n' + wsrc.slice(wsrc.indexOf('const SHEETS_QUOTA_LABEL_RE'), wsrc.indexOf(';\n', wsrc.indexOf('const SHEETS_QUOTA_LABEL_RE')) + 1) + '\n' + grab(wsrc, 'function sheetsQuotaBusyText(') +
+    '\n' + grab(wsrc, 'function schedErrorsAreQuotaBusy(') + '\n' + grab(wsrc, 'function schedBadness(') + '\n' + grab(wsrc, 'function schedErrText(') + '\n' + grab(wsrc, 'async function schedUnwrap(') +
+    '\n' + grab(wsrc, 'function schedBodyIsQuotaBusy(') + '\n' + grab(wsrc, 'async function schedStep(') + '\nreturn { schedStep, schedErrorsAreQuotaBusy };')();
+  const runStep = async (api, env) => { const errors = []; await sched.schedStep('deposit_paid', () => api.processDepositPaidSweep(env), errors); return errors; };
+  const sevOf = (job, notes) => {
+    const l = new Function(grab(wsrc, 'function failSevRank(') + '\n' + wsrc.slice(wsrc.indexOf('const FAIL_SEVERITY_BY_WHERE'), wsrc.indexOf('// ── pure helpers (unit-tested)')) + '\n' + grab(wsrc, 'function failSeverity(') + '\nreturn failSeverity;')();
+    return l(job, notes);
+  };
+
+  const { w, env, api } = makeWorld({ readThrow: new Error(QUOTA) });
+  const r = await api.processDepositPaidSweep(env);
+  t('read quota: calm answer {ok:false, quota_busy:true, reason} with NO errors[] entry (Who To Pay banner stays quiet)', r.ok === false && r.quota_busy === true && /Quota exceeded/.test(r.reason) && Array.isArray(r.errors) && r.errors.length === 0, r);
+  t('...nothing was checked or moved: no transitions, no not_found, no QuickBooks call, no text', r.transitioned.length === 0 && r.not_found.length === 0 && w.qbCalls.length === 0 && w.sms.length === 0 && w.templated.length === 0);
+  t('...exactly ONE telemetry row, sheets_quota_busy, and NO deposit_sweep_read row', w.telemetry.length === 1 && w.telemetry[0].Job_Type === 'sheets_quota_busy' && w.telemetry[0].Success === 'FALSE' && w.telemetry[0].Skill_Or_Endpoint === 'processDepositPaidSweep' && !w.telemetry.some(x => x.Job_Type === 'deposit_sweep_read'), w.telemetry);
+  t('...that row is a P2 in the ledger (the old deposit_sweep_read row for the same text was a P1)', sevOf('sheets_quota_busy', w.telemetry[0].Notes) === 'P2' && sevOf('deposit_sweep_read', 'scopes/signatures/milestones err=' + QUOTA) === 'P1');
+  const errs = await runStep(api, env);
+  t('...and the scheduler sees "busy" for the deposit_paid step (calm P2, retried next run, nobody paged)', errs.length === 1 && sched.schedErrorsAreQuotaBusy(errs), errs);
+  t('...Who To Pay: no scope state changed, the next run retries (scope still Pre-approved)', w.scopes[0].Approval_Stage === 'Pre-approved');
+
+  // a REAL read failure is exactly what it was
+  const w2 = makeWorld({ readThrow: new Error('Sheets API error on GET /values/Scopes: The caller does not have permission') });
+  const r2 = await w2.api.processDepositPaidSweep(w2.env);
+  t('control: a non-quota read failure is still ok:false with an errors[] entry and its own deposit_sweep_read row (P1)', r2.ok === false && !r2.quota_busy && r2.errors.length === 1 && r2.errors[0].stage === 'deposit_sweep_read' && w2.w.telemetry.length === 1 && w2.w.telemetry[0].Job_Type === 'deposit_sweep_read', { r2, tel: w2.w.telemetry });
+  t('control: ... and the scheduler does NOT call it busy (still P0)', !sched.schedErrorsAreQuotaBusy(await runStep(w2.api, w2.env)));
+  // a WRITE-side quota text is not the read-busy
+  const w3 = makeWorld({ readThrow: new Error(QUOTA.replace('on GET', 'on POST')) });
+  const r3 = await w3.api.processDepositPaidSweep(w3.env);
+  t('control: a quota error that is NOT on a GET stays the loud path', r3.errors.length === 1 && !r3.quota_busy && w3.w.telemetry[0].Job_Type === 'deposit_sweep_read');
+  // the calm row itself cannot be written: that must be reported loudly, not swallowed
+  const w4 = makeWorld({ readThrow: new Error(QUOTA), failTelemetry: true });
+  const r4 = await w4.api.processDepositPaidSweep(w4.env);
+  t('quota AND the telemetry write fails: still no false calm - the failed write is in errors[] and the scheduler treats it as a real failure', r4.quota_busy === true && r4.errors.length === 1 && r4.errors[0].stage === 'telemetry' && !sched.schedErrorsAreQuotaBusy(await runStep(w4.api, w4.env)), r4);
+  // happy path: nothing reported
+  const w5 = makeWorld();
+  const r5 = await w5.api.processDepositPaidSweep(w5.env);
+  t('happy path: a normal sweep is not quota_busy and files nothing as quota', !r5.quota_busy && !w5.w.telemetry.some(x => x.Job_Type === 'sheets_quota_busy'));
+  // money / scope-11 behaviour is not touched: the classification and not_found code do not know about quota
+  t('deposit classification (classifyMissingDeposit) and the not_found surface are unchanged by this fix', !/sheets_quota_busy/.test(grab(wsrc, 'function classifyMissingDeposit(')) && !/quota_busy/.test(grab(wsrc, 'async function depositSweepSurface(')) && !/quota_busy/.test(grab(wsrc, 'async function scopeDepositPaidTransition(')));
+}
+
 // ── wiring tripwires on the real source ─────────────────────────────────────────
 // Oct 12 2026: scheduled() is a loud no-op; the daily jobs are scheduler jobs (daily_qb_sync), not cron branches.
 const sched0 = grab(wsrc, 'async function schedRunDailyQbSync(');
