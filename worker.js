@@ -38958,7 +38958,8 @@ function strExternalEvents(task, foreign) {
 }
 
 // ── Batched, verified Sheets writes (one read + one write + one re-read per tab, however many rows: a 40-date change must not burn the per-minute read quota) ──
-async function strBatchSet(env, tab, updates) {
+// opts.soft: a failed verification re-read (after the write went in) returns out.unverified = [ids] and out.unverified_error instead of throwing. Opt-in, so every other caller is unchanged.
+async function strBatchSet(env, tab, updates, opts) {
   const out = { ok: [], failed: [] }; if (!updates.length) return out;
   invalidateTabCache(tab);
   const data = await sheetsRequest(env, 'GET', `/values/${tab}`), rows = data.values || [], headers = rows[0] || [];
