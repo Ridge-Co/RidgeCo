@@ -39369,7 +39369,7 @@ async function strStageQueue(ctx, J) {
     if (refs.length !== r.refs.length) { // some dates failed: Brett's text would be wrong, so use the standard wording for the dates that DID change
       const its = J.items.filter(i => refs.includes(i.ref)); ds = [...new Set(its.map(i => i.date))].sort();
       text = (await strRenderRecipient(ctx, r.kind, c, ds, r.kind === 'mark' ? { key: 'x', kind: 'checkout', date: ds[0], next: '' } : its[0]._t, { newC: cleaner, mark: req.mark })).text; replaced = true;
-      state.warnings.push(`${r.name}'s text was reworded to list only the dates that really changed (some dates failed), so your edit was replaced.`);
+      state.warnings.push(`${r.name}'s text was reworded to list only the dates that really changed (some dates did not save or could not be confirmed), so your edit was replaced.`);
     }
     const expect = r.kind === 'mark' ? ds.map(d => ({ date: d, mark: req.mark })) : J.items.filter(i => refs.includes(i.ref)).map(i => ({ task_key: i.task_key, date: i.date, assigned_id: cleaner.ID }));
     rows.push({ Plan_ID: J.planId, Cleaner_ID: c.ID, Kind: r.kind, Msg_Type: r.type, Body: text, Task_Keys: refs.join(','), Expect: JSON.stringify(expect), Not_Before: win ? iso : heldIso, Status: 'parked', Created_At: iso, Note: '' });
