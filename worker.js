@@ -39528,8 +39528,8 @@ async function strStageFinish(ctx, J) {
     textRes.push(out);
   }
   const items = J.items.map(it => { const r = state.ires[it.ref], ci = state.cal.items[it.ref]; return { ref: it.ref, task_key: it.task_key || '', date: it.date, label: it.label, status: r.status, reason: r.reason || '', flag: r.flag || '', notes: it.notes || [], sentence: it.sentence || '', calendar: ci || null }; });
-  const counts = { done: items.filter(i => i.status === 'done').length, skipped: items.filter(i => i.status === 'skipped').length, failed: items.filter(i => i.status === 'failed').length };
-  const anyProblem = errors.length > 0 || counts.failed > 0, status = !anyProblem ? 'done' : (counts.done > 0 ? 'partial' : 'failed');
+  const counts = { done: items.filter(i => i.status === 'done').length, skipped: items.filter(i => i.status === 'skipped').length, failed: items.filter(i => i.status === 'failed').length, unverified: items.filter(i => i.status === 'unverified').length };
+  const anyProblem = errors.length > 0 || counts.failed > 0 || counts.unverified > 0, status = !anyProblem ? 'done' : (counts.done > 0 || counts.unverified > 0 ? 'partial' : 'failed'); // "saved, could not confirm" is partial, never "did NOT go through"
   const cal = Object.assign({ mode: plan.calendar.mode }, state.cal); delete cal.done; delete cal.fatal;
   const res = { ok: status === 'done', status, plan_id: J.planId, action: req.action, cleaner: plan.cleaner, mark: req.mark, items, counts, texts: textRes, email: state.email, calendar: cal, warnings: warnings.concat(plan.warnings || []), errors, calls: state.calls, duplicate: false };
   res.summary = strChangeSummaryText({ action: plan.action, cleaner: plan.cleaner, mark: req.mark }, res);
