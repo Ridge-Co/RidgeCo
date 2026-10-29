@@ -37312,7 +37312,9 @@ async function inspGuardFailure(env, kind, e) {
     catch (se) { cfgNote = ' [could not record outage start: ' + String((se && se.message) || se).slice(0, 120) + ']'; console.error('insp guard: could not save STR_GUARD_FAIL_SINCE:', se && se.message); }
   }
   const mins = Number.isFinite(since) ? Math.round((now - since) / 60000) : 0;
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-book/' + kind + (isFeed ? '_feed' : '_quota'), Success: 'FALSE', Notes: ((isFeed ? 'Bookings feed unreadable' : 'Sheets read quota hit') + ', will retry next tick (failing ' + mins + ' min): ' + msg + cfgNote).slice(0, 480) }); }
+  // Oct 29 2026 (queue 215): a Sheets quota hit is the calm P2 "sheets_quota_busy" row (Job_Type decides the severity; the message text "Quota exceeded" made the old
+  // insp_booking row a P1). The 45-minute persistent alert below is unchanged. A bookings-feed outage is not a Sheets quota, so it keeps insp_booking.
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: isFeed ? 'insp_booking' : 'sheets_quota_busy', Skill_Or_Endpoint: 'insp-book/' + kind + (isFeed ? '_feed' : '_quota'), Success: 'FALSE', Notes: ((isFeed ? 'Bookings feed unreadable' : 'Sheets read quota hit') + ', will retry next tick (failing ' + mins + ' min): ' + msg + cfgNote).slice(0, 480) }); }
   catch (te) { console.error('insp guard: telemetry write failed:', te && te.message, '| original:', kind, msg); }
   if (Number.isFinite(since) && now - since >= INSP_GUARD_QUOTA_GRACE_MS) return inspAlert(env, kind + '_persistent', 'Cleaning-coverage check has not been able to read the ' + (isFeed ? 'bookings feed for ' + mins + ' minutes. ' : 'sheet for ' + mins + ' minutes (Sheets read quota). ') + msg);
 }
