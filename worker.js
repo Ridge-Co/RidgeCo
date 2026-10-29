@@ -39002,7 +39002,7 @@ async function strMarkBatch(ctx, changes, opts) {
     for (const u of upd) { const f = r.failed.find(x => String(x.id) === String(u.id)); if (f) res.failed.push({ key: u.k, error: f.error }); else if (unvIds.has(String(u.id))) res.unverified.push({ key: u.k, error: r.unverified_error || 'could not re-read the sheet' }); else { Object.assign(u.ex, u.fields); keep(u.k, u.fields.Mark); res.ok.push(u.k); } }
   }
   if (add.length) {
-    try { const ids = await strAddRows(ctx.env, 'STR_Availability', add.map(a => a.f)); add.forEach((a, i) => { ctx.st.availRows.push(Object.assign({ ID: ids[i] }, a.f)); keep(a.k, a.f.Mark); res.ok.push(a.k); }); }
+    try { const ids = await strAddRows(ctx.env, 'STR_Availability', add.map(a => a.f), soft ? { soft: true } : undefined); if (ids.unverified) { for (const a of add) res.unverified.push({ key: a.k, error: ids.unverified }); } else add.forEach((a, i) => { ctx.st.availRows.push(Object.assign({ ID: ids[i] }, a.f)); keep(a.k, a.f.Mark); res.ok.push(a.k); }); }
     catch (e) { for (const a of add) res.failed.push({ key: a.k, error: strErrText(e) }); }
   }
   return res;
