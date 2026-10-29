@@ -39269,8 +39269,29 @@ async function strStageSheets(ctx, J) {
     const upd = []; for (const it of toDo.filter(x => done(x) && !ires[x.ref].oc)) for (const o of it.offers_declined) upd.push({ id: o.id, fields: { Status: 'declined', Responded_At: iso, Note: 'marked out by Brett' } });
     if (upd.length) { try { const r = await strBatchSet(env, 'STR_Offers', upd, { soft: true }); for (const f of r.failed) state.errors.push({ step: 'close_offers', error: `A waiting offer could not be closed (${f.error}).` }); if ((r.unverified || []).length) state.warnings.push(`A waiting offer was closed but the Hub could not read the sheet back to confirm it (${r.unverified_error}).`); } catch (e) { state.errors.push({ step: 'close_offers', error: strErrText(e) }); } }
   }
+  for (const it of toDo.filter(done)) ires[it.ref].oc = 1; // offers for this date are settled (not redone on a later pass)
   ctx.dirty = true;
+  // a write that went in but could not be read back is NOT an error and NOT done: wait for the next pass, which confirms it through the "already has this one" branch above
+  if (toDo.some(it => (ires[it.ref].status === 'pending' && ires[it.ref].unv) || ires[it.ref].mku)) {
+    state.unv = (state.unv || 0) + 1; state.unv_at = Date.now();
+    if (state.unv < STR_UNV_MAX) { state.tries.sheets = Math.max(0, (state.tries.sheets || 1) - 1); return false; }
+    strGiveUpUnverified(J);
+  }
   return true;
+}
+// The tries ran out and the read-back never worked: say so, loudly, and keep every text back. Used by the stage itself and by the driver's 3-try cap.
+function strGiveUpUnverified(J) {
+  const { state } = J, ires = state.ires;
+  for (const it of J.items) {
+    const r = ires[it.ref]; if (!r) continue;
+    if (r.status === 'pending' && r.unv) {
+      ires[it.ref] = { status: 'unverified', reason: `Saved, but the Hub could not read the sheet back to confirm it (${String(r.unv).slice(0, 120)}). It most likely saved. Refresh and check this date before trying again. No text was sent for it.` };
+      state.errors.push({ step: 'save_unverified', error: `${it.label}: saved but NOT confirmed - the Hub could not read the sheet back (${String(r.unv).slice(0, 120)}). Refresh and check before doing it again. No text was sent for it.` });
+    } else if (r.mku) {
+      state.errors.push({ step: 'backup_mark', error: `${it.label}: the assignment went through but a backup mark could not be confirmed (${String(r.mku).slice(0, 120)}).` });
+      r.flag = 'mark_unverified'; delete r.mku; r.mk = 1; state.unvMarks = (state.unvMarks || []).concat((it.marks || []).map(m => String(m.cleaner_id)));
+    }
+  }
 }
 
 // ── Stage 2: audit trail, one STR_Log row per date ──
