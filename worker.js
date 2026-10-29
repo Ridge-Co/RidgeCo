@@ -17791,6 +17791,9 @@ function schedBadness(status, b) {
     if (b.unparseable_response) return 'unreadable response: ' + b.unparseable_response;
     if (b.error) return (typeof b.error === 'string' ? b.error : JSON.stringify(b.error)).slice(0, 300);
     if (b.ok === false) {
+      // Oct 29 2026: a job that stopped on Google's shared read quota says so ({quota_busy:true, reason:<the Sheets error>}, no errors[]). Hand the scheduler the
+      // raw Sheets error text so schedErrorsAreQuotaBusy sees it for what it is (a calm, retried "busy"). Any errors[] entry makes this branch stand aside.
+      if (b.quota_busy === true && b.reason && !(Array.isArray(b.errors) && b.errors.length)) return String(b.reason).slice(0, 300);
       // Oct 14 2026: the deposit sweep failed 70+ times in a row with the useless text "ok:false []" (its not_found list was the
       // reason, its errors list was empty). A failure must say WHY, or nobody can act on it.
       const why = (Array.isArray(b.errors) && b.errors.length) ? b.errors
