@@ -39266,8 +39266,8 @@ async function strStageSheets(ctx, J) {
     }
   }
   if (isMark && req.mark === 'out') { // close waiting offers the cleaner can no longer take; the scheduler asks the next cleaner on its next run
-    const upd = []; for (const it of toDo.filter(done)) for (const o of it.offers_declined) upd.push({ id: o.id, fields: { Status: 'declined', Responded_At: iso, Note: 'marked out by Brett' } });
-    if (upd.length) { try { const r = await strBatchSet(env, 'STR_Offers', upd); for (const f of r.failed) state.errors.push({ step: 'close_offers', error: `A waiting offer could not be closed (${f.error}).` }); } catch (e) { state.errors.push({ step: 'close_offers', error: strErrText(e) }); } }
+    const upd = []; for (const it of toDo.filter(x => done(x) && !ires[x.ref].oc)) for (const o of it.offers_declined) upd.push({ id: o.id, fields: { Status: 'declined', Responded_At: iso, Note: 'marked out by Brett' } });
+    if (upd.length) { try { const r = await strBatchSet(env, 'STR_Offers', upd, { soft: true }); for (const f of r.failed) state.errors.push({ step: 'close_offers', error: `A waiting offer could not be closed (${f.error}).` }); if ((r.unverified || []).length) state.warnings.push(`A waiting offer was closed but the Hub could not read the sheet back to confirm it (${r.unverified_error}).`); } catch (e) { state.errors.push({ step: 'close_offers', error: strErrText(e) }); } }
   }
   ctx.dirty = true;
   return true;
