@@ -39194,6 +39194,10 @@ function strRoom(ctx, est) { return ctx.subS0 === undefined || strSubUsed(ctx) +
 async function strFresh(ctx) { if (ctx.dirty) { await strLoad(ctx, true); ctx.dirty = false; } }
 const STR_STAGES = ['sheets', 'audit', 'calendar', 'queue', 'send', 'email', 'alerts', 'finish'];
 const STR_STAGE_EST = { sheets: 18, audit: 4, calendar: 8, queue: 4, send: 17, email: 7, alerts: 12, finish: 22 };
+// Oct 29 2026 (queue 228): a write that went in but could not be read back is "unconfirmed", never "failed". The sheets stage waits STR_UNV_GAP_MS between passes
+// (Google's read quota is per minute) and gives up after STR_UNV_MAX passes with a loud "saved, could not confirm". No text is lined up for an unconfirmed write.
+const STR_UNV_MAX = 5, STR_UNV_GAP_MS = 10000;
+const strPause = ms => new Promise(r => setTimeout(r, ms));
 const STR_STAGE_TEXT = { sheets: 'saving the schedule change', audit: 'writing the activity log', calendar: 'fixing the cleaning calendar', queue: 'lining up the texts', send: 'sending the texts', email: 'sending the calendar invite', alerts: 'checking the standing alerts', finish: 'wrapping up' };
 
 // ── Compact copy of the plan that is saved with the job (a cell holds at most 50,000 characters) ──
