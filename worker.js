@@ -29169,7 +29169,7 @@ async function ensureColumns(env, tab, columns) {
       // "sheets_quota_busy" row (the caller still gets the throw and retries), not a P1 "ensure_columns_failed". A real failure (a write, a bad range) is unchanged.
       // (typeof: other tests slice this function out of module scope without the helper; they keep the old row.)
       const _busy = typeof sheetsQuotaBusyError === 'function' && sheetsQuotaBusyError(e);
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: _busy ? 'sheets_quota_busy' : 'ensure_columns_failed', Skill_Or_Endpoint: _busy ? 'ensure_columns/' + tab : tab, Success: 'FALSE', Notes: `columns=${(columns || []).join(',')} err=${String((e && e.message) || e)}` }); } catch (_) {}
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: _busy ? 'sheets_quota_busy' : 'ensure_columns_failed', Skill_Or_Endpoint: _busy ? 'ensure_columns/' + tab : tab, Success: 'FALSE', Notes: `columns=${(columns || []).join(',')} err=${String((e && e.message) || e)}` }); } catch (le) { console.error('ensureColumns: could not log the failure to Ops_Telemetry (the original error is still thrown):', tab, le && le.message); }
     }
     throw e;
   }
