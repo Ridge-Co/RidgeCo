@@ -37913,7 +37913,9 @@ async function strAddRows(env, tab, list, opts) {
   try { const g = await guardAppendedIds(env, tab, appendResp, rows.length, idc, ids); for (let i = 0; i < ids.length; i++) ids[i] = g.ids[i]; }
   catch (e) { throw strErr('write_not_landed', `A new ${tab} row may share its id with another row: ${strErrText(e)}`); }
   invalidateTabCache(tab);
-  const back = await fetchTab(env, tab);
+  let back;
+  try { back = await fetchTab(env, tab); }
+  catch (e) { if (!(opts && opts.soft)) throw e; ids.unverified = strErrText(e).slice(0, 160); return ids; }
   for (const id of ids) if (!back.some(r => String(r.ID) === id)) throw strErr('write_not_landed', `A new ${tab} row (#${id}) was not found after saving`);
   return ids;
 }
