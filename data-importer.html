@@ -61,6 +61,18 @@
   input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=image]),select,textarea{font-size:16px !important}
 }
 </style>
+<style id="mobile-tap-targets">
+/* Ops_Build_Queue #111 (Oct 29 2026): tap targets >=44px + scrollable wide tables on touch phones only (same gate as mobile-input-font, so mouse/desktop density is unchanged).
+   min-height/min-width only (never a fixed height) so labels wrap instead of overflowing; !important so page rules like .btn.small{min-height:34px} cannot win. Documented exceptions: checkboxes/radios/file inputs and plain text links inside a sentence. */
+@media (hover:none) and (pointer:coarse){
+  button,input[type=button],input[type=submit],select,summary,.btn,.btn-sm,.filter-btn,#rc-navbar a{min-height:44px !important}
+  button,input[type=button],input[type=submit],.btn,.btn-sm,.filter-btn,#rc-navbar a{min-width:44px !important}
+  .modal-close{font-size:1.6rem;line-height:1;margin:-8px -10px -8px 0}
+  div.tab{min-height:44px !important;min-width:44px;display:flex;align-items:center;justify-content:center}
+  .table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  *:has(> table):not(body):not(html){overflow-x:auto;-webkit-overflow-scrolling:touch}
+}
+</style>
 </head>
 <body>
 <!-- RC-NAV: shared back-to-Hub + tools jump bar (Aug 20, 2026) -->
@@ -132,10 +144,10 @@
   <div class="section">
     <div class="section-title">BALTIMORE PROPERTIES — 11 from ClickUp</div>
     <p style="color:var(--muted);font-size:11px;margin-bottom:10px">Review and edit before importing. All are multi-unit Baltimore properties.</p>
-    <table>
+    <div class="table-wrap"><table>
       <thead><tr><th><input type="checkbox" id="check-all-props" onchange="toggleAll('prop-check-',this.checked)"></th><th>Address</th><th>Type</th><th>Owner</th><th>Units</th></tr></thead>
       <tbody id="bmore-props-body"></tbody>
-    </table>
+    </table></div>
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
       <button class="btn success" onclick="importBmoreProperties()">Import Selected Properties + Units + Tenants</button>
       <span id="bmore-count" style="color:var(--muted);font-size:11px;line-height:32px"></span>
@@ -157,10 +169,10 @@
       <label style="margin-left:16px">Owner name</label>
       <input id="wb-owner" placeholder="Owner name..." style="width:160px">
     </div>
-    <table>
+    <div class="table-wrap"><table>
       <thead><tr><th><input type="checkbox" id="check-all-wb" onchange="toggleAll('wb-check-',this.checked)"></th><th>Address</th><th>Type</th></tr></thead>
       <tbody id="wb-props-body"></tbody>
-    </table>
+    </table></div>
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
       <button class="btn success" onclick="importWbProperties()">Import Selected</button>
       <span id="wb-count" style="color:var(--muted);font-size:11px;line-height:32px"></span>

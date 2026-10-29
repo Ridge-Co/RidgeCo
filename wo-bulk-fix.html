@@ -44,6 +44,19 @@
   input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=image]),select,textarea{font-size:16px !important}
 }
 </style>
+<style id="mobile-tap-targets">
+/* Ops_Build_Queue #111 (Oct 29 2026): tap targets >=44px + scrollable wide tables on touch phones only (same gate as mobile-input-font, so mouse/desktop density is unchanged).
+   min-height/min-width only (never a fixed height) so labels wrap instead of overflowing; !important so page rules like .btn.small{min-height:34px} cannot win. Documented exceptions: checkboxes/radios/file inputs and plain text links inside a sentence. */
+@media (hover:none) and (pointer:coarse){
+  button,input[type=button],input[type=submit],select,summary,.btn,.btn-sm,.filter-btn,#rc-navbar a{min-height:44px !important}
+  button,input[type=button],input[type=submit],.btn,.btn-sm,.filter-btn,#rc-navbar a{min-width:44px !important}
+  .modal-close{font-size:1.6rem;line-height:1;margin:-8px -10px -8px 0}
+  div.tab{min-height:44px !important;min-width:44px;display:flex;align-items:center;justify-content:center}
+  .table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  *:has(> table):not(body):not(html){overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .row>input{min-width:0}
+}
+</style>
 </head>
 <body>
 <!-- RC-NAV: shared back-to-Hub + tools jump bar (Aug 20, 2026) -->
