@@ -38976,7 +38976,9 @@ async function strBatchSet(env, tab, updates, opts) {
   if (!cells.length) return out;
   await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: cells });
   invalidateTabCache(tab);
-  const back = await fetchTab(env, tab);
+  let back;
+  try { back = await fetchTab(env, tab); }
+  catch (e) { if (!(opts && opts.soft)) throw e; out.unverified = sent.map(u => u.id); out.unverified_error = strErrText(e).slice(0, 160); return out; }
   for (const u of sent) {
     const row = back.find(r => String(r.ID) === String(u.id)), badk = row ? Object.keys(u.fields).filter(k => String(row[k] == null ? '' : row[k]) !== String(u.fields[k] == null ? '' : u.fields[k])) : ['(row missing)'];
     if (badk.length) out.failed.push({ id: u.id, error: `${tab} #${u.id}: ${badk.join(', ')} did not save` }); else out.ok.push(u.id);
