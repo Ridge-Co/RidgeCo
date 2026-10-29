@@ -899,7 +899,7 @@ function runApply(body, n){
   });
 }
 var TXT_PILL = { sent: ['ok', 'Text sent'], held: ['warn', 'Text held'], not_sent: ['warn', 'Not texted'], failed: ['bad', 'TEXT FAILED'] };
-var ITM_PILL = { done: ['ok', 'Done'], skipped: ['warn', 'Skipped'], failed: ['bad', 'FAILED'] };
+var ITM_PILL = { done: ['ok', 'Done'], skipped: ['warn', 'Skipped'], failed: ['bad', 'FAILED'], unverified: ['warn', 'SAVED - NOT CONFIRMED'] };
 function renderResult(r){
   var dup = !!r.duplicate; if(dup && r.result) r = r.result;
   var tone = r.status === 'done' ? 'ok' : (r.status === 'failed' ? 'err' : 'warn');

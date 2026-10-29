@@ -115,7 +115,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-28.01-fi-premier-repair-contact';
+const BUILD_VERSION = '2026-10-29.02-str-verify-soft';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -37900,7 +37900,9 @@ async function strEnsureTabs(env) {
   await ensureColumns(env, 'Vendors', ['Service_Area']);
   __strTabsReady = true;
 }
-async function strAddRows(env, tab, list) {
+// opts.soft (Oct 29 2026, queue 228): the append LANDED but the verification re-read could not be done (Sheets read quota, a 5xx). Instead of throwing (which
+// made the whole swap look FAILED although the rows were saved) the ids come back with .unverified = the reason. The caller must NOT treat that as saved-and-checked.
+async function strAddRows(env, tab, list, opts) {
   if (!list.length) return [];
   invalidateTabCache(tab);
   const data = await sheetsRequest(env, 'GET', `/values/${tab}`), rows = data.values || [[]], headers = rows[0] || [];
@@ -37911,7 +37913,9 @@ async function strAddRows(env, tab, list) {
   try { const g = await guardAppendedIds(env, tab, appendResp, rows.length, idc, ids); for (let i = 0; i < ids.length; i++) ids[i] = g.ids[i]; }
   catch (e) { throw strErr('write_not_landed', `A new ${tab} row may share its id with another row: ${strErrText(e)}`); }
   invalidateTabCache(tab);
-  const back = await fetchTab(env, tab);
+  let back;
+  try { back = await fetchTab(env, tab); }
+  catch (e) { if (!(opts && opts.soft)) throw e; ids.unverified = strErrText(e).slice(0, 160); return ids; }
   for (const id of ids) if (!back.some(r => String(r.ID) === id)) throw strErr('write_not_landed', `A new ${tab} row (#${id}) was not found after saving`);
   return ids;
 }
@@ -38954,7 +38958,8 @@ function strExternalEvents(task, foreign) {
 }
 
 // ── Batched, verified Sheets writes (one read + one write + one re-read per tab, however many rows: a 40-date change must not burn the per-minute read quota) ──
-async function strBatchSet(env, tab, updates) {
+// opts.soft: a failed verification re-read (after the write went in) returns out.unverified = [ids] and out.unverified_error instead of throwing. Opt-in, so every other caller is unchanged.
+async function strBatchSet(env, tab, updates, opts) {
   const out = { ok: [], failed: [] }; if (!updates.length) return out;
   invalidateTabCache(tab);
   const data = await sheetsRequest(env, 'GET', `/values/${tab}`), rows = data.values || [], headers = rows[0] || [];
@@ -38971,7 +38976,9 @@ async function strBatchSet(env, tab, updates) {
   if (!cells.length) return out;
   await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: cells });
   invalidateTabCache(tab);
-  const back = await fetchTab(env, tab);
+  let back;
+  try { back = await fetchTab(env, tab); }
+  catch (e) { if (!(opts && opts.soft)) throw e; out.unverified = sent.map(u => u.id); out.unverified_error = strErrText(e).slice(0, 160); return out; }
   for (const u of sent) {
     const row = back.find(r => String(r.ID) === String(u.id)), badk = row ? Object.keys(u.fields).filter(k => String(row[k] == null ? '' : row[k]) !== String(u.fields[k] == null ? '' : u.fields[k])) : ['(row missing)'];
     if (badk.length) out.failed.push({ id: u.id, error: `${tab} #${u.id}: ${badk.join(', ')} did not save` }); else out.ok.push(u.id);
@@ -38979,8 +38986,9 @@ async function strBatchSet(env, tab, updates) {
   return out;
 }
 // Admin-set availability marks, many at once. changes: [{cleaner, date, mark:'can'|'out'|'', source}]. Returns { ok:[key], failed:[{key,error}] } and keeps ctx.st in step.
-async function strMarkBatch(ctx, changes) {
-  const iso = new Date(ctx.now).toISOString(), res = { ok: [], failed: [] }, upd = [], add = [];
+// opts.soft: a mark whose write went in but could not be re-read is returned in res.unverified [{key,error}] (neither ok nor failed).
+async function strMarkBatch(ctx, changes, opts) {
+  const soft = !!(opts && opts.soft), iso = new Date(ctx.now).toISOString(), res = { ok: [], failed: [], unverified: [] }, upd = [], add = [];
   for (const ch of changes) {
     const k = ch.cleaner.ID + '|' + ch.date, m = ch.mark || '', ex = ctx.st.availRows.find(a => String(a.Cleaner_ID) === String(ch.cleaner.ID) && a.Property_Key === STR_PROP && a.Date === ch.date);
     if (ex) upd.push({ id: ex.ID, k, ex, fields: { Mark: m, Updated_At: iso, Source: ch.source || 'admin' } });
@@ -38989,11 +38997,12 @@ async function strMarkBatch(ctx, changes) {
   }
   const keep = (k, mark) => { if (mark) ctx.st.marks[k] = mark; else delete ctx.st.marks[k]; };
   if (upd.length) {
-    let r; try { r = await strBatchSet(ctx.env, 'STR_Availability', upd.map(u => ({ id: u.id, fields: u.fields }))); } catch (e) { r = { ok: [], failed: upd.map(u => ({ id: u.id, error: strErrText(e) })) }; }
-    for (const u of upd) { const f = r.failed.find(x => String(x.id) === String(u.id)); if (f) res.failed.push({ key: u.k, error: f.error }); else { Object.assign(u.ex, u.fields); keep(u.k, u.fields.Mark); res.ok.push(u.k); } }
+    let r; try { r = await strBatchSet(ctx.env, 'STR_Availability', upd.map(u => ({ id: u.id, fields: u.fields })), soft ? { soft: true } : undefined); } catch (e) { r = { ok: [], failed: upd.map(u => ({ id: u.id, error: strErrText(e) })) }; }
+    const unvIds = new Set((r.unverified || []).map(String));
+    for (const u of upd) { const f = r.failed.find(x => String(x.id) === String(u.id)); if (f) res.failed.push({ key: u.k, error: f.error }); else if (unvIds.has(String(u.id))) res.unverified.push({ key: u.k, error: r.unverified_error || 'could not re-read the sheet' }); else { Object.assign(u.ex, u.fields); keep(u.k, u.fields.Mark); res.ok.push(u.k); } }
   }
   if (add.length) {
-    try { const ids = await strAddRows(ctx.env, 'STR_Availability', add.map(a => a.f)); add.forEach((a, i) => { ctx.st.availRows.push(Object.assign({ ID: ids[i] }, a.f)); keep(a.k, a.f.Mark); res.ok.push(a.k); }); }
+    try { const ids = await strAddRows(ctx.env, 'STR_Availability', add.map(a => a.f), soft ? { soft: true } : undefined); if (ids.unverified) { for (const a of add) res.unverified.push({ key: a.k, error: ids.unverified }); } else add.forEach((a, i) => { ctx.st.availRows.push(Object.assign({ ID: ids[i] }, a.f)); keep(a.k, a.f.Mark); res.ok.push(a.k); }); }
     catch (e) { for (const a of add) res.failed.push({ key: a.k, error: strErrText(e) }); }
   }
   return res;
@@ -39185,6 +39194,10 @@ function strRoom(ctx, est) { return ctx.subS0 === undefined || strSubUsed(ctx) +
 async function strFresh(ctx) { if (ctx.dirty) { await strLoad(ctx, true); ctx.dirty = false; } }
 const STR_STAGES = ['sheets', 'audit', 'calendar', 'queue', 'send', 'email', 'alerts', 'finish'];
 const STR_STAGE_EST = { sheets: 18, audit: 4, calendar: 8, queue: 4, send: 17, email: 7, alerts: 12, finish: 22 };
+// Oct 29 2026 (queue 228): a write that went in but could not be read back is "unconfirmed", never "failed". The sheets stage waits STR_UNV_GAP_MS between passes
+// (Google's read quota is per minute) and gives up after STR_UNV_MAX passes with a loud "saved, could not confirm". No text is lined up for an unconfirmed write.
+const STR_UNV_MAX = 5, STR_UNV_GAP_MS = 10000;
+const strPause = ms => new Promise(r => setTimeout(r, ms));
 const STR_STAGE_TEXT = { sheets: 'saving the schedule change', audit: 'writing the activity log', calendar: 'fixing the cleaning calendar', queue: 'lining up the texts', send: 'sending the texts', email: 'sending the calendar invite', alerts: 'checking the standing alerts', finish: 'wrapping up' };
 
 // ── Compact copy of the plan that is saved with the job (a cell holds at most 50,000 characters) ──
@@ -39223,6 +39236,7 @@ const strOkItems = J => J.items.filter(i => i.outcome === 'change' && J.state.ir
 async function strStageSheets(ctx, J) {
   const { env } = ctx, { req, state } = J, cleaner = J.cleaner, iso = new Date(ctx.now).toISOString(), isMark = req.action === 'mark', ires = state.ires, first = J.plan.cleaner.first;
   const toDo = J.items.filter(i => i.outcome === 'change');
+  if (state.unv) { const w = STR_UNV_GAP_MS - (Date.now() - (state.unv_at || 0)); if (w > 0) await strPause(w); state.unv_at = Date.now(); } // (resuming after an unconfirmed write) let Google's per-minute read quota clear
   const done = it => ires[it.ref].status === 'done', fail = (it, why) => { ires[it.ref] = { status: 'failed', reason: why }; state.errors.push({ step: 'change_item', error: `${it.label}: ${why}` }); };
   if (!isMark) {
     invalidateTabCache('STR_Turnovers');
@@ -39230,36 +39244,60 @@ async function strStageSheets(ctx, J) {
     for (const it of toDo) {
       if (ires[it.ref].status !== 'pending') continue; // (resuming) already settled
       const row = cur.get(it.task_key), f = { Status: 'covered', Assigned_Cleaner_ID: cleaner.ID, Assigned_Via: 'admin_swap', Checkout_Text_Sent: '', Note: '', Updated_At: iso };
-      if (row) { if (row.Status === 'cancelled') { fail(it, 'The booking was cancelled a moment ago.'); continue; } if (row.Status === 'covered' && String(row.Assigned_Cleaner_ID) === cleaner.ID) { ires[it.ref] = { status: 'done', reason: `${first} already has this one.` }; continue; } upd.push({ id: row.ID, fields: f, it }); }
+      if (row) { if (row.Status === 'cancelled') { fail(it, 'The booking was cancelled a moment ago.'); continue; } if (row.Status === 'covered' && String(row.Assigned_Cleaner_ID) === cleaner.ID) { ires[it.ref] = { status: 'done', reason: `${first} already has this one.` }; continue; } /* (also how a write that could not be re-read last pass is confirmed) */ upd.push({ id: row.ID, fields: f, it }); }
       else adds.push({ it, f: Object.assign({ Task_Key: it.task_key, Property_Key: STR_PROP, Kind: it.kind, Date: it.date, Win_Start: it._t.winStart, Win_End: it._t.winEnd, Next_Arrival: it._t.next || '', Guests: '', Missing_Count: '0', Created_At: iso }, f) });
     }
-    if (upd.length) { let r; try { r = await strBatchSet(env, 'STR_Turnovers', upd.map(u => ({ id: u.id, fields: u.fields }))); } catch (e) { r = { ok: [], failed: upd.map(u => ({ id: u.id, error: strErrText(e) })) }; } for (const u of upd) { const f = r.failed.find(x => String(x.id) === String(u.id)); if (f) fail(u.it, f.error); else ires[u.it.ref] = { status: 'done', reason: '' }; } }
-    if (adds.length) { try { await strAddRows(env, 'STR_Turnovers', adds.map(a => a.f)); for (const a of adds) ires[a.it.ref] = { status: 'done', reason: 'The scheduler had not picked this date up yet; it was added now.' }; } catch (e) { for (const a of adds) fail(a.it, 'Could not save this date (it may or may not have saved - Refresh and check before retrying): ' + strErrText(e)); } }
+    if (upd.length) { let r; try { r = await strBatchSet(env, 'STR_Turnovers', upd.map(u => ({ id: u.id, fields: u.fields })), { soft: true }); } catch (e) { r = { ok: [], failed: upd.map(u => ({ id: u.id, error: strErrText(e) })) }; } const unvIds = new Set((r.unverified || []).map(String)); for (const u of upd) { const f = r.failed.find(x => String(x.id) === String(u.id)); if (f) fail(u.it, f.error); else if (unvIds.has(String(u.id))) ires[u.it.ref] = { status: 'pending', reason: '', unv: r.unverified_error || 'could not re-read the sheet' }; else ires[u.it.ref] = { status: 'done', reason: '' }; } }
+    if (adds.length) { try { const ids = await strAddRows(env, 'STR_Turnovers', adds.map(a => a.f), { soft: true }); for (const a of adds) ires[a.it.ref] = ids.unverified ? { status: 'pending', reason: '', unv: ids.unverified } : { status: 'done', reason: 'The scheduler had not picked this date up yet; it was added now.' }; } catch (e) { for (const a of adds) fail(a.it, 'Could not save this date (it may or may not have saved - Refresh and check before retrying): ' + strErrText(e)); } }
     // quietly close any waiting offers on the dates we just assigned
-    const offUpd = []; for (const it of toDo.filter(done)) for (const o of it.offers_closed) offUpd.push({ id: o.id, fields: { Status: o.status === 'queued' ? 'failed' : 'superseded', Responded_At: iso, Note: 'closed by admin swap' }, it });
-    if (offUpd.length) { let r; try { r = await strBatchSet(env, 'STR_Offers', offUpd.map(u => ({ id: u.id, fields: u.fields }))); } catch (e) { r = { ok: [], failed: offUpd.map(u => ({ id: u.id, error: strErrText(e) })) }; } for (const f of r.failed) { const it = (offUpd.find(u => String(u.id) === String(f.id)) || {}).it; state.errors.push({ step: 'close_offers', error: `${it ? it.label : ''}: a waiting offer could not be closed (${f.error}). Check the board before anyone replies.` }); if (it) ires[it.ref].flag = 'offer_not_closed'; } }
+    const offUpd = []; for (const it of toDo.filter(x => done(x) && !ires[x.ref].oc)) for (const o of it.offers_closed) offUpd.push({ id: o.id, fields: { Status: o.status === 'queued' ? 'failed' : 'superseded', Responded_At: iso, Note: 'closed by admin swap' }, it });
+    if (offUpd.length) { let r; try { r = await strBatchSet(env, 'STR_Offers', offUpd.map(u => ({ id: u.id, fields: u.fields })), { soft: true }); } catch (e) { r = { ok: [], failed: offUpd.map(u => ({ id: u.id, error: strErrText(e) })) }; } if ((r.unverified || []).length) state.warnings.push(`A waiting offer was closed but the Hub could not read the sheet back to confirm it (${r.unverified_error}). Check the board before anyone replies.`); for (const f of r.failed) { const it = (offUpd.find(u => String(u.id) === String(f.id)) || {}).it; state.errors.push({ step: 'close_offers', error: `${it ? it.label : ''}: a waiting offer could not be closed (${f.error}). Check the board before anyone replies.` }); if (it) ires[it.ref].flag = 'offer_not_closed'; } }
   }
   // availability marks (displaced cleaners become backup; out-marks cleared; or the whole mark action)
   const markChanges = [], markIt = new Map();
-  if (isMark) { for (const it of toDo) { markChanges.push({ cleaner, date: it.date, mark: req.mark, source: 'admin' }); markIt.set(cleaner.ID + '|' + it.date, it); } }
-  else for (const it of toDo.filter(done)) for (const m of it.marks) { markChanges.push({ cleaner: ctx.st.cmap[m.cleaner_id], date: m.date, mark: m.mark, source: 'admin_swap' }); markIt.set(m.cleaner_id + '|' + m.date, it); }
+  if (isMark) { for (const it of toDo.filter(x => ires[x.ref].status === 'pending')) { markChanges.push({ cleaner, date: it.date, mark: req.mark, source: 'admin' }); markIt.set(cleaner.ID + '|' + it.date, it); } }
+  else for (const it of toDo.filter(x => done(x) && !ires[x.ref].mk)) for (const m of it.marks) { markChanges.push({ cleaner: ctx.st.cmap[m.cleaner_id], date: m.date, mark: m.mark, source: 'admin_swap' }); markIt.set(m.cleaner_id + '|' + m.date, it); }
   if (markChanges.length) {
-    const r = await strMarkBatch(ctx, markChanges.filter(m => m.cleaner));
-    if (isMark) { for (const it of toDo) { const f = r.failed.find(x => x.key === cleaner.ID + '|' + it.date); if (f) fail(it, 'Could not save the mark: ' + f.error); else ires[it.ref] = { status: 'done', reason: '' }; } }
-    else for (const f of r.failed) { const it = markIt.get(f.key); state.errors.push({ step: 'backup_mark', error: `${it ? it.label : f.key}: the assignment went through but a backup mark did not save (${f.error}).` }); if (it) ires[it.ref].flag = 'mark_failed'; }
+    const r = await strMarkBatch(ctx, markChanges.filter(m => m.cleaner), { soft: true }), unvKeys = new Map(r.unverified.map(u => [u.key, u.error]));
+    if (isMark) { for (const it of toDo.filter(x => ires[x.ref].status === 'pending')) { const k = cleaner.ID + '|' + it.date, f = r.failed.find(x => x.key === k); if (f) fail(it, 'Could not save the mark: ' + f.error); else if (unvKeys.has(k)) ires[it.ref] = { status: 'pending', reason: '', unv: unvKeys.get(k) }; else ires[it.ref] = { status: 'done', reason: '' }; } }
+    else {
+      for (const f of r.failed) { const it = markIt.get(f.key); state.errors.push({ step: 'backup_mark', error: `${it ? it.label : f.key}: the assignment went through but a backup mark did not save (${f.error}).` }); if (it) ires[it.ref].flag = 'mark_failed'; }
+      for (const it of new Set(markIt.values())) { const bad = [...unvKeys.keys()].find(k => markIt.get(k) === it); if (bad) ires[it.ref].mku = unvKeys.get(bad); else { delete ires[it.ref].mku; ires[it.ref].mk = 1; } } // mk = this date's backup marks are settled; mku = written but not yet read back
+    }
   }
   if (isMark && req.mark === 'out') { // close waiting offers the cleaner can no longer take; the scheduler asks the next cleaner on its next run
-    const upd = []; for (const it of toDo.filter(done)) for (const o of it.offers_declined) upd.push({ id: o.id, fields: { Status: 'declined', Responded_At: iso, Note: 'marked out by Brett' } });
-    if (upd.length) { try { const r = await strBatchSet(env, 'STR_Offers', upd); for (const f of r.failed) state.errors.push({ step: 'close_offers', error: `A waiting offer could not be closed (${f.error}).` }); } catch (e) { state.errors.push({ step: 'close_offers', error: strErrText(e) }); } }
+    const upd = []; for (const it of toDo.filter(x => done(x) && !ires[x.ref].oc)) for (const o of it.offers_declined) upd.push({ id: o.id, fields: { Status: 'declined', Responded_At: iso, Note: 'marked out by Brett' } });
+    if (upd.length) { try { const r = await strBatchSet(env, 'STR_Offers', upd, { soft: true }); for (const f of r.failed) state.errors.push({ step: 'close_offers', error: `A waiting offer could not be closed (${f.error}).` }); if ((r.unverified || []).length) state.warnings.push(`A waiting offer was closed but the Hub could not read the sheet back to confirm it (${r.unverified_error}).`); } catch (e) { state.errors.push({ step: 'close_offers', error: strErrText(e) }); } }
   }
+  for (const it of toDo.filter(done)) ires[it.ref].oc = 1; // offers for this date are settled (not redone on a later pass)
   ctx.dirty = true;
+  // a write that went in but could not be read back is NOT an error and NOT done: wait for the next pass, which confirms it through the "already has this one" branch above
+  if (toDo.some(it => (ires[it.ref].status === 'pending' && ires[it.ref].unv) || ires[it.ref].mku)) {
+    state.unv = (state.unv || 0) + 1; state.unv_at = Date.now();
+    if (state.unv < STR_UNV_MAX) { state.tries.sheets = Math.max(0, (state.tries.sheets || 1) - 1); return false; }
+    strGiveUpUnverified(J);
+  }
   return true;
+}
+// The tries ran out and the read-back never worked: say so, loudly, and keep every text back. Used by the stage itself and by the driver's 3-try cap.
+function strGiveUpUnverified(J) {
+  const { state } = J, ires = state.ires;
+  for (const it of J.items) {
+    const r = ires[it.ref]; if (!r) continue;
+    if (r.status === 'pending' && r.unv) {
+      ires[it.ref] = { status: 'unverified', reason: `Saved, but the Hub could not read the sheet back to confirm it (${String(r.unv).slice(0, 120)}). It most likely saved. Refresh and check this date before trying again. No text was sent for it.` };
+      state.errors.push({ step: 'save_unverified', error: `${it.label}: saved but NOT confirmed - the Hub could not read the sheet back (${String(r.unv).slice(0, 120)}). Refresh and check before doing it again. No text was sent for it.` });
+    } else if (r.mku) {
+      state.errors.push({ step: 'backup_mark', error: `${it.label}: the assignment went through but a backup mark could not be confirmed (${String(r.mku).slice(0, 120)}).` });
+      r.flag = 'mark_unverified'; delete r.mku; r.mk = 1; state.unvMarks = (state.unvMarks || []).concat((it.marks || []).map(m => String(m.cleaner_id)));
+    }
+  }
 }
 
 // ── Stage 2: audit trail, one STR_Log row per date ──
 async function strStageAudit(ctx, J) {
   const { req, state } = J, cleaner = J.cleaner, iso = new Date(ctx.now).toISOString(), isMark = req.action === 'mark', first = J.plan.cleaner.first;
-  const logRows = J.items.filter(it => ['change', 'blocked', 'not_found'].includes(it.outcome) || state.ires[it.ref].status === 'failed').map(it => { const r = state.ires[it.ref], ok = r.status === 'done'; return { Timestamp: iso, Task_Key: it.task_key || '', Cleaner_ID: cleaner.ID, Event: isMark ? (ok ? 'admin_mark' : 'admin_mark_failed') : (ok ? 'admin_swap' : 'admin_swap_failed'), Detail: (isMark ? `${it.date}: ${it.current || '-'} -> ${req.mark || 'cleared'}` : `${it.label}: ${(it.displaced || []).map(d => d.name + (d.source === 'calendar' ? ' (calendar entry)' : '')).concat(it.unmatched || []).join(', ') || 'nobody'} -> ${first}${req.action === 'assign_range' ? ' [range]' : ''}`) + (ok ? '' : ` [${r.status}: ${r.reason}]`) + ` plan ${J.planId}`.slice(0, 480) }; });
+  const logRows = J.items.filter(it => ['change', 'blocked', 'not_found'].includes(it.outcome) || state.ires[it.ref].status === 'failed').map(it => { const r = state.ires[it.ref], ok = r.status === 'done'; return { Timestamp: iso, Task_Key: it.task_key || '', Cleaner_ID: cleaner.ID, Event: isMark ? (ok ? 'admin_mark' : (r.status === 'unverified' ? 'admin_mark_unverified' : 'admin_mark_failed')) : (ok ? 'admin_swap' : (r.status === 'unverified' ? 'admin_swap_unverified' : 'admin_swap_failed')), Detail: (isMark ? `${it.date}: ${it.current || '-'} -> ${req.mark || 'cleared'}` : `${it.label}: ${(it.displaced || []).map(d => d.name + (d.source === 'calendar' ? ' (calendar entry)' : '')).concat(it.unmatched || []).join(', ') || 'nobody'} -> ${first}${req.action === 'assign_range' ? ' [range]' : ''}`) + (ok ? '' : ` [${r.status}: ${r.reason}]`) + ` plan ${J.planId}`.slice(0, 480) }; });
   try { if (logRows.length) await strAddRows(ctx.env, 'STR_Log', logRows.map(r => Object.assign({}, r, { Detail: r.Detail.slice(0, 480) }))); } catch (e) { state.errors.push({ step: 'audit_log', error: 'Could not write the audit rows to the Activity log: ' + strErrText(e) }); }
   return true;
 }
@@ -39323,14 +39361,15 @@ async function strStageQueue(ctx, J) {
   for (const r of J.recipients) {
     const c = ctx.st.cmap[r.cleaner_id], base = { key: r.key, name: r.name, first: r.first, kind: r.kind, dates: r.dates }, tx = J.texts[r.key] || { send: false, text: '' };
     const refs = r.refs.filter(x => okRefs.has(x)); if (!c) { state.texts.push(Object.assign(base, { status: 'failed', detail: 'Cleaner not found.' })); continue; }
-    if (!refs.length) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: 'Nothing changed for this person, so no text.' })); continue; }
+    if (!refs.length) { const unv = r.refs.some(x => (state.ires[x] || {}).status === 'unverified'); state.texts.push(Object.assign(base, { status: 'not_sent', detail: unv ? 'The change was saved but could not be confirmed, so no text was sent.' : 'Nothing changed for this person, so no text.' })); if (unv) state.warnings.push(`${r.name} was NOT texted: the change was saved but the Hub could not confirm it. Check the schedule, then tell them yourself.`); continue; }
+    if (r.kind === 'back' && (state.unvMarks || []).includes(String(r.cleaner_id))) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: 'Their backup mark was saved but could not be confirmed, so no text was sent.' })); state.warnings.push(`${r.name} was NOT texted: their backup mark could not be confirmed. Check the schedule, then tell them yourself.`); continue; }
     if (!tx.send && (r.can_send || r.kind === 'mark')) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: 'You unticked this text.' })); continue; }
     if (!r.can_send) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: r.reason })); state.warnings.push(`${r.name} was NOT texted: ${r.reason} Tell them yourself.`); continue; }
     let text = tx.text, replaced = false, ds = r.dates;
     if (refs.length !== r.refs.length) { // some dates failed: Brett's text would be wrong, so use the standard wording for the dates that DID change
       const its = J.items.filter(i => refs.includes(i.ref)); ds = [...new Set(its.map(i => i.date))].sort();
       text = (await strRenderRecipient(ctx, r.kind, c, ds, r.kind === 'mark' ? { key: 'x', kind: 'checkout', date: ds[0], next: '' } : its[0]._t, { newC: cleaner, mark: req.mark })).text; replaced = true;
-      state.warnings.push(`${r.name}'s text was reworded to list only the dates that really changed (some dates failed), so your edit was replaced.`);
+      state.warnings.push(`${r.name}'s text was reworded to list only the dates that really changed (some dates did not save or could not be confirmed), so your edit was replaced.`);
     }
     const expect = r.kind === 'mark' ? ds.map(d => ({ date: d, mark: req.mark })) : J.items.filter(i => refs.includes(i.ref)).map(i => ({ task_key: i.task_key, date: i.date, assigned_id: cleaner.ID }));
     rows.push({ Plan_ID: J.planId, Cleaner_ID: c.ID, Kind: r.kind, Msg_Type: r.type, Body: text, Task_Keys: refs.join(','), Expect: JSON.stringify(expect), Not_Before: win ? iso : heldIso, Status: 'parked', Created_At: iso, Note: '' });
@@ -39391,6 +39430,7 @@ function strChangeSummaryText(plan, res) {
   else bits.push(`${plan.cleaner.first} now has ${c.done} of ${res.items.length} turnover(s) you asked for`);
   if (c.skipped) bits.push(`${c.skipped} skipped (nothing to do or not allowed)`);
   if (c.failed) bits.push(`${c.failed} FAILED`);
+  if (c.unverified) bits.push(`${c.unverified} saved but NOT confirmed (the Hub could not read the sheet back); no text sent for them`);
   const t = res.texts, sent = t.filter(x => x.status === 'sent'), held = t.filter(x => x.status === 'held'), bad = t.filter(x => x.status === 'failed'), no = t.filter(x => x.status === 'not_sent');
   if (sent.length) bits.push(`texted ${sent.map(x => x.first).join(', ')}`);
   if (held.length) bits.push(`text held until 8 AM for ${held.map(x => x.first).join(', ')}`);
@@ -39456,7 +39496,7 @@ async function strChangeContinue(ctx, row) {
       else complete = await stageFns[stage](ctx, J);
     } catch (e) {
       state.errors.push({ step: 'stage_' + stage, error: `The step "${STR_STAGE_TEXT[stage]}" hit a problem: ${strErrText(e)}` });
-      if (state.tries[stage] >= 3) { complete = true; if (stage === 'sheets') for (const k of Object.keys(state.ires)) if (state.ires[k].status === 'pending') state.ires[k] = { status: 'failed', reason: 'The schedule change did not save (see the error below).' }; }
+      if (state.tries[stage] >= 3) { complete = true; if (stage === 'sheets') { for (const k of Object.keys(state.ires)) if (state.ires[k].status === 'pending' && !state.ires[k].unv) state.ires[k] = { status: 'failed', reason: 'The schedule change did not save (see the error below).' }; strGiveUpUnverified(J); } }
       else { const er = state.errors.pop(); state.warnings.push('Hiccup (tried again): ' + er.error); break; }
     }
     state.errors.push(...ctx.errors.splice(0));
@@ -39488,8 +39528,8 @@ async function strStageFinish(ctx, J) {
     textRes.push(out);
   }
   const items = J.items.map(it => { const r = state.ires[it.ref], ci = state.cal.items[it.ref]; return { ref: it.ref, task_key: it.task_key || '', date: it.date, label: it.label, status: r.status, reason: r.reason || '', flag: r.flag || '', notes: it.notes || [], sentence: it.sentence || '', calendar: ci || null }; });
-  const counts = { done: items.filter(i => i.status === 'done').length, skipped: items.filter(i => i.status === 'skipped').length, failed: items.filter(i => i.status === 'failed').length };
-  const anyProblem = errors.length > 0 || counts.failed > 0, status = !anyProblem ? 'done' : (counts.done > 0 ? 'partial' : 'failed');
+  const counts = { done: items.filter(i => i.status === 'done').length, skipped: items.filter(i => i.status === 'skipped').length, failed: items.filter(i => i.status === 'failed').length, unverified: items.filter(i => i.status === 'unverified').length };
+  const anyProblem = errors.length > 0 || counts.failed > 0 || counts.unverified > 0, status = !anyProblem ? 'done' : (counts.done > 0 || counts.unverified > 0 ? 'partial' : 'failed'); // "saved, could not confirm" is partial, never "did NOT go through"
   const cal = Object.assign({ mode: plan.calendar.mode }, state.cal); delete cal.done; delete cal.fatal;
   const res = { ok: status === 'done', status, plan_id: J.planId, action: req.action, cleaner: plan.cleaner, mark: req.mark, items, counts, texts: textRes, email: state.email, calendar: cal, warnings: warnings.concat(plan.warnings || []), errors, calls: state.calls, duplicate: false };
   res.summary = strChangeSummaryText({ action: plan.action, cleaner: plan.cleaner, mark: req.mark }, res);
