@@ -587,6 +587,137 @@ const markOf = (W, cid, d) => (rowsOf(W, 'STR_Availability').find(a => a.Cleaner
   t('40 dates: every single request stayed under 48 outgoing calls', W.maxCall <= 48, W.maxCall);
 }
 
+// ═══ 13. Oct 29 2026 (queue 228): the verification re-read hits the Sheets READ quota. The writes LANDED; the swap must not be reported FAILED ═══
+// Nothing is texted for a write the Hub could not confirm; a later pass confirms it ("already has this one") and only then are the texts lined up.
+{
+  const realST = globalThis.setTimeout; globalThis.setTimeout = (fn, ms, ...a) => { if (CUR) (CUR.waits = CUR.waits || []).push(ms); return realST(fn, 0, ...a); };
+  const startFirst = async (E, p, body) => { CUR = E.W; const texts = {}; for (const r of p.recipients) texts[r.key] = { send: r.send_default, body: r.text }; E.__cold(); return await J(E.strChangeApply({}, Object.assign({}, body, { plan_id: p.plan_id, sig: p.sig, texts }))); };
+  const queued = W => rowsOf(W, 'STR_Outbox').length;
+  const gina = W => W.sms.filter(s => s.to === 'Regina Seville').length;
+  {
+    // A. one date, the re-read fails once with the quota error
+    const { W, E } = await setup(), body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+    W.rfault = { tab: 'STR_Turnovers', times: 1 };
+    const first = await startFirst(E, p, body);
+    t('A: first call is "applying" (waiting to confirm), NOT failed', first.status === 'applying' && first.ok === true && first.stage === 'sheets', first);
+    t('A: the write DID land', tr(W, K25).Assigned_Cleaner_ID === '1' && tr(W, K25).Status === 'covered');
+    t('A: while unconfirmed NOTHING is queued, texted, put on the calendar or emailed', queued(W) === 0 && W.sms.length === 0 && !W.cal.some(c => c.method !== 'GET') && !W.attach.length && W.brett.length === 0, { q: queued(W), sms: W.sms.length });
+    t('A: no FAILED audit row and no failure telemetry yet', !rowsOf(W, 'STR_Log').some(l => /failed/.test(l.Event)) && !W.telemetry.some(x => x.Success === 'FALSE'), W.telemetry);
+    t('A: the saved job still shows the date as pending (not failed)', (() => { const st = JSON.parse(rowsOf(W, 'STR_Changes')[0].State); const v = Object.values(st.ires)[0]; return v.status === 'pending' && !!v.unv; })());
+    const res = await finish(E, first, p.plan_id);
+    t('A: the next pass confirms it: done, not failed, nothing in errors', res.status === 'done' && res.ok === true && res.counts.done === 1 && res.counts.failed === 0 && !(res.errors || []).length && !/FAILED/.test(res.summary), res);
+    t('A: the item says it was confirmed on a re-check', /already has this one/.test(res.items[0].reason) || res.items[0].status === 'done');
+    t('A: texts were queued only now, once each; Gina texted exactly once', gina(W) === 1 && W.sms.filter(s => s.to === 'Kayla').length === 1 && queued(W) === 2, W.sms.map(s => s.to + ':' + s.type));
+    t('A: calendar written after confirmation; backup mark saved', W.calEvents.some(e => e.summary === 'Gina Cleaning' && e.start.date === '2026-10-25') && markOf(W, '2', '2026-10-25') === 'can');
+    t('A: it waited between tries (never hammers the quota)', (W.waits || []).some(ms => ms >= 5000), W.waits);
+    t('A: audit says admin_swap, never admin_swap_failed; no failure telemetry', rowsOf(W, 'STR_Log').filter(l => l.Event === 'admin_swap').length === 1 && !rowsOf(W, 'STR_Log').some(l => /failed|unverified/.test(l.Event)) && !W.telemetry.some(x => x.Success === 'FALSE'), W.telemetry);
+  }
+  {
+    // B. bulk: three dates, one re-read failure -> all three done, one grouped text per person, nobody texted early
+    const { W, E } = await setup(), body = { action: 'swap', task_keys: [K20, K25, K30], cleaner_id: '3' }, p = await preview(E, body);
+    W.rfault = { tab: 'STR_Turnovers', times: 1 };
+    const first = await startFirst(E, p, body);
+    t('B: bulk first call applying, nothing texted or queued yet', first.status === 'applying' && queued(W) === 0 && W.sms.length === 0, first);
+    const res = await finish(E, first, p.plan_id);
+    t('B: all three dates DONE, none failed', res.status === 'done' && res.counts.done === 3 && res.counts.failed === 0 && [K20, K25, K30].every(k => tr(W, k).Assigned_Cleaner_ID === '3'), res.counts);
+    t('B: each person texted exactly once', W.sms.filter(s => s.to === 'Rachel Twigg').length === 1 && W.sms.filter(s => s.to === 'Regina Seville').length === 1, W.sms.map(s => s.to + ':' + s.type));
+  }
+  {
+    // C. a non-quota read error on the re-read is also "could not confirm", never "FAILED"
+    const { W, E } = await setup(), body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+    W.rfault = { tab: 'STR_Turnovers', times: 1, msg: 'Sheets API error on GET /values/STR_Turnovers: 503 backend error' };
+    const first = await startFirst(E, p, body);
+    t('C: a 503 on the re-read is unconfirmed, not failed', first.status === 'applying' && W.sms.length === 0 && queued(W) === 0, first);
+    const res = await finish(E, first, p.plan_id);
+    t('C: confirmed on the next pass', res.status === 'done' && res.counts.done === 1 && gina(W) === 1, res.status);
+  }
+  {
+    // D. the quota never clears: after the tries are used it says "saved, could not confirm" LOUDLY (never FAILED, never texted)
+    const { W, E } = await setup(), body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+    W.rfault = { tab: 'STR_Turnovers', times: 1000, sticky: true };
+    const first = await startFirst(E, p, body), res = await finish(E, first, p.plan_id);
+    t('D: ended (bounded number of passes) as partial + unverified, not "failed"', res.status === 'partial' && res.ok === false && res.counts.unverified === 1 && res.counts.failed === 0 && res.counts.done === 0 && res.items[0].status === 'unverified', { s: res.status, c: res.counts, calls: res.calls });
+    t('D: wording says saved / could not confirm / no text, and the summary does not say FAILED', /could not (be )?(double-)?check|could not confirm|not confirmed/i.test(res.summary) && !/\bFAILED\b/.test(res.summary) && /No text was sent/.test(res.items[0].reason), res.summary + ' | ' + res.items[0].reason);
+    t('D: NO text, no outbox row, no calendar write, no invite for an unconfirmed write', W.sms.length === 0 && queued(W) === 0 && !W.cal.some(c => c.method !== 'GET') && !W.attach.length, { sms: W.sms.length });
+    t('D: loud: error names the date, telemetry FALSE row, Brett told, audit row admin_swap_unverified', res.errors.some(e => e.step === 'save_unverified' && /Oct|25/.test(e.error)) && W.telemetry.some(x => x.Success === 'FALSE') && (W.brett.length || W.emails.length) && rowsOf(W, 'STR_Log').some(l => l.Event === 'admin_swap_unverified'), { e: res.errors, t: W.telemetry.length });
+    t('D: no text row says "Nothing changed" misleadingly: the recipients are told "saved but not confirmed"', res.texts.every(x => x.status === 'not_sent' && /not confirmed|could not be confirmed|Saved/i.test(x.detail)), res.texts);
+    t('D: the job is closed (not stuck "applying" forever)', rowsOf(W, 'STR_Changes')[0].Status === 'partial', rowsOf(W, 'STR_Changes')[0].Status);
+    t('D: the passes were bounded', (res.calls || 99) <= 12, res.calls);
+  }
+  {
+    // E. the write never lands AND the re-read keeps failing (the cap path through the stage itself, not the driver)
+    const { W, E } = await setup(), body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+    W.failBatchTab = 'STR_Turnovers'; W.rfault = { tab: 'STR_Turnovers', times: 1000 };
+    const first = await startFirst(E, p, body), res = await finish(E, first, p.plan_id);
+    t('E: gives up as unverified (cannot tell), no text, loud', res.counts.unverified === 1 && res.counts.failed === 0 && W.sms.length === 0 && res.errors.some(e => e.step === 'save_unverified') && W.telemetry.some(x => x.Success === 'FALSE'), res);
+  }
+  {
+    // F. backup mark (STR_Availability append) cannot be re-read: the displaced cleaner is NOT texted until it is confirmed, then is
+    const { W, E } = await setup(), body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+    W.rfault = { tab: 'STR_Availability', times: 1 };
+    const first = await startFirst(E, p, body);
+    t('F: backup mark unconfirmed: job waits, nothing queued or texted (not Gina, not Kayla)', first.status === 'applying' && queued(W) === 0 && W.sms.length === 0, { q: queued(W), sms: W.sms.map(s => s.to) });
+    t('F: the turnover itself is verified done in the saved job', (() => { const st = JSON.parse(rowsOf(W, 'STR_Changes')[0].State); return Object.values(st.ires)[0].status === 'done'; })());
+    const res = await finish(E, first, p.plan_id);
+    t('F: then everything completes: done, mark saved, Gina + Kayla each texted once, no double mark row', res.status === 'done' && markOf(W, '2', '2026-10-25') === 'can' && rowsOf(W, 'STR_Availability').filter(a => a.Cleaner_ID === '2' && a.Date === '2026-10-25').length === 1 && gina(W) === 1 && W.sms.filter(s => s.to === 'Kayla').length === 1, { s: res.status, e: res.errors });
+  }
+  {
+    // G. the backup mark can never be confirmed: the swap stands, loud, and the displaced cleaner is NOT texted about an unconfirmed mark
+    const { W, E } = await setup(), body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body);
+    W.rfault = { tab: 'STR_Availability', times: 1000, sticky: true };
+    const first = await startFirst(E, p, body), res = await finish(E, first, p.plan_id);
+    t('G: assignment stands and is done; result partial with a backup_mark error', res.counts.done === 1 && res.status === 'partial' && res.errors.some(e => e.step === 'backup_mark' && /could not be confirmed/.test(e.error)), res.errors);
+    t('G: Kayla (displaced) got NO text about the unconfirmed mark; Gina (verified) was texted', W.sms.filter(s => s.to === 'Kayla').length === 0 && gina(W) === 1 && res.warnings.some(w => /Kayla was NOT texted/.test(w)), { sms: W.sms.map(s => s.to), w: res.warnings });
+  }
+  {
+    // H. mark action (Out/Backup on dates): same rule
+    const { W, E } = await setup(), body = { action: 'mark', cleaner_id: '2', dates: ['2026-10-27', '2026-10-28'], mark: 'out' }, p = await preview(E, body);
+    W.rfault = { tab: 'STR_Availability', times: 1 };
+    const first = await startFirst(E, p, body);
+    t('H: mark action: re-read quota -> applying, no text yet', first.status === 'applying' && W.sms.length === 0, first);
+    const res = await finish(E, first, p.plan_id);
+    t('H: then done, marks saved once each, no FAILED', res.status === 'done' && res.counts.failed === 0 && markOf(W, '2', '2026-10-27') === 'out' && markOf(W, '2', '2026-10-28') === 'out' && rowsOf(W, 'STR_Availability').filter(a => a.Cleaner_ID === '2' && a.Date === '2026-10-27').length === 1, { s: res.status, c: res.counts, e: res.errors });
+  }
+  {
+    // I. a REAL write failure is still FAILED (the soft path must not hide it); and a failed text after confirmation is still loud
+    const { W, E } = await setup(); W.failBatchTab = 'STR_Turnovers';
+    const body = { action: 'swap', task_keys: [K25], cleaner_id: '1' }, p = await preview(E, body), r = await sendIt(E, p, body);
+    t('I: write accepted but not landed (re-read works): still FAILED', r.status === 'failed' && r.counts.failed === 1 && r.counts.unverified === 0 && r.items[0].status === 'failed', r.counts);
+    const { W: W2, E: E2 } = await setup(); W2.rfault = { tab: 'STR_Turnovers', times: 1 }; W2.failSms = true;
+    const p2 = await preview(E2, body), f2 = await startFirst(E2, p2, body), r2 = await finish(E2, f2, p2.plan_id);
+    t('I: text failure AFTER a later confirmation stays loud, naming the cleaner', r2.status === 'partial' && r2.errors.some(e => e.step === 'text_failed' && /Regina Seville|Gina/.test(e.error) && /Tell them yourself/.test(e.error)) && W2.telemetry.some(x => x.Success === 'FALSE'), r2.errors);
+  }
+  {
+    // J. the helpers themselves: soft is opt-in. Without it the old behaviour (throw) is unchanged for every other caller
+    const { W, E } = await setup(); CUR = W;
+    const rows = rowsOf(W, 'STR_Turnovers'), id = rows[0].ID;
+    W.rfault = { tab: 'STR_Turnovers', times: 5, sticky: true };
+    let threw = '', soft = null;
+    try { await E.strBatchSet({}, 'STR_Turnovers', [{ id, fields: { Note: 'x1' } }]); } catch (e) { threw = String(e.message); }
+    t('J: strBatchSet without soft still throws the read error (other callers unchanged)', /429|Quota/.test(threw), threw);
+    W.rfault.armed = false;
+    try { soft = await E.strBatchSet({}, 'STR_Turnovers', [{ id, fields: { Note: 'x2' } }], { soft: true }); } catch (e) { soft = { threw: String(e.message) }; }
+    t('J: strBatchSet soft returns the ids as unverified, not ok, not failed', soft && Array.isArray(soft.unverified) && soft.unverified.length === 1 && String(soft.unverified[0]) === String(id) && !soft.ok.length && !soft.failed.length && /429|Quota/.test(soft.unverified_error), soft);
+    t('J: ...and the cell really was written', rowsOf(W, 'STR_Turnovers')[0].Note === 'x2');
+  }
+  {
+    // K. the date has no turnover row yet (the scheduler had not picked it up): the ADD is re-read-unconfirmed, then confirmed on the next pass without a duplicate row
+    const { W, E } = await setup(), body = { action: 'swap', task_keys: [K108], cleaner_id: '1' };
+    const rows = W.tabs.get('STR_Turnovers'), ix = rows.findIndex(r => r[rows[0].indexOf('Task_Key')] === K108); if (ix > 0) rows.splice(ix, 1);
+    const p = await preview(E, body);
+    if (!p.items || !p.items.some(i => i.outcome === 'change')) t('K: (setup) preview offers the missing date as a change', false, p.items);
+    else {
+      W.rfault = { tab: 'STR_Turnovers', times: 1 };
+      const first = await startFirst(E, p, body);
+      t('K: it took the ADD path (the saved job holds the date as unconfirmed, with the quota reason)', (() => { const st = JSON.parse(rowsOf(W, 'STR_Changes')[0].State); const v = st.ires[K108]; return v && v.status === 'pending' && /429/.test(v.unv) && rowsOf(W, 'STR_Turnovers').filter(r => r.Task_Key === K108).length === 1; })());
+      t('K: add landed, re-read quota: applying, no text, no calendar write', first.status === 'applying' && W.sms.length === 0 && queued(W) === 0 && !W.cal.some(c => c.method !== 'GET'), first);
+      const res = await finish(E, first, p.plan_id);
+      t('K: confirmed next pass: done, exactly ONE turnover row for the date, Gina texted once', res.status === 'done' && rowsOf(W, 'STR_Turnovers').filter(r => r.Task_Key === K108).length === 1 && tr(W, K108).Assigned_Cleaner_ID === '1' && gina(W) === 1, { s: res.status, rows: rowsOf(W, 'STR_Turnovers').filter(r => r.Task_Key === K108).length });
+    }
+  }
+  globalThis.setTimeout = realST;
+}
+
 // ═══ 12. state + load: the old flows still work ═══
 {
   const { W, E } = await setup();
