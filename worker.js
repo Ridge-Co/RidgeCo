@@ -17807,12 +17807,30 @@ function schedBadness(status, b) {
   }
   return null;
 }
+// Oct 29 2026. PURE. Is this step result a failure ONLY because Google's shared Sheets READ quota ran out (every error is a read-quota error, nothing else failed)?
+// Decided on the structured result, so the 300-character cut in schedBadness' text can never hide a second, real error or a not_found / failed count that the text
+// does not show. Anything else: false (stays loud).
+function schedBodyIsQuotaBusy(status, b) {
+  if (status >= 400 || !b || typeof b !== 'object' || b.unparseable_response) return false;
+  if (Array.isArray(b.not_found) && b.not_found.length) return false;
+  if (typeof b.failed === 'number' && b.failed > 0) return false;
+  if (Array.isArray(b.failed) && b.failed.length) return false;
+  if (b.error) return typeof b.error === 'string' && sheetsQuotaBusyText(b.error);
+  const list = b.errors;
+  if (Array.isArray(list) && list.length) return list.every(e => e && sheetsQuotaBusyText(e.error));
+  return b.ok === false && b.quota_busy === true && sheetsQuotaBusyText(b.reason);
+}
 // Runs one step: a throw OR a failure-shaped result is pushed to `errors`; the (unwrapped) body is returned.
+// quota_busy on an entry is the structured verdict: true = every error was the read quota; false = the text looks like it but the result also had something else wrong.
 async function schedStep(name, fn, errors) {
   try {
     const u = await schedUnwrap(await fn());
     const bad = schedBadness(u.status, u.body);
-    if (bad) errors.push({ step: name, error: bad });
+    if (bad) {
+      const entry = { step: name, error: bad };
+      if (schedBodyIsQuotaBusy(u.status, u.body)) entry.quota_busy = true; else if (sheetsQuotaBusyText(bad)) entry.quota_busy = false;
+      errors.push(entry);
+    }
     return u.body;
   } catch (e) { errors.push({ step: name, error: schedErrText(e) }); return undefined; }
 }
