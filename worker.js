@@ -39430,6 +39430,7 @@ function strChangeSummaryText(plan, res) {
   else bits.push(`${plan.cleaner.first} now has ${c.done} of ${res.items.length} turnover(s) you asked for`);
   if (c.skipped) bits.push(`${c.skipped} skipped (nothing to do or not allowed)`);
   if (c.failed) bits.push(`${c.failed} FAILED`);
+  if (c.unverified) bits.push(`${c.unverified} saved but NOT confirmed (the Hub could not read the sheet back); no text sent for them`);
   const t = res.texts, sent = t.filter(x => x.status === 'sent'), held = t.filter(x => x.status === 'held'), bad = t.filter(x => x.status === 'failed'), no = t.filter(x => x.status === 'not_sent');
   if (sent.length) bits.push(`texted ${sent.map(x => x.first).join(', ')}`);
   if (held.length) bits.push(`text held until 8 AM for ${held.map(x => x.first).join(', ')}`);
