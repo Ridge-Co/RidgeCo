@@ -39361,7 +39361,8 @@ async function strStageQueue(ctx, J) {
   for (const r of J.recipients) {
     const c = ctx.st.cmap[r.cleaner_id], base = { key: r.key, name: r.name, first: r.first, kind: r.kind, dates: r.dates }, tx = J.texts[r.key] || { send: false, text: '' };
     const refs = r.refs.filter(x => okRefs.has(x)); if (!c) { state.texts.push(Object.assign(base, { status: 'failed', detail: 'Cleaner not found.' })); continue; }
-    if (!refs.length) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: 'Nothing changed for this person, so no text.' })); continue; }
+    if (!refs.length) { const unv = r.refs.some(x => (state.ires[x] || {}).status === 'unverified'); state.texts.push(Object.assign(base, { status: 'not_sent', detail: unv ? 'The change was saved but could not be confirmed, so no text was sent.' : 'Nothing changed for this person, so no text.' })); if (unv) state.warnings.push(`${r.name} was NOT texted: the change was saved but the Hub could not confirm it. Check the schedule, then tell them yourself.`); continue; }
+    if (r.kind === 'back' && (state.unvMarks || []).includes(String(r.cleaner_id))) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: 'Their backup mark was saved but could not be confirmed, so no text was sent.' })); state.warnings.push(`${r.name} was NOT texted: their backup mark could not be confirmed. Check the schedule, then tell them yourself.`); continue; }
     if (!tx.send && (r.can_send || r.kind === 'mark')) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: 'You unticked this text.' })); continue; }
     if (!r.can_send) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: r.reason })); state.warnings.push(`${r.name} was NOT texted: ${r.reason} Tell them yourself.`); continue; }
     let text = tx.text, replaced = false, ds = r.dates;
