@@ -38986,8 +38986,9 @@ async function strBatchSet(env, tab, updates, opts) {
   return out;
 }
 // Admin-set availability marks, many at once. changes: [{cleaner, date, mark:'can'|'out'|'', source}]. Returns { ok:[key], failed:[{key,error}] } and keeps ctx.st in step.
-async function strMarkBatch(ctx, changes) {
-  const iso = new Date(ctx.now).toISOString(), res = { ok: [], failed: [] }, upd = [], add = [];
+// opts.soft: a mark whose write went in but could not be re-read is returned in res.unverified [{key,error}] (neither ok nor failed).
+async function strMarkBatch(ctx, changes, opts) {
+  const soft = !!(opts && opts.soft), iso = new Date(ctx.now).toISOString(), res = { ok: [], failed: [], unverified: [] }, upd = [], add = [];
   for (const ch of changes) {
     const k = ch.cleaner.ID + '|' + ch.date, m = ch.mark || '', ex = ctx.st.availRows.find(a => String(a.Cleaner_ID) === String(ch.cleaner.ID) && a.Property_Key === STR_PROP && a.Date === ch.date);
     if (ex) upd.push({ id: ex.ID, k, ex, fields: { Mark: m, Updated_At: iso, Source: ch.source || 'admin' } });
