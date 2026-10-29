@@ -115,7 +115,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-28.01-fi-premier-repair-contact';
+const BUILD_VERSION = '2026-10-29.01-quota-calm';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -12486,6 +12486,16 @@ async function processDepositPaidSweep(env) {
     try { await paymentMilestonesTab(env); } catch (_) {}
     tabs = { sigs: await fetchTab(env, 'Scope_Signatures'), milestones: await fetchTab(env, 'Payment_Milestones') };
   } catch (e) {
+    // Oct 29 2026 (queue 222): Google's shared per-minute READ quota stopped the sweep's reads. Nothing was checked, nothing moved; the next run (the scheduler, or
+    // the next Who To Pay open) simply tries again. That is the calm P2 "sheets_quota_busy" row and a {quota_busy:true} answer with NO errors[] entry (so the Who To Pay
+    // banner does not turn red and the scheduler files it as busy, not as a P0), instead of its own P1 "deposit_sweep_read" row. Every other read failure is unchanged.
+    // Money rules are untouched: no deposit is classified or transitioned on this path. If even the P2 row cannot be written, THAT is reported loudly in errors[].
+    if (sheetsQuotaBusyError(e)) {
+      out.ok = false; out.quota_busy = true; out.reason = String((e && e.message) || e).slice(0, 300);
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'sheets_quota_busy', Skill_Or_Endpoint: 'processDepositPaidSweep', Success: 'FALSE', Notes: ('deposit sweep skipped (will retry next run): ' + out.reason).slice(0, 480) }); }
+      catch (le) { out.errors.push({ stage: 'telemetry', ref: 'scopes/signatures/milestones', error: 'could not write Ops_Telemetry: ' + String((le && le.message) || le).slice(0, 200) }); }
+      return out;
+    }
     await logAndCollectError(env, out.errors, 'deposit_sweep_read', 'processDepositPaidSweep', 'scopes/signatures/milestones', e);
     out.ok = false; return out;
   }
@@ -17781,6 +17791,9 @@ function schedBadness(status, b) {
     if (b.unparseable_response) return 'unreadable response: ' + b.unparseable_response;
     if (b.error) return (typeof b.error === 'string' ? b.error : JSON.stringify(b.error)).slice(0, 300);
     if (b.ok === false) {
+      // Oct 29 2026: a job that stopped on Google's shared read quota says so ({quota_busy:true, reason:<the Sheets error>}, no errors[]). Hand the scheduler the
+      // raw Sheets error text so schedErrorsAreQuotaBusy sees it for what it is (a calm, retried "busy"). Any errors[] entry makes this branch stand aside.
+      if (b.quota_busy === true && b.reason && !(Array.isArray(b.errors) && b.errors.length)) return String(b.reason).slice(0, 300);
       // Oct 14 2026: the deposit sweep failed 70+ times in a row with the useless text "ok:false []" (its not_found list was the
       // reason, its errors list was empty). A failure must say WHY, or nobody can act on it.
       const why = (Array.isArray(b.errors) && b.errors.length) ? b.errors
@@ -17794,12 +17807,30 @@ function schedBadness(status, b) {
   }
   return null;
 }
+// Oct 29 2026. PURE. Is this step result a failure ONLY because Google's shared Sheets READ quota ran out (every error is a read-quota error, nothing else failed)?
+// Decided on the structured result, so the 300-character cut in schedBadness' text can never hide a second, real error or a not_found / failed count that the text
+// does not show. Anything else: false (stays loud).
+function schedBodyIsQuotaBusy(status, b) {
+  if (status >= 400 || !b || typeof b !== 'object' || b.unparseable_response) return false;
+  if (Array.isArray(b.not_found) && b.not_found.length) return false;
+  if (typeof b.failed === 'number' && b.failed > 0) return false;
+  if (Array.isArray(b.failed) && b.failed.length) return false;
+  if (b.error) return typeof b.error === 'string' && sheetsQuotaBusyText(b.error);
+  const list = b.errors;
+  if (Array.isArray(list) && list.length) return list.every(e => e && sheetsQuotaBusyText(e.error));
+  return b.ok === false && b.quota_busy === true && sheetsQuotaBusyText(b.reason);
+}
 // Runs one step: a throw OR a failure-shaped result is pushed to `errors`; the (unwrapped) body is returned.
+// quota_busy on an entry is the structured verdict: true = every error was the read quota; false = the text looks like it but the result also had something else wrong.
 async function schedStep(name, fn, errors) {
   try {
     const u = await schedUnwrap(await fn());
     const bad = schedBadness(u.status, u.body);
-    if (bad) errors.push({ step: name, error: bad });
+    if (bad) {
+      const entry = { step: name, error: bad };
+      if (schedBodyIsQuotaBusy(u.status, u.body)) entry.quota_busy = true; else if (sheetsQuotaBusyText(bad)) entry.quota_busy = false;
+      errors.push(entry);
+    }
     return u.body;
   } catch (e) { errors.push({ step: name, error: schedErrText(e) }); return undefined; }
 }
@@ -19438,11 +19469,36 @@ function sheetsQuotaBusyError(e) {
   const m = String((e && e.message) || e || '');
   return /^Sheets API error on GET /.test(m) && /quota exceeded|read requests per minute|RESOURCE_EXHAUSTED|\b429\b/i.test(m);
 }
+// Oct 29 2026 (queue 215/216/222). PURE. sheetsQuotaBusyError is anchored on "Sheets API error on GET", so it missed a read-quota error that a job had
+// WRAPPED: nested in a list (`ok:false [{"stage":"deposit_sweep_read","error":"Sheets API error on GET ..."}]`, `2 error(s): [...]`) or behind a plain label
+// ("Held cleaner texts could not be processed: Sheets API error on GET ..."). Those were filed as P0/P1 failures instead of the calm P2 sheets_quota_busy row.
+// Rule: EVERY error found must be a read-quota error. A list that also holds ONE real error (a write that failed, a bug, a telemetry write on POST) is NOT
+// busy, and a list with an `"error":` value we cannot read (an object, null, a cut-off tail that is not a quota message) is NOT busy either: when unsure it stays loud.
+const SHEETS_QUOTA_LABEL_RE = /^[A-Za-z][^"{}\[\]]{0,150}?:\s+(?=Sheets API error on GET )/;
+function sheetsQuotaBusyText(text) {
+  const m = String((text && text.message) || text || '');
+  if (!m) return false;
+  const one = v => {
+    const s = String(v || '').replace(SHEETS_QUOTA_LABEL_RE, '');
+    return sheetsQuotaBusyError(s) && (s.match(/Sheets API error on /g) || []).length === 1;   // exactly one Sheets error, and it is the GET quota one
+  };
+  if (one(m)) return true;
+  // The scheduler cuts a job's error text at 300 characters. A list that is cut off may have lost a second, REAL error after the quota one, so a text that does not
+  // close (end in a closing bracket) is never assumed busy here; schedStep flags such runs from the structured result instead, see schedBodyIsQuotaBusy. When unsure: loud.
+  if (!/[\]\x7d]\s*$/.test(m)) return false;   // (\x7d is a closing curly brace, written this way so the function's braces stay balanced for the tests that slice it out)
+  const vals = [], re = /"error":"((?:[^"\\]|\\.)*)"/g;
+  let x;
+  while ((x = re.exec(m))) vals.push(x[1].replace(/\\(.)/g, '$1'));   // undo JSON backslash escapes (the value is only compared against the quota pattern)
+  const total = (m.match(/"error"\s*:/g) || []).length;
+  return vals.length > 0 && vals.length === total && vals.every(one);
+}
 // Oct 22 2026. PURE. A scheduler job's errors ([{step, error}]) where EVERY entry is the shared Sheets read quota ("busy"), not a bug in the job.
 // Such a run is retried on the next tick; it is a calm P2 "sheets_quota_busy" row, not a P0 "scheduler_job" failure that pages Brett.
 // (A job that stays unable to run is still caught loudly: the "Scheduled job X is overdue" condition is P0.)
+// Oct 29 2026: an entry's error may be the raw message OR a job's wrapped text with the quota error nested inside (see sheetsQuotaBusyText).
+// An entry schedStep flagged has its structured verdict honoured either way (schedBodyIsQuotaBusy); the cut-off text alone can neither prove nor disprove it.
 function schedErrorsAreQuotaBusy(errors) {
-  return Array.isArray(errors) && errors.length > 0 && errors.every(x => x && sheetsQuotaBusyError(x.error));
+  return Array.isArray(errors) && errors.length > 0 && errors.every(x => x && (x.quota_busy === true || (x.quota_busy !== false && sheetsQuotaBusyText(x.error))));
 }
 function aiCreditIsPausedError(e) { return !!e && e.code === AI_CREDIT_CODE; }
 
@@ -29109,7 +29165,11 @@ async function ensureColumns(env, tab, columns) {
     // if THAT specific call is what's failing, logging the failure via logTelemetry would call
     // straight back into this same failing path instead of just reporting it.
     if (tab !== TELEMETRY_TAB) {
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ensure_columns_failed', Skill_Or_Endpoint: tab, Success: 'FALSE', Notes: `columns=${(columns || []).join(',')} err=${String((e && e.message) || e)}` }); } catch (_) {}
+      // Oct 29 2026 (queue 216): the header check is a plain READ of the tab. When Google's shared per-minute read quota is what stopped it, that is the calm P2
+      // "sheets_quota_busy" row (the caller still gets the throw and retries), not a P1 "ensure_columns_failed". A real failure (a write, a bad range) is unchanged.
+      // (typeof: other tests slice this function out of module scope without the helper; they keep the old row.)
+      const _busy = typeof sheetsQuotaBusyError === 'function' && sheetsQuotaBusyError(e);
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: _busy ? 'sheets_quota_busy' : 'ensure_columns_failed', Skill_Or_Endpoint: _busy ? 'ensure_columns/' + tab : tab, Success: 'FALSE', Notes: `columns=${(columns || []).join(',')} err=${String((e && e.message) || e)}` }); } catch (le) { console.error('ensureColumns: could not log the failure to Ops_Telemetry (the original error is still thrown):', tab, le && le.message); }
     }
     throw e;
   }
@@ -37252,7 +37312,9 @@ async function inspGuardFailure(env, kind, e) {
     catch (se) { cfgNote = ' [could not record outage start: ' + String((se && se.message) || se).slice(0, 120) + ']'; console.error('insp guard: could not save STR_GUARD_FAIL_SINCE:', se && se.message); }
   }
   const mins = Number.isFinite(since) ? Math.round((now - since) / 60000) : 0;
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-book/' + kind + (isFeed ? '_feed' : '_quota'), Success: 'FALSE', Notes: ((isFeed ? 'Bookings feed unreadable' : 'Sheets read quota hit') + ', will retry next tick (failing ' + mins + ' min): ' + msg + cfgNote).slice(0, 480) }); }
+  // Oct 29 2026 (queue 215): a Sheets quota hit is the calm P2 "sheets_quota_busy" row (Job_Type decides the severity; the message text "Quota exceeded" made the old
+  // insp_booking row a P1). The 45-minute persistent alert below is unchanged. A bookings-feed outage is not a Sheets quota, so it keeps insp_booking.
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: isFeed ? 'insp_booking' : 'sheets_quota_busy', Skill_Or_Endpoint: 'insp-book/' + kind + (isFeed ? '_feed' : '_quota'), Success: 'FALSE', Notes: ((isFeed ? 'Bookings feed unreadable' : 'Sheets read quota hit') + ', will retry next tick (failing ' + mins + ' min): ' + msg + cfgNote).slice(0, 480) }); }
   catch (te) { console.error('insp guard: telemetry write failed:', te && te.message, '| original:', kind, msg); }
   if (Number.isFinite(since) && now - since >= INSP_GUARD_QUOTA_GRACE_MS) return inspAlert(env, kind + '_persistent', 'Cleaning-coverage check has not been able to read the ' + (isFeed ? 'bookings feed for ' + mins + ' minutes. ' : 'sheet for ' + mins + ' minutes (Sheets read quota). ') + msg);
 }
@@ -37936,7 +37998,9 @@ const __strSysAt = {};
 async function strSystemAlert(env, kind, message) {
   // Oct 22 2026: the shared Sheets read quota ran out under the cleaning scheduler. Recorded as the calm P2 "sheets_quota_busy" row; no text or email
   // (the next tick retries, and a scheduler that stays unable to run is still the P0 "overdue" condition).
-  if (sheetsQuotaBusyError(message)) {
+  // Oct 29 2026: also when the quota error sits behind a plain label ("Held cleaner texts could not be processed: Sheets API error on GET ...").
+  // (typeof: the STR block is also run on its own in tests, without the helper; the plain check still applies there.)
+  if (typeof sheetsQuotaBusyText === 'function' ? sheetsQuotaBusyText(message) : sheetsQuotaBusyError(message)) {
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'sheets_quota_busy', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); }
     catch (te) { /* silent-ok: alert code must not report its own failure (it would loop); the full text goes to the Worker log */ console.error('str alert: quota-busy telemetry failed:', te && te.message, '| original:', kind, message); }
     return;
