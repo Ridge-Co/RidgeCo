@@ -16,6 +16,7 @@ let pass = 0, fail = 0;
 const t = (n, c) => { if (c) pass++; else { fail++; console.log('  FAIL:', n); } };
 
 const src = [
+  'function sheetsQuotaBusyError(',
   'function alertDebounceOk(', 'function firstMilestoneForSignature(', 'function depositMilestoneForSignature(', 'function resolveScopeDepositInvoice(',
   'function classifyMissingDeposit(', 'function depositSweepSkipSet(', 'async function claimDepositTextMarker(',
   'async function scopeDepositInvoiceId(', 'async function scopeDepositPaidTransition(', 'async function logAndCollectError(',
