@@ -8,6 +8,8 @@
 //  #96 every page carrying the mobile-input-font block: on a touch phone every text control is >=16px
 //       (probe inputs injected so dynamic/hidden ones are covered), no maximum-scale/user-scalable; on a
 //       NARROW NON-TOUCH window controls are NOT touched (rule is touch-only); desktop density unchanged.
+//  #111 every page carrying mobile-tap-targets: on a 360/390 touch phone every button/select/tab/nav link/modal close is >=44x44, no sideways page scroll, wide tables scroll
+//       inside their own wrapper; on a mouse (narrow or desktop) nothing changes; hidden panels stay hidden.
 import { chromium } from 'playwright'; import http from 'http'; import fs from 'fs'; import path from 'path'; import assert from 'assert';
 const ROOT = process.cwd(); const W = 'https://maintenance-hub.brett-2f8.workers.dev';
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
