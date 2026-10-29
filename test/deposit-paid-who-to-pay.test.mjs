@@ -39,6 +39,7 @@ function makeWorld(opts = {}) {
   const env = {};
   const ctx = {
     fetchTab: async (e, tab) => {
+      if (w.readThrow && tab === 'Scopes') throw w.readThrow;   // Oct 29 2026: force a Sheets read failure on the sweep's first read
       if (tab === 'Scopes') { w.scopeReads++; if (w.flipAfterReads && w.scopeReads > w.flipAfterReads) w.scopes.forEach(x => { x.Approval_Stage = 'Approved'; }); }
       return ({ Scopes: w.scopes, Scope_Signatures: w.sigs, Payment_Milestones: w.milestones }[tab] || []);
     },
