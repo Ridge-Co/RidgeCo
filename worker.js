@@ -39236,6 +39236,7 @@ const strOkItems = J => J.items.filter(i => i.outcome === 'change' && J.state.ir
 async function strStageSheets(ctx, J) {
   const { env } = ctx, { req, state } = J, cleaner = J.cleaner, iso = new Date(ctx.now).toISOString(), isMark = req.action === 'mark', ires = state.ires, first = J.plan.cleaner.first;
   const toDo = J.items.filter(i => i.outcome === 'change');
+  if (state.unv) { const w = STR_UNV_GAP_MS - (Date.now() - (state.unv_at || 0)); if (w > 0) await strPause(w); state.unv_at = Date.now(); } // (resuming after an unconfirmed write) let Google's per-minute read quota clear
   const done = it => ires[it.ref].status === 'done', fail = (it, why) => { ires[it.ref] = { status: 'failed', reason: why }; state.errors.push({ step: 'change_item', error: `${it.label}: ${why}` }); };
   if (!isMark) {
     invalidateTabCache('STR_Turnovers');
