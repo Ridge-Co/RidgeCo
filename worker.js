@@ -12486,6 +12486,16 @@ async function processDepositPaidSweep(env) {
     try { await paymentMilestonesTab(env); } catch (_) {}
     tabs = { sigs: await fetchTab(env, 'Scope_Signatures'), milestones: await fetchTab(env, 'Payment_Milestones') };
   } catch (e) {
+    // Oct 29 2026 (queue 222): Google's shared per-minute READ quota stopped the sweep's reads. Nothing was checked, nothing moved; the next run (the scheduler, or
+    // the next Who To Pay open) simply tries again. That is the calm P2 "sheets_quota_busy" row and a {quota_busy:true} answer with NO errors[] entry (so the Who To Pay
+    // banner does not turn red and the scheduler files it as busy, not as a P0), instead of its own P1 "deposit_sweep_read" row. Every other read failure is unchanged.
+    // Money rules are untouched: no deposit is classified or transitioned on this path. If even the P2 row cannot be written, THAT is reported loudly in errors[].
+    if (sheetsQuotaBusyError(e)) {
+      out.ok = false; out.quota_busy = true; out.reason = String((e && e.message) || e).slice(0, 300);
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'sheets_quota_busy', Skill_Or_Endpoint: 'processDepositPaidSweep', Success: 'FALSE', Notes: ('deposit sweep skipped (will retry next run): ' + out.reason).slice(0, 480) }); }
+      catch (le) { out.errors.push({ stage: 'telemetry', ref: 'scopes/signatures/milestones', error: 'could not write Ops_Telemetry: ' + String((le && le.message) || le).slice(0, 200) }); }
+      return out;
+    }
     await logAndCollectError(env, out.errors, 'deposit_sweep_read', 'processDepositPaidSweep', 'scopes/signatures/milestones', e);
     out.ok = false; return out;
   }
