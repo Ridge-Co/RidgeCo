@@ -37900,7 +37900,9 @@ async function strEnsureTabs(env) {
   await ensureColumns(env, 'Vendors', ['Service_Area']);
   __strTabsReady = true;
 }
-async function strAddRows(env, tab, list) {
+// opts.soft (Oct 29 2026, queue 228): the append LANDED but the verification re-read could not be done (Sheets read quota, a 5xx). Instead of throwing (which
+// made the whole swap look FAILED although the rows were saved) the ids come back with .unverified = the reason. The caller must NOT treat that as saved-and-checked.
+async function strAddRows(env, tab, list, opts) {
   if (!list.length) return [];
   invalidateTabCache(tab);
   const data = await sheetsRequest(env, 'GET', `/values/${tab}`), rows = data.values || [[]], headers = rows[0] || [];
