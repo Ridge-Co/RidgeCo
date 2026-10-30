@@ -34739,6 +34739,7 @@ function deliveryTenantText(o) {
   const when = [deliveryWindowHuman(o.window), deliveryDateYY(o.date)].filter(Boolean).join(' ');
   let msg;
   if (o.kind === 'cancel') msg = item.charAt(0).toUpperCase() + item.slice(1) + ' delivery is no longer scheduled. No need to be home.';
+  else if (o.kind === 'fyi') msg = 'Update: ' + item + ' delivery' + (when ? ' now ' + when : ' time changed') + '. Thanks for being there, no need to reply.';   // Oct 30 2026 (Brett): the tenant already said yes, so a better window is news, not a new question: no link, no ask
   else if (o.kind === 'changed') msg = 'Delivery changed: ' + item + (when ? ' now ' + when : '') + '. Can you be there? ' + o.link;
   else msg = 'New ' + item + ' ordered.' + (when ? ' Delivery ' + when + '.' : '') + ' Please let us know if you can be there: ' + o.link;
   return deliveryPlainSms(msg, true);
