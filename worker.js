@@ -34967,36 +34967,54 @@ async function deliveryTenantNotice(env, o) {
     const owner = owners.find(w => String(w.ID) === String(place.property.Owner_ID)) || null;
     let queue = [];
     try { queue = await fetchTab(env, MSG_QUEUE_TAB); } catch (e) { if (!isMissingTabError(e)) throw e; }
-    const mine = r => r.Message_Type === 'delivery_tenant_notice' && woId && String(r.WO_ID) === String(woId);
-    const waiting = queue.filter(r => mine(r) && r.Status === 'pending' && r.Send_After);
-    // A newer text replaces one still waiting for its slot: never two texts for one delivery.
-    if (variant !== 'cancel' || waiting.length) for (const q of waiting) {
-      if (nm.mode === 'draft') break;
-      const ok = await updateMessageQueueRow(env, q.ID, { Status: 'skipped', Gate_Snapshot: variant === 'cancel' ? 'delivery cancelled before this request went out' : 'superseded by a newer delivery notice', Send_After: '' });
-      if (ok === false) return { tenant_sms: 'failed', detail: 'could not retire the older waiting notice (queue row ' + q.ID + '), nothing new queued', warn: true };
-    }
-    if (variant === 'cancel') {
-      if (!queue.some(r => mine(r) && r.Status === 'sent')) return { tenant_sms: 'skipped', detail: waiting.length ? 'the request had not gone out yet: it was withdrawn, tenant not texted' : 'tenant was never asked, nothing to cancel' };
-    }
-    const first = !queue.some(r => r.Status === 'sent' && normalizePhone(r.Recipient_Phone) === normalizePhone(tenant.Phone));
     const item = String(row.Item_Type || '').toLowerCase() || 'appliance';
-    const ctx = { first: tenant.First_Name || 'there', assistant: cfg.ASSISTANT_NAME || 'Riley', owner: (owner && (owner.Company || owner.First_Name)) || 'your property owner', item, street: deliveryStreet(row.Delivery_Address), date, window: win };
     let link = '';
-    if (variant !== 'cancel') link = await deliveryShortLink(env, cfg, o.deliveryId || row.ID);
-    let msg;
-    if (variant === 'request' && cfg.Delivery_Tenant_Notice_Text) {
-      msg = deliveryPlainSms(renderTemplate(cfg.Delivery_Tenant_Notice_Text, { FirstName: ctx.first, AssistantName: ctx.assistant, Owner: ctx.owner, Item: item, Street: ctx.street, Address: row.Delivery_Address || '', When: [deliveryShortDate(date), deliveryWindowHuman(win)].filter(Boolean).join(' '), Link: link }), true);
-      if (link && msg.indexOf(link) < 0) msg += ' ' + link;   // a custom template that forgot {Link} must still carry the answer link
-    } else msg = deliveryTenantText(Object.assign({ kind: variant, link }, ctx));
-    if (first) msg = withTenantStopNote(msg);
-    if (nm.mode === 'draft') return { tenant_sms: 'draft', detail: 'draft saved on the delivery (Tenant_Notice_Draft), not sent', sig, draft: msg };
+    if (variant === 'request' || variant === 'changed') link = await deliveryShortLink(env, cfg, o.deliveryId || row.ID);
     const hold = deliveryNoticeHoldUntil(new Date(), variant === 'cancel' ? (row.Expected_Date || date) : date);
-    const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'delivery_tenant_notice', recipient_type: 'tenant', tenant, property: place.property, owner, message_body: msg, holdUntil: hold ? hold.toISOString() : undefined, allowRepeat: true });   // once-per-event is enforced above (Tenant_Notice_Sig + the waiting-row swap + Event_Claim); the D-16 same-text guard must NOT swallow a real second move that reads exactly like an earlier one (Y, back to X, Y again)
+    const sendOne = async (tn) => {
+      const who = String(tn.First_Name || 'tenant');
+      const tag = (x) => Object.assign({ who }, x);
+      if (!tn.Phone) return tag({ state: 'skipped', detail: 'no phone on file' });
+      const ph = normalizePhone(tn.Phone);
+      const mine = r => r.Message_Type === 'delivery_tenant_notice' && woId && String(r.WO_ID) === String(woId) && normalizePhone(r.Recipient_Phone) === ph;
+      const waiting = queue.filter(r => mine(r) && r.Status === 'pending' && r.Send_After);
+      // A newer text replaces one still waiting for its slot: never two texts for one person for one delivery.
+      if (nm.mode !== 'draft') for (const q of waiting) {
+        const ok = await updateMessageQueueRow(env, q.ID, { Status: 'skipped', Gate_Snapshot: variant === 'cancel' ? 'delivery cancelled before this request went out' : 'superseded by a newer delivery notice', Send_After: '' });
+        if (ok === false) return tag({ state: 'failed', detail: 'could not retire the older waiting notice (queue row ' + q.ID + '), nothing new queued', warn: true });
+      }
+      if (variant === 'cancel' && !queue.some(r => mine(r) && r.Status === 'sent')) return tag({ state: 'skipped', detail: waiting.length ? 'the request had not gone out yet: it was withdrawn, tenant not texted' : 'tenant was never asked, nothing to cancel' });
+      const first = !queue.some(r => r.Status === 'sent' && normalizePhone(r.Recipient_Phone) === ph);
+      const ctx = { first: tn.First_Name || 'there', assistant: cfg.ASSISTANT_NAME || 'Riley', owner: (owner && (owner.Company || owner.First_Name)) || 'your property owner', item, street: deliveryStreet(row.Delivery_Address), date, window: win };
+      let msg;
+      if (variant === 'request' && cfg.Delivery_Tenant_Notice_Text) {
+        msg = deliveryPlainSms(renderTemplate(cfg.Delivery_Tenant_Notice_Text, { FirstName: ctx.first, AssistantName: ctx.assistant, Owner: ctx.owner, Item: item, Street: ctx.street, Address: row.Delivery_Address || '', When: [deliveryShortDate(date), deliveryWindowHuman(win)].filter(Boolean).join(' '), Link: link }), true);
+        if (link && msg.indexOf(link) < 0) msg += ' ' + link;   // a custom template that forgot {Link} must still carry the answer link
+      } else msg = deliveryTenantText(Object.assign({ kind: variant, link }, ctx));
+      if (first) msg = withTenantStopNote(msg);
+      if (nm.mode === 'draft') return tag({ state: 'draft', detail: 'draft saved on the delivery (Tenant_Notice_Draft), not sent', draft: msg });
+      const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'delivery_tenant_notice', recipient_type: 'tenant', tenant: tn, property: place.property, owner, message_body: msg, holdUntil: hold ? hold.toISOString() : undefined, allowRepeat: true });   // once-per-event is enforced above (Tenant_Notice_Sig + the waiting-row swap + Event_Claim); the D-16 same-text guard must NOT swallow a real second move that reads exactly like an earlier one (Y, back to X, Y again)
+      if (r && r.sent) return tag({ state: 'sent', detail: 'sent now (delivery is today)', text: msg });
+      if (r && r.held_for_quiet_hours) return tag({ state: 'queued', detail: 'held until ' + r.send_after, send_after: r.send_after, text: msg });
+      if (r && r.send_ok === false) return tag({ state: 'skipped', detail: 'blocked by the text gate: ' + r.gate_snapshot });
+      return tag({ state: 'failed', detail: 'not sent (' + ((r && (r.gate_snapshot || r.warning)) || 'unknown') + ')', warn: true });
+    };
+    const results = [];
+    for (const tn of list) {
+      try { results.push(await sendOne(tn)); }
+      catch (e) { results.push({ who: String(tn.First_Name || 'tenant'), state: 'failed', detail: String((e && e.message) || e).slice(0, 120), warn: true }); }   // one co-tenant failing must not hide the others' results
+    }
     const nowIso = new Date().toISOString();
-    if (r && r.sent) return { tenant_sms: 'sent', detail: 'sent now (delivery is today)', sig, sent_at: nowIso, text: msg };
-    if (r && r.held_for_quiet_hours) return { tenant_sms: 'queued', detail: 'held until ' + r.send_after, sig, send_after: r.send_after, sent_at: nowIso, text: msg };
-    if (r && r.send_ok === false) return { tenant_sms: 'skipped', detail: 'blocked by the text gate: ' + r.gate_snapshot };
-    return { tenant_sms: 'failed', detail: 'not sent (' + ((r && (r.gate_snapshot || r.warning)) || 'unknown') + ')', warn: true };
+    const detail = results.map(x => (multi ? x.who + ': ' : '') + x.detail).join(' | ');
+    const has = s => results.some(x => x.state === s);
+    const warn = results.some(x => x.warn) || undefined;
+    const withText = results.find(x => x.text);
+    const common = { detail, warn };
+    if (has('queued')) return Object.assign(common, { tenant_sms: 'queued', sig, send_after: (results.find(x => x.send_after) || {}).send_after, sent_at: nowIso, text: withText && withText.text });
+    if (has('sent')) return Object.assign(common, { tenant_sms: 'sent', sig, sent_at: nowIso, text: withText && withText.text });
+    if (has('draft')) return Object.assign(common, { tenant_sms: 'draft', sig, draft: results.filter(x => x.draft).map(x => (multi ? x.who + ': ' : '') + x.draft).join('\n') });
+    if (has('failed')) return Object.assign(common, { tenant_sms: 'failed', warn: true });
+    return { tenant_sms: 'skipped', detail };
   } catch (e) { return { tenant_sms: 'failed', detail: String((e && e.message) || e).slice(0, 160), warn: true }; }
 }
 
