@@ -34957,7 +34957,11 @@ async function deliveryTenantNotice(env, o) {
   if (variant !== 'cancel' && !date) return { tenant_sms: 'skipped', detail: 'no delivery date yet: the tenant is asked when a later email sets the date', no_date: true };
   const sig = variant === 'cancel' ? 'CANCELLED' : (date || '') + '|' + (win || '');
   if (String(row.Tenant_Notice_Sig || '') === sig && /^(queued|sent|draft)/.test(String(row.Tenant_Notice_Status || ''))) return { tenant_sms: 'skipped', detail: 'tenant already told this date/window', record: false };
-  if (!tenant.Phone) return { tenant_sms: 'skipped', detail: 'tenant has no phone on file' };
+  // Oct 30 2026: everyone active in the unit gets the text (co-tenants), not only the one tenant on the delivery row. Same phone twice = once.
+  const people = [tenant].concat((Array.isArray(o.recipients) ? o.recipients : []).filter(x => x && String(x.ID) !== String(tenant.ID)));
+  const seenPhones = {};
+  const list = people.filter(x => { const ph = normalizePhone(x.Phone); if (!ph) return true; if (seenPhones[ph]) return false; seenPhones[ph] = true; return true; });
+  const multi = list.length > 1;
   try {
     const owners = await fetchTab(env, 'Owners');
     const owner = owners.find(w => String(w.ID) === String(place.property.Owner_ID)) || null;
