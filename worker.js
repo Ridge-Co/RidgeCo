@@ -40873,9 +40873,15 @@ let __fiTabsReady = false;
 async function fiRoute(env, label, fn) {
   try { return await fn(); }
   catch (e) {
+    // Oct 30 2026: Google's shared per-minute READ quota running out is a "busy, retry in a moment" state, not a bug. It used to leave here as a generic
+    // 500 'internal' (one P1 row per photo, and the phone gave up on the photo). Rethrow it so the Worker's top-level handler answers with the typed 429
+    // (busy:true, retry_after_seconds) plus ONE calm P2 sheets_quota_busy row, exactly like every other Hub route (see strHandleErr).
+    if (sheetsQuotaBusyError(e)) throw e;
     console.error('fi/' + label + ' failed:', e && e.message);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_route_error', Skill_Or_Endpoint: '/fi/' + label, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (_) { /* telemetry is best-effort; the error itself is returned below */ }
-    return fiErr(500, 'internal', 'The server hit an error (' + label + '). Nothing was reported as saved. Retry; if it repeats, tell Brett.', { detail: String((e && e.message) || e).slice(0, 160) });
+    let telemetryError = '';
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_route_error', Skill_Or_Endpoint: '/fi/' + label, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); }
+    catch (te) { telemetryError = String((te && te.message) || te).slice(0, 120); console.error('fi/' + label + ': could not log to Ops_Telemetry:', telemetryError, '| original:', e && e.message); }
+    return fiErr(500, 'internal', 'The server hit an error (' + label + '). Nothing was reported as saved. Retry; if it repeats, tell Brett.', Object.assign({ detail: String((e && e.message) || e).slice(0, 160) }, telemetryError ? { telemetry_error: telemetryError } : {}));
   }
 }
 function fiErr(status, error, message, extra) { return json(Object.assign({ ok: false, error, message }, extra || {}), status); }
