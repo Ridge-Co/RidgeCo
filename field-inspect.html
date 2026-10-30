@@ -252,7 +252,7 @@ function setSync(){
   else if (ss.syncing){ cls='work'; txt='⏳ Saving…'; }
   else if (rec.dirty){ cls='work'; txt='⏳ Changes waiting to save'; }
   else { cls='ok'; txt='✓ Saved to server' + (rec.base_rev ? ' (v'+rec.base_rev+')' : ''); }
-  if (np){ txt += ' · 📷 '+np+' photo'+(np>1?'s':'')+' waiting'; if (S.photoMsg){ cls = cls==='ok'?'err':cls; txt += ' ⚠'; a = '<button class="btn sm" onclick="retryPhotos()">Retry photos</button>'; } }
+  if (np){ var ps = photoStatusHtml(np); txt += ' · '+ps.txt; if (ps.cls==='err'){ cls = 'err'; } else if (cls==='ok' || ps.cls==='off'){ cls = ps.cls; } a = ps.act || a; }
   bar.className = cls; st.innerHTML = txt; act.innerHTML = a;
 }
 function pendingPhotoCount(){ var n=0; for (var k in photoState){ if (photoState[k].state!=='done') n++; } return n; }
