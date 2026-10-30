@@ -304,7 +304,7 @@ globalThis.fetch = async (input, init) => {
   if (m) { const b = init && init.body ? JSON.parse(init.body) : undefined; const r = await store.handle(method, decodeURIComponent(m[1]).replace(/%3A/gi, ':'), b); return new Response(JSON.stringify(r), { status: r && r.error ? r.error.code : 200 }); }
   if (url.startsWith('https://api.twilio.com/')) {
     const p = new URLSearchParams(init.body); twilio.push({ to: p.get('To'), body: p.get('Body') });
-    return twilioMode === 'ok' ? new Response(JSON.stringify({ sid: 'SM' + twilio.length, status: 'queued' }), { status: 201 }) : new Response(JSON.stringify({ code: 21608, message: 'forced failure' }), { status: 400 });
+    return twilioMode === 'ok' && p.get('To') !== twilioFailTo ? new Response(JSON.stringify({ sid: 'SM' + twilio.length, status: 'queued' }), { status: 201 }) : new Response(JSON.stringify({ code: 21608, message: 'forced failure' }), { status: 400 });
   }
   return new Response(JSON.stringify({ ok: true }), { status: 200 });
 };
