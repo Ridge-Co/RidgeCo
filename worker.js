@@ -35228,12 +35228,12 @@ async function deliveryCalSync(env, cfg, deliveryId, row, cal, dry) {
       for (const id of ids) { try { await deliveryCalFetch(env, sub, 'DELETE', '/events/' + encodeURIComponent(id)); } catch (e) { if (!gone(e)) throw e; } }
       return { status: 'cancelled', event_id: '' };
     }
-    const body = deliveryCalEventBody(cal);
+    const body = deliveryCalEventBody(cal), patchBody = deliveryCalEventBody(cal, true);
     let id = had, how = 'updated';
-    if (id) { try { await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), body); } catch (e) { if (!gone(e)) throw e; id = ''; } }
+    if (id) { try { await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), patchBody); } catch (e) { if (!gone(e)) throw e; id = ''; } }
     if (!id) {
       const found = await find();
-      if (found.length) { id = found[0]; await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), body); }
+      if (found.length) { id = found[0]; await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), patchBody); }
       else { const made = await deliveryCalFetch(env, sub, 'POST', '/events', body); id = String(made.id || ''); how = 'created'; if (!id) throw new Error('Google Calendar did not return an event id'); }
     }
     return { status: how, event_id: id };
