@@ -35461,6 +35461,7 @@ async function deliveryEmailIntake(env, body) {
     }
 
     // ── writes ──
+    let keepYes = false;   // Oct 30 2026: a tenant who said yes while the delivery was still all-day keeps that yes when only the window gets set
     let deliveryId, claim = '', lostClaim = false, woInfo = { wo_id: String(prior.Linked_WO_IDs || '').split(',')[0].trim(), created: false };
     const noteLine = 'Email (' + p.kind + ', ' + (mailboxStr || 'mailbox ?') + '): ' + subject.slice(0, 100);
     await ensureDeliveryTab(env);
