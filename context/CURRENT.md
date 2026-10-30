@@ -1,3 +1,7 @@
+# FIELD INSPECTION PHOTOS: SHEETS QUOTA, AUTO-RETRY, VISIBLE STATUS + SCHEDULER LINKS — Oct 30, 2026 — branch `fi-photo-quota-and-nav` (PR to `staging`). BUILD_VERSION `2026-10-30.02-fi-photo-quota-nav`. FEATURE_LOG rule 236.
+
+## 🟡 Built and tested (full suite 0 failing); going through staging. NOT merged to main: Brett decides. Photo uploads cost 2 Sheets reads instead of 4 to 11, quota answers are a calm typed 429, the page retries by itself and says why in the bottom bar. Field Inspection <-> Scheduler chips in the blue top bar via `rc-related.js` (new CLAUDE.md rule: related tools join a group by default). Follow-ups: `fiPhotoView` 2 full-tab reads per image view; `fiFolderOrganize` near the 50-subrequest ceiling; possible orphan Drive file if the FI_Photos append fails after upload.
+
 # PREMIER REPAIR ENDPOINT — Oct 27, 2026 — on `staging` ONLY (PRs #455, #456). BUILD_VERSION `2026-10-27.05-fi-premier-repair-guards`. FEATURE_LOG rule 235.
 
 ## 🟡 Built, staging-verified, independently validated. NOT merged to main. After Brett's go-ahead and the production deploy: run `hub_prod_post /admin/fi-premier-repair` dry run, read every step, then the real run (body in FEATURE_LOG 235). Then verify read-only with `hub_prod_get`. Brett said yes (Oct 28) to copying Josiah's phone/email onto owner #25: send `copy_partner_contact:true` in the same body (blank cells only).
