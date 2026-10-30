@@ -33,7 +33,18 @@ export function world() {
       tab.rows[n - 2][ci] = body.values[0][0]; return {};
     }
     m = path.match(/^\/values\/([A-Za-z_]+):append/);
-    if (method === 'POST' && m) { const tab = T(m[1]); if (h.dropAppend === m[1]) return {}; for (const row of body.values) { let vals = row.slice(); if (h.corrupt) vals = h.corrupt(m[1], vals, tab.headers); tab.rows.push(vals); } if (h.corrupt && h.corruptOnce) h.corrupt = null; return {}; }
+    if (method === 'POST' && m) { const tab = T(m[1]); if (h.dropAppend === m[1]) return {}; for (const row of body.values) { let vals = row.slice(); if (h.corrupt) vals = h.corrupt(m[1], vals, tab.headers); tab.rows.push(vals); } if (h.corrupt && h.corruptOnce) h.corrupt = null; const last = tab.rows.length + 1; let cn = tab.headers.length, cl = ''; while (cn > 0) { const r = (cn - 1) % 26; cl = String.fromCharCode(65 + r) + cl; cn = Math.floor((cn - 1) / 26); } return h.noAppendRange ? {} : { updates: { updatedRange: m[1] + '!A' + last + ':' + cl + last, updatedRows: 1 } }; }
+    // Oct 30 2026: fiReadFresh now goes through sheetsRequest (whole-tab GET) and the photo verify reads back ONE row (ranged GET).
+    let g = path.match(/^\/values\/([A-Za-z_]+)$/);
+    if (method === 'GET' && g) {
+      if (h.sheetsReadError) { const er = h.sheetsReadError(g[1], method, path); if (er) throw er; }
+      const tb = T(g[1]); return { values: tb.headers.length ? [tb.headers].concat(tb.rows.filter(Boolean)) : [] };
+    }
+    g = path.match(/^\/values\/([A-Za-z_]+)!([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+    if (method === 'GET' && g) {
+      if (h.sheetsReadError) { const er = h.sheetsReadError(g[1], method, path); if (er) throw er; }
+      const row = T(g[1]).rows[Number(g[3]) - 2]; return { values: row ? [row] : [] };
+    }
     throw new Error('fake sheets: unhandled ' + method + ' ' + path);
   };
   const ensureColumns = async (env, tab, cols) => { const tb = T(tab); for (const c of cols) if (!tb.headers.includes(c)) tb.headers.push(c); };
@@ -72,6 +83,8 @@ export function world() {
   const factory = new Function('h', 'sheetsRequest', 'ensureColumns', 'fetch', 'col', 'bytesToB64', `
     const json = (data, status = 200) => ({ status, ok: status < 300, body: data, clone() { return this; }, json: async () => data });
     const CORS = {}; const env0 = {};
+    const invalidateTabCache = (tab) => { (h.invalidated = h.invalidated || []).push(tab); };
+    ${grab('sheetsQuotaBusyError')}
     const isStaging = () => true;
     const getAccessToken = async () => 'tok';
     const findOrCreateFolder = async () => ({ id: 'folder1' });
@@ -112,7 +125,7 @@ export function world() {
     ${grab('normalizePhone')}
     ${aiCreditGuardPrelude()}
     ${block}
-    return { fiNormalizeEquipment, fiContractorize, fiScrubDocForReport, fiNormalizeSummary, fiTypeOut, FI_STRUCTURE_SYSTEM, FI_SUMMARY_SYSTEM, FI_ROUTE_SYSTEM, fiOwnerName, fiNormName, fiStreetOf, fiFolderSafe, fiInspFolderName, fiDirectory, fiPropertyCreate, fiDriveFindFolders, fiDriveEnsureFolder, fiWriteCells, fiInspectionFolder, fiFolderOrganize, fiDriveChildIds, fiFindInspection, fiReadFresh, FI_INSP_HEADERS, fiBrandScrape, fiParseBrandHtml, fiColorsFromCss, fiPickBrandColors, fiSafeUrl, fiFetchLimited, fiSniffImage, fiNormalizeEquipment, fiValidateEquipment, fiValidateVoiceNotes, FI_EQUIP_KINDS, fiEquipFields, fiTranscribe, fiTranscribeJson, FI_TRANSCRIBE_SYSTEM, fiAudioMime, fiRouteNotes, fiNormalizeRoute, fiBuildRoutePrompt, fiReadLabel, fiTypesList, fiTypesSave, fiTypesTouch, fiTypeClean, FI_TYPE_SEED, FI_TABS, FI_BRAND_HEADERS, fiBrandContactLine, fiBuildEmail, fiSave, fiPublish, fiReport, fiPhotoUpload, fiPhotoView, fiBrandSave, fiEmailReport, fiStructure, fiSummarize, fiList, fiGetInspection, fiRoute, fiNormalizeIssue, fiNormalizeIssues, fiExtractJson, fiValidateDoc, fiFingerprint, fiTradeRollup, fiPublishChecks, fiSerialize, fiChunk, fiJoinRow, fiBuildStructurePrompt, fiPhotoIds, fiIsAdmin, FI_DATA_CHUNK, fiBookings, fiBookingStart, fiPremierRepair, fiUrgentSend, fiUrgentTextWindow, fiUrgentCollect, fiBuildUrgentEmail, fiUrgentSmsBody, fiOnlyPhoneMarksChanged, fiPublicDocKey, fiReword, fiBookingOut, fiBookingOwnerRow, fiBookingPropMatches, fiBookingAddrParts, fiValidateAccess, fiValidateVisit, inspCleanSize, inspSizeText, FI_REWORD_SYSTEM };
+    return { fiRoute, fiReadFresh, fiFindInspectionForPhoto, fiInspCacheDrop, fiNormalizeEquipment, fiContractorize, fiScrubDocForReport, fiNormalizeSummary, fiTypeOut, FI_STRUCTURE_SYSTEM, FI_SUMMARY_SYSTEM, FI_ROUTE_SYSTEM, fiOwnerName, fiNormName, fiStreetOf, fiFolderSafe, fiInspFolderName, fiDirectory, fiPropertyCreate, fiDriveFindFolders, fiDriveEnsureFolder, fiWriteCells, fiInspectionFolder, fiFolderOrganize, fiDriveChildIds, fiFindInspection, fiReadFresh, FI_INSP_HEADERS, fiBrandScrape, fiParseBrandHtml, fiColorsFromCss, fiPickBrandColors, fiSafeUrl, fiFetchLimited, fiSniffImage, fiNormalizeEquipment, fiValidateEquipment, fiValidateVoiceNotes, FI_EQUIP_KINDS, fiEquipFields, fiTranscribe, fiTranscribeJson, FI_TRANSCRIBE_SYSTEM, fiAudioMime, fiRouteNotes, fiNormalizeRoute, fiBuildRoutePrompt, fiReadLabel, fiTypesList, fiTypesSave, fiTypesTouch, fiTypeClean, FI_TYPE_SEED, FI_TABS, FI_BRAND_HEADERS, fiBrandContactLine, fiBuildEmail, fiSave, fiPublish, fiReport, fiPhotoUpload, fiPhotoView, fiBrandSave, fiEmailReport, fiStructure, fiSummarize, fiList, fiGetInspection, fiRoute, fiNormalizeIssue, fiNormalizeIssues, fiExtractJson, fiValidateDoc, fiFingerprint, fiTradeRollup, fiPublishChecks, fiSerialize, fiChunk, fiJoinRow, fiBuildStructurePrompt, fiPhotoIds, fiIsAdmin, FI_DATA_CHUNK, fiBookings, fiBookingStart, fiPremierRepair, fiUrgentSend, fiUrgentTextWindow, fiUrgentCollect, fiBuildUrgentEmail, fiUrgentSmsBody, fiOnlyPhoneMarksChanged, fiPublicDocKey, fiReword, fiBookingOut, fiBookingOwnerRow, fiBookingPropMatches, fiBookingAddrParts, fiValidateAccess, fiValidateVisit, inspCleanSize, inspSizeText, FI_REWORD_SYSTEM };
   `);
   const env = { WORKER_SECRET: 'sek', HUB_TEST_TOKEN: 'tst', SHEET_ID: 'S', DRIVE_PROPERTIES_ROOT: 'root' };
   return { h, env, ...factory(h, sheetsRequest, ensureColumns, fetch, new Function('return ' + grab('col'))(), new Function('return ' + grab('bytesToB64'))()) };

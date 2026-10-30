@@ -47,7 +47,7 @@
   .banner{border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
   .banner.warn{background:#fdf3e0;border:1px solid #f0d9a8;color:#7a5b12} .banner.err{background:#fdecea;border:1px solid #f1b9b3;color:#8e281d} .banner.ok{background:#e7f6ec;border:1px solid #b5e0c4;color:#14623a} .banner.info{background:#eaf1fd;border:1px solid #bcd0f5;color:#1a3f94}
   #login{max-width:360px;margin:60px auto;padding:20px;text-align:center}
-  #syncbar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--surface);border-top:1px solid var(--border);padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px}
+  #syncbar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--surface);border-top:1px solid var(--border);padding:8px 12px calc(8px + env(safe-area-inset-bottom));display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;line-height:1.35}
   #syncbar .st{font-weight:700}
   #syncbar.ok .st{color:var(--accent2)} #syncbar.work .st{color:var(--accent)} #syncbar.off .st{color:var(--warn)} #syncbar.err .st{color:var(--danger)}
   .area-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 4px;border-top:1px solid var(--border);cursor:pointer;min-height:52px}
@@ -110,6 +110,7 @@
   <a href="index.html" style="color:#fff;text-decoration:none">← Hub</a>
   <span style="margin-left:auto" id="nav-ver">Field Inspection</span>
 </div>
+<script src="rc-related.js" data-group="inspections"></script>
 
 <div id="login">
   <h1>Field Inspection</h1>
@@ -252,11 +253,11 @@ function setSync(){
   else if (ss.syncing){ cls='work'; txt='⏳ Saving…'; }
   else if (rec.dirty){ cls='work'; txt='⏳ Changes waiting to save'; }
   else { cls='ok'; txt='✓ Saved to server' + (rec.base_rev ? ' (v'+rec.base_rev+')' : ''); }
-  if (np){ txt += ' · 📷 '+np+' photo'+(np>1?'s':'')+' waiting'; if (S.photoMsg){ cls = cls==='ok'?'err':cls; txt += ' ⚠'; a = '<button class="btn sm" onclick="retryPhotos()">Retry photos</button>'; } }
+  if (np){ var ps = photoStatusHtml(np); txt += ' · '+ps.txt; if (ps.cls==='err'){ cls = 'err'; } else if (cls==='ok' || ps.cls==='off'){ cls = ps.cls; } a = ps.act || a; }
   bar.className = cls; st.innerHTML = txt; act.innerHTML = a;
 }
 function pendingPhotoCount(){ var n=0; for (var k in photoState){ if (photoState[k].state!=='done') n++; } return n; }
-window.addEventListener('online', function(){ if (S.rec) syncNow(true); pumpPhotos(); setSync(); });
+window.addEventListener('online', function(){ if (S.rec) syncNow(true); pumpPhotos(true); setSync(); });
 window.addEventListener('offline', setSync);
 window.addEventListener('beforeunload', function(e){ if ((S.rec && S.rec.dirty) || pendingPhotoCount()){ e.preventDefault(); e.returnValue=''; return ''; } });
 function mut(fn){
@@ -374,34 +375,134 @@ $('photo-in').addEventListener('change', function(ev){
   });
   chain.then(function(){ render(); pumpPhotos(); if (tg.urgent && S.urg && S.urg.mode==='new') renderUrgentNew(); if (!fails) toast(files.length+' photo'+(files.length>1?'s':'')+' added'); });
 });
-function pumpPhotos(){
-  if (S.pumping) return Promise.resolve(); if (!navigator.onLine) { setSync(); return Promise.resolve(); }
-  S.pumping = true; S.photoMsg='';
+// ── photo uploader ──────────────────────────────────────────────────────────
+// Photos go up one at a time. A failure that is NOT the photo's fault (Google Sheets read limit, a bad signal, a slow server) never marks the photo failed:
+// it stays queued, the reason is shown in the bar at the bottom, and the page retries by itself with a growing wait (5s, 10s, 20s, 40s, then every 60s).
+// Only a photo the server will never accept (too big, wrong type), or one that has failed PHOTO_MAX_TRIES times in a row, is marked failed and needs "Retry photos".
+var PHOTO_MAX_TRIES = 10, PHOTO_TIMEOUT_MS = 75000, PHOTO_GAP_MS = 900;
+var photoTries = {};          // photo id -> consecutive failed attempts (memory only)
+var pumpTimer = null, tickTimer = null;
+S.up = { done:0, nextAt:0, why:'', msg:'', sendingId:'', attempt:0, busyRounds:0, reported:{} };
+function photoBackoff(n){ return Math.min(60, 5 * Math.pow(2, Math.max(0, n - 1))); }
+function reportPhoto(where, msg, id){ if (S.up.reported[id]) return; S.up.reported[id] = 1; try{ if (window.hubReportFailure) window.hubReportFailure(where, msg, { photo_id:id }); }catch(e){ console.error('photo failure report failed', e); } }
+function schedulePump(sec, why, msg){
+  if (pumpTimer) clearTimeout(pumpTimer);
+  S.up.nextAt = Date.now() + sec*1000; S.up.why = why; S.up.msg = msg || '';
+  pumpTimer = setTimeout(function(){ pumpTimer = null; S.up.nextAt = 0; pumpPhotos(); }, sec*1000);
+  if (!tickTimer) tickTimer = setInterval(function(){ if (!S.up.nextAt && !S.pumping){ clearInterval(tickTimer); tickTimer = null; } setSync(); }, 1000);
+  setSync();
+}
+function sendPhoto(p){
+  // resolves {ok} | {kind:'busy'|'transient'|'unsaved'|'fatal', wait, text}; never rejects
+  var ctl = window.AbortController ? new AbortController() : null, timedOut = false;
+  var to = setTimeout(function(){ timedOut = true; if (ctl) ctl.abort(); }, PHOTO_TIMEOUT_MS);
+  var opts = { method:'POST', headers:{'X-Auth-Token':AUTH_TOKEN,'Content-Type':'image/jpeg'}, body:p.blob };
+  if (ctl) opts.signal = ctl.signal;
+  return fetch(WORKER+'/fi/photo?inspection_id='+encodeURIComponent(p.insp)+'&photo_id='+encodeURIComponent(p.id), opts)
+    .then(function(res){
+      clearTimeout(to);
+      return res.text().then(function(t){
+        var j; try{ j = JSON.parse(t); }catch(e){ j = null; }
+        var msg = (j && (j.message || j.error)) || ('HTTP '+res.status);
+        if (res.ok && j && j.ok !== false) return { ok:true };
+        if (j && j.error === 'inspection_not_saved') return { kind:'unsaved', text:'waiting for the inspection to save' };
+        if (res.status === 429 || (j && j.busy)) return { kind:'busy', wait:Math.max(5, Number(j && j.retry_after_seconds) || 8), text:'Google Sheets is busy' };
+        if (res.status === 400 || res.status === 413 || res.status === 415) return { kind:'fatal', text:msg };
+        if (res.status === 401 || res.status === 403) return { kind:'fatal', text:'Not signed in (' + msg + ') — reload the page and log in again' };
+        return { kind:'transient', text:msg + ' (HTTP '+res.status+')' };
+      });
+    })
+    .catch(function(e){
+      clearTimeout(to);
+      return { kind:'transient', text: timedOut ? 'the server did not answer in '+Math.round(PHOTO_TIMEOUT_MS/1000)+'s' : 'no connection to the server' };
+    });
+}
+function pumpPhotos(force){
+  if (S.pumping) return Promise.resolve();
+  if (!navigator.onLine) { S.up.why = 'offline'; setSync(); return Promise.resolve(); }
+  if (!force && S.up.nextAt && S.up.nextAt > Date.now()) return Promise.resolve();   // honour the backoff; other code calls this often
+  if (pumpTimer){ clearTimeout(pumpTimer); pumpTimer = null; }
+  S.up.nextAt = 0; S.up.why = ''; S.up.msg = '';
+  S.pumping = true; S.photoMsg = '';
+  var retryIn = 0, retryWhy = '', retryMsg = '', consecutiveFail = 0;
   return dbAll('photos').then(function(rows){
-    var todo = (rows||[]).filter(function(p){ return p.state!=='done'; });
-    photoState = {}; todo.forEach(function(p){ photoState[p.id] = { state:p.state, err:p.err||'' }; });
+    var todo = (rows||[]).filter(function(p){ return p.state !== 'done'; });
+    var fresh = {}; todo.forEach(function(p){ fresh[p.id] = { state:p.state, err:p.err||'' }; });
+    photoState = fresh;
+    todo = todo.filter(function(p){ return p.state !== 'error'; });   // failed photos wait for the Retry photos button
     setSync();
-    var chain = Promise.resolve();
-    todo.forEach(function(p){
-      chain = chain.then(function(){
-        return dbGet('docs', p.insp).then(function(d){
-          if (!d || !d.base_rev){ photoState[p.id] = { state:'pending', err:'waiting for the inspection to save' }; return; }
-          return fetch(WORKER+'/fi/photo?inspection_id='+encodeURIComponent(p.insp)+'&photo_id='+encodeURIComponent(p.id), { method:'POST', headers:{'X-Auth-Token':AUTH_TOKEN,'Content-Type':'image/jpeg'}, body:p.blob })
-            .then(function(res){ return res.text().then(function(t){ var j; try{ j=JSON.parse(t); }catch(e){ j={ok:false,message:'HTTP '+res.status}; } if (!res.ok || j.ok===false){ var er=new Error(j.message||('HTTP '+res.status)); er.code=j.error; throw er; } return j; }); })
-            .then(function(){ p.state='done'; p.err=''; delete photoState[p.id]; return dbPut('photos', p); })
-            .catch(function(e){
-              if (e.code==='inspection_not_saved'){ photoState[p.id] = { state:'pending', err:'waiting for the inspection to save' }; if (S.rec && S.rec.id===p.insp){ S.rec.dirty=true; scheduleSync(); } return; }
-              p.err = e.message; p.state='error'; photoState[p.id] = { state:'error', err:e.message }; S.photoMsg = e.message; return dbPut('photos', p);
-            });
+    var i = 0;
+    function next(){
+      if (i >= todo.length) return Promise.resolve();
+      var p = todo[i++];
+      return dbGet('docs', p.insp).then(function(d){
+        if (!d || !d.base_rev){ photoState[p.id] = { state:'pending', err:'waiting for the inspection to save' }; retryIn = Math.max(retryIn, 20); retryWhy = retryWhy || 'unsaved'; return next(); }
+        S.up.sendingId = p.id; S.up.attempt = (photoTries[p.id] || 0) + 1; setSync();
+        return sendPhoto(p).then(function(r){
+          S.up.sendingId = '';
+          if (r.ok){
+            p.state = 'done'; p.err = ''; delete photoState[p.id]; delete photoTries[p.id]; S.up.done++; consecutiveFail = 0; S.up.busyRounds = 0;
+            return dbPut('photos', p).then(function(){ setSync(); return new Promise(function(r2){ setTimeout(r2, PHOTO_GAP_MS); }); }).then(next);
+          }
+          if (r.kind === 'unsaved'){
+            photoState[p.id] = { state:'pending', err:r.text };
+            if (S.rec && S.rec.id === p.insp){ S.rec.dirty = true; scheduleSync(); }
+            retryIn = Math.max(retryIn, 20); retryWhy = retryWhy || 'unsaved'; return next();
+          }
+          if (r.kind === 'fatal'){
+            p.err = r.text; p.state = 'error'; photoState[p.id] = { state:'error', err:r.text }; S.photoMsg = r.text;
+            reportPhoto('field-inspect photo upload', r.text, p.id);
+            return dbPut('photos', p).then(next);
+          }
+          // busy or transient: the photo stays queued; stop the loop (the cause is shared by every photo) and try again later
+          var n = (photoTries[p.id] = (photoTries[p.id] || 0) + 1);
+          if (r.kind === 'busy'){
+            S.up.busyRounds++;
+            photoState[p.id] = { state:'pending', err:r.text };
+            retryIn = Math.max(retryIn, r.wait + Math.min(30, S.up.busyRounds * 4)); retryWhy = 'busy'; retryMsg = r.text;
+            if (S.up.busyRounds === 6) reportPhoto('field-inspect photo upload (still busy after 6 tries)', 'Google Sheets read limit has held photo uploads for several minutes', p.id);
+            return Promise.resolve();
+          }
+          if (n >= PHOTO_MAX_TRIES){
+            var m = 'Failed '+n+' times: '+r.text;
+            p.err = m; p.state = 'error'; photoState[p.id] = { state:'error', err:m }; S.photoMsg = m;
+            reportPhoto('field-inspect photo upload', m, p.id);
+            return dbPut('photos', p).then(next);
+          }
+          photoState[p.id] = { state:'pending', err:r.text };
+          retryIn = Math.max(retryIn, photoBackoff(n)); retryWhy = 'retry'; retryMsg = r.text;
+          if (n === 4) reportPhoto('field-inspect photo upload (4 failed tries)', r.text, p.id);
+          return (++consecutiveFail >= 2) ? Promise.resolve() : next();
         });
       });
-    });
-    return chain;
-  }).then(function(){ S.pumping=false; setSync(); if (S.view==='review'||S.view==='area') safeRender(); var stuck = Object.keys(photoState).some(function(k){ return photoState[k].state==='pending'; }); if (stuck) setTimeout(pumpPhotos, 20000); })
-    .catch(function(e){ S.pumping=false; S.photoMsg = e.message; setSync(); });
+    }
+    return next();
+  }).then(function(){
+    S.pumping = false;
+    if (retryIn) schedulePump(retryIn, retryWhy, retryMsg);
+    setSync(); if (S.view==='review'||S.view==='area') safeRender();
+  }).catch(function(e){
+    S.pumping = false; S.photoMsg = 'Photo uploader problem: '+e.message; reportPhoto('field-inspect photo uploader', e.message, 'pump'); schedulePump(30, 'retry', e.message);
+  });
 }
 function retryPhotos(){
-  dbAll('photos').then(function(rows){ var ps=[]; (rows||[]).forEach(function(p){ if (p.state==='error'){ p.state='pending'; ps.push(dbPut('photos',p)); } }); return Promise.all(ps); }).then(function(){ S.photoMsg=''; pumpPhotos(); });
+  dbAll('photos').then(function(rows){ var ps=[]; (rows||[]).forEach(function(p){ if (p.state==='error'){ p.state='pending'; ps.push(dbPut('photos',p)); } delete photoTries[p.id]; S.up.reported[p.id] = 0; }); return Promise.all(ps); }).then(function(){ S.photoMsg=''; S.up.busyRounds=0; pumpPhotos(true); });
+}
+// One plain-language line for the bottom bar: is the page working, waiting its turn, or actually stuck?
+function photoStatusHtml(np){
+  var up = S.up, n = np + ' photo'+(np>1?'s':'')+' waiting', secs = up.nextAt ? Math.max(0, Math.ceil((up.nextAt - Date.now())/1000)) : 0;
+  var failed = Object.keys(photoState).filter(function(k){ return photoState[k].state === 'error'; });
+  if (failed.length) return { cls:'err', txt:'📷 '+n+' · ⚠ '+failed.length+' failed — '+esc(photoState[failed[0]].err||''), act:'<button class="btn sm" onclick="retryPhotos()">Retry photos</button>' };
+  if (!navigator.onLine) return { cls:'off', txt:'📷 '+n+' · 📴 offline — they upload by themselves when signal returns', act:'' };
+  if (S.pumping && up.sendingId){ var tot = up.done + np; return { cls:'work', txt:'📷 Uploading photo '+(up.done+1)+' of '+tot+(up.attempt>1?' (try '+up.attempt+')':'')+'… keep this page open', act:'' }; }
+  if (up.nextAt){
+    var why = up.why === 'busy' ? 'Google is limiting how fast we can save (shared limit). Normal after a batch of photos — nothing is wrong.'
+      : up.why === 'unsaved' ? 'Waiting for the inspection to finish saving.'
+      : 'Last try failed: '+esc(up.msg||'')+'.';
+    return { cls:'work', txt:'📷 '+n+' · '+why+' Retrying by itself in '+secs+'s. Just keep this page open.', act:'<button class="btn sm" onclick="pumpPhotos(true)">Retry now</button>' };
+  }
+  if (S.pumping) return { cls:'work', txt:'📷 '+n+' · checking…', act:'' };
+  return { cls:'work', txt:'📷 '+n+' · starting…', act:'' };
 }
 
 // ── model ───────────────────────────────────────────────────────────────────

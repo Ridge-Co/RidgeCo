@@ -115,7 +115,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
 // Portals poll GET /version and refresh themselves onto new code when this changes
 // (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-30.01-delivery-cotenants-keep-yes';
+const BUILD_VERSION = '2026-10-30.02-fi-photo-quota-nav';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -40873,9 +40873,15 @@ let __fiTabsReady = false;
 async function fiRoute(env, label, fn) {
   try { return await fn(); }
   catch (e) {
+    // Oct 30 2026: Google's shared per-minute READ quota running out is a "busy, retry in a moment" state, not a bug. It used to leave here as a generic
+    // 500 'internal' (one P1 row per photo, and the phone gave up on the photo). Rethrow it so the Worker's top-level handler answers with the typed 429
+    // (busy:true, retry_after_seconds) plus ONE calm P2 sheets_quota_busy row, exactly like every other Hub route (see strHandleErr).
+    if (sheetsQuotaBusyError(e)) throw e;
     console.error('fi/' + label + ' failed:', e && e.message);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_route_error', Skill_Or_Endpoint: '/fi/' + label, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (_) { /* telemetry is best-effort; the error itself is returned below */ }
-    return fiErr(500, 'internal', 'The server hit an error (' + label + '). Nothing was reported as saved. Retry; if it repeats, tell Brett.', { detail: String((e && e.message) || e).slice(0, 160) });
+    let telemetryError = '';
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_route_error', Skill_Or_Endpoint: '/fi/' + label, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); }
+    catch (te) { telemetryError = String((te && te.message) || te).slice(0, 120); console.error('fi/' + label + ': could not log to Ops_Telemetry:', telemetryError, '| original:', e && e.message); }
+    return fiErr(500, 'internal', 'The server hit an error (' + label + '). Nothing was reported as saved. Retry; if it repeats, tell Brett.', Object.assign({ detail: String((e && e.message) || e).slice(0, 160) }, telemetryError ? { telemetry_error: telemetryError } : {}));
   }
 }
 function fiErr(status, error, message, extra) { return json(Object.assign({ ok: false, error, message }, extra || {}), status); }
@@ -41169,32 +41175,46 @@ async function fiEnsureTabs(env) {
   __fiTabsReady = true;
 }
 // Uncached read (a read-modify-write or verify must never see a stale 6s-cached copy).
+// Oct 30 2026: this used to be its own raw fetch loop (3 tries, ~2.4 s of waiting, invisible to the read meter, and its error text was not recognised as
+// the shared quota, so a busy minute became a 500 and the phone gave up on the photo). It now goes through sheetsRequest - the same 6-try backoff
+// (~15 s, Google's quota is per MINUTE), the read meter, and the "Sheets API error on GET" text that sheetsQuotaBusyError() recognises - after dropping
+// any cached or in-flight copy of the tab so the data is still always fresh.
 async function fiReadFresh(env, tab) {
-  for (let attempt = 1; ; attempt++) {
-    const token = await getAccessToken(env);
-    const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}/values/${tab}`, { headers: { Authorization: `Bearer ${token}` } });
-    const data = await res.json();
-    if (data.error) {
-      const code = data.error.code || res.status;
-      if ((code === 429 || code >= 500) && attempt < 4) { await new Promise(r => setTimeout(r, 400 * attempt)); continue; }
-      throw new Error(`FI: Sheets read of ${tab} failed: ${data.error.message || code}`);
-    }
-    const vals = data.values || [];
-    const headers = vals[0] || [];
-    const rows = vals.slice(1).map((r, i) => { const o = {}; headers.forEach((h, j) => { o[h] = r[j] == null ? '' : String(r[j]); }); return { o, rowNum: i + 2 }; });
-    return { headers, rows };
-  }
+  invalidateTabCache(tab);
+  const data = await sheetsRequest(env, 'GET', `/values/${tab}`);
+  const vals = (data && data.values) || [];
+  const headers = vals[0] || [];
+  const rows = vals.slice(1).map((r, i) => { const o = {}; headers.forEach((h, j) => { o[h] = r[j] == null ? '' : String(r[j]); }); return { o, rowNum: i + 2 }; });
+  return { headers, rows };
 }
 async function fiWriteRow(env, tab, headers, obj, rowNum) {
   if (!headers.length) throw new Error(`FI: ${tab} has no header row`);
   const vals = headers.map(h => (obj[h] === undefined || obj[h] === null) ? '' : String(obj[h]));
-  if (rowNum) await sheetsRequest(env, 'PUT', `/values/${tab}!A${rowNum}:${col(headers.length - 1)}${rowNum}?valueInputOption=RAW`, { values: [vals] });
-  else await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, { values: [vals] });
+  if (rowNum) return await sheetsRequest(env, 'PUT', `/values/${tab}!A${rowNum}:${col(headers.length - 1)}${rowNum}?valueInputOption=RAW`, { values: [vals] });
+  return await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, { values: [vals] });
 }
 async function fiFindInspection(env, id) {
   const t = await fiReadFresh(env, 'FI_Inspections');
   const hits = t.rows.filter(r => r.o.ID === id && r.o.Active !== 'FALSE');
   return { headers: t.headers, row: hits[0] || null, dupes: hits.length };
+}
+// Oct 30 2026: every photo used to re-read the WHOLE FI_Inspections tab (up to 8 rows x 360 KB of report JSON) twice just to learn the inspection exists
+// and which Drive folder it uses. Photos only ever need: "does it exist" + its folder id. POSITIVE answers only are remembered (an inspection that was
+// saved stays saved), trimmed to the few columns a photo needs, for 10 minutes per Worker instance. A miss, a row with no folder yet, or a failed upload
+// always goes to a real read, so a just-saved inspection is never reported as missing and a moved folder is re-found.
+const __fiInspCache = new Map();
+const FI_INSP_CACHE_MS = 10 * 60 * 1000;
+function fiInspCacheDrop(id) { __fiInspCache.delete(id); }
+async function fiFindInspectionForPhoto(env, id) {
+  const hit = __fiInspCache.get(id);
+  if (hit && Date.now() - hit.at < FI_INSP_CACHE_MS) return { headers: hit.headers, row: hit.row, dupes: 1, cached: true };
+  const f = await fiFindInspection(env, id);
+  if (f.row && f.row.o.Drive_Folder_ID) {
+    if (__fiInspCache.size >= 200) __fiInspCache.delete(__fiInspCache.keys().next().value);
+    const o = f.row.o;
+    __fiInspCache.set(id, { headers: f.headers, at: Date.now(), row: { rowNum: f.row.rowNum, o: { ID: o.ID, Active: o.Active, Drive_Folder_ID: o.Drive_Folder_ID, Drive_Folder_URL: o.Drive_Folder_URL || '' } } });
+  }
+  return f;
 }
 function fiBrandOut(o, withLogo) {
   const b = { id: o.ID, name: o.Name, primary_color: o.Primary_Color || '#1d4ed8', accent_color: o.Accent_Color || '#166534', tagline: o.Tagline || '', contact_line: o.Contact_Line || '', footer_text: o.Footer_Text || '', website: o.Website || '', phone: o.Phone || '', email: o.Email || '', address: o.Address || '', is_default: o.Is_Default === 'TRUE', has_logo: !!o.Logo_Data };
@@ -41295,15 +41315,30 @@ async function fiSave(env, body) {
   }
   return json({ ok: true, rev: newRev, hash, report_token: o.Report_Token, status: o.Status, unpublished: unpublish, updated_at: now, recreated: !row && baseRev > 0 });
 }
+const FI_PHOTO_COLS = ['ID', 'Inspection_ID', 'Drive_File_ID', 'Mime', 'Bytes', 'Created_At', 'Active'];
+// Oct 30 2026: a photo does NOT set up the tabs on every cold Worker instance any more (that cost ~7 Sheets reads each time, 30 instances in 30 minutes).
+// Photos are only uploaded for an inspection that already saved, so the tabs and columns exist. If a tab or column IS missing, the first read/write says so
+// and we run fiEnsureTabs once and try again - never a silent drop.
+function fiTabMissingError(e) { return /unable to parse range|requested entity was not found|FI: .* missing column/i.test(String((e && e.message) || e || '')); }
 async function fiPhotoUpload(env, request, url) {
   const inspId = url.searchParams.get('inspection_id') || '', photoId = url.searchParams.get('photo_id') || '';
   if (!FI_ID_RE.test(inspId) || !FI_ID_RE.test(photoId)) return fiErr(400, 'bad_id', 'inspection_id and photo_id are required.');
   const mime = (request.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) return fiErr(415, 'bad_type', 'Only JPEG, PNG or WebP photos are accepted.');
-  await fiEnsureTabs(env);
-  const { row } = await fiFindInspection(env, inspId);
+  let found, pt;
+  try {
+    found = await fiFindInspectionForPhoto(env, inspId);
+    if (found.row) pt = await fiReadFresh(env, 'FI_Photos');
+  } catch (e) {
+    if (__fiTabsReady || !fiTabMissingError(e)) throw e;
+    await fiEnsureTabs(env);
+    found = await fiFindInspectionForPhoto(env, inspId);
+    if (found.row) pt = await fiReadFresh(env, 'FI_Photos');
+  }
+  const row = found.row;
   if (!row) return fiErr(409, 'inspection_not_saved', 'Save the inspection to the server first, then retry this photo.');
-  const pt = await fiReadFresh(env, 'FI_Photos');
+  if (!FI_PHOTO_COLS.every(c => pt.headers.includes(c))) { await fiEnsureTabs(env); pt = await fiReadFresh(env, 'FI_Photos'); }
+  if (!FI_PHOTO_COLS.every(c => pt.headers.includes(c))) throw new Error('FI: FI_Photos is missing column ' + FI_PHOTO_COLS.filter(c => !pt.headers.includes(c)).join(', '));
   const ex = pt.rows.find(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
   if (ex) return json({ ok: true, existing: true, photo_id: photoId });
   const buf = await request.arrayBuffer();
@@ -41313,23 +41348,33 @@ async function fiPhotoUpload(env, request, url) {
   if (!root) return fiErr(500, 'not_configured', 'DRIVE_PROPERTIES_ROOT is not configured.');
   const token = await getAccessToken(env);
   let folder;
-  try { folder = await fiInspectionFolder(env, token, row, (await fiFindInspection(env, inspId)).headers, false); }
-  catch (e) { return fiErr(502, 'drive_folder', 'Could not set up the property’s Drive folder: ' + String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
+  try { folder = await fiInspectionFolder(env, token, row, found.headers, false); }
+  catch (e) { if (sheetsQuotaBusyError(e)) throw e; return fiErr(502, 'drive_folder', 'Could not set up the property’s Drive folder: ' + String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
   const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
   let shared;
   try { shared = await fiDriveSharedRoot(token, root); } catch (e) { return fiErr(502, 'drive_folder', String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
   let up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, folder.id, shared);
   if ((!up || !up.id) && row.o.Drive_Folder_ID) {
-    // The remembered folder may have been deleted or moved: look it up again once, then retry.
+    // The remembered folder may have been deleted or moved: forget the cached copy, look it up again once (a real read), then retry.
+    fiInspCacheDrop(inspId);
     try { const cur = await fiFindInspection(env, inspId); folder = await fiInspectionFolder(env, token, cur.row, cur.headers, true); up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, folder.id, shared); }
-    catch (e) { return fiErr(502, 'drive_folder', 'The Drive folder could not be re-created: ' + String((e && e.message) || e).slice(0, 160)); }
+    catch (e) { if (sheetsQuotaBusyError(e)) throw e; return fiErr(502, 'drive_folder', 'The Drive folder could not be re-created: ' + String((e && e.message) || e).slice(0, 160)); }
   }
   if (!up || !up.id) return fiErr(502, 'drive_upload', 'Drive did not accept the photo. Retry.');
   if (up.size !== undefined && Number(up.size) !== buf.byteLength) return fiErr(502, 'drive_size_mismatch', 'Drive stored a different number of bytes than were sent. Retry.');
-  await fiWriteRow(env, 'FI_Photos', pt.headers, { ID: photoId, Inspection_ID: inspId, Drive_File_ID: up.id, Mime: mime, Bytes: buf.byteLength, Created_At: new Date().toISOString(), Active: 'TRUE' }, 0);
-  const chk = await fiReadFresh(env, 'FI_Photos');
-  const hits = chk.rows.filter(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
-  if (hits.length !== 1 || hits[0].o.Drive_File_ID !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
+  const wrote = await fiWriteRow(env, 'FI_Photos', pt.headers, { ID: photoId, Inspection_ID: inspId, Drive_File_ID: up.id, Mime: mime, Bytes: buf.byteLength, Created_At: new Date().toISOString(), Active: 'TRUE' }, 0);
+  // Verify the write by reading back just the row the append reported (one tiny read), not the whole tab. If the append did not say where it landed,
+  // fall back to the full-tab check - a write is never reported saved without a read-back.
+  const rr = /^[A-Za-z0-9_]+!([A-Z]+)(\d+):([A-Z]+)(\d+)$/.exec(String((wrote && wrote.updates && wrote.updates.updatedRange) || ''));
+  if (rr && rr[2] === rr[4] && Number(rr[2]) >= 2) {
+    const back = await sheetsRequest(env, 'GET', `/values/FI_Photos!A${rr[2]}:${col(pt.headers.length - 1)}${rr[2]}`);
+    const v = (back && back.values && back.values[0]) || [];
+    if (v[pt.headers.indexOf('ID')] !== photoId || v[pt.headers.indexOf('Drive_File_ID')] !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
+  } else {
+    const chk = await fiReadFresh(env, 'FI_Photos');
+    const hits = chk.rows.filter(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
+    if (hits.length !== 1 || hits[0].o.Drive_File_ID !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
+  }
   return json({ ok: true, photo_id: photoId, bytes: buf.byteLength });
 }
 async function fiPhotoView(env, url) {
