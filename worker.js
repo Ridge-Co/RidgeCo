@@ -41315,6 +41315,11 @@ async function fiSave(env, body) {
   }
   return json({ ok: true, rev: newRev, hash, report_token: o.Report_Token, status: o.Status, unpublished: unpublish, updated_at: now, recreated: !row && baseRev > 0 });
 }
+const FI_PHOTO_COLS = ['ID', 'Inspection_ID', 'Drive_File_ID', 'Mime', 'Bytes', 'Created_At', 'Active'];
+// Oct 30 2026: a photo does NOT set up the tabs on every cold Worker instance any more (that cost ~7 Sheets reads each time, 30 instances in 30 minutes).
+// Photos are only uploaded for an inspection that already saved, so the tabs and columns exist. If a tab or column IS missing, the first read/write says so
+// and we run fiEnsureTabs once and try again - never a silent drop.
+function fiTabMissingError(e) { return /unable to parse range|requested entity was not found|FI: .* missing column/i.test(String((e && e.message) || e || '')); }
 async function fiPhotoUpload(env, request, url) {
   const inspId = url.searchParams.get('inspection_id') || '', photoId = url.searchParams.get('photo_id') || '';
   if (!FI_ID_RE.test(inspId) || !FI_ID_RE.test(photoId)) return fiErr(400, 'bad_id', 'inspection_id and photo_id are required.');
