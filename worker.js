@@ -35210,10 +35210,12 @@ function deliveryAuthAlert(env, reason, severity, message) { return deliveryLedg
 // reported (failure ledger P1 + the response's calendar_status + the delivery row), never swallowed. On staging the write is a stub.
 const DELIVERY_CAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
 const DELIVERY_CAL_KEY_PROP = 'ridgecoDeliveryKey';
-function deliveryCalEventBody(cal) {
+function deliveryCalEventBody(cal, patch) {
   const ev = { summary: cal.title, location: cal.location || '', description: cal.description || '', status: 'confirmed', extendedProperties: { private: { [DELIVERY_CAL_KEY_PROP]: cal.key } } };
-  if (cal.all_day) { ev.start = { date: cal.start_iso }; ev.end = { date: cal.end_iso }; }
-  else { ev.start = { dateTime: cal.start_iso, timeZone: 'America/New_York' }; ev.end = { dateTime: cal.end_iso, timeZone: 'America/New_York' }; }
+  // patch=true (updating an event that may already exist in the OTHER shape): Google merges nested objects on PATCH, so a timed update on a
+  // date-only event would carry BOTH date and dateTime and answer 400 "Invalid start time" (the Oct 29 2026 range delivery). Null the other field out.
+  if (cal.all_day) { ev.start = patch ? { date: cal.start_iso, dateTime: null, timeZone: null } : { date: cal.start_iso }; ev.end = patch ? { date: cal.end_iso, dateTime: null, timeZone: null } : { date: cal.end_iso }; }
+  else { ev.start = Object.assign({ dateTime: cal.start_iso, timeZone: 'America/New_York' }, patch ? { date: null } : {}); ev.end = Object.assign({ dateTime: cal.end_iso, timeZone: 'America/New_York' }, patch ? { date: null } : {}); }
   return ev;
 }
 async function deliveryCalFetch(env, sub, method, pathAndQuery, body) {
