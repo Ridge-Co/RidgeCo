@@ -33,7 +33,18 @@ export function world() {
       tab.rows[n - 2][ci] = body.values[0][0]; return {};
     }
     m = path.match(/^\/values\/([A-Za-z_]+):append/);
-    if (method === 'POST' && m) { const tab = T(m[1]); if (h.dropAppend === m[1]) return {}; for (const row of body.values) { let vals = row.slice(); if (h.corrupt) vals = h.corrupt(m[1], vals, tab.headers); tab.rows.push(vals); } if (h.corrupt && h.corruptOnce) h.corrupt = null; return {}; }
+    if (method === 'POST' && m) { const tab = T(m[1]); if (h.dropAppend === m[1]) return {}; for (const row of body.values) { let vals = row.slice(); if (h.corrupt) vals = h.corrupt(m[1], vals, tab.headers); tab.rows.push(vals); } if (h.corrupt && h.corruptOnce) h.corrupt = null; const last = tab.rows.length + 1; let cn = tab.headers.length, cl = ''; while (cn > 0) { const r = (cn - 1) % 26; cl = String.fromCharCode(65 + r) + cl; cn = Math.floor((cn - 1) / 26); } return h.noAppendRange ? {} : { updates: { updatedRange: m[1] + '!A' + last + ':' + cl + last, updatedRows: 1 } }; }
+    // Oct 30 2026: fiReadFresh now goes through sheetsRequest (whole-tab GET) and the photo verify reads back ONE row (ranged GET).
+    let g = path.match(/^\/values\/([A-Za-z_]+)$/);
+    if (method === 'GET' && g) {
+      if (h.sheetsReadError) { const er = h.sheetsReadError(g[1], method, path); if (er) throw er; }
+      const tb = T(g[1]); return { values: tb.headers.length ? [tb.headers].concat(tb.rows.filter(Boolean)) : [] };
+    }
+    g = path.match(/^\/values\/([A-Za-z_]+)!([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+    if (method === 'GET' && g) {
+      if (h.sheetsReadError) { const er = h.sheetsReadError(g[1], method, path); if (er) throw er; }
+      const row = T(g[1]).rows[Number(g[3]) - 2]; return { values: row ? [row] : [] };
+    }
     throw new Error('fake sheets: unhandled ' + method + ' ' + path);
   };
   const ensureColumns = async (env, tab, cols) => { const tb = T(tab); for (const c of cols) if (!tb.headers.includes(c)) tb.headers.push(c); };
