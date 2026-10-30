@@ -288,7 +288,16 @@ globalThis.fetch = async (input, init) => {
     if (method === 'GET') { const q = /privateExtendedProperty=([^&]+)/.exec(sub); const [k, v] = q ? decodeURIComponent(q[1]).split('=') : []; return new Response(JSON.stringify({ items: [...calEvents.values()].filter(e => !k || (e.extendedProperties && e.extendedProperties.private && e.extendedProperties.private[k] === v)).map(e => ({ id: e.id, status: e.status })) }), { status: 200 }); }
     if (method === 'POST') { const id = 'ev' + (++calSeq); calEvents.set(id, Object.assign({ id }, b)); return new Response(JSON.stringify({ id }), { status: 200 }); }
     const idm = /^\/events\/([^?]+)/.exec(sub), eid = idm && decodeURIComponent(idm[1]);
-    if (method === 'PATCH') { if (!calEvents.has(eid)) return new Response('{"error":{"code":404}}', { status: 404 }); calEvents.set(eid, Object.assign(calEvents.get(eid), b)); return new Response(JSON.stringify({ id: eid }), { status: 200 }); }
+    if (method === 'PATCH') {
+      if (!calEvents.has(eid)) return new Response('{"error":{"code":404}}', { status: 404 });
+      const cur = calEvents.get(eid), merged = Object.assign({}, cur, b);
+      for (const k of ['start', 'end']) if (b[k]) {   // Google merges nested objects on PATCH; null clears a field; date AND dateTime together is a 400
+        const m2 = Object.assign({}, cur[k] || {}, b[k]); for (const kk of Object.keys(m2)) if (m2[kk] === null) delete m2[kk];
+        if (m2.date && m2.dateTime) return new Response('{"error":{"code":400,"errors":[{"domain":"global","reason":"invalid","message":"Invalid start time."}],"message":"Invalid start time."}}', { status: 400 });
+        merged[k] = m2;
+      }
+      calEvents.set(eid, merged); return new Response(JSON.stringify({ id: eid }), { status: 200 });
+    }
     if (method === 'DELETE') { if (!calEvents.has(eid)) return new Response('{"error":{"code":410}}', { status: 410 }); calEvents.delete(eid); return new Response(null, { status: 204 }); }
   }
   const m = /^https:\/\/sheets\.googleapis\.com\/v4\/spreadsheets\/TESTSHEET(.*)$/.exec(url);
