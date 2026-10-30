@@ -41198,6 +41198,24 @@ async function fiFindInspection(env, id) {
   const hits = t.rows.filter(r => r.o.ID === id && r.o.Active !== 'FALSE');
   return { headers: t.headers, row: hits[0] || null, dupes: hits.length };
 }
+// Oct 30 2026: every photo used to re-read the WHOLE FI_Inspections tab (up to 8 rows x 360 KB of report JSON) twice just to learn the inspection exists
+// and which Drive folder it uses. Photos only ever need: "does it exist" + its folder id. POSITIVE answers only are remembered (an inspection that was
+// saved stays saved), trimmed to the few columns a photo needs, for 10 minutes per Worker instance. A miss, a row with no folder yet, or a failed upload
+// always goes to a real read, so a just-saved inspection is never reported as missing and a moved folder is re-found.
+const __fiInspCache = new Map();
+const FI_INSP_CACHE_MS = 10 * 60 * 1000;
+function fiInspCacheDrop(id) { __fiInspCache.delete(id); }
+async function fiFindInspectionForPhoto(env, id) {
+  const hit = __fiInspCache.get(id);
+  if (hit && Date.now() - hit.at < FI_INSP_CACHE_MS) return { headers: hit.headers, row: hit.row, dupes: 1, cached: true };
+  const f = await fiFindInspection(env, id);
+  if (f.row && f.row.o.Drive_Folder_ID) {
+    if (__fiInspCache.size >= 200) __fiInspCache.delete(__fiInspCache.keys().next().value);
+    const o = f.row.o;
+    __fiInspCache.set(id, { headers: f.headers, at: Date.now(), row: { rowNum: f.row.rowNum, o: { ID: o.ID, Active: o.Active, Drive_Folder_ID: o.Drive_Folder_ID, Drive_Folder_URL: o.Drive_Folder_URL || '' } } });
+  }
+  return f;
+}
 function fiBrandOut(o, withLogo) {
   const b = { id: o.ID, name: o.Name, primary_color: o.Primary_Color || '#1d4ed8', accent_color: o.Accent_Color || '#166534', tagline: o.Tagline || '', contact_line: o.Contact_Line || '', footer_text: o.Footer_Text || '', website: o.Website || '', phone: o.Phone || '', email: o.Email || '', address: o.Address || '', is_default: o.Is_Default === 'TRUE', has_logo: !!o.Logo_Data };
   if (withLogo) b.logo_data = o.Logo_Data || '';
