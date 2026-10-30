@@ -267,6 +267,7 @@ function makeStore() {
 const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
 let store = makeStore();
 const twilio = [];            // every outbound text the worker tried to send
+let twilioFailTo = '';       // fail only this number (a co-tenant whose text bounces)
 let twilioMode = 'ok';        // 'ok' | 'fail'
 let tokenMode = 'ok', calMode = 'ok', jwksMode = 'ok', jwksFetches = 0, calSeq = 0, jwksKeys = [];   // fake Google: sign-in token endpoint, Calendar API, published sign-in keys
 const calEvents = new Map(), calLog = [];
@@ -287,14 +288,23 @@ globalThis.fetch = async (input, init) => {
     if (method === 'GET') { const q = /privateExtendedProperty=([^&]+)/.exec(sub); const [k, v] = q ? decodeURIComponent(q[1]).split('=') : []; return new Response(JSON.stringify({ items: [...calEvents.values()].filter(e => !k || (e.extendedProperties && e.extendedProperties.private && e.extendedProperties.private[k] === v)).map(e => ({ id: e.id, status: e.status })) }), { status: 200 }); }
     if (method === 'POST') { const id = 'ev' + (++calSeq); calEvents.set(id, Object.assign({ id }, b)); return new Response(JSON.stringify({ id }), { status: 200 }); }
     const idm = /^\/events\/([^?]+)/.exec(sub), eid = idm && decodeURIComponent(idm[1]);
-    if (method === 'PATCH') { if (!calEvents.has(eid)) return new Response('{"error":{"code":404}}', { status: 404 }); calEvents.set(eid, Object.assign(calEvents.get(eid), b)); return new Response(JSON.stringify({ id: eid }), { status: 200 }); }
+    if (method === 'PATCH') {
+      if (!calEvents.has(eid)) return new Response('{"error":{"code":404}}', { status: 404 });
+      const cur = calEvents.get(eid), merged = Object.assign({}, cur, b);
+      for (const k of ['start', 'end']) if (b[k]) {   // Google merges nested objects on PATCH; null clears a field; date AND dateTime together is a 400
+        const m2 = Object.assign({}, cur[k] || {}, b[k]); for (const kk of Object.keys(m2)) if (m2[kk] === null) delete m2[kk];
+        if (m2.date && m2.dateTime) return new Response('{"error":{"code":400,"errors":[{"domain":"global","reason":"invalid","message":"Invalid start time."}],"message":"Invalid start time."}}', { status: 400 });
+        merged[k] = m2;
+      }
+      calEvents.set(eid, merged); return new Response(JSON.stringify({ id: eid }), { status: 200 });
+    }
     if (method === 'DELETE') { if (!calEvents.has(eid)) return new Response('{"error":{"code":410}}', { status: 410 }); calEvents.delete(eid); return new Response(null, { status: 204 }); }
   }
   const m = /^https:\/\/sheets\.googleapis\.com\/v4\/spreadsheets\/TESTSHEET(.*)$/.exec(url);
   if (m) { const b = init && init.body ? JSON.parse(init.body) : undefined; const r = await store.handle(method, decodeURIComponent(m[1]).replace(/%3A/gi, ':'), b); return new Response(JSON.stringify(r), { status: r && r.error ? r.error.code : 200 }); }
   if (url.startsWith('https://api.twilio.com/')) {
     const p = new URLSearchParams(init.body); twilio.push({ to: p.get('To'), body: p.get('Body') });
-    return twilioMode === 'ok' ? new Response(JSON.stringify({ sid: 'SM' + twilio.length, status: 'queued' }), { status: 201 }) : new Response(JSON.stringify({ code: 21608, message: 'forced failure' }), { status: 400 });
+    return twilioMode === 'ok' && p.get('To') !== twilioFailTo ? new Response(JSON.stringify({ sid: 'SM' + twilio.length, status: 'queued' }), { status: 201 }) : new Response(JSON.stringify({ code: 21608, message: 'forced failure' }), { status: 400 });
   }
   return new Response(JSON.stringify({ ok: true }), { status: 200 });
 };
@@ -346,7 +356,7 @@ function seed(over) {
   // The worker memoises ensureColumns for 10 minutes per process, so a brand-new fake store must keep the HEADER rows the previous run created
   // (exactly what the live sheet looks like after the first email): carry headers over, drop the data.
   WK.__tabCache.clear(); QH.__tabCache.clear();   // every seed is a fresh world: no sheet rows may be served from a previous seed's cache. NOTE: the D-16 duplicate-text memory is deliberately NOT cleared.
-  const prev = store; store = makeStore(); skew += 60000; twilio.length = 0; twilioMode = 'ok'; tokenMode = 'ok'; calMode = 'ok'; calEvents.clear(); calLog.length = 0;
+  const prev = store; store = makeStore(); skew += 60000; twilio.length = 0; twilioMode = 'ok'; twilioFailTo = ''; tokenMode = 'ok'; calMode = 'ok'; calEvents.clear(); calLog.length = 0;
   for (const [name, rows] of prev.tabs) if (rows.length && rows[0].length) store.tabs.set(name, [rows[0].slice()]);
   tab('Config', ['Key', 'Value'], Object.entries(Object.assign({ admin_phone: ADMIN, TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE', Delivery_Claim_Settle_Ms: '40', Delivery_Cal_Impersonate: 'brett@bmoremanagement.com' }, over.config || {})).map(([Key, Value]) => ({ Key, Value })));
   tab('Owners', ['ID', 'First_Name', 'Company', 'SMS_Enabled', 'Phone'], [{ ID: 'O1', First_Name: 'Olly', Company: 'Phoenix Estate Rentals', SMS_Enabled: 'TRUE' }]);
@@ -1299,6 +1309,98 @@ const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\
   t('token compare is constant-time', /function deliveryCtEq\(a, b\)[^\n]*\|=/.test(src));
   t('no reminder texts in this build (no sweep that texts unanswered tenants)', !/reminder/i.test(block.replace(/no reminder texts[^\n]*/gi, '')));
   t('BUILD_VERSION bumped', /const BUILD_VERSION = '\d{4}-\d{2}-\d{2}\.\d{2}-[a-z0-9-]+'/.test(src)); // any stamped version: a later build must not break this test
+}
+
+
+// ═════════════ ADDENDUM (Oct 30 2026): co-tenants get the text; a yes given before the window stays; calendar all-day -> timed ═════════════
+const CO_PHONE = '+14105550177';
+const addCoTenant = (name) => { store.tabs.get('Tenants').push(['T9', 'P1', 'U1', 'TRUE', name, 'Mate', CO_PHONE, '', '', '2025-01-01', '']); WK.__tabCache.clear(); QH.__tabCache.clear(); };
+const toCo = () => twilio.filter(x => x.to === CO_PHONE);
+const pendingNotices = () => noticeRows().filter(x => x.Status === 'pending');
+// A delivery with a date but no window (the "all day" order), a co-tenant in the same unit, the request released at 6pm.
+async function coWorld() {
+  seed(); await send('confirm', NODATE);
+  addCoTenant('Cory' + SEED_NAME);
+  const r = await send('scheduled');
+  await withClock('2026-10-14T22:05:00Z', () => QH.processQuietHoursQueue(env));
+  return r;
+}
+{
+  const r = await coWorld();
+  t('CO: the request is queued for BOTH people in the unit (not just the tenant on the row)', r.json.tenant_sms === 'queued' && noticeRows().length === 2 && new Set(noticeRows().map(x => x.Recipient_Phone)).size === 2 && noticeRows().some(x => x.Recipient_Phone === CO_PHONE), noticeRows().map(x => x.Recipient_Phone));
+  t('CO: both get the same terse request with their own link to the same delivery', toTenant().length === 1 && toCo().length === 1 && /^New refrigerator ordered\./.test(toCo()[0].body) && /\/r\/1\./.test(toCo()[0].body) && /\/r\/1\./.test(toTenant()[0].body), [toTenant().map(x => x.body), toCo().map(x => x.body)]);
+  t('CO: the first-ever text to each number carries its own STOP note', /STOP/i.test(toCo()[0].body) === /STOP/i.test(toTenant()[0].body));
+  const n = noticeRows().length;
+  await send('scheduled'); await send('confirm');
+  t('CO: the same news again does not text either person a second time', noticeRows().length === n);
+}
+{
+  // THE case from Oct 30: said yes while the delivery was all day, then the window is set the same day -> update text, NOT a question; the yes stands.
+  await coWorld();
+  const tok = await tokOfBody(toTenant()[0].body);
+  const ans = await pub('POST', '/delivery/rsvp', { t: tok, answer: 'yes', note: 'Cory will be there' }, '10.0.1.1');
+  t('KEEP: (setup) tenant said yes while the delivery had no window', ans.json.ok === true && dels()[0].Tenant_RSVP === 'Confirmed' && dels()[0].Expected_Window === '');
+  const sentBefore = toTenant().length + toCo().length;
+  const w = await send('window');
+  const pend = pendingNotices();
+  t('KEEP: the yes is kept (not reset) and the note says why', dels()[0].Tenant_RSVP === 'Confirmed' && dels()[0].Tenant_RSVP_Note === 'Cory will be there' && /Tenant answer kept \(Confirmed before the window was known\)/.test(dels()[0].Delivery_Notes) && !/Tenant answer reset/.test(dels()[0].Delivery_Notes), dels()[0]);
+  t('KEEP: BOTH people get an update text with the new window, no link and no question', pend.length === 2 && pend.every(x => x.Message_Body === 'Update: refrigerator delivery now 9am-1pm 10/16/26. Thanks for being there, no need to reply.'), pend.map(x => x.Message_Body));
+  t('KEEP: the response reports the notice as queued with no warning', w.json.tenant_sms === 'queued' && w.json.warnings.length === 0, w.json);
+  await withClock('2026-10-14T22:10:00Z', () => QH.processQuietHoursQueue(env));
+  t('KEEP: both phones receive the update at the next window', toTenant().length === 2 && toCo().length === 2 && /^Update: refrigerator delivery now 9am-1pm/.test(toTenant().slice(-1)[0].body) && /^Update: refrigerator delivery now 9am-1pm/.test(toCo().slice(-1)[0].body) && !/http/.test(toCo().slice(-1)[0].body), [toTenant().map(x => x.body), toCo().map(x => x.body)]);
+  // ...but a SECOND window change after a specific window was already given is a new question again
+  await send('window2');
+  const again = pendingNotices();
+  t('KEEP: a later window change (a specific time was already known) resets the yes and ASKS again with a link', dels()[0].Tenant_RSVP === '' && /Tenant answer reset \(was Confirmed\)/.test(dels()[0].Delivery_Notes) && again.length === 2 && again.every(x => /^Delivery changed: refrigerator now 11am-3pm 10\/16\/26\. Can you be there\? https:/.test(x.Message_Body)), [dels()[0].Tenant_RSVP, again.map(x => x.Message_Body)]);
+}
+{
+  // Not answered, then the window is set -> they ARE asked, with the specific time (both people)
+  await coWorld();
+  await send('window');
+  const pend = pendingNotices();
+  t('ASK: no answer yet + window set -> both get "can you be there?" with the specific window and a link', pend.length === 2 && pend.every(x => /^Delivery changed: refrigerator now 9am-1pm 10\/16\/26\. Can you be there\? https:/.test(x.Message_Body)) && dels()[0].Tenant_RSVP === '', pend.map(x => x.Message_Body));
+}
+{
+  // Said yes, then the DATE moves: the yes was for another day -> reset and ask
+  await coWorld();
+  const tok = await tokOfBody(toTenant()[0].body);
+  await pub('POST', '/delivery/rsvp', { t: tok, answer: 'yes' }, '10.0.1.2');
+  await send('reschedule');
+  const pend = pendingNotices();
+  t('ASK: yes, then a different DATE -> the yes is reset and both are asked again', dels()[0].Tenant_RSVP === '' && /Tenant answer reset \(was Confirmed\)/.test(dels()[0].Delivery_Notes) && pend.length === 2 && pend.every(x => /^Delivery changed:/.test(x.Message_Body) && /Can you be there\?/.test(x.Message_Body)), pend.map(x => x.Message_Body));
+}
+{
+  // Declined / unsure answers are still reset and asked again when a window arrives (unchanged rule)
+  await coWorld();
+  const tok = await tokOfBody(toTenant()[0].body);
+  await pub('POST', '/delivery/rsvp', { t: tok, answer: 'no' }, '10.0.1.3');
+  await send('window');
+  t('ASK: a Declined tenant is still reset and asked again when the window arrives', dels()[0].Tenant_RSVP === '' && pendingNotices().length === 2 && pendingNotices().every(x => /Can you be there\?/.test(x.Message_Body)));
+}
+{
+  // Single-tenant units behave exactly as before (no extra text, no label noise)
+  seed(); await send('confirm');
+  t('SOLO: one tenant in the unit -> exactly one request, as before', noticeRows().length === 1 && noticeRows()[0].Recipient_Phone === TENANT_PHONE);
+}
+{
+  // FAULT INJECTION: the co-tenant's text bounces. Tenant on the row still gets theirs, the failure is NAMED and surfaced, never swallowed.
+  seed(); await send('confirm', NODATE);
+  addCoTenant('Cory' + SEED_NAME); twilioFailTo = CO_PHONE;
+  const today = await send('scheduled', { body: FX.scheduled.body.replace('Friday, October 16, 2026', 'Wednesday, October 14, 2026') });
+  t('FAULT: the on-row tenant still got the same-day text', toTenant().length === 1 && /ordered/i.test(toTenant()[0].body), toTenant());
+  t('FAULT: the co-tenant failure is reported (needs_attention, a warning naming who and why) and the happy path stays quiet', today.json.needs_attention === true && today.json.warnings.some(x => /tenant notice/.test(x) && new RegExp('Cory' + SEED_NAME).test(x)), today.json.warnings);
+  twilioFailTo = '';
+  seed(); await send('confirm', NODATE); addCoTenant('Cory' + SEED_NAME);
+  const ok = await send('scheduled', { body: FX.scheduled.body.replace('Friday, October 16, 2026', 'Wednesday, October 14, 2026') });
+  t('FAULT: with nothing forced, both texts go out and no tenant-notice warning appears', toTenant().length === 1 && toCo().length === 1 && !ok.json.warnings.some(x => /tenant notice/.test(x)), ok.json.warnings);
+}
+{
+  // CALENDAR: an all-day event that gets its window must become a timed event (the Oct 29 "Invalid start time" 400)
+  seed(); await send('confirm');
+  t('CAL: (setup) the order without a window is an all-day event', calEvents.size === 1 && !![...calEvents.values()][0].start.date);
+  const w = await send('window');
+  const ev = [...calEvents.values()][0];
+  t('CAL: window arrives -> event PATCHed to a timed event, no date left behind, status updated (no 400)', w.json.calendar_status === 'updated' && !!ev.start.dateTime && !ev.start.date && !!ev.end.dateTime && !ev.end.date && !(w.json.warnings || []).some(x => /calendar/.test(x)), [w.json.calendar_status, ev.start, ev.end, w.json.warnings]);
 }
 
 console.log(`\ndelivery-email-intake: ${pass} passed, ${fail} failed`);
