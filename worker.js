@@ -35562,7 +35562,8 @@ async function deliveryEmailIntake(env, body) {
       const prop = propertyId ? properties.find(x => String(x.ID) === String(propertyId)) : null;
       const tenantObj = tenantId ? tenants.find(t => String(t.ID) === String(tenantId)) : null;
       const rowNow = Object.assign({}, merged, { Expected_Date: date || merged.Expected_Date || '' });
-      tn = await deliveryTenantNotice(env, { cfg, row: rowNow, deliveryId, place: { property: prop, tenant: prop ? tenantObj : null }, woId, date, win, variant: cancelling ? 'cancel' : (merged.Tenant_Notice_Sent_At ? 'changed' : 'request') });
+      const unitMates = (prop && tenantObj && merged.Unit_ID) ? tenantsForDispatch(tenants, null, { Unit_ID: String(merged.Unit_ID), Property_ID: String(propertyId) }).filter(x => String(x.ID) !== String(tenantObj.ID)) : [];   // co-tenants in the same unit
+      tn = await deliveryTenantNotice(env, { cfg, row: rowNow, deliveryId, place: { property: prop, tenant: prop ? tenantObj : null }, recipients: unitMates, woId, date, win, variant: cancelling ? 'cancel' : (merged.Tenant_Notice_Sent_At ? (keepYes ? 'fyi' : 'changed') : 'request') });
       if (tn.warn) warnings.push('tenant notice: ' + tn.detail);
       if (tn.record !== false && tn.tenant_sms !== 'off') {
         const upd = { Tenant_Notice_Status: (tn.tenant_sms + (tn.detail ? ': ' + tn.detail : '')).slice(0, 200) };
