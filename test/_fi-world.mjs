@@ -83,6 +83,8 @@ export function world() {
   const factory = new Function('h', 'sheetsRequest', 'ensureColumns', 'fetch', 'col', 'bytesToB64', `
     const json = (data, status = 200) => ({ status, ok: status < 300, body: data, clone() { return this; }, json: async () => data });
     const CORS = {}; const env0 = {};
+    const invalidateTabCache = (tab) => { (h.invalidated = h.invalidated || []).push(tab); };
+    ${grab('sheetsQuotaBusyError')}
     const isStaging = () => true;
     const getAccessToken = async () => 'tok';
     const findOrCreateFolder = async () => ({ id: 'folder1' });
