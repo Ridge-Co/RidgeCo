@@ -35515,7 +35515,11 @@ async function deliveryEmailIntake(env, body) {
         const nl = [noteLine].concat(notes, placeNotes, anomaly ? ['CHECK: ' + anomaly] : []);
         if (dateChanged || winChanged) nl.push('Date/window now ' + (date || '?') + (win ? ' ' + win : '') + ' (was ' + (prior.Expected_Date || '?') + (prior.Expected_Window ? ' ' + prior.Expected_Window : '') + ')');
         // A new date/window makes the tenant's earlier answer out of date: reset it (the new request asks again). A Declined tenant is the on-site contact again.
-        if ((dateChanged || winChanged) && prior.Tenant_RSVP && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+        // Exception (Brett, Oct 30 2026): a Confirmed answer given while the delivery had NO window yet (all day), and the date has not moved, still stands when the window gets set: the tenant gets an update text, not a new question.
+        if ((dateChanged || winChanged) && prior.Tenant_RSVP === 'Confirmed' && !dateChanged && !prior.Expected_Window && win && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+          keepYes = true;
+          nl.push('Tenant answer kept (Confirmed before the window was known): the window is now ' + win + ', tenant gets an update text, not a new question');
+        } else if ((dateChanged || winChanged) && prior.Tenant_RSVP && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
           Object.assign(f, { Tenant_RSVP: '', Tenant_RSVP_At: '', Tenant_RSVP_Note: '' });
           if (prior.Tenant_RSVP === 'Declined' && merged.Tenant_ID) Object.assign(f, { Onsite_Contact: 'tenant', Onsite_Contact_Phone: '' });
           nl.push('Tenant answer reset (was ' + prior.Tenant_RSVP + ') because the date/window changed');
