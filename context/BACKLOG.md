@@ -403,6 +403,11 @@ _Kills the single-contact bottleneck on deliveries: tenant is blind + the delive
 
 ## IN PROGRESS
 
+**Oct 30 2026 additions (Field Inspection photo follow-ups, from FEATURE_LOG rule 236):**
+- B-20261030-1500-fp · 🟡 **[field-inspection] [sheets-quota]** `fiPhotoView` does 2 whole-tab reads (`FI_Inspections` + `FI_Photos`) per image view; a published report with many images bursts the shared Sheets read quota the same way uploads did. Fix idea: look up by report token + photo id with the same positive-only cache and a one-row read.
+- B-20261030-1501-fq · 🟡 **[field-inspection]** `fiFolderOrganize` (limit 20) makes ~45 outbound calls per request, close to the Worker's 50-subrequest ceiling; lower the limit or make it resumable.
+- B-20261030-1502-fo · 🟢 **[field-inspection]** A failed `FI_Photos` append after a successful Drive upload leaves an orphan Drive file (the retry uploads again). Harmless but untidy; consider a sweep or reuse by name.
+
 | ID | Venture | Item | Blocker |
 |---|---|---|---|
 | B-015 | Ridge Co | QuickBooks Send-to-QuickBooks flow (invoice + bill + payment) | 🟡 INVOICE+BILL SHIPPED July 20 (pending Brett live-verify) — `/qb/send-invoice` preview-first: creates QB Invoice + Bill from Invoice_Review; find-or-create customer/vendor; custom final price + quick-picks; per-receipt reimburse/on-account classification (vendor payable excludes on-account); labor summary + per-receipt material lines; CustomerMemo job-photo link; receipt attachments (all→Invoice, reimburse→Bill); refresh-token persistence; WO→Invoiced. **Remaining (Phase 2):** payments (Payment + BillPayment, QB_Payment_ID col), overpay guard, vendor-pay worklist, payment webhooks (auto status-back). |

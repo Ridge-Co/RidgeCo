@@ -194,6 +194,15 @@ For every build and every PR, no exceptions:
 - Void re-render uses a full `loadAll()+openWODetail()` refresh, not fragile DOM removal.
 - **Never ask Brett to share a calendar (or anything) with the service account with edit rights; use delegation** (Oct 21 2026, FEATURE_LOG 227): his Google Workspace only allows view-details sharing outside the domain, so the service account can read but never write a shared calendar. The Hub acts as him instead (Config `STR_CAL_IMPERSONATE=brett@bmoremanagement.com`, domain-wide delegation, scope `calendar.events`). Any new cleaning-calendar call must stay an `/events` call (a test enforces it).
 
+## MANDATORY: related tools link to each other (Brett, Oct 30 2026)
+Pages that belong together must link to each other from the blue top bar, so nobody has to go back to the Hub in between
+(first pair: Field Inspection `field-inspect.html` <-> Inspection Scheduler `inspect.html`). This is the DEFAULT for anything new:
+- Shared script `rc-related.js`: add `<script src="rc-related.js" data-group="<group>"></script>` right after the page's `#rc-navbar`,
+  and list the page in the `RC_RELATED` registry at the top of `rc-related.js` (start a new group if none fits).
+- A new page that is directly related to existing ones (same job, same people, one feeds the other) joins their group in the same PR.
+  If you are not sure whether it is related, ask. `test/rc-related.test.mjs` fails if a page uses the script without being registered, or a registered page lacks it.
+- Also add the page to the "Jump to…" menu in `inspect.html`'s RC-NAV copy (and the others) when it is a new top-level tool.
+
 ## Security note (in progress)
 `worker.js` currently gates the whole API with one shared secret that ships to the browser —
 bulk read endpoints can leak PII. "Plan B" = per-user auth (session tokens, per-role scoping).
