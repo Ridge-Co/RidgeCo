@@ -41325,10 +41325,20 @@ async function fiPhotoUpload(env, request, url) {
   if (!FI_ID_RE.test(inspId) || !FI_ID_RE.test(photoId)) return fiErr(400, 'bad_id', 'inspection_id and photo_id are required.');
   const mime = (request.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) return fiErr(415, 'bad_type', 'Only JPEG, PNG or WebP photos are accepted.');
-  await fiEnsureTabs(env);
-  const { row } = await fiFindInspection(env, inspId);
+  let found, pt;
+  try {
+    found = await fiFindInspectionForPhoto(env, inspId);
+    if (found.row) pt = await fiReadFresh(env, 'FI_Photos');
+  } catch (e) {
+    if (__fiTabsReady || !fiTabMissingError(e)) throw e;
+    await fiEnsureTabs(env);
+    found = await fiFindInspectionForPhoto(env, inspId);
+    if (found.row) pt = await fiReadFresh(env, 'FI_Photos');
+  }
+  const row = found.row;
   if (!row) return fiErr(409, 'inspection_not_saved', 'Save the inspection to the server first, then retry this photo.');
-  const pt = await fiReadFresh(env, 'FI_Photos');
+  if (!FI_PHOTO_COLS.every(c => pt.headers.includes(c))) { await fiEnsureTabs(env); pt = await fiReadFresh(env, 'FI_Photos'); }
+  if (!FI_PHOTO_COLS.every(c => pt.headers.includes(c))) throw new Error('FI: FI_Photos is missing column ' + FI_PHOTO_COLS.filter(c => !pt.headers.includes(c)).join(', '));
   const ex = pt.rows.find(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
   if (ex) return json({ ok: true, existing: true, photo_id: photoId });
   const buf = await request.arrayBuffer();
