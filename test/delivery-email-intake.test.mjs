@@ -267,6 +267,7 @@ function makeStore() {
 const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
 let store = makeStore();
 const twilio = [];            // every outbound text the worker tried to send
+let twilioFailTo = '';       // fail only this number (a co-tenant whose text bounces)
 let twilioMode = 'ok';        // 'ok' | 'fail'
 let tokenMode = 'ok', calMode = 'ok', jwksMode = 'ok', jwksFetches = 0, calSeq = 0, jwksKeys = [];   // fake Google: sign-in token endpoint, Calendar API, published sign-in keys
 const calEvents = new Map(), calLog = [];
