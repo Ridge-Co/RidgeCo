@@ -356,7 +356,7 @@ function seed(over) {
   // The worker memoises ensureColumns for 10 minutes per process, so a brand-new fake store must keep the HEADER rows the previous run created
   // (exactly what the live sheet looks like after the first email): carry headers over, drop the data.
   WK.__tabCache.clear(); QH.__tabCache.clear();   // every seed is a fresh world: no sheet rows may be served from a previous seed's cache. NOTE: the D-16 duplicate-text memory is deliberately NOT cleared.
-  const prev = store; store = makeStore(); skew += 60000; twilio.length = 0; twilioMode = 'ok'; tokenMode = 'ok'; calMode = 'ok'; calEvents.clear(); calLog.length = 0;
+  const prev = store; store = makeStore(); skew += 60000; twilio.length = 0; twilioMode = 'ok'; twilioFailTo = ''; tokenMode = 'ok'; calMode = 'ok'; calEvents.clear(); calLog.length = 0;
   for (const [name, rows] of prev.tabs) if (rows.length && rows[0].length) store.tabs.set(name, [rows[0].slice()]);
   tab('Config', ['Key', 'Value'], Object.entries(Object.assign({ admin_phone: ADMIN, TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE', Delivery_Claim_Settle_Ms: '40', Delivery_Cal_Impersonate: 'brett@bmoremanagement.com' }, over.config || {})).map(([Key, Value]) => ({ Key, Value })));
   tab('Owners', ['ID', 'First_Name', 'Company', 'SMS_Enabled', 'Phone'], [{ ID: 'O1', First_Name: 'Olly', Company: 'Phoenix Estate Rentals', SMS_Enabled: 'TRUE' }]);
