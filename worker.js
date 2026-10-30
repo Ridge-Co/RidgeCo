@@ -41348,8 +41348,8 @@ async function fiPhotoUpload(env, request, url) {
   if (!root) return fiErr(500, 'not_configured', 'DRIVE_PROPERTIES_ROOT is not configured.');
   const token = await getAccessToken(env);
   let folder;
-  try { folder = await fiInspectionFolder(env, token, row, (await fiFindInspection(env, inspId)).headers, false); }
-  catch (e) { return fiErr(502, 'drive_folder', 'Could not set up the property’s Drive folder: ' + String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
+  try { folder = await fiInspectionFolder(env, token, row, found.headers, false); }
+  catch (e) { if (sheetsQuotaBusyError(e)) throw e; return fiErr(502, 'drive_folder', 'Could not set up the property’s Drive folder: ' + String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
   const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
   let shared;
   try { shared = await fiDriveSharedRoot(token, root); } catch (e) { return fiErr(502, 'drive_folder', String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
