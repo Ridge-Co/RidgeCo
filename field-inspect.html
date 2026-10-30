@@ -257,7 +257,7 @@ function setSync(){
   bar.className = cls; st.innerHTML = txt; act.innerHTML = a;
 }
 function pendingPhotoCount(){ var n=0; for (var k in photoState){ if (photoState[k].state!=='done') n++; } return n; }
-window.addEventListener('online', function(){ if (S.rec) syncNow(true); pumpPhotos(); setSync(); });
+window.addEventListener('online', function(){ if (S.rec) syncNow(true); pumpPhotos(true); setSync(); });
 window.addEventListener('offline', setSync);
 window.addEventListener('beforeunload', function(e){ if ((S.rec && S.rec.dirty) || pendingPhotoCount()){ e.preventDefault(); e.returnValue=''; return ''; } });
 function mut(fn){
