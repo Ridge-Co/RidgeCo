@@ -47,7 +47,7 @@
   .banner{border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
   .banner.warn{background:#fdf3e0;border:1px solid #f0d9a8;color:#7a5b12} .banner.err{background:#fdecea;border:1px solid #f1b9b3;color:#8e281d} .banner.ok{background:#e7f6ec;border:1px solid #b5e0c4;color:#14623a} .banner.info{background:#eaf1fd;border:1px solid #bcd0f5;color:#1a3f94}
   #login{max-width:360px;margin:60px auto;padding:20px;text-align:center}
-  #syncbar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--surface);border-top:1px solid var(--border);padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px}
+  #syncbar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--surface);border-top:1px solid var(--border);padding:8px 12px calc(8px + env(safe-area-inset-bottom));display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;line-height:1.35}
   #syncbar .st{font-weight:700}
   #syncbar.ok .st{color:var(--accent2)} #syncbar.work .st{color:var(--accent)} #syncbar.off .st{color:var(--warn)} #syncbar.err .st{color:var(--danger)}
   .area-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 4px;border-top:1px solid var(--border);cursor:pointer;min-height:52px}
