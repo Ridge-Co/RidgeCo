@@ -41175,27 +41175,23 @@ async function fiEnsureTabs(env) {
   __fiTabsReady = true;
 }
 // Uncached read (a read-modify-write or verify must never see a stale 6s-cached copy).
+// Oct 30 2026: this used to be its own raw fetch loop (3 tries, ~2.4 s of waiting, invisible to the read meter, and its error text was not recognised as
+// the shared quota, so a busy minute became a 500 and the phone gave up on the photo). It now goes through sheetsRequest - the same 6-try backoff
+// (~15 s, Google's quota is per MINUTE), the read meter, and the "Sheets API error on GET" text that sheetsQuotaBusyError() recognises - after dropping
+// any cached or in-flight copy of the tab so the data is still always fresh.
 async function fiReadFresh(env, tab) {
-  for (let attempt = 1; ; attempt++) {
-    const token = await getAccessToken(env);
-    const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}/values/${tab}`, { headers: { Authorization: `Bearer ${token}` } });
-    const data = await res.json();
-    if (data.error) {
-      const code = data.error.code || res.status;
-      if ((code === 429 || code >= 500) && attempt < 4) { await new Promise(r => setTimeout(r, 400 * attempt)); continue; }
-      throw new Error(`FI: Sheets read of ${tab} failed: ${data.error.message || code}`);
-    }
-    const vals = data.values || [];
-    const headers = vals[0] || [];
-    const rows = vals.slice(1).map((r, i) => { const o = {}; headers.forEach((h, j) => { o[h] = r[j] == null ? '' : String(r[j]); }); return { o, rowNum: i + 2 }; });
-    return { headers, rows };
-  }
+  invalidateTabCache(tab);
+  const data = await sheetsRequest(env, 'GET', `/values/${tab}`);
+  const vals = (data && data.values) || [];
+  const headers = vals[0] || [];
+  const rows = vals.slice(1).map((r, i) => { const o = {}; headers.forEach((h, j) => { o[h] = r[j] == null ? '' : String(r[j]); }); return { o, rowNum: i + 2 }; });
+  return { headers, rows };
 }
 async function fiWriteRow(env, tab, headers, obj, rowNum) {
   if (!headers.length) throw new Error(`FI: ${tab} has no header row`);
   const vals = headers.map(h => (obj[h] === undefined || obj[h] === null) ? '' : String(obj[h]));
-  if (rowNum) await sheetsRequest(env, 'PUT', `/values/${tab}!A${rowNum}:${col(headers.length - 1)}${rowNum}?valueInputOption=RAW`, { values: [vals] });
-  else await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, { values: [vals] });
+  if (rowNum) return await sheetsRequest(env, 'PUT', `/values/${tab}!A${rowNum}:${col(headers.length - 1)}${rowNum}?valueInputOption=RAW`, { values: [vals] });
+  return await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, { values: [vals] });
 }
 async function fiFindInspection(env, id) {
   const t = await fiReadFresh(env, 'FI_Inspections');
