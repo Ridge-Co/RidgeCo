@@ -41362,10 +41362,19 @@ async function fiPhotoUpload(env, request, url) {
   }
   if (!up || !up.id) return fiErr(502, 'drive_upload', 'Drive did not accept the photo. Retry.');
   if (up.size !== undefined && Number(up.size) !== buf.byteLength) return fiErr(502, 'drive_size_mismatch', 'Drive stored a different number of bytes than were sent. Retry.');
-  await fiWriteRow(env, 'FI_Photos', pt.headers, { ID: photoId, Inspection_ID: inspId, Drive_File_ID: up.id, Mime: mime, Bytes: buf.byteLength, Created_At: new Date().toISOString(), Active: 'TRUE' }, 0);
-  const chk = await fiReadFresh(env, 'FI_Photos');
-  const hits = chk.rows.filter(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
-  if (hits.length !== 1 || hits[0].o.Drive_File_ID !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
+  const wrote = await fiWriteRow(env, 'FI_Photos', pt.headers, { ID: photoId, Inspection_ID: inspId, Drive_File_ID: up.id, Mime: mime, Bytes: buf.byteLength, Created_At: new Date().toISOString(), Active: 'TRUE' }, 0);
+  // Verify the write by reading back just the row the append reported (one tiny read), not the whole tab. If the append did not say where it landed,
+  // fall back to the full-tab check - a write is never reported saved without a read-back.
+  const rr = /^[A-Za-z0-9_]+!([A-Z]+)(\d+):([A-Z]+)(\d+)$/.exec(String((wrote && wrote.updates && wrote.updates.updatedRange) || ''));
+  if (rr && rr[2] === rr[4] && Number(rr[2]) >= 2) {
+    const back = await sheetsRequest(env, 'GET', `/values/FI_Photos!A${rr[2]}:${col(pt.headers.length - 1)}${rr[2]}`);
+    const v = (back && back.values && back.values[0]) || [];
+    if (v[pt.headers.indexOf('ID')] !== photoId || v[pt.headers.indexOf('Drive_File_ID')] !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
+  } else {
+    const chk = await fiReadFresh(env, 'FI_Photos');
+    const hits = chk.rows.filter(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
+    if (hits.length !== 1 || hits[0].o.Drive_File_ID !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
+  }
   return json({ ok: true, photo_id: photoId, bytes: buf.byteLength });
 }
 async function fiPhotoView(env, url) {
