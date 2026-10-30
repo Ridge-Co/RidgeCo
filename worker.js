@@ -41355,9 +41355,10 @@ async function fiPhotoUpload(env, request, url) {
   try { shared = await fiDriveSharedRoot(token, root); } catch (e) { return fiErr(502, 'drive_folder', String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
   let up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, folder.id, shared);
   if ((!up || !up.id) && row.o.Drive_Folder_ID) {
-    // The remembered folder may have been deleted or moved: look it up again once, then retry.
+    // The remembered folder may have been deleted or moved: forget the cached copy, look it up again once (a real read), then retry.
+    fiInspCacheDrop(inspId);
     try { const cur = await fiFindInspection(env, inspId); folder = await fiInspectionFolder(env, token, cur.row, cur.headers, true); up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, folder.id, shared); }
-    catch (e) { return fiErr(502, 'drive_folder', 'The Drive folder could not be re-created: ' + String((e && e.message) || e).slice(0, 160)); }
+    catch (e) { if (sheetsQuotaBusyError(e)) throw e; return fiErr(502, 'drive_folder', 'The Drive folder could not be re-created: ' + String((e && e.message) || e).slice(0, 160)); }
   }
   if (!up || !up.id) return fiErr(502, 'drive_upload', 'Drive did not accept the photo. Retry.');
   if (up.size !== undefined && Number(up.size) !== buf.byteLength) return fiErr(502, 'drive_size_mismatch', 'Drive stored a different number of bytes than were sent. Retry.');
