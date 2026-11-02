@@ -2,6 +2,9 @@
 // Covers: the exact Premier times, the re-lay / running-late math, DST (clocks go back Sun Nov 1 2026), locked items, propose -> approve, idempotent apply,
 // failure injection (every failure must be reported AND visible in the result, and nothing downstream may go out after a failed write).
 import fs from 'fs';
+// The test world is set on Oct 23 2026 (the plans are for Oct 27 and 28). Pin the clock there (it still ticks) so the "start time already passed"
+// check does not fail once those dates are in the real past (Nov 2 2026: this test failed on the clock alone, not on the code).
+{ const realNow = Date.now.bind(Date), t0 = realNow(), fakeStart = Date.parse('2026-10-23T15:00:00Z'); Date.now = () => fakeStart + (realNow() - t0); }
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 function grabFn(name) {
   let i = src.indexOf('async function ' + name + '(');
