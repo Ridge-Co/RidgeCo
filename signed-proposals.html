@@ -395,7 +395,7 @@ function confirmBook(btn){
   }).catch(function(e){btn.disabled=false;btn.textContent='Confirm — create in QuickBooks';toast('Error: '+e.message);});
 }
 function closeModal(){document.getElementById('modal').classList.remove('open');cur=null;curMs=null;curAdjust=null;}
-function confirmModalAction(btn){ if(modalMode==='milestones') confirmMilestoneBill(btn); else if(modalMode==='adjust') confirmAdjust(btn); else confirmBook(btn); }
+function confirmModalAction(btn){ if(modalMode==='milestones') confirmMilestoneBill(btn); else if(modalMode==='adjust') confirmAdjust(btn); else if(modalMode==='msamount') confirmMsAmount(btn); else confirmBook(btn); }
 
 // ── Vendor-bill adjustment (Sep 18 2026) ────────────────────────────────────
 // One-off dollar correction to an already-booked deposit or final vendor bill — built for the
