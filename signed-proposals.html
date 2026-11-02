@@ -258,6 +258,7 @@ function load(){
             +'<span>'+money(m.customer_amount)+'</span>'
             +'<span class="chip '+(billed?'booked':(flagged?'gap':'signed'))+'" style="margin-left:2px">'+(billed?('billed'+(m.qb_invoice_number?(' #'+esc(m.qb_invoice_number)):'')):(flagged?'⏳ pending info':'pending'))+'</span>'
             +(!billed?('<a href="#" onclick="toggleMilestonePendingInfo(\''+esc(r.id)+'\',\''+esc(m.id)+'\','+(flagged?'true':'false')+');return false;" style="color:'+(flagged?'var(--red)':'var(--blue)')+';font-size:11px;font-weight:700;text-decoration:none;margin-left:6px">'+(flagged?'Clear':'Flag')+'</a>'):'')
+            +(!billed?('<a href="#" onclick="editMilestoneAmount(\''+esc(r.id)+'\',\''+esc(m.id)+'\','+Number(m.customer_amount||0)+');return false;" style="color:var(--blue);font-size:11px;font-weight:700;text-decoration:none;margin-left:6px">Edit amount</a>'):'')
             +'</label>'
             +(flagged?('<div class="sub" style="margin:-2px 0 6px 24px">⏳ '+esc(m.pending_info_note||'Needs info before billing.')+'</div>'):'');
         });
