@@ -18,7 +18,7 @@ function grabConst(name) { const i = src.indexOf('const ' + name + ' ='); if (i 
 const BEGIN = src.indexOf('// ═══ SHIFT-BLOCK-BEGIN'), END = src.indexOf('// ═══ SHIFT-BLOCK-END');
 if (BEGIN < 0 || END < BEGIN) throw new Error('shift block markers missing');
 const BLOCK = src.slice(BEGIN, END);
-const realFns = ['nyOffsetMinutes', 'inspDurationMin', 'inspParseHHMM', 'inspEtWallToMs', 'inspEtDate', 'inspEtMinutes', 'inspEtDow', 'inspFmtEt', 'inspFmtEtTime', 'inspErr', 'inspBookingEventBody', 'inspBookUrl', 'inspIcsEsc', 'inspIcsStamp', 'inspIcsFold', 'inspSenderAddr', 'inspIcs', 'inspKeyMin', 'inspConflictsFrom', 'woJobLabel', 'normalizePhone', 'tenantMovedOut', 'tenantForQueuedText', 'isMissingTabError', 'inspGoogleCalUrl'].map(grabFn).join('\n');
+const realFns = ['nyOffsetMinutes', 'inspDurationMin', 'inspParseHHMM', 'inspEtWallToMs', 'inspEtDate', 'inspEtMinutes', 'inspEtDow', 'inspFmtEt', 'inspFmtEtTime', 'inspErr', 'inspBookingEventBody', 'inspSizeText', 'inspBookUrl', 'inspIcsEsc', 'inspIcsStamp', 'inspIcsFold', 'inspSenderAddr', 'inspIcs', 'inspKeyMin', 'inspConflictsFrom', 'woJobLabel', 'normalizePhone', 'tenantMovedOut', 'tenantForQueuedText', 'isMissingTabError', 'inspGoogleCalUrl'].map(grabFn).join('\n');
 const realConsts = ['INSP_TZ', 'INSP_ACTIVE_BOOKING', 'PORTAL_BASE'].map(grabConst).join('\n');
 
 let pass = 0, fail = 0;
