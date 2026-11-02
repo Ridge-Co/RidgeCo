@@ -25795,7 +25795,8 @@ function isPathAllowedForRole(path, role){ const s = ROLE_SCOPES[role]; return !
 // credential. This is an app credential, not user data — safe to share across
 // requests in the same isolate.
 let __sheetsToken = { key: '', token: '', exp: 0 };
-async function getAccessToken(env) {
+async function getAccessToken(env, pick) {
+  if (pick && pick.read) { const t2 = await sa2ReadToken(env, pick); if (t2) return t2; }   // Nov 2 2026: Sheets READS may use the second account (see "Second Sheets identity" below)
   const now=Math.floor(Date.now()/1000);
   const cacheKey=env.GOOGLE_SA_EMAIL||'';
   if(__sheetsToken.token && __sheetsToken.key===cacheKey && __sheetsToken.exp>now+60) return __sheetsToken.token;
