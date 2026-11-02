@@ -108,7 +108,7 @@ const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
 // binding in wrangler.toml), so EVERY deploy gets a new version automatically and a PR never needs to touch this line.
 // Portals poll GET /version and refresh themselves onto new code when it changes (B-093 auto-refresh).
 // The Branch policy guard fails a PR into main that changes this line (override: put `allow-build-version-edit: true` in the PR body).
-const BUILD_VERSION = '2026-10-21.02-failure-ledger-self-heal';
+const BUILD_VERSION = '2026-10-30.01-delivery-cotenants-keep-yes';
 let __unstampedReported = false;
 // buildVersion(env) -> { version, base, stamped, version_id, deployed_at }. Never throws. If the Cloudflare binding is missing the answer
 // says so ('+unstamped', stamped:false) AND files one failure-ledger row per isolate, because an unstamped Worker would otherwise never
