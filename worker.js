@@ -43860,7 +43860,7 @@ const fiSharedCache = {};
 //   fetch  -> bytes (base64, ~5 MB per call) of Full-size files ('orig') or of the stored ~1600 px copies ('std'), so a matcher can compare them
 //   attach -> pairs [{photo_id, file_id}]: COPIES the Drive file into the inspection folder as <photo_id>_original.<ext> (server-side, no bytes through the Worker),
 //             then records it in the photo's Orig_* cells, read back and verified. Never replaces an existing original; never deletes or moves anything.
-// Only files that sit directly inside a folder named "Full size" next to the inspection's folder can be read or attached.
+// Only files that sit directly inside a folder named "Full size" next to, or inside, the inspection's folder can be read or attached.
 const FI_BRIDGE_FETCH_BYTES = 5 * 1024 * 1024, FI_BRIDGE_FETCH_MAX = 12 * 1024 * 1024, FI_BRIDGE_FETCH_IDS = 25, FI_BRIDGE_ATTACH_MAX = 12;
 async function fiBridgeDrive(token, url, init, what) {
   const h = Object.assign({ Authorization: `Bearer ${token}` }, (init && init.headers) || {});
@@ -43894,7 +43894,9 @@ async function fiBridgeContext(env, inspId) {
   const meta = await fiBridgeDrive(token, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folder.id)}?fields=id,name,parents&supportsAllDrives=true`, null, 'reading the inspection folder');
   const propId = (meta.parents || [])[0];
   if (!propId) return { err: fiErr(409, 'no_property_folder', 'The inspection folder has no parent (property) folder in Drive.') };
-  const sibs = (await fiBridgeList(token, propId, shared, " and mimeType='application/vnd.google-apps.folder'")).filter(f => /^full\s*size$/i.test(String(f.name || '').trim()));
+  // "Full size" folders: beside the inspection folder (under the property) or inside it (Nov 2 2026: Brett put 931 Saint Paul's inside the inspection folder).
+  const sibs = [];
+  for (const parent of [propId, folder.id]) for (const f of await fiBridgeList(token, parent, shared, " and mimeType='application/vnd.google-apps.folder'")) if (/^full\s*size$/i.test(String(f.name || '').trim()) && !sibs.some(x => x.id === f.id)) sibs.push(f);
   let pt = await fiReadFresh(env, 'FI_Photos');
   if (!FI_ORIG_COLS.every(c => pt.headers.includes(c))) { await ensureColumns(env, 'FI_Photos', FI_PHOTO_HEADERS); pt = await fiReadFresh(env, 'FI_Photos'); }
   if (!FI_ORIG_COLS.every(c => pt.headers.includes(c))) throw new Error('FI originals: FI_Photos is missing column ' + FI_ORIG_COLS.filter(c => !pt.headers.includes(c)).join(', '));

@@ -55,6 +55,8 @@ async function setup(opts) {
       if (d.listFail) return R(500, { error: { message: 'list down' } });
       if (q.startsWith("'PROP' in parents")) return R(200, { files: [{ id: 'FS1', name: d.fullName }, { id: 'INSPF', name: 'Inspection 10152026' }, { id: 'FS_OTHER', name: 'Full size photos old' }] });
       if (q.startsWith("'FS1' in parents")) return R(200, { files: d.full });
+      if (q.startsWith("'INSPF' in parents") && q.includes("vnd.google-apps.folder")) return R(200, { files: d.innerFull || [] });
+      if (q.startsWith("'FS2' in parents")) return R(200, { files: d.full2 || [] });
       if (q.startsWith("'INSPF' in parents")) return R(200, { files: d.inInsp.concat(d.copies.map(c => ({ id: c.id, name: c.name, size: c.size, mimeType: 'image/jpeg' }))) });
       return R(200, { files: [] });
     }
@@ -92,6 +94,20 @@ const origCells = (w) => { const tb = w.h.tabs.FI_Photos, g = n => tb.headers.in
   const no = await setup({ fullName: 'Misc' }); const r3 = await bridge(no.w, { action: 'scan' }); t('no Full size folder -> empty list, still ok (the caller sees 0 files)', r3.body.ok && r3.body.full_folders.length === 0 && r3.body.originals.length === 0, r3.body);
   const lf = await setup(); lf.d.listFail = true; let threw = null; try { await bridge(lf.w, { action: 'scan' }); } catch (e) { threw = e; }
   t('Drive listing failure is thrown (fiRoute turns it into a typed 500 + telemetry), never an empty list', threw && /list.*failed/.test(String(threw.message)), threw && threw.message);
+}
+// ── a Full size folder INSIDE the inspection folder (Brett's 931 Saint Paul St) ──
+{
+  const { w, d } = await setup({ fullName: 'Misc' });
+  d.innerFull = [{ id: 'FS2', name: 'full size' }];
+  d.full2 = [{ id: 'in_src_01', name: 'IMG_1.jpg', mimeType: 'image/jpeg', size: '1234' }];
+  const r = await bridge(w, { action: 'scan' });
+  t('scan also finds a Full size folder inside the inspection folder', r.body.full_folders.length === 1 && r.body.full_folders[0].id === 'FS2' && r.body.originals.length === 1 && r.body.originals[0].id === 'in_src_01', r.body);
+  d.full.push({ id: 'in_src_01', name: 'IMG_1.jpg', mimeType: 'image/jpeg', size: '1234' });
+  const a = await bridge(w, { action: 'attach', pairs: [{ photo_id: 'ph_att_a', file_id: 'in_src_01' }] });
+  t('and can attach from it', a.body.attached === 1 && d.copies[0].name === 'ph_att_a_original.jpg' && d.copies[0].parents[0] === 'INSPF', a.body);
+  const both = await setup(); both.d.innerFull = [{ id: 'FS2', name: 'Full size' }]; both.d.full2 = [{ id: 'in_src_02', name: 'IMG_2.jpg', mimeType: 'image/jpeg', size: '99' }];
+  const rb = await bridge(both.w, { action: 'scan' });
+  t('folders beside AND inside are both read (no duplicates)', rb.body.full_folders.length === 2 && rb.body.originals.length === 4, rb.body.full_folders);
 }
 // ── fetch ──
 {
