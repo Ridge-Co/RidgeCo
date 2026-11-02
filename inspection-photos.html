@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="test-login.js"></script>
+<script src="failure-reporter.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Inspection Photos</title>
+<style>
+  :root{ --brand:#1d4ed8; --accent:#166534; --text:#1c2430; --muted:#6b7684; --border:#dfe3e8; --bg:#f4f5f7; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px;line-height:1.45}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 14px 60px}
+  .band{background:var(--brand);color:#fff;padding:18px 20px;display:flex;align-items:center;gap:14px}
+  .band img{max-height:56px;max-width:180px;background:#fff;border-radius:8px;padding:4px;display:block}
+  .band .nm{font-size:22px;font-weight:800;line-height:1.1} .band .tg{font-size:13px;opacity:.9}
+  h1{margin:18px 0 2px;font-size:26px}
+  h2{font-size:19px;margin:26px 0 8px;color:var(--brand);border-bottom:2px solid var(--brand);padding-bottom:4px;display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  h2 small{font-size:13px;font-weight:600;color:var(--muted)}
+  .muted{color:var(--muted);font-size:14px}
+  .note{background:#fff;border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin:12px 0;font-size:15px}
+  .note.warn{background:#fdf3e0;border-color:#f0d9a8;color:#7a5b12}
+  .btn{display:inline-flex;align-items:center;min-height:44px;padding:10px 16px;border:1px solid var(--brand);border-radius:10px;background:var(--brand);color:#fff;font-size:15px;font-weight:700;text-decoration:none;cursor:pointer}
+  .btn.alt{background:#fff;color:var(--brand)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+  .card{background:#fff;border:1px solid var(--border);border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
+  .card a.pic{display:block;line-height:0;background:#e9edf2}
+  .card img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block;cursor:zoom-in}
+  .card .miss{aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;text-align:center;color:#c0392b;font-size:13px;padding:8px;line-height:1.3}
+  .card .cap{padding:8px 10px 10px;font-size:14px;display:flex;flex-direction:column;gap:6px;flex:1}
+  .card .cap b{font-weight:700}
+  .tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:12px;font-weight:700;background:#e7f6ec;color:#14623a;white-space:nowrap}
+  .tag.std{background:#eef2f7;color:#556}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:auto}
+  .row a{font-size:14px;font-weight:700;color:var(--brand);text-decoration:none;min-height:32px;display:inline-flex;align-items:center}
+  .msg{background:#fff;border:1px solid var(--border);border-radius:12px;padding:24px;margin:40px auto;max-width:520px;text-align:center}
+  .msg.err{border-color:#f1b9b3;background:#fdecea;color:#8e281d}
+  .foot{margin-top:26px;padding-top:12px;border-top:2px solid var(--brand);font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div id="root"><div class="msg">Loading photos…</div></div>
+<script>
+// Public photo page for ONE inspection report (opened from the report's "View all photos" button; it uses the same private report link, so it works exactly as long as that
+// link does and shows nothing unless the report is published). Thumbnails are the report's standard size; every photo links to its FULL-SIZE original.
+var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
+var Q = new URLSearchParams(location.search), TOKEN = Q.get('r') || '';
+var EQ_KIND = {furnace:'Furnace',boiler:'Boiler',central_ac:'Central A/C',heat_pump:'Heat pump',water_heater:'Water heater',refrigerator:'Refrigerator',range:'Range / oven',dishwasher:'Dishwasher',microwave:'Microwave',washer:'Washer',dryer:'Dryer',disposal:'Garbage disposal',electrical_panel:'Electrical panel',other:'Equipment'};
+var SEV_LABEL = {urgent:'Urgent',high:'High',medium:'Medium',low:'Low',info:'Note'};
+var IMG_TRIES = 5, FULL = {};
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function safeColor(c, d){ return /^#[0-9a-fA-F]{6}$/.test(c||'') ? c : d; }
+function show(html){ document.getElementById('root').innerHTML = html; }
+function fail(title, msg, cls){ show('<div class="msg '+(cls||'')+'"><h2 style="border:none;color:inherit;display:block">'+esc(title)+'</h2><p>'+esc(msg)+'</p></div>'); }
+function imgUrl(id){ return WORKER + '/fi/photo/view?r=' + encodeURIComponent(TOKEN) + '&p=' + encodeURIComponent(id); }
+function fullUrl(id){ return imgUrl(id) + '&full=1'; }
+function dlUrl(id){ return fullUrl(id) + '&dl=1'; }
+function reportUrl(){ return new URL('inspection-report.html?r=' + encodeURIComponent(TOKEN), location.href).href; }
+function mb(n){ return (n / 1048576).toFixed(n >= 10485760 ? 0 : 1) + ' MB'; }
+// A busy server or a weak signal must not leave a hole: try each picture several times, a little later each time, before saying it failed.
+function imgErr(i){
+  var n = Number(i.dataset.n || 0) + 1; i.dataset.n = n;
+  if (n < IMG_TRIES){ setTimeout(function(){ i.src = imgUrl(i.dataset.p) + '&try=' + n; }, 1200 * n); return; }
+  i.outerHTML = '<div class="miss">Preview could not be loaded.<br>The full-size link below still works.</div>';
+}
+
+if (!TOKEN){ fail('Photo link incomplete', 'This link is missing its access code. Please use the link you were sent.', 'err'); }
+else {
+  var headers = {}; try{ var a = localStorage.getItem('mh_auth'); if (a) headers['X-Auth-Token'] = a; }catch(e){ /* no stored admin code — public view */ }
+  load();
+}
+function load(){
+  fetch(WORKER + '/fi/report?r=' + encodeURIComponent(TOKEN), { headers: headers }).then(function(res){
+    return res.text().then(function(t){ var d; try{ d = JSON.parse(t); }catch(e){ throw new Error('The server sent an unreadable answer (HTTP '+res.status+').'); } return { ok:res.ok && d.ok !== false, d:d }; });
+  }).then(function(r){
+    if (!r.ok){
+      if (r.d.error === 'not_published') return fail('This report is being updated', r.d.message || 'Please check back soon.');
+      if (r.d.error === 'not_found') return fail('Report not found', 'This link is not valid. Please ask for a new link.', 'err');
+      return fail('Could not load the photos', r.d.message || 'Please try again in a moment.', 'err');
+    }
+    draw(r.d);
+  }).catch(function(e){ fail('Could not load the photos', e.message + ' Check your connection and reload.', 'err'); });
+}
+// Which photos belong to which area, and what each one shows (the issue or equipment it is attached to).
+function groups(doc, have){
+  var seen = {}, out = [];
+  (doc.areas||[]).forEach(function(a){
+    if (a.excluded) return;
+    var items = [];
+    function add(id, label){ if (!have[id] || seen[id]) return; seen[id] = 1; items.push({ id:id, label:label }); }
+    (a.issues||[]).forEach(function(is){ (is.photo_ids||[]).forEach(function(p){ add(p, { kind:'Issue', text:is.title, sev:is.severity }); }); });
+    (a.equipment||[]).forEach(function(e){ (e.photo_ids||[]).forEach(function(p){ add(p, { kind:'Equipment', text:(e.name ? e.name + ' · ' : '') + (EQ_KIND[e.kind] || 'Equipment') }); }); });
+    (a.photo_ids||[]).forEach(function(p){ add(p, { kind:'', text:'' }); });
+    if (items.length) out.push({ name:a.name, items:items });
+  });
+  return out;
+}
+function cardHtml(it){
+  var has = Object.prototype.hasOwnProperty.call(FULL, it.id), l = it.label;
+  return '<div class="card"><a class="pic" href="'+esc(fullUrl(it.id))+'" target="_blank" rel="noopener"><img src="'+esc(imgUrl(it.id))+'" alt="Inspection photo" data-p="'+esc(it.id)+'" loading="lazy" decoding="async" onerror="imgErr(this)"></a>'
+    + '<div class="cap">' + (l.text ? '<div>' + (l.kind === 'Issue' ? '<span class="muted">' + esc(SEV_LABEL[l.sev] || '') + (l.sev ? ' · ' : '') + '</span>' : '<span class="muted">' + esc(l.kind) + ': </span>') + '<b>' + esc(l.text) + '</b></div>' : '<div class="muted">Area photo</div>')
+    + '<div class="row">' + (has ? '<span class="tag">Original · ' + esc(mb(FULL[it.id])) + '</span>' : '<span class="tag std">Standard size</span>')
+    + '<a href="'+esc(fullUrl(it.id))+'" target="_blank" rel="noopener">Open full size</a><a href="'+esc(dlUrl(it.id))+'">Download</a></div></div></div>';
+}
+function draw(d){
+  var doc = d.doc, b = d.brand || {}, insp = d.inspection, have = {};
+  (d.photo_ids||[]).forEach(function(p){ have[p] = true; });
+  FULL = d.photo_full || {};
+  var gs = groups(doc, have), total = 0, nFull = 0;
+  gs.forEach(function(g){ g.items.forEach(function(it){ total++; if (Object.prototype.hasOwnProperty.call(FULL, it.id)) nFull++; }); });
+  document.documentElement.style.setProperty('--brand', safeColor(b.primary_color, '#1d4ed8'));
+  document.documentElement.style.setProperty('--accent', safeColor(b.accent_color, '#166534'));
+  document.title = 'Inspection Photos — ' + (doc.property && doc.property.address || '');
+  var h = '<div class="band">' + (b.logo_data ? '<img src="'+esc(b.logo_data)+'" alt="'+esc(b.name)+' logo">' : '') + '<div><div class="nm">'+esc(b.name)+'</div>'+(b.tagline?'<div class="tg">'+esc(b.tagline)+'</div>':'')+'</div></div><div class="wrap">';
+  if (d.preview) h += '<div class="note warn"><b>Preview — not published.</b> Only you can see this. Publish the report from the Field Inspection app to share the link.</div>';
+  h += '<h1>Inspection photos</h1><div class="muted">' + esc(doc.property && doc.property.address || '') + (insp && insp.date ? ' · ' + esc(insp.date) : '') + '</div>';
+  h += '<div style="margin:12px 0;display:flex;gap:8px;flex-wrap:wrap"><a class="btn alt" href="'+esc(reportUrl())+'">← Back to the report</a></div>';
+  if (!total){ h += '<div class="note">There are no photos on this report.</div></div>'; return show(h); }
+  h += '<div class="note"><b>' + total + ' photo' + (total > 1 ? 's' : '') + '.</b> Tap a photo to open it at <b>full size</b>' + (nFull ? ' — the original, uncompressed photo from the inspection, with every detail the camera captured' : '') + '. “Download” saves the file to your device.</div>';
+  if (nFull < total) h += '<div class="note warn">' + (nFull ? (total - nFull) + ' of these photo' + (total - nFull > 1 ? 's are' : ' is') + ' only available at standard size (marked “Standard size”).' : 'These photos are available at the standard report size only; no larger originals were stored for this inspection.') + '</div>';
+  gs.forEach(function(g){
+    h += '<h2>' + esc(g.name) + '<small>' + g.items.length + ' photo' + (g.items.length > 1 ? 's' : '') + '</small></h2><div class="grid">' + g.items.map(cardHtml).join('') + '</div>';
+  });
+  h += '<div class="foot">' + (b.footer_text ? '<div style="white-space:pre-wrap">' + esc(b.footer_text) + '</div>' : '') + '<div>Photos reflect conditions visible on the inspection date.</div></div></div>';
+  show(h);
+}
+</script>
+</body>
+</html>

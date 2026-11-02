@@ -47,7 +47,7 @@
   .banner{border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
   .banner.warn{background:#fdf3e0;border:1px solid #f0d9a8;color:#7a5b12} .banner.err{background:#fdecea;border:1px solid #f1b9b3;color:#8e281d} .banner.ok{background:#e7f6ec;border:1px solid #b5e0c4;color:#14623a} .banner.info{background:#eaf1fd;border:1px solid #bcd0f5;color:#1a3f94}
   #login{max-width:360px;margin:60px auto;padding:20px;text-align:center}
-  #syncbar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--surface);border-top:1px solid var(--border);padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px}
+  #syncbar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--surface);border-top:1px solid var(--border);padding:8px 12px calc(8px + env(safe-area-inset-bottom));display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;line-height:1.35}
   #syncbar .st{font-weight:700}
   #syncbar.ok .st{color:var(--accent2)} #syncbar.work .st{color:var(--accent)} #syncbar.off .st{color:var(--warn)} #syncbar.err .st{color:var(--danger)}
   .area-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 4px;border-top:1px solid var(--border);cursor:pointer;min-height:52px}
@@ -110,6 +110,7 @@
   <a href="index.html" style="color:#fff;text-decoration:none">← Hub</a>
   <span style="margin-left:auto" id="nav-ver">Field Inspection</span>
 </div>
+<script src="rc-related.js" data-group="inspections"></script>
 
 <div id="login">
   <h1>Field Inspection</h1>
@@ -252,11 +253,11 @@ function setSync(){
   else if (ss.syncing){ cls='work'; txt='⏳ Saving…'; }
   else if (rec.dirty){ cls='work'; txt='⏳ Changes waiting to save'; }
   else { cls='ok'; txt='✓ Saved to server' + (rec.base_rev ? ' (v'+rec.base_rev+')' : ''); }
-  if (np){ txt += ' · 📷 '+np+' photo'+(np>1?'s':'')+' waiting'; if (S.photoMsg){ cls = cls==='ok'?'err':cls; txt += ' ⚠'; a = '<button class="btn sm" onclick="retryPhotos()">Retry photos</button>'; } }
+  if (np){ var ps = photoStatusHtml(np); txt += ' · '+ps.txt; if (ps.cls==='err'){ cls = 'err'; } else if (cls==='ok' || ps.cls==='off'){ cls = ps.cls; } a = ps.act || a; }
   bar.className = cls; st.innerHTML = txt; act.innerHTML = a;
 }
 function pendingPhotoCount(){ var n=0; for (var k in photoState){ if (photoState[k].state!=='done') n++; } return n; }
-window.addEventListener('online', function(){ if (S.rec) syncNow(true); pumpPhotos(); setSync(); });
+window.addEventListener('online', function(){ if (S.rec) syncNow(true); pumpPhotos(true); setSync(); });
 window.addEventListener('offline', setSync);
 window.addEventListener('beforeunload', function(e){ if ((S.rec && S.rec.dirty) || pendingPhotoCount()){ e.preventDefault(); e.returnValue=''; return ''; } });
 function mut(fn){
@@ -329,7 +330,7 @@ function photoSrc(id){
 function loadPhotoBlobs(inspId){
   return dbAll('photos').then(function(rows){
     (rows||[]).forEach(function(p){
-      if (p.insp !== inspId) return;
+      if (p.insp !== inspId || p.kind === 'orig') return;
       if (p.blob && !blobUrl[p.id]) blobUrl[p.id] = URL.createObjectURL(p.blob);
     });
   });
@@ -341,19 +342,45 @@ function allPhotoStates(){
     setSync();
   });
 }
-function compressImage(file){
+function compressImage(file, maxSide, quality){
   return new Promise(function(resolve, reject){
     var url = URL.createObjectURL(file), img = new Image();
     img.onload = function(){
       try{
-        var max = 1600, w = img.naturalWidth, h = img.naturalHeight, sc = Math.min(1, max/Math.max(w,h));
+        var max = maxSide || 1600, w = img.naturalWidth, h = img.naturalHeight, sc = Math.min(1, max/Math.max(w,h));
         var c = document.createElement('canvas'); c.width = Math.round(w*sc); c.height = Math.round(h*sc);
         c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-        c.toBlob(function(b){ URL.revokeObjectURL(url); if(b) resolve(b); else reject(new Error('Could not compress the photo')); }, 'image/jpeg', 0.82);
+        c.toBlob(function(b){ URL.revokeObjectURL(url); if(b) resolve(b); else reject(new Error('Could not compress the photo')); }, 'image/jpeg', quality || 0.82);
       }catch(e){ URL.revokeObjectURL(url); reject(e); }
     };
     img.onerror = function(){ URL.revokeObjectURL(url); reject(new Error('This photo could not be read ('+(file.type||'unknown type')+')')); };
     img.src = url;
+  });
+}
+// Nov 2 2026 (Brett): recipients get the FULL-SIZE photo "from the original photo, as much detail as possible". The ~1600 px copy above is still what uploads first and what the
+// report shows (fast, small). The untouched original file goes up afterwards as its own queue row (id <photo>__o, kind 'orig'), behind every standard copy, with the same
+// retry / wait / status bar as any photo. Its phone copy is dropped as soon as the server confirms it.
+var ORIG_MAX_BYTES = 30 * 1024 * 1024 - 65536;     // the server refuses more than 30 MB
+function prepareOriginal(file){
+  var okType = ['image/jpeg','image/png','image/webp'].indexOf(file.type) > -1;
+  if (okType && file.size > 0 && file.size <= ORIG_MAX_BYTES) return Promise.resolve({ blob:file, mime:file.type });
+  // A type the server cannot store (HEIC, AVIF...) or a file over the limit: re-save it at its FULL pixel size (never scaled down), best quality that fits.
+  return compressImage(file, 100000, 0.95).then(function(b){
+    if (b.size <= ORIG_MAX_BYTES) return { blob:b, mime:'image/jpeg' };
+    return compressImage(file, 100000, 0.88).then(function(b2){
+      if (b2.size <= ORIG_MAX_BYTES) return { blob:b2, mime:'image/jpeg' };
+      throw new Error('it is over 30 MB even re-saved at full size');
+    });
+  });
+}
+// Never throws and never hides a failure: the standard copy is already saved, and a missing original is toasted AND reported to the Hub's failure ledger.
+function queueOriginal(rec, photoId, file){
+  return prepareOriginal(file).then(function(o){
+    var row = { id:photoId+'__o', photo_id:photoId, kind:'orig', insp:rec.id, blob:o.blob, mime:o.mime, state:'pending', err:'', at:Date.now() };
+    return dbPut('photos', row).then(function(){ photoState[row.id] = { state:'pending', err:'' }; });
+  }).catch(function(e){
+    toast('The full-size copy of one photo could not be kept ('+e.message+'). The standard copy is saved.');
+    reportPhoto('field-inspect original photo', 'Could not prepare/store the original: '+e.message, photoId);
   });
 }
 var photoTarget = null; // {areaId}
@@ -369,39 +396,162 @@ $('photo-in').addEventListener('change', function(ev){
         blobUrl[id] = URL.createObjectURL(blob); photoState[id] = { state:'pending', err:'' };
         mut(function(doc){ var a = findArea(doc, tg.areaId); (a.photo_ids = a.photo_ids||[]).push(id); });
         if (tg.urgent && S.urg && S.urg.photoIds) S.urg.photoIds.push(id);
+        return queueOriginal(rec, id, f);
       });
     }).catch(function(e){ fails++; toast('Photo not added: '+e.message); });
   });
   chain.then(function(){ render(); pumpPhotos(); if (tg.urgent && S.urg && S.urg.mode==='new') renderUrgentNew(); if (!fails) toast(files.length+' photo'+(files.length>1?'s':'')+' added'); });
 });
-function pumpPhotos(){
-  if (S.pumping) return Promise.resolve(); if (!navigator.onLine) { setSync(); return Promise.resolve(); }
-  S.pumping = true; S.photoMsg='';
+// ── photo uploader ──────────────────────────────────────────────────────────
+// Photos go up one at a time. A failure that is NOT the photo's fault (Google Sheets read limit, a bad signal, a slow server) never marks the photo failed:
+// it stays queued, the reason is shown in the bar at the bottom, and the page retries by itself with a growing wait (5s, 10s, 20s, 40s, then every 60s).
+// Only a photo the server will never accept (too big, wrong type), or one that has failed PHOTO_MAX_TRIES times in a row, is marked failed and needs "Retry photos".
+var PHOTO_MAX_TRIES = 10, PHOTO_TIMEOUT_MS = 75000, PHOTO_ORIG_TIMEOUT_MS = 240000, PHOTO_GAP_MS = 900;   // an original is several MB: it gets a longer time on a weak signal
+function isOrigId(id){ return /__o$/.test(String(id)); }   // the queue row of a photo's full-size original is '<photo id>__o'
+var photoTries = {};          // photo id -> consecutive failed attempts (memory only)
+var pumpTimer = null, tickTimer = null;
+S.up = { done:0, nextAt:0, why:'', msg:'', sendingId:'', attempt:0, busyRounds:0, reported:{} };
+function photoBackoff(n){ return Math.min(60, 5 * Math.pow(2, Math.max(0, n - 1))); }
+function reportPhoto(where, msg, id){ if (S.up.reported[id]) return; S.up.reported[id] = 1; try{ if (window.hubReportFailure) window.hubReportFailure(where, msg, { photo_id:id }); }catch(e){ console.error('photo failure report failed', e); } }
+function schedulePump(sec, why, msg){
+  if (pumpTimer) clearTimeout(pumpTimer);
+  S.up.nextAt = Date.now() + sec*1000; S.up.why = why; S.up.msg = msg || '';
+  pumpTimer = setTimeout(function(){ pumpTimer = null; S.up.nextAt = 0; pumpPhotos(); }, sec*1000);
+  if (!tickTimer) tickTimer = setInterval(function(){ if (!S.up.nextAt && !S.pumping){ clearInterval(tickTimer); tickTimer = null; } setSync(); }, 1000);
+  setSync();
+}
+function sendPhoto(p){
+  // resolves {ok} | {kind:'busy'|'transient'|'unsaved'|'fatal', wait, text}; never rejects
+  var isOrig = p.kind === 'orig', tmo = isOrig ? PHOTO_ORIG_TIMEOUT_MS : PHOTO_TIMEOUT_MS;
+  var ctl = window.AbortController ? new AbortController() : null, timedOut = false;
+  var to = setTimeout(function(){ timedOut = true; if (ctl) ctl.abort(); }, tmo);
+  var opts = { method:'POST', headers:{'X-Auth-Token':AUTH_TOKEN,'Content-Type':isOrig ? (p.mime || 'image/jpeg') : 'image/jpeg'}, body:p.blob };
+  if (ctl) opts.signal = ctl.signal;
+  return fetch(WORKER+'/fi/photo?inspection_id='+encodeURIComponent(p.insp)+'&photo_id='+encodeURIComponent(isOrig ? p.photo_id : p.id)+(isOrig ? '&kind=orig' : ''), opts)
+    .then(function(res){
+      clearTimeout(to);
+      return res.text().then(function(t){
+        var j; try{ j = JSON.parse(t); }catch(e){ j = null; }
+        var msg = (j && (j.message || j.error)) || ('HTTP '+res.status);
+        if (res.ok && j && j.ok !== false) return { ok:true };
+        if (j && j.error === 'inspection_not_saved') return { kind:'unsaved', text:'waiting for the inspection to save' };
+        if (j && j.error === 'photo_not_saved') return { kind:'unsaved', text:'waiting for the standard copy to upload first' };
+        if (res.status === 429 || (j && j.busy)) return { kind:'busy', wait:Math.max(5, Number(j && j.retry_after_seconds) || 8), text:'Google Sheets is busy' };
+        if (res.status === 400 || res.status === 413 || res.status === 415) return { kind:'fatal', text:msg };
+        if (res.status === 401 || res.status === 403) return { kind:'fatal', auth:true, text:'Not signed in (' + msg + ') — reload the page and log in again' };
+        return { kind:'transient', text:msg + ' (HTTP '+res.status+')' };
+      });
+    })
+    .catch(function(e){
+      clearTimeout(to);
+      return { kind:'transient', text: timedOut ? 'the server did not answer in '+Math.round(tmo/1000)+'s' : 'no connection to the server' };
+    });
+}
+function pumpPhotos(force){
+  if (S.pumping) return Promise.resolve();
+  if (!navigator.onLine) { S.up.why = 'offline'; setSync(); return Promise.resolve(); }
+  if (!force && S.up.nextAt && S.up.nextAt > Date.now()) return Promise.resolve();   // honour the backoff; other code calls this often
+  if (pumpTimer){ clearTimeout(pumpTimer); pumpTimer = null; }
+  S.up.nextAt = 0; S.up.why = ''; S.up.msg = '';
+  S.pumping = true; S.photoMsg = '';
+  var retryIn = 0, retryWhy = '', retryMsg = '', consecutiveFail = 0;
   return dbAll('photos').then(function(rows){
-    var todo = (rows||[]).filter(function(p){ return p.state!=='done'; });
-    photoState = {}; todo.forEach(function(p){ photoState[p.id] = { state:p.state, err:p.err||'' }; });
+    var todo = (rows||[]).filter(function(p){ return p.state !== 'done'; });
+    var fresh = {}; todo.forEach(function(p){ fresh[p.id] = { state:p.state, err:p.err||'' }; });
+    photoState = fresh;
+    todo = todo.filter(function(p){ return p.state !== 'error'; });   // failed photos wait for the Retry photos button
+    todo.sort(function(a, b){ return (a.kind === 'orig' ? 1 : 0) - (b.kind === 'orig' ? 1 : 0); });   // every standard copy goes before any full-size original
     setSync();
-    var chain = Promise.resolve();
-    todo.forEach(function(p){
-      chain = chain.then(function(){
-        return dbGet('docs', p.insp).then(function(d){
-          if (!d || !d.base_rev){ photoState[p.id] = { state:'pending', err:'waiting for the inspection to save' }; return; }
-          return fetch(WORKER+'/fi/photo?inspection_id='+encodeURIComponent(p.insp)+'&photo_id='+encodeURIComponent(p.id), { method:'POST', headers:{'X-Auth-Token':AUTH_TOKEN,'Content-Type':'image/jpeg'}, body:p.blob })
-            .then(function(res){ return res.text().then(function(t){ var j; try{ j=JSON.parse(t); }catch(e){ j={ok:false,message:'HTTP '+res.status}; } if (!res.ok || j.ok===false){ var er=new Error(j.message||('HTTP '+res.status)); er.code=j.error; throw er; } return j; }); })
-            .then(function(){ p.state='done'; p.err=''; delete photoState[p.id]; return dbPut('photos', p); })
-            .catch(function(e){
-              if (e.code==='inspection_not_saved'){ photoState[p.id] = { state:'pending', err:'waiting for the inspection to save' }; if (S.rec && S.rec.id===p.insp){ S.rec.dirty=true; scheduleSync(); } return; }
-              p.err = e.message; p.state='error'; photoState[p.id] = { state:'error', err:e.message }; S.photoMsg = e.message; return dbPut('photos', p);
-            });
+    var i = 0;
+    function next(){
+      if (i >= todo.length) return Promise.resolve();
+      var p = todo[i++];
+      if (p.kind === 'orig'){
+        // An original only goes up after its own standard copy is on the server; if that photo was removed, the original is dropped with it.
+        var std = (rows||[]).filter(function(x){ return x.id === p.photo_id; })[0];
+        if (!std){ delete photoState[p.id]; return dbDel('photos', p.id).then(next); }
+        if (std.state !== 'done'){ photoState[p.id] = { state:'pending', err:'waiting for the standard copy' }; return next(); }
+        if (!p.blob){ p.state = 'done'; delete photoState[p.id]; return dbPut('photos', p).then(next); }
+      }
+      return dbGet('docs', p.insp).then(function(d){
+        if (!d || !d.base_rev){ photoState[p.id] = { state:'pending', err:'waiting for the inspection to save' }; retryIn = Math.max(retryIn, 20); retryWhy = retryWhy || 'unsaved'; return next(); }
+        S.up.sendingId = p.id; S.up.attempt = (photoTries[p.id] || 0) + 1; setSync();
+        return sendPhoto(p).then(function(r){
+          S.up.sendingId = '';
+          if (r.ok){
+            p.state = 'done'; p.err = ''; delete photoState[p.id]; delete photoTries[p.id]; S.up.done++; consecutiveFail = 0; S.up.busyRounds = 0;
+            if (p.kind === 'orig') delete p.blob;   // the server has the original: free this phone's storage
+            return dbPut('photos', p).then(function(){ setSync(); return new Promise(function(r2){ setTimeout(r2, PHOTO_GAP_MS); }); }).then(next);
+          }
+          if (r.kind === 'unsaved'){
+            photoState[p.id] = { state:'pending', err:r.text };
+            if (S.rec && S.rec.id === p.insp){ S.rec.dirty = true; scheduleSync(); }
+            retryIn = Math.max(retryIn, 20); retryWhy = retryWhy || 'unsaved'; return next();
+          }
+          if (r.kind === 'fatal' && p.kind === 'orig' && !r.auth){
+            // The server will never take this original (over 30 MB / wrong type). The standard copy is already safe, so do not leave a red bar that can never clear:
+            // say so, report it to the Hub's failure ledger, and drop the original.
+            reportPhoto('field-inspect original photo', r.text, p.photo_id);
+            toast('A full-size photo was not kept: '+r.text);
+            delete photoState[p.id]; delete photoTries[p.id];
+            return dbDel('photos', p.id).then(next);
+          }
+          if (r.kind === 'fatal'){
+            p.err = r.text; p.state = 'error'; photoState[p.id] = { state:'error', err:r.text }; S.photoMsg = r.text;
+            reportPhoto('field-inspect photo upload', r.text, p.id);
+            return dbPut('photos', p).then(next);
+          }
+          // busy or transient: the photo stays queued; stop the loop (the cause is shared by every photo) and try again later
+          var n = (photoTries[p.id] = (photoTries[p.id] || 0) + 1);
+          if (r.kind === 'busy'){
+            S.up.busyRounds++;
+            photoState[p.id] = { state:'pending', err:r.text };
+            retryIn = Math.max(retryIn, r.wait + Math.min(30, S.up.busyRounds * 4)); retryWhy = 'busy'; retryMsg = r.text;
+            if (S.up.busyRounds === 6) reportPhoto('field-inspect photo upload (still busy after 6 tries)', 'Google Sheets read limit has held photo uploads for several minutes', p.id);
+            return Promise.resolve();
+          }
+          if (n >= PHOTO_MAX_TRIES){
+            var m = 'Failed '+n+' times: '+r.text;
+            p.err = m; p.state = 'error'; photoState[p.id] = { state:'error', err:m }; S.photoMsg = m;
+            reportPhoto('field-inspect photo upload', m, p.id);
+            return dbPut('photos', p).then(next);
+          }
+          photoState[p.id] = { state:'pending', err:r.text };
+          retryIn = Math.max(retryIn, photoBackoff(n)); retryWhy = 'retry'; retryMsg = r.text;
+          if (n === 4) reportPhoto('field-inspect photo upload (4 failed tries)', r.text, p.id);
+          return (++consecutiveFail >= 2) ? Promise.resolve() : next();
         });
       });
-    });
-    return chain;
-  }).then(function(){ S.pumping=false; setSync(); if (S.view==='review'||S.view==='area') safeRender(); var stuck = Object.keys(photoState).some(function(k){ return photoState[k].state==='pending'; }); if (stuck) setTimeout(pumpPhotos, 20000); })
-    .catch(function(e){ S.pumping=false; S.photoMsg = e.message; setSync(); });
+    }
+    return next();
+  }).then(function(){
+    S.pumping = false;
+    if (retryIn) schedulePump(retryIn, retryWhy, retryMsg);
+    setSync(); if (S.view==='review'||S.view==='area') safeRender();
+  }).catch(function(e){
+    S.pumping = false; S.photoMsg = 'Photo uploader problem: '+e.message; reportPhoto('field-inspect photo uploader', e.message, 'pump'); schedulePump(30, 'retry', e.message);
+  });
 }
 function retryPhotos(){
-  dbAll('photos').then(function(rows){ var ps=[]; (rows||[]).forEach(function(p){ if (p.state==='error'){ p.state='pending'; ps.push(dbPut('photos',p)); } }); return Promise.all(ps); }).then(function(){ S.photoMsg=''; pumpPhotos(); });
+  dbAll('photos').then(function(rows){ var ps=[]; (rows||[]).forEach(function(p){ if (p.state==='error'){ p.state='pending'; ps.push(dbPut('photos',p)); } delete photoTries[p.id]; S.up.reported[p.id] = 0; }); return Promise.all(ps); }).then(function(){ S.photoMsg=''; S.up.busyRounds=0; pumpPhotos(true); });
+}
+// One plain-language line for the bottom bar: is the page working, waiting its turn, or actually stuck?
+function photoStatusHtml(np){
+  var nO = Object.keys(photoState).filter(isOrigId).length, nS = np - nO;
+  var up = S.up, n = (nS ? nS+' photo'+(nS>1?'s':'') : '') + (nS && nO ? ' + ' : '') + (nO ? nO+' full-size cop'+(nO>1?'ies':'y') : '') + ' waiting', secs = up.nextAt ? Math.max(0, Math.ceil((up.nextAt - Date.now())/1000)) : 0;
+  var failed = Object.keys(photoState).filter(function(k){ return photoState[k].state === 'error'; });
+  if (failed.length) return { cls:'err', txt:'📷 '+n+' · ⚠ '+failed.length+' failed — '+esc(photoState[failed[0]].err||''), act:'<button class="btn sm" onclick="retryPhotos()">Retry photos</button>' };
+  if (!navigator.onLine) return { cls:'off', txt:'📷 '+n+' · 📴 offline — they upload by themselves when signal returns', act:'' };
+  if (S.pumping && up.sendingId && isOrigId(up.sendingId)) return { cls:'work', txt:'🖼 Uploading a full-size photo ('+n+')… keep this page open', act:'' };
+  if (S.pumping && up.sendingId){ var tot = up.done + np; return { cls:'work', txt:'📷 Uploading photo '+(up.done+1)+' of '+tot+(up.attempt>1?' (try '+up.attempt+')':'')+'… keep this page open', act:'' }; }
+  if (up.nextAt){
+    var why = up.why === 'busy' ? 'Google is limiting how fast we can save (shared limit). Normal after a batch of photos — nothing is wrong.'
+      : up.why === 'unsaved' ? 'Waiting for the inspection to finish saving.'
+      : 'Last try failed: '+esc(up.msg||'')+'.';
+    return { cls:'work', txt:'📷 '+n+' · '+why+' Retrying by itself in '+secs+'s. Just keep this page open.', act:'<button class="btn sm" onclick="pumpPhotos(true)">Retry now</button>' };
+  }
+  if (S.pumping) return { cls:'work', txt:'📷 '+n+' · checking…', act:'' };
+  return { cls:'work', txt:'📷 '+n+' · starting…', act:'' };
 }
 
 // ── model ───────────────────────────────────────────────────────────────────
@@ -1316,15 +1466,16 @@ var EQUIP_KINDS = {
   furnace:{label:'Furnace',extra:['fuel','filter_size']}, boiler:{label:'Boiler',extra:['fuel']}, central_ac:{label:'Central A/C',extra:['tonnage','filter_size']},
   heat_pump:{label:'Heat pump',extra:['tonnage','filter_size']}, water_heater:{label:'Water heater',extra:['fuel','capacity']}, refrigerator:{label:'Refrigerator',extra:[]},
   range:{label:'Range / oven',extra:['fuel']}, dishwasher:{label:'Dishwasher',extra:[]}, microwave:{label:'Microwave',extra:[]}, washer:{label:'Washer',extra:[]},
-  dryer:{label:'Dryer',extra:['fuel']}, disposal:{label:'Garbage disposal',extra:[]}, other:{label:'Other equipment',extra:[]}
+  dryer:{label:'Dryer',extra:['fuel']}, disposal:{label:'Garbage disposal',extra:[]}, electrical_panel:{label:'Electrical panel',extra:['amperage','spaces']}, other:{label:'Other equipment',extra:[]}
 };
-var EQUIP_LABEL = {name:'Label (optional, e.g. “Upstairs unit”)',brand:'Brand',model:'Model number',serial:'Serial number',year:'Year / date made',notes:'Notes',fuel:'Fuel type',filter_size:'Filter size',tonnage:'Tonnage',capacity:'Capacity'};
-var EQUIP_HINT = {filter_size:'e.g. 16x25x1', fuel:'gas, electric, oil', capacity:'gallons, e.g. 40', tonnage:'e.g. 3 ton', year:'e.g. 2008', model:'as printed on the label', serial:'as printed on the label'};
+var EQUIP_LABEL = {name:'Label (optional, e.g. “Upstairs unit”)',brand:'Brand',model:'Model number',serial:'Serial number',year:'Year / date made',notes:'Notes',fuel:'Fuel type',filter_size:'Filter size',tonnage:'Tonnage',capacity:'Capacity',amperage:'Amperage rating',spaces:'Breaker spaces'};
+var EQUIP_HINT = {filter_size:'e.g. 16x25x1', fuel:'gas, electric, oil', capacity:'gallons, e.g. 40', tonnage:'e.g. 3 ton', amperage:'e.g. 100A or 200A (main / panel rating)', spaces:'e.g. 20 or 40', year:'e.g. 2008', model:'as printed on the label', serial:'as printed on the label'};
 function equipKeys(kind){ return ['brand','model','serial','year'].concat((EQUIP_KINDS[kind]||EQUIP_KINDS.other).extra); }
 function equipSuggest(areaName){
   var n = String(areaName||'').toLowerCase(), out = [];
   if (/water heater/.test(n)) out = ['water_heater'];
   else if (/hvac|heat|furnace|boiler|mechanical|utility|cooling/.test(n)) out = ['furnace','boiler','central_ac','heat_pump'];
+  else if (/electric|panel|breaker/.test(n)) out = ['electrical_panel'];
   else if (/kitchen/.test(n)) out = ['refrigerator','range','dishwasher','microwave','disposal'];
   else if (/laundry/.test(n)) out = ['washer','dryer'];
   else if (/basement|cellar/.test(n)) out = ['furnace','boiler','water_heater','washer','dryer'];
@@ -1334,7 +1485,7 @@ function equipTitle(e){ var k = EQUIP_KINDS[e.kind] || EQUIP_KINDS.other; return
 function equipSummary(e){
   var bits = [];
   ['brand','model','serial','year'].forEach(function(f){ if (e[f]) bits.push((f==='serial'?'S/N ':f==='model'?'Model ':'')+e[f]); });
-  ['filter_size','fuel','tonnage','capacity'].forEach(function(f){ if (e[f]) bits.push((f==='filter_size'?'filter ':'')+e[f]); });
+  ['filter_size','fuel','tonnage','capacity','amperage','spaces'].forEach(function(f){ if (e[f]) bits.push((f==='filter_size'?'filter ':f==='spaces'?'':'')+e[f]+(f==='spaces'?' spaces':'')); });
   return bits.join(' · ');
 }
 
@@ -1683,7 +1834,7 @@ function removePhotosNow(){
 function purgeOrphanPhotos(ids){
   var used = {}; S.rec.doc.areas.forEach(function(a){ (a.photo_ids||[]).forEach(function(p){ used[p]=1; }); (a.issues||[]).forEach(function(is){ (is.photo_ids||[]).forEach(function(p){ used[p]=1; }); }); (a.equipment||[]).forEach(function(e){ (e.photo_ids||[]).forEach(function(p){ used[p]=1; }); }); });
   var chain = Promise.resolve();
-  ids.forEach(function(id){ if (used[id]) return; chain = chain.then(function(){ return dbDel('photos', id); }).then(function(){ if (blobUrl[id]){ try{ URL.revokeObjectURL(blobUrl[id]); }catch(e){ /* url already released */ } delete blobUrl[id]; } delete photoState[id]; }); });
+  ids.forEach(function(id){ if (used[id]) return; chain = chain.then(function(){ return dbDel('photos', id); }).then(function(){ return dbDel('photos', id+'__o'); }).then(function(){ delete photoState[id+'__o']; if (blobUrl[id]){ try{ URL.revokeObjectURL(blobUrl[id]); }catch(e){ /* url already released */ } delete blobUrl[id]; } delete photoState[id]; }); });
   return chain.then(function(){ setSync(); });
 }
 function viewPhoto(id){
@@ -1732,7 +1883,7 @@ function saveEquip(){
   var e = eqEdit, any = equipKeys(e.kind).concat(['notes']).some(function(f){ return String(e[f]||'').trim(); });
   if (!any){ toast('Fill in at least one detail (brand, model, serial…)'); return; }
   var a = curArea(), isNew = e.isNew; delete e.isNew;
-  ['name','brand','model','serial','year','notes','fuel','filter_size','tonnage','capacity'].forEach(function(f){ if (e[f]===undefined) return; e[f] = String(e[f]).trim(); if (!e[f]) delete e[f]; });
+  ['name','brand','model','serial','year','notes','fuel','filter_size','tonnage','capacity','amperage','spaces'].forEach(function(f){ if (e[f]===undefined) return; e[f] = String(e[f]).trim(); if (!e[f]) delete e[f]; });
   mut(function(){ a.equipment = a.equipment||[]; if (isNew) a.equipment.push(e); else for (var i=0;i<a.equipment.length;i++) if (a.equipment[i].id===e.id) a.equipment[i]=e; });
   closeSheet(); render(); toast('Equipment saved');
 }
@@ -1865,6 +2016,7 @@ function renderIssueSheet(){
   h += '<div class="toggle"><span>Send to '+esc(reqName(S.rec.doc))+'<div class="muted">'+(is.sent?'Already sent '+esc(sentWhen(is.sent))+'. Tick to send it again.':'Adds it to the “to send” list on the inspection page. Nothing is sent yet.')+'</div></span><input type="checkbox" aria-label="send to the requester"'+(is.flag_send&&!is.sent?' checked':'')+' onchange="urgentToggleFlag(this.checked)"></div>';
   if ((a.photo_ids||[]).length){ h += '<label class="fld">Photos for this issue (tap to attach)</label><div class="thumbs">'+a.photo_ids.map(function(p){ var on = (is.photo_ids||[]).indexOf(p)>-1; return '<button class="thumb'+(on?' sel':'')+'" onclick="toggleIssuePhoto(\''+p+'\')" aria-label="photo">'+(photoSrc(p)?'<img src="'+esc(photoSrc(p))+'" alt="">':'')+(on?'<span class="b">✓</span>':'')+'</button>'; }).join('')+'</div>'; }
   h += '<div class="btns"><button class="btn primary" onclick="saveIssue()">Save</button><button class="btn" onclick="closeSheet()">Cancel</button>'+(is.isNew?'':'<button class="btn danger" id="ie-del" onclick="deleteIssueStep()">Delete</button>')+'</div>';
+  if (!is.isNew) h += '<div class="btns"><button class="btn block" id="ie-move" onclick="moveIssueSheet()">Move to another area…</button></div><div class="muted">Wrong area? Moving keeps everything on this issue — title, details, cause, fix, severity, trade, flags and its photos.</div>';
   openSheet(h);
 }
 function saveIssue(){
@@ -1873,6 +2025,60 @@ function saveIssue(){
   var oldType = ''; if (!isNew) for (var k=0;k<a.issues.length;k++) if (a.issues[k].id===is.id) oldType = a.issues[k].issue_type||'';
   mut(function(){ if (isNew) a.issues.push(is); else for (var i=0;i<a.issues.length;i++) if (a.issues[i].id===is.id) a.issues[i]=is; if ((!a.condition||a.condition==='not_inspected')) a.condition='fair'; });
   closeSheet(); render(); if (isNew || (is.issue_type && is.issue_type!==oldType)) touchTypes([is]);
+}
+// ---- move an issue to another area (Nov 2 2026, Brett: a Basement issue was really Exterior Rear; "move the issue itself ... and retain all the info") ----
+// Pure: moves the SAME issue object (same id, so the trade roll-up, the report and "send to requester" marks all keep pointing at it) from one area to another.
+// Everything on it travels (nothing is rebuilt from a template). Its photos are added to the new area's photo list and leave the old one unless something that stays
+// behind (another issue or equipment) still uses them. Returns {ok:false,error} and changes nothing when it cannot be done safely.
+function moveIssueInDoc(doc, issue, fromId, toId){
+  var from = findArea(doc, fromId), to = findArea(doc, toId);
+  if (!from || !to || from === to) return { ok:false, error:'Pick a different area.' };
+  if (to.excluded) return { ok:false, error:to.name+' is marked not applicable. Turn it back on first.' };
+  var idx = -1, dup = false;
+  doc.areas.forEach(function(a){ (a.issues||[]).forEach(function(x, i){ if (x.id === issue.id){ if (a === from && idx < 0) idx = i; else dup = true; } }); });
+  if (idx < 0) return { ok:false, error:'That issue is no longer in '+from.name+'.' };
+  if (dup) return { ok:false, error:'This issue exists in more than one area, so it was not moved. Tell Brett.' };
+  if ((to.issues||[]).length >= 60) return { ok:false, error:to.name+' already has the most issues allowed (60).' };
+  var moved = JSON.parse(JSON.stringify(issue)); delete moved.isNew;
+  from.issues.splice(idx, 1);
+  to.issues = to.issues || []; to.issues.push(moved);
+  var pids = moved.photo_ids || [], carried = 0;
+  to.photo_ids = to.photo_ids || [];
+  pids.forEach(function(pid){ if (to.photo_ids.indexOf(pid) < 0){ to.photo_ids.push(pid); carried++; } });
+  var stay = {};
+  (from.issues||[]).forEach(function(x){ (x.photo_ids||[]).forEach(function(pid){ stay[pid] = 1; }); });
+  (from.equipment||[]).forEach(function(e){ (e.photo_ids||[]).forEach(function(pid){ stay[pid] = 1; }); });
+  from.photo_ids = (from.photo_ids||[]).filter(function(pid){ return pids.indexOf(pid) < 0 || stay[pid]; });
+  var conditionSet = false;
+  if (!to.condition || to.condition === 'not_inspected'){ to.condition = 'fair'; conditionSet = true; }   // same as adding an issue there by hand
+  return { ok:true, issue:moved, photos:pids.length, fromName:from.name, toName:to.name, toId:to.id, fromEmpty:!(from.issues||[]).length, fromCondition:from.condition, conditionSet:conditionSet };
+}
+function moveIssueSheet(){
+  var is = editing, a = curArea(), doc = S.rec.doc;
+  if (!is || is.isNew || !a) return;
+  if (!String(is.title||'').trim()){ toast('Give the issue a title first'); return; }
+  var rows = doc.areas.filter(function(x){ return !x.excluded && x.id !== a.id; }).map(function(x){
+    var n = issueCount(x);
+    return '<div class="area-row" onclick="moveIssueTo(\''+x.id+'\')"><span><b>'+esc(x.name)+'</b><div class="muted">'+esc(groupLabel(x.group))+(groupLabel(x.group)?' · ':'')+n+' issue'+(n===1?'':'s')+'</div></span><span class="pill new">Move here</span></div>';
+  }).join('');
+  var np = (is.photo_ids||[]).length;
+  openSheet('<h2>Move this issue to…</h2><div class="muted"><b>'+esc(is.title)+'</b> is in '+esc(a.name)+'. Pick the area it belongs in. It keeps all its details'+(np ? ' and its '+np+' photo'+(np===1?'':'s')+' go with it' : '')+'. Any edits you just made here are kept too.</div><div style="margin-top:6px">'+(rows || '<div class="muted">There is no other area to move it to.</div>')+'</div><div class="btns"><button class="btn" onclick="renderIssueSheet()">Back</button></div>');
+}
+function moveIssueTo(areaId){
+  if (!claim('mvis')) return;
+  var is = editing, a = curArea();
+  if (!is || is.isNew || !a){ release('mvis'); return; }
+  if (!String(is.title||'').trim()){ release('mvis'); toast('Give the issue a title first'); return; }
+  is.title = is.title.trim(); if (is.trade === 'tenant_action') is.tenant_action = true; else delete is.tenant_action;
+  var test = moveIssueInDoc(JSON.parse(JSON.stringify(S.rec.doc)), is, a.id, areaId);   // dry run on a copy: a refusal must change nothing
+  if (!test.ok){ release('mvis'); toast(test.error); return; }
+  var res = null;
+  mut(function(doc){ res = moveIssueInDoc(doc, is, a.id, areaId); });
+  if (!res || !res.ok){ release('mvis'); toast((res && res.error) || 'The issue could not be moved.'); return; }   // cannot happen after the dry run; never silent if it does
+  editing = null; release('mvis');
+  var hint = res.fromEmpty && (res.fromCondition === 'poor' || res.fromCondition === 'fair') ? '<div class="muted" style="margin-top:6px">'+esc(res.fromName)+' now has no issues but is still marked “'+esc((COND_LABEL && COND_LABEL[res.fromCondition]) || res.fromCondition)+'” — change that if it no longer applies.</div>' : '';
+  openSheet('<h2>Moved</h2><p><b>'+esc(res.issue.title)+'</b> is now in <b>'+esc(res.toName)+'</b> with everything recorded on it'+(res.photos ? ' and its '+res.photos+' photo'+(res.photos===1?'':'s') : '')+'.</p>'+hint+'<div class="btns"><button class="btn primary" onclick="closeSheet();openArea(\''+res.toId+'\')">Go to '+esc(res.toName)+'</button><button class="btn" onclick="closeSheet()">Stay in '+esc(res.fromName)+'</button></div>');
+  render();
 }
 
 // ---- brands ----

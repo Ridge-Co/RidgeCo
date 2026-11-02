@@ -41043,7 +41043,7 @@ async function inspCalendarTest(env, url) {
 const FI_DATA_COLS = 8, FI_DATA_CHUNK = 45000, FI_MAX_DOC_CHARS = FI_DATA_COLS * FI_DATA_CHUNK;
 const FI_BRAND_HEADERS = ['ID','Name','Primary_Color','Accent_Color','Tagline','Contact_Line','Footer_Text','Logo_Data','Is_Default','Active','Created_At','Updated_At','Website','Phone','Email','Address'];
 const FI_INSP_HEADERS = ['ID','Property_ID','Address','Inspection_Type','Status','Brand_ID','Client_Name','Client_Email','Inspector','Inspection_Date','Report_Token','Published_At','Published_Rev','Rev','Doc_Hash','Issue_Count','Photo_Count','Created_At','Updated_At','Active'].concat(Array.from({ length: FI_DATA_COLS }, (_, i) => 'Data_' + (i + 1)), ['Owner_ID','Owner_Name','Drive_Folder_ID','Drive_Folder_URL']);
-const FI_PHOTO_HEADERS = ['ID','Inspection_ID','Drive_File_ID','Mime','Bytes','Created_At','Active'];
+const FI_PHOTO_HEADERS = ['ID','Inspection_ID','Drive_File_ID','Mime','Bytes','Created_At','Active','Orig_Drive_File_ID','Orig_Mime','Orig_Bytes','Orig_At'];   // Orig_* (Nov 2 2026): the untouched full-resolution photo from the phone; Drive_File_ID stays the fast ~1600 px copy the report shows
 const FI_EMAIL_HEADERS = ['ID','Inspection_ID','To_Email','Subject','Result','Sent_At'];
 const FI_TYPE_TAB_HEADERS = ['ID','Name','Trade','Default_Severity','Areas','Detail','Likely_Cause','Recommended_Fix','Uses','Source','Active','Created_At','Updated_At'];
 const FI_TABS = { FI_Brands: FI_BRAND_HEADERS, FI_Inspections: FI_INSP_HEADERS, FI_Photos: FI_PHOTO_HEADERS, FI_Email_Log: FI_EMAIL_HEADERS, FI_Issue_Types: FI_TYPE_TAB_HEADERS };
@@ -41052,15 +41052,23 @@ const FI_SEVERITIES = ['urgent','high','medium','low','info'];
 const FI_CONDITIONS = ['good','fair','poor','nothing_to_do','not_inspected','na'];
 const FI_PAGE_BASE = 'https://ridge-co.github.io/RidgeCo';
 const FI_MAX_PHOTO_BYTES = 8 * 1024 * 1024;
+const FI_MAX_ORIG_BYTES = 30 * 1024 * 1024;   // Nov 2 2026: full-resolution originals (a 50 MP phone JPEG is 10-20 MB). Held in Worker memory twice while it is sent to Drive (60 MB of the 128 MB limit).
+const FI_ORIG_COLS = ['Orig_Drive_File_ID', 'Orig_Mime', 'Orig_Bytes', 'Orig_At'];
 const FI_ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
 
 let __fiTabsReady = false;
 async function fiRoute(env, label, fn) {
   try { return await fn(); }
   catch (e) {
+    // Oct 30 2026: Google's shared per-minute READ quota running out is a "busy, retry in a moment" state, not a bug. It used to leave here as a generic
+    // 500 'internal' (one P1 row per photo, and the phone gave up on the photo). Rethrow it so the Worker's top-level handler answers with the typed 429
+    // (busy:true, retry_after_seconds) plus ONE calm P2 sheets_quota_busy row, exactly like every other Hub route (see strHandleErr).
+    if (sheetsQuotaBusyError(e)) throw e;
     console.error('fi/' + label + ' failed:', e && e.message);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_route_error', Skill_Or_Endpoint: '/fi/' + label, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (_) { /* telemetry is best-effort; the error itself is returned below */ }
-    return fiErr(500, 'internal', 'The server hit an error (' + label + '). Nothing was reported as saved. Retry; if it repeats, tell Brett.', { detail: String((e && e.message) || e).slice(0, 160) });
+    let telemetryError = '';
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_route_error', Skill_Or_Endpoint: '/fi/' + label, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); }
+    catch (te) { telemetryError = String((te && te.message) || te).slice(0, 120); console.error('fi/' + label + ': could not log to Ops_Telemetry:', telemetryError, '| original:', e && e.message); }
+    return fiErr(500, 'internal', 'The server hit an error (' + label + '). Nothing was reported as saved. Retry; if it repeats, tell Brett.', Object.assign({ detail: String((e && e.message) || e).slice(0, 160) }, telemetryError ? { telemetry_error: telemetryError } : {}));
   }
 }
 function fiErr(status, error, message, extra) { return json(Object.assign({ ok: false, error, message }, extra || {}), status); }
@@ -41354,32 +41362,46 @@ async function fiEnsureTabs(env) {
   __fiTabsReady = true;
 }
 // Uncached read (a read-modify-write or verify must never see a stale 6s-cached copy).
+// Oct 30 2026: this used to be its own raw fetch loop (3 tries, ~2.4 s of waiting, invisible to the read meter, and its error text was not recognised as
+// the shared quota, so a busy minute became a 500 and the phone gave up on the photo). It now goes through sheetsRequest - the same 6-try backoff
+// (~15 s, Google's quota is per MINUTE), the read meter, and the "Sheets API error on GET" text that sheetsQuotaBusyError() recognises - after dropping
+// any cached or in-flight copy of the tab so the data is still always fresh.
 async function fiReadFresh(env, tab) {
-  for (let attempt = 1; ; attempt++) {
-    const token = await getAccessToken(env);
-    const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}/values/${tab}`, { headers: { Authorization: `Bearer ${token}` } });
-    const data = await res.json();
-    if (data.error) {
-      const code = data.error.code || res.status;
-      if ((code === 429 || code >= 500) && attempt < 4) { await new Promise(r => setTimeout(r, 400 * attempt)); continue; }
-      throw new Error(`FI: Sheets read of ${tab} failed: ${data.error.message || code}`);
-    }
-    const vals = data.values || [];
-    const headers = vals[0] || [];
-    const rows = vals.slice(1).map((r, i) => { const o = {}; headers.forEach((h, j) => { o[h] = r[j] == null ? '' : String(r[j]); }); return { o, rowNum: i + 2 }; });
-    return { headers, rows };
-  }
+  invalidateTabCache(tab);
+  const data = await sheetsRequest(env, 'GET', `/values/${tab}`);
+  const vals = (data && data.values) || [];
+  const headers = vals[0] || [];
+  const rows = vals.slice(1).map((r, i) => { const o = {}; headers.forEach((h, j) => { o[h] = r[j] == null ? '' : String(r[j]); }); return { o, rowNum: i + 2 }; });
+  return { headers, rows };
 }
 async function fiWriteRow(env, tab, headers, obj, rowNum) {
   if (!headers.length) throw new Error(`FI: ${tab} has no header row`);
   const vals = headers.map(h => (obj[h] === undefined || obj[h] === null) ? '' : String(obj[h]));
-  if (rowNum) await sheetsRequest(env, 'PUT', `/values/${tab}!A${rowNum}:${col(headers.length - 1)}${rowNum}?valueInputOption=RAW`, { values: [vals] });
-  else await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, { values: [vals] });
+  if (rowNum) return await sheetsRequest(env, 'PUT', `/values/${tab}!A${rowNum}:${col(headers.length - 1)}${rowNum}?valueInputOption=RAW`, { values: [vals] });
+  return await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, { values: [vals] });
 }
 async function fiFindInspection(env, id) {
   const t = await fiReadFresh(env, 'FI_Inspections');
   const hits = t.rows.filter(r => r.o.ID === id && r.o.Active !== 'FALSE');
   return { headers: t.headers, row: hits[0] || null, dupes: hits.length };
+}
+// Oct 30 2026: every photo used to re-read the WHOLE FI_Inspections tab (up to 8 rows x 360 KB of report JSON) twice just to learn the inspection exists
+// and which Drive folder it uses. Photos only ever need: "does it exist" + its folder id. POSITIVE answers only are remembered (an inspection that was
+// saved stays saved), trimmed to the few columns a photo needs, for 10 minutes per Worker instance. A miss, a row with no folder yet, or a failed upload
+// always goes to a real read, so a just-saved inspection is never reported as missing and a moved folder is re-found.
+const __fiInspCache = new Map();
+const FI_INSP_CACHE_MS = 10 * 60 * 1000;
+function fiInspCacheDrop(id) { __fiInspCache.delete(id); }
+async function fiFindInspectionForPhoto(env, id) {
+  const hit = __fiInspCache.get(id);
+  if (hit && Date.now() - hit.at < FI_INSP_CACHE_MS) return { headers: hit.headers, row: hit.row, dupes: 1, cached: true };
+  const f = await fiFindInspection(env, id);
+  if (f.row && f.row.o.Drive_Folder_ID) {
+    if (__fiInspCache.size >= 200) __fiInspCache.delete(__fiInspCache.keys().next().value);
+    const o = f.row.o;
+    __fiInspCache.set(id, { headers: f.headers, at: Date.now(), row: { rowNum: f.row.rowNum, o: { ID: o.ID, Active: o.Active, Drive_Folder_ID: o.Drive_Folder_ID, Drive_Folder_URL: o.Drive_Folder_URL || '' } } });
+  }
+  return f;
 }
 function fiBrandOut(o, withLogo) {
   const b = { id: o.ID, name: o.Name, primary_color: o.Primary_Color || '#1d4ed8', accent_color: o.Accent_Color || '#166534', tagline: o.Tagline || '', contact_line: o.Contact_Line || '', footer_text: o.Footer_Text || '', website: o.Website || '', phone: o.Phone || '', email: o.Email || '', address: o.Address || '', is_default: o.Is_Default === 'TRUE', has_logo: !!o.Logo_Data };
@@ -41480,15 +41502,31 @@ async function fiSave(env, body) {
   }
   return json({ ok: true, rev: newRev, hash, report_token: o.Report_Token, status: o.Status, unpublished: unpublish, updated_at: now, recreated: !row && baseRev > 0 });
 }
+const FI_PHOTO_COLS = ['ID', 'Inspection_ID', 'Drive_File_ID', 'Mime', 'Bytes', 'Created_At', 'Active'];
+// Oct 30 2026: a photo does NOT set up the tabs on every cold Worker instance any more (that cost ~7 Sheets reads each time, 30 instances in 30 minutes).
+// Photos are only uploaded for an inspection that already saved, so the tabs and columns exist. If a tab or column IS missing, the first read/write says so
+// and we run fiEnsureTabs once and try again - never a silent drop.
+function fiTabMissingError(e) { return /unable to parse range|requested entity was not found|FI: .* missing column/i.test(String((e && e.message) || e || '')); }
 async function fiPhotoUpload(env, request, url) {
   const inspId = url.searchParams.get('inspection_id') || '', photoId = url.searchParams.get('photo_id') || '';
   if (!FI_ID_RE.test(inspId) || !FI_ID_RE.test(photoId)) return fiErr(400, 'bad_id', 'inspection_id and photo_id are required.');
   const mime = (request.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) return fiErr(415, 'bad_type', 'Only JPEG, PNG or WebP photos are accepted.');
-  await fiEnsureTabs(env);
-  const { row } = await fiFindInspection(env, inspId);
+  if (url.searchParams.get('kind') === 'orig') return fiPhotoUploadOriginal(env, request, url, inspId, photoId, mime);
+  let found, pt;
+  try {
+    found = await fiFindInspectionForPhoto(env, inspId);
+    if (found.row) pt = await fiReadFresh(env, 'FI_Photos');
+  } catch (e) {
+    if (__fiTabsReady || !fiTabMissingError(e)) throw e;
+    await fiEnsureTabs(env);
+    found = await fiFindInspectionForPhoto(env, inspId);
+    if (found.row) pt = await fiReadFresh(env, 'FI_Photos');
+  }
+  const row = found.row;
   if (!row) return fiErr(409, 'inspection_not_saved', 'Save the inspection to the server first, then retry this photo.');
-  const pt = await fiReadFresh(env, 'FI_Photos');
+  if (!FI_PHOTO_COLS.every(c => pt.headers.includes(c))) { await fiEnsureTabs(env); pt = await fiReadFresh(env, 'FI_Photos'); }
+  if (!FI_PHOTO_COLS.every(c => pt.headers.includes(c))) throw new Error('FI: FI_Photos is missing column ' + FI_PHOTO_COLS.filter(c => !pt.headers.includes(c)).join(', '));
   const ex = pt.rows.find(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
   if (ex) return json({ ok: true, existing: true, photo_id: photoId });
   const buf = await request.arrayBuffer();
@@ -41498,38 +41536,145 @@ async function fiPhotoUpload(env, request, url) {
   if (!root) return fiErr(500, 'not_configured', 'DRIVE_PROPERTIES_ROOT is not configured.');
   const token = await getAccessToken(env);
   let folder;
-  try { folder = await fiInspectionFolder(env, token, row, (await fiFindInspection(env, inspId)).headers, false); }
-  catch (e) { return fiErr(502, 'drive_folder', 'Could not set up the property’s Drive folder: ' + String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
+  try { folder = await fiInspectionFolder(env, token, row, found.headers, false); }
+  catch (e) { if (sheetsQuotaBusyError(e)) throw e; return fiErr(502, 'drive_folder', 'Could not set up the property’s Drive folder: ' + String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
   const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
   let shared;
   try { shared = await fiDriveSharedRoot(token, root); } catch (e) { return fiErr(502, 'drive_folder', String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
   let up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, folder.id, shared);
   if ((!up || !up.id) && row.o.Drive_Folder_ID) {
-    // The remembered folder may have been deleted or moved: look it up again once, then retry.
+    // The remembered folder may have been deleted or moved: forget the cached copy, look it up again once (a real read), then retry.
+    fiInspCacheDrop(inspId);
     try { const cur = await fiFindInspection(env, inspId); folder = await fiInspectionFolder(env, token, cur.row, cur.headers, true); up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, folder.id, shared); }
-    catch (e) { return fiErr(502, 'drive_folder', 'The Drive folder could not be re-created: ' + String((e && e.message) || e).slice(0, 160)); }
+    catch (e) { if (sheetsQuotaBusyError(e)) throw e; return fiErr(502, 'drive_folder', 'The Drive folder could not be re-created: ' + String((e && e.message) || e).slice(0, 160)); }
   }
   if (!up || !up.id) return fiErr(502, 'drive_upload', 'Drive did not accept the photo. Retry.');
   if (up.size !== undefined && Number(up.size) !== buf.byteLength) return fiErr(502, 'drive_size_mismatch', 'Drive stored a different number of bytes than were sent. Retry.');
-  await fiWriteRow(env, 'FI_Photos', pt.headers, { ID: photoId, Inspection_ID: inspId, Drive_File_ID: up.id, Mime: mime, Bytes: buf.byteLength, Created_At: new Date().toISOString(), Active: 'TRUE' }, 0);
-  const chk = await fiReadFresh(env, 'FI_Photos');
-  const hits = chk.rows.filter(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
-  if (hits.length !== 1 || hits[0].o.Drive_File_ID !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
+  const wrote = await fiWriteRow(env, 'FI_Photos', pt.headers, { ID: photoId, Inspection_ID: inspId, Drive_File_ID: up.id, Mime: mime, Bytes: buf.byteLength, Created_At: new Date().toISOString(), Active: 'TRUE' }, 0);
+  // Verify the write by reading back just the row the append reported (one tiny read), not the whole tab. If the append did not say where it landed,
+  // fall back to the full-tab check - a write is never reported saved without a read-back.
+  const rr = /^[A-Za-z0-9_]+!([A-Z]+)(\d+):([A-Z]+)(\d+)$/.exec(String((wrote && wrote.updates && wrote.updates.updatedRange) || ''));
+  if (rr && rr[2] === rr[4] && Number(rr[2]) >= 2) {
+    const back = await sheetsRequest(env, 'GET', `/values/FI_Photos!A${rr[2]}:${col(pt.headers.length - 1)}${rr[2]}`);
+    const v = (back && back.values && back.values[0]) || [];
+    if (v[pt.headers.indexOf('ID')] !== photoId || v[pt.headers.indexOf('Drive_File_ID')] !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
+  } else {
+    const chk = await fiReadFresh(env, 'FI_Photos');
+    const hits = chk.rows.filter(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
+    if (hits.length !== 1 || hits[0].o.Drive_File_ID !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
+  }
+  fiViewCacheDropInsp(inspId);   // a photo that just arrived must be viewable at once, not 404 until the lookup list ages out
   return json({ ok: true, photo_id: photoId, bytes: buf.byteLength });
+}
+// ── Full-size photos (Nov 2 2026, Brett: "full size from original photo. they need as much detail as possible", links "indefinitely") ──
+// The phone still uploads the fast ~1600 px copy first (the report and PDF use it). It then sends the UNTOUCHED original as a second file
+// (POST /fi/photo?kind=orig): stored next to the copy in the inspection's Drive folder and recorded on the same FI_Photos row (Orig_*).
+// Nothing is re-encoded here: the bytes the phone sent are the bytes a recipient downloads. A photo with no original (everything uploaded before
+// this build) falls back to the ~1600 px copy and the report says so; it never pretends.
+async function fiPhotoUploadOriginal(env, request, url, inspId, photoId, mime) {
+  let found, pt;
+  try {
+    found = await fiFindInspectionForPhoto(env, inspId);
+    if (found.row) pt = await fiReadFresh(env, 'FI_Photos');
+  } catch (e) {
+    if (__fiTabsReady || !fiTabMissingError(e)) throw e;
+    await fiEnsureTabs(env);
+    found = await fiFindInspectionForPhoto(env, inspId);
+    if (found.row) pt = await fiReadFresh(env, 'FI_Photos');
+  }
+  const row = found.row;
+  if (!row) return fiErr(409, 'inspection_not_saved', 'Save the inspection to the server first, then retry this photo.');
+  if (!FI_ORIG_COLS.every(c => pt.headers.includes(c))) { await ensureColumns(env, 'FI_Photos', FI_PHOTO_HEADERS); pt = await fiReadFresh(env, 'FI_Photos'); }   // an FI_Photos tab made before this feature gets the Orig_* columns here (ensureColumns logs its own failures)
+  if (!FI_ORIG_COLS.every(c => pt.headers.includes(c))) throw new Error('FI: FI_Photos is missing column ' + FI_ORIG_COLS.filter(c => !pt.headers.includes(c)).join(', '));
+  const ph = pt.rows.find(r => r.o.ID === photoId && r.o.Inspection_ID === inspId && r.o.Active !== 'FALSE');
+  if (!ph) return fiErr(409, 'photo_not_saved', 'The standard copy of this photo has not reached the server yet. It goes first; the full-size copy follows.');
+  if (ph.o.Orig_Drive_File_ID) return json({ ok: true, existing: true, photo_id: photoId });
+  const buf = await request.arrayBuffer();
+  if (!buf.byteLength) return fiErr(400, 'empty', 'The photo was empty.');
+  if (buf.byteLength > FI_MAX_ORIG_BYTES) return fiErr(413, 'too_large', 'The full-size photo is larger than 30 MB, so only the standard copy is kept.');
+  const root = env.DRIVE_PROPERTIES_ROOT;
+  if (!root) return fiErr(500, 'not_configured', 'DRIVE_PROPERTIES_ROOT is not configured.');
+  const token = await getAccessToken(env);
+  let folder, shared;
+  try { folder = await fiInspectionFolder(env, token, row, found.headers, false); }
+  catch (e) { if (sheetsQuotaBusyError(e)) throw e; return fiErr(502, 'drive_folder', 'Could not set up the property’s Drive folder: ' + String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
+  try { shared = await fiDriveSharedRoot(token, root); } catch (e) { return fiErr(502, 'drive_folder', String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
+  const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+  let up = await uploadFileToDrive(token, buf, `${photoId}_original.${ext}`, mime, folder.id, shared);
+  if ((!up || !up.id) && row.o.Drive_Folder_ID) {
+    fiInspCacheDrop(inspId);
+    try { const cur = await fiFindInspection(env, inspId); folder = await fiInspectionFolder(env, token, cur.row, cur.headers, true); up = await uploadFileToDrive(token, buf, `${photoId}_original.${ext}`, mime, folder.id, shared); }
+    catch (e) { if (sheetsQuotaBusyError(e)) throw e; return fiErr(502, 'drive_folder', 'The Drive folder could not be re-created: ' + String((e && e.message) || e).slice(0, 160)); }
+  }
+  if (!up || !up.id) return fiErr(502, 'drive_upload', 'Drive did not accept the full-size photo. Retry.');
+  if (up.size !== undefined && Number(up.size) !== buf.byteLength) return fiErr(502, 'drive_size_mismatch', 'Drive stored a different number of bytes than were sent. Retry.');
+  await fiWriteRow(env, 'FI_Photos', pt.headers, Object.assign({}, ph.o, { Orig_Drive_File_ID: up.id, Orig_Mime: mime, Orig_Bytes: buf.byteLength, Orig_At: new Date().toISOString() }), ph.rowNum);
+  // Read back just that row: the pointer to the original must really be on it before the phone is told the original is safe.
+  const back = await sheetsRequest(env, 'GET', `/values/FI_Photos!A${ph.rowNum}:${col(pt.headers.length - 1)}${ph.rowNum}`);
+  const v = (back && back.values && back.values[0]) || [];
+  if (v[pt.headers.indexOf('ID')] !== photoId || v[pt.headers.indexOf('Orig_Drive_File_ID')] !== up.id || String(v[pt.headers.indexOf('Orig_Bytes')]) !== String(buf.byteLength)) return fiErr(500, 'verify_failed', 'The full-size photo record could not be verified. Retry.');
+  fiViewCacheDropInsp(inspId);
+  return json({ ok: true, photo_id: photoId, bytes: buf.byteLength, original: true });
+}
+// Per Worker instance: report token -> { inspId, photos: Map(photoId -> {drive, mime, orig, origMime, origBytes}) }. Looking a photo up used to read the whole
+// FI_Inspections tab AND the whole FI_Photos tab from Google Sheets for EVERY image (a 139-photo report = ~280 reads against a shared limit of 60 a minute),
+// so most images failed ("Photo could not be loaded") and the PDF printed with holes. Now one pair of reads fills the whole inspection for a few minutes,
+// concurrent first requests share it, and /fi/report fills it for free. Positive answers only expire on a clock (a few minutes); an unknown photo triggers
+// at most one refresh per FI_VIEW_REFRESH_GAP_MS, and an unknown token is remembered as unknown for 30 s so a scan cannot drain the Sheets quota.
+const __fiViewCache = new Map(), __fiViewInflight = new Map(), __fiViewMiss = new Map();
+const FI_VIEW_CACHE_MS = 3 * 60 * 1000, FI_VIEW_REFRESH_GAP_MS = 15 * 1000, FI_VIEW_MISS_MS = 30 * 1000;
+function fiViewPhotoMap(rows, inspId) {
+  const m = new Map();
+  for (const x of rows) if (x.o.Inspection_ID === inspId && x.o.Active !== 'FALSE' && x.o.Drive_File_ID) m.set(x.o.ID, { drive: x.o.Drive_File_ID, mime: x.o.Mime || 'image/jpeg', orig: x.o.Orig_Drive_File_ID || '', origMime: x.o.Orig_Mime || '', origBytes: Number(x.o.Orig_Bytes) || 0 });
+  return m;
+}
+function fiViewCacheSet(token, inspId, rows) {
+  if (__fiViewCache.size >= 100) __fiViewCache.delete(__fiViewCache.keys().next().value);
+  __fiViewCache.set(token, { at: Date.now(), inspId, photos: fiViewPhotoMap(rows, inspId) });
+  __fiViewMiss.delete(token);
+}
+function fiViewCacheDropInsp(inspId) { for (const [k, v] of __fiViewCache) if (v.inspId === inspId) __fiViewCache.delete(k); }
+async function fiViewLoad(env, token) {
+  if (__fiViewInflight.has(token)) return __fiViewInflight.get(token);
+  const pr = (async () => {
+    const it = await fiReadFresh(env, 'FI_Inspections');
+    const insp = it.rows.find(x => x.o.Report_Token === token && x.o.Active !== 'FALSE');
+    if (!insp) { __fiViewMiss.set(token, Date.now()); if (__fiViewMiss.size > 200) __fiViewMiss.delete(__fiViewMiss.keys().next().value); return null; }
+    const pt = await fiReadFresh(env, 'FI_Photos');
+    fiViewCacheSet(token, insp.o.ID, pt.rows);
+    return __fiViewCache.get(token);
+  })();
+  __fiViewInflight.set(token, pr);
+  try { return await pr; } finally { __fiViewInflight.delete(token); }
+}
+async function fiViewLookup(env, token, photoId) {
+  const miss = __fiViewMiss.get(token);
+  if (miss && Date.now() - miss < FI_VIEW_MISS_MS) return null;
+  let e = __fiViewCache.get(token);
+  const age = e ? Date.now() - e.at : Infinity;
+  if (e && age < FI_VIEW_CACHE_MS && e.photos.has(photoId)) return e.photos.get(photoId);
+  if (e && age < FI_VIEW_REFRESH_GAP_MS) return null;   // refreshed moments ago and it is still not there
+  e = await fiViewLoad(env, token);
+  return e ? (e.photos.get(photoId) || null) : null;
 }
 async function fiPhotoView(env, url) {
   const r = url.searchParams.get('r') || '', p = url.searchParams.get('p') || '';
   if (!r || !FI_ID_RE.test(p)) return fiErr(404, 'not_found', 'Not found.');
-  const it = await fiReadFresh(env, 'FI_Inspections');
-  const insp = it.rows.find(x => x.o.Report_Token === r && x.o.Active !== 'FALSE');
-  if (!insp) return fiErr(404, 'not_found', 'Not found.');
-  const pt = await fiReadFresh(env, 'FI_Photos');
-  const ph = pt.rows.find(x => x.o.ID === p && x.o.Inspection_ID === insp.o.ID && x.o.Active !== 'FALSE');
+  const full = url.searchParams.get('full') === '1', dl = url.searchParams.get('dl') === '1';
+  const ph = await fiViewLookup(env, r, p);
   if (!ph) return fiErr(404, 'not_found', 'Not found.');
+  const useOrig = full && !!ph.orig;
+  const fileId = useOrig ? ph.orig : ph.drive, mime = (useOrig ? ph.origMime : ph.mime) || 'image/jpeg';
   const token = await getAccessToken(env);
-  const dr = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(ph.o.Drive_File_ID)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
-  if (!dr.ok || !dr.body) return fiErr(502, 'drive_read', 'Could not load the photo.');
-  return new Response(dr.body, { status: 200, headers: { ...CORS, 'Content-Type': ph.o.Mime || 'image/jpeg', 'Cache-Control': 'private, max-age=3600' } });
+  const get = () => fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+  let dr = await get();
+  if (!dr.ok && (dr.status === 429 || dr.status >= 500)) { await new Promise(res => setTimeout(res, 700)); dr = await get(); }   // Drive hiccup: one more try before the page sees a broken image
+  if (!dr.ok || !dr.body) return fiErr(502, 'drive_read', 'Could not load the photo.', { drive_status: dr.status });
+  const ext = /png/i.test(mime) ? 'png' : /webp/i.test(mime) ? 'webp' : 'jpg';
+  const headers = { ...CORS, 'Content-Type': mime, 'Cache-Control': 'private, max-age=86400', 'X-Photo-Variant': useOrig ? 'original' : 'standard', 'Access-Control-Expose-Headers': 'X-Photo-Variant, Content-Length' };
+  const len = dr.headers && dr.headers.get && dr.headers.get('Content-Length'); if (len) headers['Content-Length'] = len;
+  if (dl) headers['Content-Disposition'] = `attachment; filename="inspection-photo-${p}${useOrig ? '-original' : ''}.${ext}"`;
+  return new Response(dr.body, { status: 200, headers });
 }
 async function fiReport(env, request, url) {
   const r = url.searchParams.get('r') || '';
@@ -41547,6 +41692,9 @@ async function fiReport(env, request, url) {
   const pt = await fiReadFresh(env, 'FI_Photos');
   const have = new Set(pt.rows.filter(x => x.o.Inspection_ID === insp.o.ID && x.o.Active !== 'FALSE').map(x => x.o.ID));
   const photoIds = fiPhotoIds(doc).filter(p => have.has(p));
+  fiViewCacheSet(r, insp.o.ID, pt.rows);   // the report page is about to request every photo: answer them from this read, not from a read each
+  const fullMap = fiViewPhotoMap(pt.rows, insp.o.ID), photoFull = {};
+  for (const p of photoIds) { const m = fullMap.get(p); if (m && m.orig) photoFull[p] = m.origBytes; }   // photo id -> original size in bytes (only photos that HAVE an original)
   const summaryOk = !!(doc.summary && doc.summary.accepted && doc.summary.fp === fiFingerprint(doc));
   if (!summaryOk) delete doc.summary;
   delete doc.dictation_log;
@@ -41556,7 +41704,7 @@ async function fiReport(env, request, url) {
   delete doc.booking;   // the requester's phone/email and booking notes are internal - never on the public report
   for (const a of (doc.areas || [])) { delete a.pending_text; delete a.dictation; }
   fiScrubDocForReport(doc);
-  return json({ ok: true, preview: !published, inspection: Object.assign(fiInspHeaderOut(insp.o), { property_id: '' }), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, rollup: fiTradeRollup(doc) });
+  return json({ ok: true, preview: !published, inspection: Object.assign(fiInspHeaderOut(insp.o), { property_id: '' }), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, photo_full: photoFull, rollup: fiTradeRollup(doc) });
 }
 async function fiStructure(env, body) {
   body = body || {};
@@ -41848,6 +41996,7 @@ const FI_EQUIP_KINDS = {
   washer: { label: 'Washer', extra: [] },
   dryer: { label: 'Dryer', extra: ['fuel'] },
   disposal: { label: 'Garbage disposal', extra: [] },
+  electrical_panel: { label: 'Electrical panel', extra: ['amperage', 'spaces'] },   // Nov 2 2026: breaker box / service panel; the label is read from a photo like any other equipment label
   other: { label: 'Other equipment', extra: [] },
 };
 function fiEquipFields(kind) { const k = FI_EQUIP_KINDS[kind]; return k ? ['name'].concat(FI_EQUIP_COMMON, k.extra) : []; }
@@ -41860,6 +42009,7 @@ function fiNormalizeEquipment(raw) {
   if (kind === 'stove' || kind === 'oven' || kind === 'range_oven' || kind === 'stove_oven') kind = 'range';
   if (kind === 'fridge') kind = 'refrigerator';
   if (kind === 'hot_water_heater' || kind === 'waterheater') kind = 'water_heater';
+  if (['panel', 'electrical', 'electric_panel', 'electrical_panel', 'breaker_panel', 'breaker_box', 'service_panel', 'main_panel', 'sub_panel', 'subpanel', 'load_center', 'fuse_box', 'electric_box', 'electrical_box'].includes(kind)) kind = 'electrical_panel';
   if (!FI_EQUIP_KINDS[kind]) kind = 'other';
   const out = { kind };
   let any = false;
@@ -42338,7 +42488,7 @@ Rules:
 - severity: urgent = safety hazard or active damage needing action now; high = fix soon, will worsen; medium = next opportunity; low = cosmetic/minor; info = observation only.
 - Anything only the TENANT can address (debris, clutter, trash, pet or yard issues, blocked access) uses trade "tenant_action" and the fix is the request to the tenant.
 - If the property was built before 1978 and the notes mention peeling, chipping or deteriorated paint, add "Pre-1978 property: possible lead-paint concern" to the detail, use severity at least high, and recommend lead-safe repair practices. Never state that lead IS present.
-- Equipment details spoken (brand, model, serial, year, filter size, fuel, capacity, tonnage) go in "equipment" for the area where the equipment is (furnace/boiler/water heater are usually in a utility/HVAC/basement area). Numbers heard by voice may be wrong: say so in the equipment notes ("heard by voice - verify against the label").
+- Equipment details spoken (brand, model, serial, year, filter size, fuel, capacity, tonnage; for an electrical panel: brand, model, amperage like 100A or 200A, number of breaker spaces) go in "equipment" (kind electrical_panel for a breaker box / service panel) for the area where the equipment is (furnace/boiler/water heater are usually in a utility/HVAC/basement area; the panel is usually in its own Electrical Panel area or the basement). Numbers heard by voice may be wrong: say so in the equipment notes ("heard by voice - verify against the label").
 - "conditions": only when the inspector clearly states an area is good/fair/poor or has nothing to do.
 - "new_areas": only when the notes clearly describe a space that is not in the area list at all.
 - Wording: never write "licensed", "certified", "qualified" or "professional" before a contractor or trade, and never name a specific trade to hire (no "licensed electrician", "HVAC contractor", "plumber", "pest control"); whenever a repair needs someone, say "an appropriate contractor". Do not mention licensing.
@@ -42349,7 +42499,7 @@ function fiBuildRoutePrompt(b, catalog) {
   const types = catalog.slice(0, 90).map(t => t.name).join('; ');
   const notes = (b.notes || []).map(n => `=== NOTE ${fiStr(n.id, 40)}${n.label ? ' (' + fiStr(n.label, 80) + ')' : ''} ===\n${fiStr(n.text, 30000)}`).join('\n\n');
   const proposed = (b.proposed || []).slice(0, 80).map(t => `- ${fiStr(t, 80)}`).join('\n') || '(none)';
-  return `Property: ${fiStr(b.address, 160) || 'unknown'}${b.pre1978 ? ' - BUILT BEFORE 1978' : ''}\nInspection type: ${fiStr(b.inspection_type, 40) || 'periodic'}\n\nAreas (use these area_ids exactly):\n${areas}\n\nKnown issue types: ${types || '(none)'}\n\nAlready proposed from earlier notes (do not repeat):\n${proposed}\n\n${notes}\n\nReturn JSON only: {"issues":[{"area_id":"","note_id":"","quote":"","type":"","title":"","trade":"","severity":"","detail":"","likely_cause":"","recommended_fix":"","fix_source":"inspector|suggested"}],"equipment":[{"area_id":"","note_id":"","quote":"","kind":"","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","notes":""}],"conditions":[{"area_id":"","condition":"good|fair|poor|nothing_to_do","note_id":""}],"new_areas":[{"name":"","note_id":"","quote":""}],"unassigned":[{"note_id":"","text":"","why":""}]}\nAllowed trades: ${FI_TRADES.join(', ')}. Allowed severities: ${FI_SEVERITIES.join(', ')}. Equipment kinds: ${Object.keys(FI_EQUIP_KINDS).join(', ')}.`;
+  return `Property: ${fiStr(b.address, 160) || 'unknown'}${b.pre1978 ? ' - BUILT BEFORE 1978' : ''}\nInspection type: ${fiStr(b.inspection_type, 40) || 'periodic'}\n\nAreas (use these area_ids exactly):\n${areas}\n\nKnown issue types: ${types || '(none)'}\n\nAlready proposed from earlier notes (do not repeat):\n${proposed}\n\n${notes}\n\nReturn JSON only: {"issues":[{"area_id":"","note_id":"","quote":"","type":"","title":"","trade":"","severity":"","detail":"","likely_cause":"","recommended_fix":"","fix_source":"inspector|suggested"}],"equipment":[{"area_id":"","note_id":"","quote":"","kind":"","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","amperage":"","spaces":"","notes":""}],"conditions":[{"area_id":"","condition":"good|fair|poor|nothing_to_do","note_id":""}],"new_areas":[{"name":"","note_id":"","quote":""}],"unassigned":[{"note_id":"","text":"","why":""}]}\nAllowed trades: ${FI_TRADES.join(', ')}. Allowed severities: ${FI_SEVERITIES.join(', ')}. Equipment kinds: ${Object.keys(FI_EQUIP_KINDS).join(', ')}.`;
 }
 // Pure: validates/normalizes the AI routing output against the real area list. Anything that cannot be placed safely goes to "unassigned" - nothing is dropped.
 function fiNormalizeRoute(parsed, areaIds) {
@@ -42399,7 +42549,7 @@ async function fiRouteNotes(env, body) {
 }
 
 // ── Read a manufacturer label / data plate from a photo already uploaded to the inspection (Claude vision). Proposes values only; the inspector confirms. ──
-const FI_LABEL_SYSTEM = `You read the manufacturer's data plate / rating label in a photo of home equipment (furnace, boiler, air conditioner, water heater, appliance). Report ONLY text that is actually printed and legible. Never guess, never decode a serial number into a date unless a manufacture date is printed, never invent a model number. If a field is not visible, leave it empty. Copy model and serial numbers character for character. Output a single JSON object and nothing else.`;
+const FI_LABEL_SYSTEM = `You read the manufacturer's data plate / rating label in a photo of home equipment (furnace, boiler, air conditioner, water heater, appliance) or of an electrical service panel / breaker box (the label inside the door or on the cover: manufacturer, model or catalog number, amperage rating, number of spaces). Report ONLY text that is actually printed and legible. Never guess, never decode a serial number into a date unless a manufacture date is printed, never invent a model number. If a field is not visible, leave it empty. Copy model and serial numbers character for character. Output a single JSON object and nothing else.`;
 async function fiReadLabel(env, body) {
   body = body || {};
   const inspId = String(body.inspection_id || ''), photoId = String(body.photo_id || '');
@@ -42415,7 +42565,7 @@ async function fiReadLabel(env, body) {
   const bytes = new Uint8Array(await dr.arrayBuffer());
   const mime = ph.o.Mime || 'image/jpeg';
   const kind = FI_EQUIP_KINDS[body.kind] ? body.kind : '';
-  const prompt = `${kind ? 'This is a ' + FI_EQUIP_KINDS[kind].label.toLowerCase() + '. ' : ''}Read the label.\nReturn JSON only: {"readable":true,"kind":"${Object.keys(FI_EQUIP_KINDS).join('|')}","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","notes":""}\n"year" only if a manufacture date or year is printed (copy it as printed). "notes" may hold other printed ratings (BTU, voltage) in one short line. Set readable false if no label text can be read.`;
+  const prompt = `${kind ? 'This is a ' + FI_EQUIP_KINDS[kind].label.toLowerCase() + '. ' : ''}Read the label.\nReturn JSON only: {"readable":true,"kind":"${Object.keys(FI_EQUIP_KINDS).join('|')}","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","amperage":"","spaces":"","notes":""}\n"year" only if a manufacture date or year is printed (copy it as printed). "notes" may hold other printed ratings (BTU, voltage) in one short line. For an ELECTRICAL PANEL: brand = the panel manufacturer (e.g. Square D, Eaton / Cutler-Hammer, Siemens, GE, Murray, Federal Pacific, Zinsco, Challenger); model = the panel or enclosure model / catalog number exactly as printed (not a breaker's number); "amperage" = the panel or main bus / main breaker rating printed on it (e.g. 100A, 200A), never the amp rating of a single circuit breaker; "spaces" = the number of spaces / circuits the panel is rated for if printed (e.g. 20, 40); put voltage, phase, short-circuit rating or a "max main" in notes. If only the door directory (handwritten circuit list) is visible and no manufacturer label, set readable false. Set readable false if no label text can be read.`;
   let ai;
   try { ai = await routeAI(env, { type: 'fi_read_label', tier: 'REASON', schema: true, system: FI_LABEL_SYSTEM, prompt, media: { type: 'image', source: { type: 'base64', media_type: mime, data: bytesToB64(bytes) } }, maxTokens: 600, source: 'field-inspect' }); }
   catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Automatic label reading is paused (AI credit) - type the details by hand.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not read this photo. Type the details by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
