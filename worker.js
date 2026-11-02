@@ -1012,6 +1012,7 @@ const _hubWorkerCore = {
         if (path === '/estimate/decline')         return await estimateDecline(env, body);
         if (path === '/wo/deposit-approve')       return await depositApprove(env, body);
         if (path === '/wo/deposit-clear')         return await depositClear(env, body);
+        if (path === '/wo/deposit-link')          return await depositLink(env, body);
         if (path === '/geocode-property')         return await geocodeProperty(env, body);
         if (path === '/save-property-clusters')   return await savePropertyClusters(env, body);
         if (path === '/import-key-registry')      return await importKeyRegistry(env, body);
