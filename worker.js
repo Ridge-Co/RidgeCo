@@ -1012,6 +1012,7 @@ const _hubWorkerCore = {
         if (path === '/estimate/decline')         return await estimateDecline(env, body);
         if (path === '/wo/deposit-approve')       return await depositApprove(env, body);
         if (path === '/wo/deposit-clear')         return await depositClear(env, body);
+        if (path === '/wo/deposit-link')          return await depositLink(env, body);
         if (path === '/geocode-property')         return await geocodeProperty(env, body);
         if (path === '/save-property-clusters')   return await savePropertyClusters(env, body);
         if (path === '/import-key-registry')      return await importKeyRegistry(env, body);
@@ -1181,6 +1182,7 @@ const _hubWorkerCore = {
         if (path === '/scope-proposal/unbook-final') return await scopeProposalUnbookFinal(env, body);
         if (path === '/scope-proposal/bill-milestones') return await scopeProposalBillMilestones(env, body);
         if (path === '/scope-proposal/milestone/set-pending-info') return await setMilestonePendingInfo(env, body);
+        if (path === '/scope-proposal/milestone/set-amount') return await setMilestoneCustomerAmount(env, body);
         if (path === '/scope-proposal/adjust-bill') return await scopeProposalAdjustBill(env, body);
         if (path === '/fi/save')                  return await fiRoute(env, 'save', () => fiSave(env, body));
         if (path === '/fi/publish')               return await fiRoute(env, 'publish', () => fiPublish(env, body));
@@ -6159,6 +6161,67 @@ async function setMilestonePendingInfo(env, body) {
     Pending_Info_Set_Date: pending ? new Date().toISOString() : '',
   });
   return json({ success: true, id: msId, signature_id: sigId, pending_info: pending, note: pending ? note : '' });
+}
+
+// POST /scope-proposal/milestone/set-amount (admin) { signature_id, milestone_id, customer_amount, reason, preview_only?, set_by? }
+// Nov 2 2026 (WO-1253 / Scope 11): the Final milestone was frozen at the signed $655 and the only way to change what the customer is billed was to regenerate the
+// proposal, which re-sends it for signature. This is a BILLING-ONLY edit of one still-PENDING milestone's customer amount. It sends nothing to the customer (no
+// signature, no email, no text), touches neither QuickBooks nor the vendor side (Vendor_Amount is unchanged), and leaves the signed Scope_Signatures row exactly
+// as signed. The edit is audited on the milestone row (original amount, reason, who, when) and in Ops_Telemetry. A milestone that is already billed is refused.
+async function setMilestoneCustomerAmount(env, body) {
+  const msId = String((body && body.milestone_id) || '').trim();
+  const sigId = String((body && body.signature_id) || '').trim();
+  if (!msId || !sigId) return json({ ok: false, error: 'signature_id and milestone_id required' }, 400);
+  const amount = money2(parseFloat(body.customer_amount));
+  if (!Number.isFinite(amount) || amount <= 0) return json({ ok: false, error: 'customer_amount must be a positive number' }, 400);
+  if (amount > 500000) return json({ ok: false, error: 'customer_amount looks wrong ($' + amount.toFixed(2) + ') - nothing was changed.' }, 400);
+  const reason = String(body.reason || '').trim();
+  if (reason.length < 3) return json({ ok: false, error: 'A reason is required (it is kept on the milestone as the audit note).' }, 400);
+  const previewOnly = body.preview_only === true;
+  const setBy = String(body.set_by || 'Brett').slice(0, 60);
+
+  let sigs, milestones;
+  try {
+    await paymentMilestonesTab(env);
+    [sigs, milestones] = await Promise.all([fetchTab(env, 'Scope_Signatures'), fetchTab(env, 'Payment_Milestones')]);
+  } catch (e) { return json({ ok: false, error: 'Could not read the proposal data, so nothing was changed (' + String((e && e.message) || e).slice(0, 160) + '). Try again in a minute.' }, 502); }
+  const sig = sigs.find(r => String(r.ID) === sigId && String(r.Active || '').toUpperCase() !== 'FALSE');
+  if (!sig) return json({ ok: false, error: 'signature not found' }, 404);
+  const m = milestones.find(x => String(x.ID) === msId && String(x.Signature_ID) === sigId && String(x.Active || '').toUpperCase() !== 'FALSE');
+  if (!m) return json({ ok: false, error: 'Milestone ' + msId + ' not found on signature ' + sigId }, 404);
+  if ((m.Status || 'pending') !== 'pending' || String(m.QB_Invoice_ID || '').trim()) {
+    return json({ ok: false, error: 'The "' + (m.Label || 'milestone') + '" payment is already billed' + (m.QB_Invoice_Number ? ' (invoice ' + m.QB_Invoice_Number + ')' : '') + ', so its amount cannot be edited here. Nothing was changed.' }, 409);
+  }
+  const oldAmount = money2(+m.Customer_Amount || 0);
+  if (Math.abs(amount - oldAmount) < 0.005) return json({ ok: false, error: 'That milestone is already $' + oldAmount.toFixed(2) + '. Nothing was changed.' }, 400);
+
+  const live = milestones.filter(x => String(x.Signature_ID) === sigId && String(x.Active || '').toUpperCase() !== 'FALSE');
+  const newTotal = money2(live.reduce((t, x) => t + (String(x.ID) === msId ? amount : (+x.Customer_Amount || 0)), 0));
+  const signedTotal = money2(+sig.Subtotal || 0);
+  const warnings = [];
+  if (String(m.Pending_Info || '').toUpperCase() === 'TRUE') warnings.push('This milestone is flagged Pending Info (' + (m.Pending_Info_Note || 'no note') + ') - that flag is unchanged.');
+  if (Math.abs(newTotal - signedTotal) > 0.005) warnings.push('All payments on this proposal now add up to $' + newTotal.toFixed(2) + ', not the $' + signedTotal.toFixed(2) + ' the customer signed. The signed record is NOT changed and nothing is sent to the customer.');
+  const vendorSide = money2(+m.Vendor_Amount || 0);
+  const preview = { signature_id: sigId, milestone_id: msId, label: m.Label || '', old_customer_amount: oldAmount, new_customer_amount: amount, change: money2(amount - oldAmount),
+    vendor_amount_unchanged: vendorSide, all_payments_total_after: newTotal, signed_total: signedTotal, reason, sends_nothing_to_customer: true, touches_quickbooks: false };
+  if (previewOnly) return json({ ok: true, preview_only: true, preview, warnings });
+
+  try {
+    await ensureColumns(env, 'Payment_Milestones', ['Original_Customer_Amount', 'Amount_Edit_Reason', 'Amount_Edited_By', 'Amount_Edited_Date']);
+    await updateRowVerified(env, 'Payment_Milestones', msId, {
+      Customer_Amount: String(amount), Calc_Mode: 'flat', Flat_Customer_Amount: String(amount),
+      Original_Customer_Amount: String(m.Original_Customer_Amount || '').trim() || String(oldAmount),
+      Amount_Edit_Reason: reason.slice(0, 500), Amount_Edited_By: setBy, Amount_Edited_Date: new Date().toISOString(),
+    });
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 220);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'milestone_amount_edit_failed', Skill_Or_Endpoint: '/scope-proposal/milestone/set-amount', Success: 'FALSE', Notes: ('sig=' + sigId + ' ms=' + msId + ' ' + msg).slice(0, 480) }); }
+    catch (e2) { return json({ ok: false, error: 'Saving the new amount failed (' + msg + ') and that could not be logged either. Check milestone ' + msId + ' before billing.' }, 500); }
+    return json({ ok: false, error: 'Saving the new amount failed (' + msg + '). The milestone may be unchanged - check it before billing.' }, 500);
+  }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'milestone_amount_edited', Skill_Or_Endpoint: '/scope-proposal/milestone/set-amount', Success: 'TRUE', Notes: ('sig=' + sigId + ' ms=' + msId + ' ' + oldAmount.toFixed(2) + ' -> ' + amount.toFixed(2) + ' by ' + setBy + ': ' + reason).slice(0, 480) }); }
+  catch (e) { warnings.push('The amount was saved, but the audit row could not be written to Ops_Telemetry (' + String((e && e.message) || e).slice(0, 120) + '). The reason is still stored on the milestone.'); }
+  return json({ ok: true, preview, warnings });
 }
 
 async function scopeProposalBillMilestones(env, body) {
@@ -12963,6 +13026,102 @@ async function depositClear(env, body) {
     Deposit_QB_Bill_ID: '', Deposit_QB_Bill_Number: '', Deposit_Fee: '', Deposit_Applied_Bill: '', Deposit_Applied_Date: '',
   });
   return json({ success: true, wo_id: woId, qb_note: qbNote });
+}
+
+// POST /wo/deposit-link { wo_id, qb_bill_id, vendor_id?, amount?, reason?, preview_only? }
+// Nov 2 2026 (WO-1253): the Hub's deposit record was cleared by mistake while the $200 deposit bill (QuickBooks 7996, $190 after the $10 fee) was already PAID, so
+// QuickBooks kept it (depositClear refuses to delete a paid bill) but the work order no longer knew about it, and the final vendor bill would not have taken the
+// $200 off. /wo/deposit-approve always creates a NEW QuickBooks bill, which would pay the vendor twice. This re-records an EXISTING QuickBooks bill as the deposit.
+// It only READS QuickBooks (never creates, edits, pays or deletes anything there) and refuses unless the bill exists, belongs to this work order's vendor, is not
+// already used by another work order / vendor bill / proposal payment, and fits the vendor's estimate. Deposit_Applied stays FALSE, so woDepositCredit takes it off
+// the final vendor bill automatically, as before.
+async function depositLink(env, body) {
+  const woId = String((body && body.wo_id) || '').trim();
+  const billId = String((body && body.qb_bill_id) || '').trim();
+  if (!woId || !billId) return json({ ok: false, error: 'wo_id and qb_bill_id required' }, 400);
+  if (!/^\d{1,12}$/.test(billId)) return json({ ok: false, error: 'qb_bill_id must be the QuickBooks bill id (digits only).' }, 400);
+  const previewOnly = body.preview_only === true;
+  const reason = String(body.reason || '').trim().slice(0, 300);
+
+  let wos, vendors, estimates, irs, vbs, pms, sigs;
+  try {
+    await paymentMilestonesTab(env); await scopeSigTab(env);   // make sure both tabs exist so a missing tab can never silently skip the "already used" check
+    [wos, vendors, estimates, irs, vbs, pms, sigs] = await Promise.all([
+      fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendors'), fetchTab(env, 'Estimates'), fetchTab(env, 'Invoice_Review'),
+      fetchTab(env, 'Vendor_Bills'), fetchTab(env, 'Payment_Milestones'), fetchTab(env, 'Scope_Signatures'),
+    ]);
+  } catch (e) { return json({ ok: false, error: 'Could not read the Hub data needed to check this bill, so nothing was changed (' + String((e && e.message) || e).slice(0, 160) + '). Try again in a minute.' }, 502); }
+
+  const wo = findWO(wos, woId);
+  if (!wo) return json({ ok: false, error: 'No work order ' + woId + ' found' }, 404);
+  if (wo.Deposit_Amount && parseFloat(wo.Deposit_Amount) > 0) {
+    return json({ ok: false, error: woId + ' already has a $' + parseFloat(wo.Deposit_Amount).toFixed(2) + ' deposit recorded' + (wo.Deposit_QB_Bill_ID ? ' (QuickBooks bill ' + (wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID) + ')' : '') + '. Nothing was changed.' }, 409);
+  }
+  const vendorId = String(body.vendor_id || wo.Vendor_ID || '').trim();
+  if (!vendorId) return json({ ok: false, error: 'No vendor on this WO and none passed - vendor_id required' }, 400);
+  const vendor = vendors.find(v => String(v.ID) === vendorId);
+  if (!vendor) return json({ ok: false, error: 'Vendor ' + vendorId + ' not found' }, 404);
+  const vendorQbId = String(vendor.QBO_Vendor_ID || '').trim();
+  if (!vendorQbId) return json({ ok: false, error: 'This vendor has no QuickBooks vendor id on file, so the bill cannot be matched to them. Nothing was changed.' }, 409);
+
+  // The bill must not already belong to something else.
+  const used = [];
+  wos.forEach(w => { if (String(w.ID) !== String(wo.ID) && String(w.Deposit_QB_Bill_ID || '').trim() === billId) used.push('the deposit on ' + (w.WO_ID || w.ID)); });
+  irs.forEach(r => { if (String(r.QB_Bill_ID || '').trim() === billId) used.push('a vendor bill review (' + (r.WO_ID || r.ID) + ')'); });
+  vbs.forEach(r => { if (String(r.QB_Bill_ID || '').trim() === billId) used.push('a Vendor_Bills row (' + (r.WO_ID || r.ID) + ')'); });
+  pms.forEach(r => { if (String(r.QB_Bill_ID || '').trim() === billId) used.push('a proposal payment (' + (r.Label || r.ID) + ')'); });
+  sigs.forEach(r => { if ([r.QB_Bill_ID, r.QB_Final_Bill_ID].some(x => String(x || '').trim() === billId)) used.push('a signed proposal (' + r.ID + ')'); });
+  if (used.length) return json({ ok: false, error: 'QuickBooks bill ' + billId + ' is already used by ' + used.join(', ') + ', so it cannot be recorded as this deposit. Nothing was changed.' }, 409);
+
+  let token, got;
+  try {
+    token = await qbAccessToken(env);
+    got = await qbApi(env, 'bill/' + encodeURIComponent(billId) + '?minorversion=73', 'GET', null, token);
+  } catch (e) { return json({ ok: false, error: 'Could not read QuickBooks, so nothing was changed (' + String((e && e.message) || e).slice(0, 160) + ').' }, 502); }
+  const bill = got && got.Bill;
+  if (!bill) return json({ ok: false, error: 'QuickBooks bill ' + billId + ' was not found (' + (qbFault(got) || 'no detail') + '). Nothing was changed.' }, 404);
+  if (String(bill.VendorRef && bill.VendorRef.value || '') !== vendorQbId) {
+    return json({ ok: false, error: 'QuickBooks bill ' + billId + ' belongs to a different vendor (QuickBooks vendor ' + (bill.VendorRef && bill.VendorRef.value) + ', expected ' + vendorQbId + '). Nothing was changed.' }, 409);
+  }
+  const total = money2(+bill.TotalAmt || 0), balance = money2(+bill.Balance || 0);
+  const lines = Array.isArray(bill.Line) ? bill.Line : [];
+  const gross = money2(lines.reduce((t, l) => t + ((+l.Amount || 0) > 0 ? (+l.Amount || 0) : 0), 0));
+  const fee = money2(gross - total);
+  if (!(gross > 0)) return json({ ok: false, error: 'QuickBooks bill ' + billId + ' has no positive line to treat as the deposit. Nothing was changed.' }, 409);
+  if (fee < -0.005) return json({ ok: false, error: 'QuickBooks bill ' + billId + ' total ($' + total.toFixed(2) + ') is more than its lines ($' + gross.toFixed(2) + '). Nothing was changed.' }, 409);
+  if (body.amount != null && body.amount !== '' && Math.abs(money2(parseFloat(body.amount)) - gross) > 0.005) {
+    return json({ ok: false, error: 'You said the deposit was $' + money2(parseFloat(body.amount)).toFixed(2) + ' but the bill lines add up to $' + gross.toFixed(2) + ' before the fee. Nothing was changed.' }, 409);
+  }
+  const capInfo = woDepositEstimateCap(estimates, woId, wo);
+  const warnings = [];
+  if (capInfo && gross > capInfo.cap + 0.005) return json({ ok: false, error: 'A $' + gross.toFixed(2) + ' deposit is more than the vendor\'s estimate allows (the most is $' + capInfo.cap.toFixed(2) + '). Nothing was changed.' }, 409);
+  if (!capInfo) warnings.push('No estimate is on file for this work order, so the deposit could not be checked against a quote.');
+  if (balance > 0.005) warnings.push('This QuickBooks bill still has $' + balance.toFixed(2) + ' unpaid - pay it in QuickBooks yourself. It comes off the final vendor bill either way.');
+  const paid = total > 0 && balance <= 0.005;
+  const summary = { wo_id: woId, vendor: vendor.Name || vendor.Company || ('Vendor ' + vendorId), qb_bill_id: billId, qb_bill_number: bill.DocNumber || '', qb_bill_date: bill.TxnDate || '',
+    amount: gross.toFixed(2), fee: Math.max(0, fee).toFixed(2), bill_total: total.toFixed(2), bill_balance: balance.toFixed(2), already_paid: paid,
+    estimate_subtotal: capInfo ? capInfo.subtotal : null, creates_or_changes_anything_in_quickbooks: false, warnings };
+  if (previewOnly) return json({ ok: true, success: true, preview: true, ...summary });
+
+  const note = ('Re-linked existing QuickBooks bill ' + (bill.DocNumber || billId) + (reason ? ' - ' + reason : '')).slice(0, 300);
+  const fields = { Deposit_Amount: gross.toFixed(2), Deposit_Vendor_ID: vendorId, Deposit_Approved_Date: String(bill.TxnDate || new Date().toISOString().split('T')[0]),
+    Deposit_Notes: note, Deposit_Applied: 'FALSE', Deposit_QB_Bill_ID: billId, Deposit_QB_Bill_Number: String(bill.DocNumber || ''), Deposit_Fee: Math.max(0, fee).toFixed(2) };
+  try {
+    await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied', 'Deposit_QB_Bill_ID', 'Deposit_QB_Bill_Number', 'Deposit_Fee']);
+    await updateWOFields(env, woId, fields);
+    invalidateTabCache('Work_Orders');
+    const back = findWO(await fetchTab(env, 'Work_Orders'), woId);
+    const bad = Object.keys(fields).filter(k => String(back ? (back[k] == null ? '' : back[k]) : '') !== String(fields[k]));
+    if (!back || bad.length) throw new Error('did not keep: ' + (back ? bad.join(', ') : 'no row'));
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 200);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_deposit_link_failed', Skill_Or_Endpoint: '/wo/deposit-link', Success: 'FALSE', Notes: ('wo=' + woId + ' qb_bill=' + billId + ' ' + msg).slice(0, 480) }); }
+    catch (e2) { return json({ ok: false, error: 'Recording the deposit on ' + woId + ' failed (' + msg + ') and that could not be logged either. QuickBooks was not touched. Check the Deposit fields on ' + woId + '.' }, 500); }
+    return json({ ok: false, error: 'Recording the deposit on ' + woId + ' failed (' + msg + '). QuickBooks was not touched. Check the Deposit fields on ' + woId + ' before billing.' }, 500);
+  }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_deposit_linked', Skill_Or_Endpoint: '/wo/deposit-link', Success: 'TRUE', Notes: ('wo=' + woId + ' qb_bill=' + billId + ' gross=' + gross.toFixed(2) + ' fee=' + Math.max(0, fee).toFixed(2) + ' paid=' + paid).slice(0, 480) }); }
+  catch (e) { warnings.push('The deposit was recorded, but the audit row could not be written to Ops_Telemetry (' + String((e && e.message) || e).slice(0, 120) + ').'); }
+  return json({ ok: true, success: true, ...summary });
 }
 
 async function addEstimateVersion(env, body) {
