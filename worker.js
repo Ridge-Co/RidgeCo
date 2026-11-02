@@ -26414,6 +26414,7 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
     const data=await res.json();
     if(data.error){
       const code=data.error.code||res.status;
+      if (__usedSecond && (code===401 || code===403 || code===404)) { await sa2ReadRefused(env, code, data.error.message); continue; }   // second account not allowed in: retry on the main one, and report why
       const retryable = code===429 || ((code===500||code===503) && method==='GET');
       if(retryable && attempt<MAX_ATTEMPTS){
         await new Promise(r=>setTimeout(r, BACKOFF_BASE_MS*Math.pow(2,attempt-1)+Math.floor(Math.random()*120)));
