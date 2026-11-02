@@ -11128,7 +11128,37 @@ function renderDepositPanel(woId) {
     '</div>' +
     '<div style="font-size:10.5px;color:var(--muted);margin-top:6px">Creates an OPEN QuickBooks bill for this vendor (no customer invoice, no Vendor Bills entry) — pay it yourself via QuickBooks Instant Pay. ' +
     'It can never be more than the vendor\'s estimate, carries the instant-pay fee when the vendor has it on, and comes off their final bill automatically as its own line, so they are never paid it twice. You will see exactly what it does before anything is created.</div>' +
+    '<div style="border-top:1px dotted var(--border);margin-top:10px;padding-top:8px">' +
+    '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">Already paid this vendor a deposit in QuickBooks? Link that bill instead of creating a new one (nothing is created or changed in QuickBooks).</div>' +
+    '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
+    '<input type="text" inputmode="numeric" placeholder="QuickBooks bill id" id="dep-link-' + woId + '" style="width:150px;font-size:13px;padding:7px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text)">' +
+    '<button class="btn small secondary" onclick="depositLinkUI(\'' + woId + '\')">Link existing bill</button>' +
+    '</div></div>' +
     '</div>';
+}
+
+function depositLinkUI(woId) {
+  var el = document.getElementById('dep-link-' + woId);
+  var billId = el ? el.value.trim() : '';
+  if (!/^\d+$/.test(billId)) { toast('Enter the QuickBooks bill id (numbers only)', 'error'); return; }
+  var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
+  var req = { wo_id: woId, vendor_id: wo ? wo.Vendor_ID : '', qb_bill_id: billId };
+  api('POST', '/wo/deposit-link', Object.assign({ preview_only: true }, req), 20000)
+    .then(function(pv) {
+      if (!pv || !pv.success) { toast((pv && pv.error) || 'Could not check that bill', 'error'); return null; }
+      var msg = 'Record QuickBooks bill ' + (pv.qb_bill_number || pv.qb_bill_id) + ' (' + pv.qb_bill_date + ') as the $' + parseFloat(pv.amount).toFixed(2) + ' deposit for ' + pv.vendor + '?\n\n' +
+        (pv.already_paid ? 'It is already PAID in QuickBooks. ' : 'It still has a balance of $' + parseFloat(pv.bill_balance).toFixed(2) + '. ') +
+        'Nothing is created, changed or paid in QuickBooks. The $' + parseFloat(pv.amount).toFixed(2) + ' will come off their final bill automatically.' +
+        (safeArray(pv.warnings).length ? '\n\n' + pv.warnings.join('\n') : '');
+      if (!confirm(msg)) return null;
+      return api('POST', '/wo/deposit-link', req, 20000).then(function(res) {
+        if (!res.success) { toast(res.error || 'Failed to link the deposit', 'error'); return null; }
+        toast('Deposit linked - QuickBooks bill ' + (res.qb_bill_number || res.qb_bill_id), 'success');
+        return api('GET', '/workorders?include_voided=1');
+      });
+    }).then(function(wos) {
+      if (Array.isArray(wos)) { state.workorders = wos; refreshHubEstimateView(woId); }
+    }).catch(function(e) { toast(e.message, 'error'); });
 }
 
 function depositApproveUI(woId) {
