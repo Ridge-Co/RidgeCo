@@ -1181,6 +1181,7 @@ const _hubWorkerCore = {
         if (path === '/scope-proposal/unbook-final') return await scopeProposalUnbookFinal(env, body);
         if (path === '/scope-proposal/bill-milestones') return await scopeProposalBillMilestones(env, body);
         if (path === '/scope-proposal/milestone/set-pending-info') return await setMilestonePendingInfo(env, body);
+        if (path === '/scope-proposal/milestone/set-amount') return await setMilestoneCustomerAmount(env, body);
         if (path === '/scope-proposal/adjust-bill') return await scopeProposalAdjustBill(env, body);
         if (path === '/fi/save')                  return await fiRoute(env, 'save', () => fiSave(env, body));
         if (path === '/fi/publish')               return await fiRoute(env, 'publish', () => fiPublish(env, body));
