@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="test-login.js"></script>
+<script src="failure-reporter.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<!-- The link carries a private token (?t=). Never send it onward: no Referer header to anyone, and this page loads nothing from other sites. -->
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light">
+<title>Your delivery — Ridge Co</title>
+<style>
+  :root{
+    --bg:#f6f4ef; --surface:#ffffff; --border:#ddd8cc; --text:#1c2430; --muted:#5b6573;
+    --accent:#1d4ed8; --ok:#166534; --okbg:#e7f4ec; --warm:#fff8ea; --warmborder:#ecd9a8; --warmtext:#6b4a00;
+    --danger:#a32a1d; --dangerbg:#fdecea; --dangerborder:#f0b9b2;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html{max-width:100%;overflow-x:hidden}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--font);font-size:17px;line-height:1.5;min-height:100vh;max-width:100%;overflow-x:hidden;overflow-wrap:anywhere}
+  .top{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 16px}
+  .logo{color:var(--accent);font-size:1.05rem;letter-spacing:.16em;font-weight:700}
+  main{max-width:560px;margin:0 auto;padding:20px 16px 56px}
+  main:focus{outline:none}
+  h1{font-size:1.45rem;line-height:1.25;margin:0 0 10px;font-weight:700}
+  h1:focus{outline:none}
+  p{margin:0 0 12px}
+  .lead{color:var(--text)}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:16px;margin:16px 0}
+  dl.facts{margin:0}
+  dl.facts div{display:flex;gap:12px;padding:8px 0;border-top:1px solid var(--border)}
+  dl.facts div:first-child{border-top:none;padding-top:0}
+  dl.facts div:last-child{padding-bottom:0}
+  dl.facts dt{flex:0 0 68px;color:var(--muted);font-size:.9rem;padding-top:2px}
+  dl.facts dd{margin:0;flex:1;min-width:0;font-weight:600}
+  .answers{border:0;margin:16px 0 0;padding:0;min-width:0}
+  .answers legend{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .ans{display:flex;align-items:center;gap:12px;width:100%;min-height:58px;margin:0 0 12px;padding:12px 16px;border-radius:14px;border:2px solid var(--border);background:var(--surface);color:var(--text);font:inherit;font-size:1.1rem;font-weight:700;text-align:left;cursor:pointer}
+  .ans .ic{flex:0 0 28px;font-size:1.3rem;line-height:1;text-align:center}
+  .ans .lbl{flex:1;min-width:0}
+  .ans .cur{flex:0 0 auto;font-size:.8rem;font-weight:700;background:rgba(0,0,0,.08);border-radius:999px;padding:2px 10px}
+  .ans.yes{background:var(--ok);border-color:var(--ok);color:#fff}
+  .ans.yes .cur{background:rgba(255,255,255,.25)}
+  .ans[aria-pressed="true"]{box-shadow:0 0 0 3px var(--accent)}
+  .ans:active{opacity:.88}
+  .ans[aria-disabled="true"]{opacity:.6;cursor:default}
+  .ans:focus-visible,.btn:focus-visible,textarea:focus-visible,.linkbtn:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+  label.nl{display:block;font-weight:600;margin:18px 0 6px}
+  label.nl small{font-weight:400;color:var(--muted)}
+  textarea{display:block;width:100%;min-height:92px;padding:12px;border:2px solid var(--border);border-radius:12px;font:inherit;font-size:16px;color:var(--text);background:var(--surface);resize:vertical}
+  .intro ul{margin:0 0 14px;padding-left:22px}
+  .intro li{margin:4px 0}
+  .intro h2{font-size:1rem;margin:16px 0 6px}
+  .gentle{background:var(--warm);border:1px solid var(--warmborder);color:var(--warmtext);border-radius:12px;padding:12px 14px;margin:14px 0}
+  .count{font-size:.85rem;color:var(--muted);text-align:right;margin:4px 2px 0}
+  .btn{display:block;width:100%;min-height:52px;padding:12px 16px;border-radius:14px;border:2px solid var(--accent);background:var(--accent);color:#fff;font:inherit;font-size:1.05rem;font-weight:700;cursor:pointer}
+  .btn.ghost{background:var(--surface);color:var(--accent)}
+  .linkbtn{display:inline-block;min-height:48px;padding:12px 4px;margin-top:4px;border:0;background:none;color:var(--accent);font:inherit;font-weight:700;text-decoration:underline;cursor:pointer}
+  .msg{border-radius:12px;padding:12px 14px;margin:12px 0;font-size:.98rem}
+  .msg.err{background:var(--dangerbg);border:1px solid var(--dangerborder);color:#7a1f14}
+  .msg.warm{background:var(--warm);border:1px solid var(--warmborder);color:var(--warmtext)}
+  .msg.good{background:var(--okbg);border:1px solid #b7e0c5;color:#14532d}
+  .tick{width:56px;height:56px;border-radius:50%;background:var(--okbg);color:var(--ok);display:flex;align-items:center;justify-content:center;font-size:1.8rem;font-weight:700;margin:4px 0 12px}
+  .tick.soft{background:#eef1f6;color:var(--muted)}
+  .saved{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin:12px 0;white-space:pre-wrap}
+  .saved b{display:block;font-size:.85rem;color:var(--muted);font-weight:600;margin-bottom:2px}
+  .foot{margin-top:28px;color:var(--muted);font-size:.85rem;text-align:center}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  @media (prefers-reduced-motion:no-preference){ .view{animation:fade .18s ease-out} @keyframes fade{from{opacity:.4}to{opacity:1}} }
+</style>
+</head>
+<body>
+<header class="top"><span class="logo">RIDGE CO</span></header>
+<main id="main">
+  <div id="view" class="view"><p>One moment&hellip;</p></div>
+  <noscript><div class="msg warm">This page needs JavaScript to save your answer. Please turn it on, or contact Ridge Co and we will take your answer that way.</div></noscript>
+  <p class="foot">Ridge Co Property Maintenance</p>
+</main>
+<div id="live" class="sr" role="status" aria-live="polite"></div>
+<script>
+(function(){
+'use strict';
+var Q=new URLSearchParams(location.search);
+// ?api= may only point at the staging Worker (pre-merge testing); anything else is ignored. Same rule as inspect-book.html.
+var WORKER=/^https:\/\/maintenance-hub-staging\.[a-z0-9-]+\.workers\.dev$/.test(Q.get('api')||'')?Q.get('api'):'https://maintenance-hub.brett-2f8.workers.dev';
+// The text carries a short link that redirects here with ?t=<token>. Be forgiving about how it arrives: query first, then a #t= fragment.
+var TOKEN=(Q.get('t')||(new URLSearchParams((location.hash||'').replace(/^#/,'')).get('t'))||'').trim();
+var NOTE_MAX=300, TIMEOUT_MS=15000, STALE_MS=45000;
+var ANSWERS=[ {a:'yes',ic:'✓',label:'I’ll be there'}, {a:'no',ic:'✕',label:'I can’t be there'}, {a:'unsure',ic:'?',label:'Not sure yet'} ];
+
+// Everything the page knows lives here; render() draws it. Nothing server-supplied is ever put into markup without esc().
+var S={phase:'loading', d:null, current:'', note:'', draft:'', editing:false, busy:'', err:'', banner:'', loadedAt:0, detailsKey:''};
+
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
+function $(id){return document.getElementById(id);}
+function str(v,max){v=(v==null?'':String(v)).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g,'').trim();return max&&v.length>max?v.slice(0,max):v;}
+function cleanAnswer(v){v=String(v||'').toLowerCase();return (v==='yes'||v==='no'||v==='unsure')?v:'';}
+
+// ── network: never rejects; always resolves {http, j, net} ───────────────
+function req(method,path,body){
+  var ctl=('AbortController' in window)?new AbortController():null, timer=null;
+  var o={method:method,cache:'no-store',referrerPolicy:'no-referrer'};
+  if(body){o.headers={'Content-Type':'application/json'};o.body=JSON.stringify(body);}
+  if(ctl){o.signal=ctl.signal;timer=setTimeout(function(){ctl.abort();},TIMEOUT_MS);}
+  return fetch(WORKER+path,o).then(function(r){
+    clearTimeout(timer);
+    return r.text().then(function(t){var j=null;try{j=JSON.parse(t);}catch(e){j=null;}return {http:r.status,j:j,net:false};});
+  }).catch(function(){clearTimeout(timer);return {http:0,j:null,net:true};});
+}
+
+// Turn any answer from the Worker into one of our states. Anything unexpected becomes a friendly "try again", never raw text.
+function classify(res){
+  var j=res.j, http=res.http;
+  if(res.net) return {kind:'net'};
+  var code=j&&typeof j==='object'?String(j.error||j.reason||''):'';
+  if(j&&(j.delivered===true||(j.ok===true&&/^delivered$/i.test(String(j.status||'')))||(j.ok!==true&&/deliver/i.test(code)))) return {kind:'delivered'};
+  if(j&&j.cancelled===true) return {kind:'cancelled'};
+  if(j&&j.ok===true&&http>=200&&http<300) return {kind:'ok',j:j};
+  if(http===429||/rate/i.test(code)) return {kind:'slow'};
+  if(j&&(j.expired===true||/token|expired|invalid|not.?found/i.test(code))) return {kind:'invalid'};
+  if(http===400||http===401||http===403||http===404||http===410) return {kind:'invalid'};
+  return {kind:'error'};
+}
+
+// ── state updates ────────────────────────────────────────────────────────
+function applyDetails(j){
+  S.d={
+    first:str(j.first_name,40), item:str(j.item_type,60), date:str(j.date_text,80), win:str(j.window_text,60), street:str(j.street,120)
+  };
+}
+function keyOf(d){return d?[d.date,d.win,d.street,d.item].join('|'):'';}
+
+function load(silent){
+  if(!TOKEN){S.phase='invalid';render({focus:'h'});return Promise.resolve();}
+  if(!silent){S.phase='loading';render({});}
+  return req('GET','/delivery/rsvp?t='+encodeURIComponent(TOKEN)).then(function(res){
+    var c=classify(res);
+    if(c.kind==='ok'){
+      var firstLoad=!S.d, before=S.detailsKey;
+      applyDetails(c.j);
+      var cur=cleanAnswer(c.j.current), note=str(c.j.note,NOTE_MAX);
+      var key=keyOf(S.d);
+      S.loadedAt=Date.now();
+      var changed=!firstLoad&&before&&key!==before;
+      S.detailsKey=key;
+      if(firstLoad){S.current=cur;S.note=note;S.draft=note;S.editing=false;S.banner='';S.phase='ready';render({focus:'h'});return;}
+      // refresh of a page that was already showing: never throw away what the person is typing
+      var typing=S.editing&&S.draft!==S.note;
+      if(changed){S.banner='The delivery details have been updated, so please have a quick look below.';}
+      if(changed&&!cur){S.current='';S.note='';S.draft=typing?S.draft:'';S.editing=false;}
+      else if(!typing){S.current=cur;S.note=note;S.draft=note;}
+      S.phase='ready';render({focus:changed?'h':null});
+      return;
+    }
+    if(silent&&(c.kind==='net'||c.kind==='error'||c.kind==='slow')) return;   // a background refresh that could not reach us: keep showing what we have
+    S.phase=({delivered:'delivered',cancelled:'cancelled',invalid:'invalid',net:'neterror',slow:'slow',error:'neterror'})[c.kind]||'neterror';
+    render({focus:'h'});
+  });
+}
+
+function submit(a){
+  if(S.busy||S.phase!=='ready') return;            // double-tap / second tap while saving: ignored
+  var note=str(S.draft,NOTE_MAX);
+  S.busy=a;S.err='';render({focus:'ans-'+a});announce('Saving your answer…');
+  req('POST','/delivery/rsvp',{t:TOKEN,answer:a,note:note}).then(function(res){
+    var c=classify(res);
+    S.busy='';
+    if(c.kind==='ok'){
+      var cur=cleanAnswer(c.j.current);
+      if(!cur){S.err='We could not confirm that your answer was saved. Please try once more.';render({focus:'ans-'+a});return;}
+      S.current=cur;S.note=note;S.draft=note;S.editing=false;S.err='';S.banner='';
+      render({focus:'h'});
+      announce('Your answer has been saved.');
+      return;
+    }
+    if(c.kind==='delivered'){S.phase='delivered';render({focus:'h'});return;}
+    if(c.kind==='cancelled'){S.phase='cancelled';render({focus:'h'});return;}
+    if(c.kind==='invalid'){S.phase='invalid';render({focus:'h'});return;}
+    S.err=c.kind==='slow'?'That was a lot of taps in a row. Please wait a minute and try again.'
+      :c.kind==='net'?'We could not reach Ridge Co, so your answer was not saved. Please check your connection and try again. Your note is still here.'
+      :'Something went wrong on our side, so your answer was not saved. Please try again in a moment. Your note is still here.';
+    render({focus:'ans-'+a});
+  });
+}
+
+function announce(t){var el=$('live');if(el){el.textContent='';setTimeout(function(){el.textContent=t;},30);}}
+
+// ── views ────────────────────────────────────────────────────────────────
+function facts(){
+  var d=S.d||{}, rows='';
+  if(d.item) rows+='<div><dt>Item</dt><dd>'+esc(d.item)+'</dd></div>';
+  if(d.street) rows+='<div><dt>Where</dt><dd>'+esc(d.street)+'</dd></div>';
+  var when=[d.date,d.win].filter(Boolean).join(', ');
+  rows+='<div><dt>When</dt><dd>'+(when?esc(when):'Date to be confirmed')+'</dd></div>';
+  return '<div class="card"><dl class="facts">'+rows+'</dl></div>';
+}
+function hi(){var f=S.d&&S.d.first;return f?'Hi '+esc(f)+',':'Hi there,';}
+function banner(){return S.banner?'<div class="msg warm" role="note">'+esc(S.banner)+'</div>':'';}
+
+function viewForm(){
+  var d=S.d||{}, thing=d.item?('A new '+esc(d.item.toLowerCase())):'A delivery';
+  var top=S.editing
+    ? '<p class="lead">You can change your answer any time before the delivery. Whatever works for you is fine.</p>'+banner()+facts()
+    : '<div class="intro"><p class="lead">'+thing+' is scheduled to be delivered to you. Here are the details:</p>'+banner()+facts()
+      +'<h2>What we are hoping for</h2>'
+      +'<ul><li>Someone home to open the door and let the delivery team in</li><li>The old appliance taken away</li><li>The new one left in place</li></ul>'
+      +'<p>You do not need to install anything. We take care of that. Having someone there really helps, and we would be grateful.</p>'
+      +'<p class="gentle">If you can’t make it, that’s completely okay. We’ll do our best to be there instead, though the delivery may need to be rescheduled.</p></div>';
+  var btns=ANSWERS.map(function(x){
+    var pressed=S.current===x.a;
+    return '<button type="button" class="ans '+(x.a==='yes'?'yes':'')+'" id="ans-'+x.a+'" data-a="'+x.a+'" aria-pressed="'+(pressed?'true':'false')+'"'+(S.busy?' aria-disabled="true"':'')+'>'
+      +'<span class="ic" aria-hidden="true">'+x.ic+'</span><span class="lbl">'+(S.busy===x.a?'Saving…':esc(x.label))+'</span>'
+      +(pressed?'<span class="cur">Your answer</span>':'')+'</button>';
+  }).join('');
+  var len=(S.draft||'').length;
+  return '<h1 id="h" tabindex="-1">'+(S.editing?hi()+' change your answer':hi()+' can you be there for your delivery?')+'</h1>'
+    +top
+    +'<fieldset class="answers"><legend>Your answer</legend>'+btns+'</fieldset>'
+    +'<label class="nl" for="note">Add a note <small>(optional)</small></label>'
+    +'<textarea id="note" maxlength="'+NOTE_MAX+'" rows="3" autocomplete="off" aria-describedby="count" placeholder="Anything we should know?">'+esc(S.draft)+'</textarea>'
+    +'<div class="count" id="count">'+len+' / '+NOTE_MAX+'</div>'
+    +(S.err?'<div class="msg err" role="alert" id="err">'+esc(S.err)+'</div>':'')
+    +(S.editing?'<button type="button" class="linkbtn" id="back">Never mind, keep my answer</button>':'')
+    +'<p style="color:var(--muted);font-size:.9rem;margin-top:12px">Tap one of the three buttons to send your answer. You can change it later.</p>';
+}
+
+function viewDone(){
+  var f=S.d&&S.d.first, name=f?', '+esc(f):'';
+  var t,b,soft=false;
+  if(S.current==='yes'){t='Wonderful, thank you'+name+'!';b='We have you down as planning to be there. If anything changes, just come back to this page and update your answer.';}
+  else if(S.current==='no'){t='No problem at all, thank you for letting us know.';b='We’ll do our best to be there instead. If the delivery needs to be rescheduled, we’ll let you know.';soft=true;}
+  else{t='Thanks, that’s perfectly fine.';b='Whenever you know, come back to this page and tell us. There is no rush.';soft=true;}
+  return '<div class="tick'+(soft?' soft':'')+'" aria-hidden="true">'+'✓'+'</div>'
+    +'<h1 id="h" tabindex="-1">'+t+'</h1><p class="lead">'+b+'</p>'+banner()+facts()
+    +(S.note?'<div class="saved"><b>Your note</b>'+esc(S.note)+'</div>':'')
+    +'<button type="button" class="btn ghost" id="change">Change my answer</button>'
+    +'<p style="color:var(--muted);font-size:.9rem;margin-top:12px">You can close this page now. Your answer has been saved.</p>';
+}
+
+function viewSimple(title,body,withRetry){
+  return '<h1 id="h" tabindex="-1">'+title+'</h1><p class="lead">'+body+'</p>'+(withRetry?'<button type="button" class="btn" id="retry">Try again</button>':'');
+}
+
+function render(opts){
+  opts=opts||{};
+  var el=$('view'), html;
+  if(S.phase==='loading') html='<p role="status">One moment&hellip;</p>';
+  else if(S.phase==='ready') html=(S.current&&!S.editing)?viewDone():viewForm();
+  else if(S.phase==='delivered') html=viewSimple('This delivery has already arrived','Thank you for your time. There is nothing more to do here.');
+  else if(S.phase==='cancelled') html=viewSimple('This delivery is no longer scheduled','There is no need to be home. We will let you know if it is scheduled again.');
+  else if(S.phase==='invalid') html=viewSimple('This link is not working','It may have expired, or the delivery may have changed. Nothing is wrong on your end. If you have questions about your delivery, please contact Ridge Co.');
+  else if(S.phase==='slow') html=viewSimple('Please give it a minute','This page has been tried a lot in a short time. Please wait a minute, then try again.',true);
+  else html=viewSimple(navigator.onLine===false?'You seem to be offline':'We could not load this just now',(navigator.onLine===false?'Please reconnect to the internet and try again.':'Please check your connection and try again.')+' Your delivery is not affected.',true);
+  el.innerHTML=html;
+  if(opts.focus){
+    var t=opts.focus==='h'?$('h'):$(opts.focus);
+    if(t&&t.focus){try{t.focus({preventScroll:opts.focus!=='h'});}catch(e){t.focus();}}
+  }
+}
+
+// ── events (delegated: survives every re-render) ─────────────────────────
+document.addEventListener('click',function(e){
+  var t=e.target.closest?e.target.closest('button'):null; if(!t) return;
+  if(t.classList.contains('ans')){ if(t.getAttribute('aria-disabled')==='true') return; submit(t.getAttribute('data-a')); }
+  else if(t.id==='change'){S.editing=true;S.err='';S.draft=S.note;render({focus:'h'});}
+  else if(t.id==='back'){S.editing=false;S.err='';S.draft=S.note;render({focus:'h'});}
+  else if(t.id==='retry'){load(false);}
+});
+document.addEventListener('input',function(e){
+  if(e.target&&e.target.id==='note'){S.draft=e.target.value.slice(0,NOTE_MAX);var c=$('count');if(c)c.textContent=S.draft.length+' / '+NOTE_MAX;}
+});
+
+// ── stale-page protection: back button / returning to the tab / reconnecting ──
+function maybeRefresh(force){
+  if(S.busy||S.phase==='loading') return;
+  if(!force&&Date.now()-S.loadedAt<STALE_MS) return;
+  if(S.phase==='invalid'||S.phase==='delivered'||S.phase==='cancelled') return;
+  load(S.phase==='ready');
+}
+window.addEventListener('pageshow',function(ev){ if(ev.persisted) maybeRefresh(true); });   // back/forward cache restore
+document.addEventListener('visibilitychange',function(){ if(document.visibilityState==='visible') maybeRefresh(false); });
+window.addEventListener('online',function(){ if(S.phase==='neterror'||S.phase==='slow') load(false); else maybeRefresh(true); });
+
+load(false);
+})();
+</script>
+</body>
+</html>

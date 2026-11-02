@@ -112,10 +112,37 @@ function __makeWOStatus() {
 const WOStatus = __makeWOStatus();
 const OPEN_WO_STATUSES = WOStatus.sets.ACTIVE;
 const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
-// BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
-// Portals poll GET /version and refresh themselves onto new code when this changes
-// (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-23.05-invoice-visit-lines-use-notes';
+// BUILD_VERSION: FROZEN BASE LABEL. DO NOT EDIT IT IN A PR (Oct 21 2026). Every PR used to bump this one line, so any two open PRs
+// conflicted and sessions kept re-cutting branches by hand. The version portals actually see is now stamped by Cloudflare at deploy
+// time: GET /version = buildVersion(env) = this base + '+' + deploy time + '.' + Cloudflare's version id (the `version_metadata`
+// binding in wrangler.toml), so EVERY deploy gets a new version automatically and a PR never needs to touch this line.
+// Portals poll GET /version and refresh themselves onto new code when it changes (B-093 auto-refresh).
+// The Branch policy guard fails a PR into main that changes this line (override: put `allow-build-version-edit: true` in the PR body).
+let __unstampedReported = false;
+// buildVersion(env) -> { version, base, stamped, version_id, deployed_at }. Never throws. If the Cloudflare binding is missing the answer
+// says so ('+unstamped', stamped:false) AND files one failure-ledger row per isolate, because an unstamped Worker would otherwise never
+// make open portals refresh (a silent failure).
+function buildVersion(env) {
+  const m = env && env.CF_VERSION_METADATA;
+  if (m && m.id) {
+    const ts = String(m.timestamp || ''), digits = ts.replace(/\D/g, '').slice(0, 12);
+    return { version: BUILD_VERSION + '+' + (digits || 'x') + '.' + String(m.id).slice(0, 8), base: BUILD_VERSION, stamped: true, version_id: String(m.id), deployed_at: ts || null };
+  }
+  return { version: BUILD_VERSION + '+unstamped', base: BUILD_VERSION, stamped: false, version_id: null, deployed_at: null };
+}
+function buildVersionJson(env, ctx) {
+  const v = buildVersion(env);
+  if (!v.stamped && !__unstampedReported) {
+    __unstampedReported = true;
+    const p = reportFailure(env, { system: 'hub', source: 'worker', where: 'build_version_unstamped', severity: 'P2',
+      message: 'The Worker has no CF_VERSION_METADATA binding, so /version never changes on deploy and open portals will not refresh themselves. Check wrangler.toml [version_metadata].' });
+    if (ctx && ctx.waitUntil) ctx.waitUntil(p);
+  }
+  return json(v.stamped ? v : Object.assign({ warning: 'unstamped: no CF_VERSION_METADATA binding; portals will not auto-refresh on deploy' }, v));
+}
+// BUILD_VERSION: FROZEN base label, do not edit it in a PR (explained in the block above buildVersion()).
+// Portals poll GET /version, which Cloudflare stamps on every deploy, and refresh themselves when that changes (B-093).
+const BUILD_VERSION = '2026-10-30.01-delivery-cotenants-keep-yes';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -165,6 +192,8 @@ const _hubWorkerCore = {
     const path = url.pathname;
     env = __meterReqEnv(env, request, path);   // Oct 19 2026: child env carrying this request's label for the read meter
     env.__STAGING__ = isStaging(env, url);
+    env.__SELF_ORIGIN__ = url.origin;   // the host this request came in on (used to build tenant short links on the right Worker: prod or staging)
+    if (request.method === 'GET' && path.startsWith('/r/') && path.length > 3 && path.indexOf('/', 3) < 0) return await deliveryShortRedirect(env, path.slice(3), request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown');   // PUBLIC tenant short link (stateless, signed); see deliveryShortRedirect
     // Staging talks to the Intuit SANDBOX, where production's hardcoded QB_TRADE_MAP ids do not exist.
     // On staging, re-point the map at the sandbox's own items/accounts (created by /qb/setup-trades).
     // Throttled, never throws, never runs on production.
@@ -175,6 +204,7 @@ const _hubWorkerCore = {
     // (Aug 20, 2026) to tell "Brett/admin creating a WO from the Hub" (always allowed) apart
     // from "a tenant creating their own WO via submit.html" (gated).
     let callerRole = null;
+    let _idEmail = '';   // set when POST /intake/delivery-email was signed in with a verified Google identity token
     // The verified session's own id (Tenant.ID / Owner.ID / Vendor.ID, matching whichever
     // role was issued) — set alongside callerRole below. Session-identity hardening (Sep 16
     // 2026, TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 Part A): the /workorder
@@ -243,6 +273,8 @@ const _hubWorkerCore = {
       // Tenant fix-check page (Oct 16 2026): public at the gate, but every handler self-verifies the signed, expiring fix-check token (scope 'fix-check',
       // hash-checked against WO_Followups.Token_Hash, bound to ONE follow-up and ONE tenant) before reading or writing anything.
       '/fix/page','/fix/answer','/fix/upload-session','/fix/log-attachment',
+      // Tenant delivery RSVP (Oct 23 2026 addendum): public at the gate; both handlers verify the signed per-delivery token (HMAC off WORKER_SECRET), rate limit, and answer a bad/expired link with one friendly message.
+      '/delivery/rsvp',
       // STR cleaner page (Oct 14 2026): public at the gate, but every handler self-verifies the cleaner's own random Link_Token
       // (STR_Cleaners) before reading or writing anything, and never returns another cleaner's phone/email.
       '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/ics','/fi/report','/fi/photo/view',
@@ -349,14 +381,27 @@ const _hubWorkerCore = {
         const _alertPushOk = alertPushTokenOk(env.ALERT_PUSH_TOKEN, _tok, request.method, path);
         // Narrow WRITE token for the Buildium email poller (B-103, Oct 12 2026): the Apps Script in
         // brett@'s mailbox POSTs each Buildium work-order email to /intake/email. Accepted ONLY for
-        // that one path. The handler itself creates a Work Order only after parsing + matching the
+        // that one path (Oct 23 2026: and, with the same token, POST /intake/delivery-email for the store delivery-email
+        // watcher, which writes a Deliveries row, at most one install WO and texts Brett; no other path). The handler itself creates a Work Order only after parsing + matching the
         // email to a real property, and parks everything uncertain, so a leaked token can at worst
         // inject a parked/created WO and learn (via dry_run) which property/unit/tenant IDs an
         // address maps to - it reaches nothing else. Fully inert unless env.INTAKE_TOKEN is set,
         // so deploying this changes nothing until the secret exists.
         const _intakeOk = !!env.INTAKE_TOKEN
           && _tok === env.INTAKE_TOKEN
-          && request.method === 'POST' && path === '/intake/email';
+          && request.method === 'POST' && (path === '/intake/email' || path === '/intake/delivery-email');
+        // Oct 23 2026: the delivery watcher can sign in with the mailbox owner's Google identity token instead of a shared secret (Authorization: Bearer <OpenID token>); see deliveryVerifyIdToken.
+        // Bad / expired / forged / not-allow-listed tokens all fall through to the same 401 as any other unknown caller, but each kind is reported (not silent, rate-limited).
+        let _idOk = false;
+        if (!_intakeOk && request.method === 'POST' && path === '/intake/delivery-email') {
+          const _bm = /^Bearer\s+(\S+)$/i.exec(request.headers.get('Authorization') || '');
+          if (_bm) {
+            const _v = await deliveryVerifyIdToken(env, _bm[1]);
+            if (_v.ok) { _idOk = true; _idEmail = _v.email; }
+            else if (_v.unavailable) return json({ error: 'Sign-in check unavailable. Please retry shortly.' }, 503);
+            else await deliveryAuthAlert(env, 'rejected_' + _v.reason, 'P1', 'A delivery e-mail sign-in was refused (' + _v.reason + (_v.email_hint ? ', ' + _v.email_hint : '') + '). If this was the real Apps Script, check Config Delivery_Mailboxes or re-run its setup; if not, someone is probing the route.');
+          }
+        }
         // Narrow token for staging smoke-testing (test-infrastructure build, Sep 19 2026): lets
         // a Cowork session run real read+write+read-back checks against
         // maintenance-hub-staging WITHOUT ever holding WORKER_SECRET. Structurally staging-only
@@ -467,7 +512,7 @@ const _hubWorkerCore = {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage', '/portal-access/backfill'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage', '/portal-access/backfill', '/admin/fi-premier-repair'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
           // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
           // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
@@ -491,7 +536,7 @@ const _hubWorkerCore = {
           const _schedAuth = _hubTestOk ? { ok: false } : await schedAuthCheck(env, _tok, request.method, path);
           if (_schedAuth.error) return json({ error: 'scheduler auth unavailable: could not read the Config sheet (' + _schedAuth.error + ')' }, 503);
           const _schedOk = _schedAuth.ok;
-          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_intakeOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk && !_schedOk) {
+          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_intakeOk && !_idOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk && !_schedOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
@@ -524,7 +569,7 @@ const _hubWorkerCore = {
         if (path === '/failures/open')          return await failOpenList(env, url);
         if (path === '/gemini-context')          return await geminiContext(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
-        if (path === '/version')                return json({ version: BUILD_VERSION });
+        if (path === '/version')                return buildVersionJson(env, ctx);
         if (path === '/watchdog/door-system')   return await doorWatchdogStatus(env);
         if (path === '/read-meter')             return json(await __meterSnapshotAll(env, url)); // Oct 19 2026: who/what is spending the Sheets read quota (in-memory, zero Sheets reads)
         if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
@@ -671,6 +716,7 @@ const _hubWorkerCore = {
         if (path === '/deliveries')             return await deliveriesList(env, url);
         if (path === '/wo/shared')              return await woSharedRead(env, url);
         if (path === '/fix/page')               return await fixPage(env, url);                // PUBLIC, token-verified (tenant fix-check)
+        if (path === '/delivery/rsvp')          return await deliveryRsvpGet(env, url, request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown');   // PUBLIC, token-verified (tenant delivery RSVP)
         if (path === '/followup/preview')       return await followupPreview(env, url);        // ADMIN-ONLY: no ROLE_SCOPES entry; read-only, never sends
         if (path === '/followup/list')          return await followupList(env, url);           // ADMIN-ONLY
         if (path === '/proposal/signatures')    return await proposalList(env, url);
@@ -687,6 +733,7 @@ const _hubWorkerCore = {
         if (path === '/fi/photo/view')          return await fiRoute(env, 'photo-view', () => fiPhotoView(env, url));
         if (path === '/fi/issue-types')         return await fiRoute(env, 'issue-types', () => fiTypesList(env));
         if (path === '/fi/directory')           return await fiRoute(env, 'directory', () => fiDirectory(env));
+        if (path === '/fi/bookings')            return await fiRoute(env, 'bookings', () => fiBookings(env));
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
         if (path === '/insp/units')             return await inspUnitsList(env, url);
         if (path === '/insp/availability')      return await inspAvailabilityGet(env);
@@ -784,6 +831,7 @@ const _hubWorkerCore = {
         if (path === '/wo/share-send')            return await woShareSend(env, body);
         if (path === '/wo/share-revoke')          return await woShareRevoke(env, body);
         if (path === '/fix/answer')               return await fixAnswer(env, body);              // PUBLIC, token-verified
+        if (path === '/delivery/rsvp')            return await deliveryRsvpPost(env, url, body, _clientIP || 'unknown');   // PUBLIC, token-verified (tenant delivery RSVP)
         if (path === '/fix/upload-session')       return await fixUploadSession(env, body);       // PUBLIC, token-verified
         if (path === '/fix/log-attachment')       return await fixLogAttachment(env, body);       // PUBLIC, token-verified
         if (path === '/followup/send')            return await followupSend(env, body, url);     // ADMIN-ONLY: Brett's tap on Send in the preview
@@ -814,6 +862,7 @@ const _hubWorkerCore = {
         }
         if (path === '/intake/email')             return await intakeEmail(env, body);
         if (path === '/intake/retry')             return await intakeRetry(env, body);
+        if (path === '/intake/delivery-email')    return await deliveryEmailIntake(env, _idEmail ? Object.assign({}, body, { mailbox: _idEmail, mailbox_claimed: String(body && body.mailbox || '').slice(0, 120) }) : body);   // a verified identity replaces whatever mailbox the body claims   // Oct 23 2026: store delivery emails (INTAKE_TOKEN or WORKER_SECRET)
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
         if (path === '/wo-tenant/add')            return await addTenantToWO(env, body);
@@ -1127,6 +1176,7 @@ const _hubWorkerCore = {
         if (path === '/fi/summarize')             return await fiRoute(env, 'summarize', () => fiSummarize(env, body));
         if (path === '/fi/brand/save')            return await fiRoute(env, 'brand-save', () => fiBrandSave(env, body));
         if (path === '/fi/email-report')          return await fiRoute(env, 'email-report', () => fiEmailReport(env, request, body));
+        if (path === '/fi/urgent-send')           return await fiRoute(env, 'urgent-send', () => fiUrgentSend(env, body));
         if (path === '/fi/route')                 return await fiRoute(env, 'route', () => fiRouteNotes(env, body));
         if (path === '/fi/brand/scrape')          return await fiRoute(env, 'brand-scrape', () => fiBrandScrape(env, body));
         if (path === '/fi/read-label')            return await fiRoute(env, 'read-label', () => fiReadLabel(env, body));
@@ -1134,6 +1184,9 @@ const _hubWorkerCore = {
         if (path === '/fi/issue-types/save')      return await fiRoute(env, 'issue-types-save', () => fiTypesSave(env, body));
         if (path === '/fi/issue-types/touch')     return await fiRoute(env, 'issue-types-touch', () => fiTypesTouch(env, body));
         if (path === '/fi/property/create')       return await fiRoute(env, 'property-create', () => fiPropertyCreate(env, body));
+        if (path === '/fi/booking/start')         return await fiRoute(env, 'booking-start', () => fiBookingStart(env, body));
+        if (path === '/fi/reword')                return await fiRoute(env, 'reword', () => fiReword(env, body));
+        if (path === '/admin/fi-premier-repair')  return await fiRoute(env, 'premier-repair', () => fiPremierRepair(env, body));
         if (path === '/fi/folder/organize')       return await fiRoute(env, 'folder-organize', () => fiFolderOrganize(env, body));
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
@@ -6167,7 +6220,32 @@ async function scopeProposalBillMilestones(env, body) {
   feeCfg.warnings.forEach(w => warnings.push(w));
   const feeDefaultOn = !!vendor && instantPayEnabled(vendor, cfgAll, undefined);
   const feeOn = !!vendor && !vendorInHouse && vendTotal > 0 && instantPayEnabled(vendor, cfgAll, body.instant_pay);
-  const mkAdj = (force) => vendorBillAdjustments({ payable: vendTotal, lang: (vendor && String(vendor.Language || '').toLowerCase() === 'es') ? 'es' : 'en', feeOn: force === true || feeOn, cfg: feeCfg, credits: [] });
+  // Oct 26 2026: a vendor deposit recorded on the linked work order (paid by hand in QuickBooks, never a Vendor_Bills row or a milestone) comes off the
+  // FINAL vendor bill as its own visible line. An interim bill leaves it alone; the final one that cannot cover it is refused rather than sent short.
+  let depCredit = null;
+  if (vendor && !vendorInHouse && vendTotal > 0 && s.WO_ID) {
+    let woDep = null;
+    try { woDep = findWO(await fetchTab(env, 'Work_Orders'), s.WO_ID); }
+    catch (e) {
+      if (!body.preview_only) return json({ ok: false, error: 'Could not read the work order ' + s.WO_ID + ' to check for a vendor deposit (' + String((e && e.message) || e).slice(0, 140) + '), so nothing was billed. Try again in a minute.' }, 503);
+      warnings.push('Could not read the work order to check for a vendor deposit — any deposit already paid to the vendor is not reflected here.');
+    }
+    if (!woDep && !body.preview_only) return json({ ok: false, error: 'Work order ' + s.WO_ID + ' (linked to this proposal) was not found, so whether a vendor deposit was paid could not be checked. Nothing was billed. Fix the link first.' }, 409);
+    if (!woDep) warnings.push('⚠ The linked work order ' + s.WO_ID + ' was not found, so any vendor deposit already paid cannot be checked.');
+    const dep = woDepositCredit(woDep, vendor.ID);
+    if (dep) {
+      const pickedIdsDep = new Set(picked.map(m => m.ID));
+      const finalRound = !sigMilestones.some(m => !pickedIdsDep.has(m.ID) && (m.Status || 'pending') === 'pending');
+      if (!finalRound) warnings.push('💰 A $' + dep.amount.toFixed(2) + ' deposit was already paid to ' + vendDisplay + ' (QuickBooks bill ' + (dep.bill_number || dep.bill_id) + '). It stays off this interim bill and comes off the final one automatically.');
+      else if (vendTotal < dep.amount - 0.005) {
+        const msg = 'The $' + dep.amount.toFixed(2) + ' deposit already paid to ' + vendDisplay + ' is more than what is left to pay them on this final bill ($' + vendTotal.toFixed(2) + ').';
+        if (!body.preview_only) return json({ ok: false, deposit_blocked: true, error: msg + ' Nothing was billed. Fix the amounts, or clear the deposit on the work order if it was entered in error.', warnings }, 409);
+        warnings.push('⛔ ' + msg + ' The bill cannot be sent until that is fixed.');
+      } else { depCredit = dep; warnings.push('💰 A $' + dep.amount.toFixed(2) + ' deposit was already paid to ' + vendDisplay + ' (QuickBooks bill ' + (dep.bill_number || dep.bill_id) + ') — it comes off this final bill automatically.'); }
+    }
+  }
+  const mkAdj = (force) => vendorBillAdjustments({ payable: vendTotal, lang: (vendor && String(vendor.Language || '').toLowerCase() === 'es') ? 'es' : 'en', feeOn: force === true || feeOn, cfg: feeCfg,
+    credits: depCredit ? [{ type: 'deposit_credit', amount: depCredit.amount, desc: depCredit.desc, desc_es: depCredit.desc_es }] : [] });
   const adj = mkAdj(false);
   adj.notes.forEach(n => warnings.push(n));
 
@@ -6180,7 +6258,7 @@ async function scopeProposalBillMilestones(env, body) {
       pending_info: String(m.Pending_Info || '').toUpperCase() === 'TRUE', pending_info_note: m.Pending_Info_Note || '',
     })),
     invoice: { customer: custDisplay, level: billTo.level, amount: custTotal, item: tradeName, desc: invoiceDesc },
-    bill: (vendor && !vendorInHouse && vendTotal > 0) ? { vendor: vendDisplay, amount: vendTotal, trade: tradeName, fee: adj.fee, send_amount: adj.bill_total,
+    bill: (vendor && !vendorInHouse && vendTotal > 0) ? { vendor: vendDisplay, amount: vendTotal, trade: tradeName, deposit_credit: depCredit ? depCredit.amount : 0, fee: adj.fee, send_amount: adj.bill_total,
       fee_on: feeOn, fee_default_on: feeDefaultOn, fee_if_on: mkAdj(true).fee } : null,
     warnings,
   };
@@ -6238,6 +6316,7 @@ async function scopeProposalBillMilestones(env, body) {
         billId = (rb && rb.Bill && rb.Bill.Id) || '';
         billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
         if (!billId) billSkipReason = 'QB bill failed: ' + (qbFault(rb) || 'unknown error');
+        else if (depCredit) await woDepositMarkApplied(env, s.WO_ID, depCredit, { id: billId, number: billNumber }, warnings, '/scope/bill-milestones');
       } else { billSkipReason = 'The vendor\'s QuickBooks id could not be resolved — no vendor bill was created.'; }
     } catch (e) { billSkipReason = 'Vendor bill error: ' + e.message; }
     if (billSkipReason) warnings.push(billSkipReason);
@@ -6279,7 +6358,7 @@ async function scopeProposalBillMilestones(env, body) {
         const newCharge = +(priorCharge + custTotal).toFixed(2);
         const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
         const vendorNote = vendTotal > 0
-          ? ('vendor paid $' + vendTotal.toFixed(2) + ' this round' + (adj.fee > 0 ? ' (send $' + adj.bill_total.toFixed(2) + ' after the $' + adj.fee.toFixed(2) + ' instant-pay fee)' : ''))
+          ? ('vendor paid $' + vendTotal.toFixed(2) + ' this round' + (depCredit ? ' (less the $' + depCredit.amount.toFixed(2) + ' deposit already paid)' : '') + (adj.fee > 0 ? ' (send $' + adj.bill_total.toFixed(2) + ' after the $' + adj.fee.toFixed(2) + ' instant-pay fee)' : ''))
           : ('vendor not paid this round' + (billSkipReason ? (' — ' + billSkipReason) : ''));
         const noteLine = '[' + ts + '] Scope Proposal billed — ' + labelList + ' — $' + custTotal.toFixed(2) + ' invoiced (' + (invoiceNumber || invoiceId) + '); ' + vendorNote + '.';
         const fields = { Customer_Charge: String(newCharge), Notes: woRow.Notes ? (woRow.Notes + '\n' + noteLine) : noteLine };
@@ -6542,8 +6621,29 @@ async function scopeProposalBookFinal(env, body) {
   const cfgAll = await fetchConfig(env);
   const feeCfg = instantFeeConfig(cfgAll);
   feeCfg.warnings.forEach(w => warnings.push(w));
+  // Oct 26 2026: same automatic deposit deduction as the milestone path (this IS the final bill).
+  let depCredit = null;
+  if (vendor && !vendorInHouse && finalVendorAmount > 0 && s.WO_ID) {
+    let woDep = null;
+    try { woDep = findWO(await fetchTab(env, 'Work_Orders'), s.WO_ID); }
+    catch (e) {
+      if (!body.preview_only) return json({ ok: false, error: 'Could not read the work order ' + s.WO_ID + ' to check for a vendor deposit (' + String((e && e.message) || e).slice(0, 140) + '), so nothing was billed. Try again in a minute.' }, 503);
+      warnings.push('Could not read the work order to check for a vendor deposit — any deposit already paid to the vendor is not reflected here.');
+    }
+    if (!woDep && !body.preview_only) return json({ ok: false, error: 'Work order ' + s.WO_ID + ' (linked to this proposal) was not found, so whether a vendor deposit was paid could not be checked. Nothing was billed. Fix the link first.' }, 409);
+    if (!woDep) warnings.push('⚠ The linked work order ' + s.WO_ID + ' was not found, so any vendor deposit already paid cannot be checked.');
+    const dep = woDepositCredit(woDep, vendor.ID);
+    if (dep) {
+      if (finalVendorAmount < dep.amount - 0.005) {
+        const msg = 'The $' + dep.amount.toFixed(2) + ' deposit already paid to ' + vendDisplay + ' is more than the remaining vendor balance ($' + finalVendorAmount.toFixed(2) + ').';
+        if (!body.preview_only) return json({ ok: false, deposit_blocked: true, error: msg + ' Nothing was billed. Fix the amounts, or clear the deposit on the work order if it was entered in error.', warnings }, 409);
+        warnings.push('⛔ ' + msg + ' The bill cannot be sent until that is fixed.');
+      } else { depCredit = dep; warnings.push('💰 A $' + dep.amount.toFixed(2) + ' deposit was already paid to ' + vendDisplay + ' (QuickBooks bill ' + (dep.bill_number || dep.bill_id) + ') — it comes off this final bill automatically.'); }
+    }
+  }
   const adj = vendorBillAdjustments({ payable: finalVendorAmount, lang: (vendor && String(vendor.Language || '').toLowerCase() === 'es') ? 'es' : 'en',
-    feeOn: !!vendor && !vendorInHouse && finalVendorAmount > 0 && instantPayEnabled(vendor, cfgAll, body.instant_pay), cfg: feeCfg, credits: [] });
+    feeOn: !!vendor && !vendorInHouse && finalVendorAmount > 0 && instantPayEnabled(vendor, cfgAll, body.instant_pay), cfg: feeCfg,
+    credits: depCredit ? [{ type: 'deposit_credit', amount: depCredit.amount, desc: depCredit.desc, desc_es: depCredit.desc_es }] : [] });
   adj.notes.forEach(n => warnings.push(n));
   const preview = {
     signature_id: row.ID, scope_id: row.Scope_ID, property: addr, signer: row.Signer_Name,
@@ -6606,6 +6706,7 @@ async function scopeProposalBookFinal(env, body) {
         billId = (rb && rb.Bill && rb.Bill.Id) || '';
         billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
         if (!billId) billSkipReason = 'QB bill failed: ' + (qbFault(rb) || 'unknown error');
+        else if (depCredit) await woDepositMarkApplied(env, s.WO_ID, depCredit, { id: billId, number: billNumber }, warnings, '/scope-proposal/book-final');
       } else { billSkipReason = 'The vendor\'s QuickBooks id could not be resolved — no vendor bill was created.'; }
     } catch (e) { billSkipReason = 'Vendor bill error: ' + e.message; }
     if (billSkipReason) warnings.push(billSkipReason);
@@ -7937,6 +8038,7 @@ async function intakeSmsAdmin(env, message, woId, property) {
     const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'admin_intake_alert', recipient_type: 'admin', admin: { Name: 'Admin', Phone: cfg.admin_phone }, property: property || null, message_body: message, bypassQuietHours: true });
     if (r && r.sent) return 'sent';
     if (r && r.send_ok === false) return 'BLOCKED: ' + r.gate_snapshot;
+    if (env.__STAGING__ ?? isStaging(env)) return 'STAGING STUB: the text was logged only, nothing was sent (this is the test server)';
     return 'FAILED: not sent (' + ((r && r.gate_snapshot) || 'unknown') + ')';
   } catch (e) { return 'FAILED: ' + String((e && e.message) || e).slice(0, 150); }
 }
@@ -11956,17 +12058,10 @@ async function approveInvoiceReview(env, body) {
       return json({ success: false, id: realId, error: 'The invoice was approved, but its $' + padRes.pad.toFixed(2) + ' instant-pay pad did not save (' + String((e && e.message) || e).slice(0, 120) + '). Withdraw the approval and approve again before sending to QuickBooks.' }, 500);
     }
   }
-  // Sep 15 2026 — a WO carrying an unapplied vendor deposit (POST /wo/deposit-approve) has
-  // now had its final bill reviewed and folded into vendor_cost (per the deposit banner
-  // renderIRCard shows). Flip Deposit_Applied so a SECOND bill/review on this same WO never
-  // nets the same deposit out twice, and the banner stops showing once it's been accounted for.
-  try {
-    const wos = await fetchTab(env, 'Work_Orders');
-    const wo = findWO(wos, wo_id);
-    if (wo && wo.Deposit_Amount && parseFloat(wo.Deposit_Amount) > 0 && wo.Deposit_Applied !== 'TRUE') {
-      await updateWOFields(env, wo_id, { Deposit_Applied: 'TRUE' });
-    }
-  } catch (e) { /* non-fatal — the review itself is already saved */ }
+  // Oct 26 2026 — the deposit is NO LONGER flipped to applied here. Approving a review only queues the bill; the vendor bill is what actually
+  // deducts the deposit, automatically, as its own visible line (woDepositCredit in qbSendInvoice / qbSendCombinedInvoice / the proposal billing
+  // paths), and Deposit_Applied flips ONLY after QuickBooks returns that bill's id (woDepositMarkApplied). Flipping at approval meant an approved
+  // bill that never reached QuickBooks looked deducted when it was not, and it relied on Brett typing the net amount by hand.
   return json({ success: true, id: realId, instant_pad: padRes.pad || 0 });
 }
 
@@ -12429,6 +12524,16 @@ async function processDepositPaidSweep(env) {
     try { await paymentMilestonesTab(env); } catch (_) {}
     tabs = { sigs: await fetchTab(env, 'Scope_Signatures'), milestones: await fetchTab(env, 'Payment_Milestones') };
   } catch (e) {
+    // Oct 29 2026 (queue 222): Google's shared per-minute READ quota stopped the sweep's reads. Nothing was checked, nothing moved; the next run (the scheduler, or
+    // the next Who To Pay open) simply tries again. That is the calm P2 "sheets_quota_busy" row and a {quota_busy:true} answer with NO errors[] entry (so the Who To Pay
+    // banner does not turn red and the scheduler files it as busy, not as a P0), instead of its own P1 "deposit_sweep_read" row. Every other read failure is unchanged.
+    // Money rules are untouched: no deposit is classified or transitioned on this path. If even the P2 row cannot be written, THAT is reported loudly in errors[].
+    if (sheetsQuotaBusyError(e)) {
+      out.ok = false; out.quota_busy = true; out.reason = String((e && e.message) || e).slice(0, 300);
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'sheets_quota_busy', Skill_Or_Endpoint: 'processDepositPaidSweep', Success: 'FALSE', Notes: ('deposit sweep skipped (will retry next run): ' + out.reason).slice(0, 480) }); }
+      catch (le) { out.errors.push({ stage: 'telemetry', ref: 'scopes/signatures/milestones', error: 'could not write Ops_Telemetry: ' + String((le && le.message) || le).slice(0, 200) }); }
+      return out;
+    }
     await logAndCollectError(env, out.errors, 'deposit_sweep_read', 'processDepositPaidSweep', 'scopes/signatures/milestones', e);
     out.ok = false; return out;
   }
@@ -12680,11 +12785,11 @@ async function approveEstimate(env, body) {
 // half already gets created automatically elsewhere in this file (e.g. scopeProposalBook)
 // while payment itself always stays a separate, human-triggered step.
 // The Hub-side Work_Orders fields still exist so the FINAL bill's review card can show the
-// net amount still owed (renderIRCard's deposit banner + the Deposit_Applied flip in
-// approveInvoiceReview) — that part of the original design was right, just incomplete.
+// net amount still owed. UPDATE Oct 26 2026: the final vendor bill now deducts the deposit AUTOMATICALLY (woDepositCredit) and flips Deposit_Applied
+// only after QuickBooks returns that bill's id; the deposit is capped at the vendor's estimate and carries the instant-pay fee as its own line.
 async function depositApprove(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
-  const amount = parseFloat(body.amount);
+  const amount = money2(parseFloat(body.amount));
   if (!Number.isFinite(amount) || amount <= 0) return json({ error: 'amount must be a positive number' }, 400);
 
   const wos = await fetchTab(env, 'Work_Orders');
@@ -12710,6 +12815,34 @@ async function depositApprove(env, body) {
   const vendor = vendors.find(v => v.ID === vendorId);
   if (!vendor) return json({ error: `Vendor ${vendorId} not found` }, 404);
 
+  // Oct 26 2026 — a deposit can never be more than the vendor's own estimate (the number they agreed to), so a typo or a stale tap cannot overpay them.
+  // A failed READ of the estimates stops the deposit; "no estimate on file" is allowed but said out loud (older jobs were quoted outside the Hub).
+  let capInfo = null;
+  try { capInfo = woDepositEstimateCap(await fetchTab(env, 'Estimates'), woId, wo); }
+  catch (e) {
+    let tnote = '';
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_deposit_estimate_read_failed', Skill_Or_Endpoint: '/wo/deposit-approve', Success: 'FALSE', Notes: ('wo=' + woId + ' ' + String((e && e.message) || e)).slice(0, 300) }); }
+    catch (e2) { tnote = ' (That also could not be logged to Ops_Telemetry.)'; }
+    return json({ error: 'Could not read the estimates to check the deposit against the vendor\'s quote (' + String((e && e.message) || e).slice(0, 140) + '), so nothing was created. Try again in a minute.' + tnote }, 502);
+  }
+  if (capInfo && amount > capInfo.cap + 0.005) {
+    return json({ error: `A $${amount.toFixed(2)} deposit is more than the vendor's estimate allows: the estimate is $${capInfo.subtotal.toFixed(2)}` +
+      (capInfo.spent > 0 ? ` and $${capInfo.spent.toFixed(2)} of it was already paid as a deposit` : '') + `, so the most you can deposit is $${capInfo.cap.toFixed(2)}. Nothing was created.`,
+      estimate_subtotal: capInfo.subtotal, max_deposit: capInfo.cap }, 400);
+  }
+
+  // Instant-pay fee on the deposit (same rule as the final bill): its own visible negative line, so the bill total is exactly what Brett sends.
+  const cfgAll = await fetchConfig(env);
+  const feeCfg = instantFeeConfig(cfgAll);
+  const feeOn = instantPayEnabled(vendor, cfgAll, body.instant_pay);
+  const adj = vendorBillAdjustments({ payable: amount, credits: [], feeOn, cfg: feeCfg, lang: String(vendor.Language || '').toLowerCase() === 'es' ? 'es' : 'en' });
+  const warnings = feeCfg.warnings.concat(adj.notes);
+  const summary = { wo_id: woId, vendor: vendor.Name || vendor.Company || vendor.First_Name || ('Vendor ' + vendorId), amount: amount.toFixed(2), fee: money2(adj.fee).toFixed(2), send_amount: money2(adj.bill_total).toFixed(2),
+    fee_on: !!feeOn, estimate_subtotal: capInfo ? capInfo.subtotal : null, max_deposit: capInfo ? capInfo.cap : null, no_estimate_on_file: !capInfo, warnings };
+  if (!capInfo) warnings.push('No estimate is on file for this work order, so the deposit could not be checked against a quote.');
+  // Preview only: say exactly what the real click would do. Touches neither QuickBooks nor the sheet.
+  if (body.preview_only) return json({ success: true, preview: true, ...summary });
+
   const [properties, units] = await Promise.all([
     fetchTab(env, 'Properties').catch(() => []),
     fetchTab(env, 'Units').catch(() => []),
@@ -12726,13 +12859,29 @@ async function depositApprove(env, body) {
   try { vendorQbId = await qbFindOrCreateVendor(env, vendor, vendor.Name || vendor.Company || vendor.First_Name || 'Vendor', token); }
   catch (e) { return json({ error: 'QuickBooks vendor lookup failed, nothing was recorded: ' + e.message }, 502); }
 
+  // Replacing an outstanding deposit (force:true) must retire its QuickBooks bill first, or the vendor could be paid for two deposit bills while only one is
+  // ever deducted. If the old bill cannot be deleted (it was paid), refuse and leave everything as it is.
+  if (hasOutstanding && body.force && String(wo.Deposit_QB_Bill_ID || '').trim()) {
+    let del;
+    try { del = await qbDeleteBillSafe(env, wo.Deposit_QB_Bill_ID, token); }
+    catch (e) { return json({ error: 'Could not retire the existing deposit bill ' + (wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID) + ' in QuickBooks (' + String((e && e.message) || e).slice(0, 140) + '), so nothing was created. Check it in QuickBooks.' }, 502); }
+    if (!del.ok) return json({ error: 'The existing deposit bill ' + (wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID) + ' could not be deleted (' + del.error + ') — it may already be paid. Nothing was created; handle that bill in QuickBooks first.' }, 409);
+    summary.warnings.push('The earlier unapplied deposit bill ' + (del.doc || wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID) + ' was deleted in QuickBooks and replaced.');
+    // The old bill is gone, so the work order must stop pointing at it right now (a failure creating the new one below must not leave a deleted bill on file).
+    try {
+      await updateWOFields(env, woId, { Deposit_Amount: '', Deposit_QB_Bill_ID: '', Deposit_QB_Bill_Number: '', Deposit_Applied: 'FALSE', Deposit_Notes: 'Replaced' });
+      invalidateTabCache('Work_Orders');
+    } catch (e) { return json({ error: 'The old deposit bill was deleted in QuickBooks, but clearing it on ' + woId + ' failed (' + String((e && e.message) || e).slice(0, 140) + '). Nothing new was created; tell me so it can be fixed.' }, 500); }
+  }
   const trade = QB_TRADE_MAP[(wo.Trade || '').trim()] || QB_TRADE_MAP.General;
   const desc = (`Deposit — ${addr || ('WO ' + woId)}${wo.Description ? ' — ' + wo.Description : ''}`).slice(0, 4000);
   const billPayload = {
     Line: [{ DetailType: 'AccountBasedExpenseLineDetail', Amount: +amount.toFixed(2), Description: desc,
-      AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }],
+      AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }]
+      .concat(adj.lines.map(l => ({ DetailType: 'AccountBasedExpenseLineDetail', Amount: l.amount, Description: String(l.desc).slice(0, 4000),
+        AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }))),
     VendorRef: { value: vendorQbId }, TxnDate: new Date().toISOString().slice(0, 10),
-    PrivateNote: (`Deposit approved by Brett — WO ${woId} — pay via QuickBooks Instant Pay; nets against the final vendor bill at job completion.` +
+    PrivateNote: (`Deposit approved by Brett — WO ${woId} — pay via QuickBooks Instant Pay; comes off the final vendor bill automatically.` +
                   (body.notes ? ' ' + body.notes : '')).slice(0, 1000),
   };
   const rb = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
@@ -12740,17 +12889,33 @@ async function depositApprove(env, body) {
   const qbBillNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
   if (!qbBillId) return json({ error: 'QuickBooks bill was not created (' + (qbFault(rb) || 'unknown error') + ') — nothing was recorded, nothing to pay yet.' }, 502);
 
-  await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied', 'Deposit_QB_Bill_ID', 'Deposit_QB_Bill_Number']);
-  await updateWOFields(env, woId, {
-    Deposit_Amount: amount.toFixed(2),
-    Deposit_Vendor_ID: vendorId,
-    Deposit_Approved_Date: new Date().toISOString().split('T')[0],
-    Deposit_Notes: body.notes || '',
-    Deposit_Applied: 'FALSE',
-    Deposit_QB_Bill_ID: qbBillId,
-    Deposit_QB_Bill_Number: qbBillNumber,
-  });
-  return json({ success: true, wo_id: woId, amount: amount.toFixed(2), qb_bill_id: qbBillId, qb_bill_number: qbBillNumber });
+  // The bill now EXISTS in QuickBooks. If recording it on the work order fails, say so loudly with the bill id — a bill nobody recorded is exactly
+  // how a deposit gets forgotten on the final bill.
+  try {
+    await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied', 'Deposit_QB_Bill_ID', 'Deposit_QB_Bill_Number', 'Deposit_Fee']);
+    await updateWOFields(env, woId, {
+      Deposit_Amount: amount.toFixed(2),
+      Deposit_Vendor_ID: vendorId,
+      Deposit_Approved_Date: new Date().toISOString().split('T')[0],
+      Deposit_Notes: body.notes || '',
+      Deposit_Applied: 'FALSE',
+      Deposit_QB_Bill_ID: qbBillId,
+      Deposit_QB_Bill_Number: qbBillNumber,
+      Deposit_Fee: money2(adj.fee).toFixed(2),
+    });
+    invalidateTabCache('Work_Orders');
+    const back = findWO(await fetchTab(env, 'Work_Orders'), woId);
+    if (!back || String(back.Deposit_QB_Bill_ID || '') !== String(qbBillId) || Math.abs((parseFloat(back.Deposit_Amount) || 0) - amount) > 0.005) {
+      throw new Error('the deposit read back as "' + (back ? back.Deposit_Amount + ' / bill ' + back.Deposit_QB_Bill_ID : 'no row') + '"');
+    }
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 200);
+    let tnote = '';
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_deposit_record_failed', Skill_Or_Endpoint: '/wo/deposit-approve', Success: 'FALSE', Notes: ('wo=' + woId + ' qb_bill=' + qbBillId + ' ' + msg).slice(0, 480) }); }
+    catch (e2) { tnote = ' (That also could not be logged to Ops_Telemetry.)'; }
+    return json({ error: `QuickBooks bill ${qbBillNumber || qbBillId} WAS created for $${amount.toFixed(2)}, but saving it on ${woId} failed (${msg}). Do NOT create it again — write down bill ${qbBillNumber || qbBillId} and tell me so it can be recorded, otherwise the final bill will not deduct it.` + tnote, qb_bill_id: qbBillId, qb_bill_number: qbBillNumber }, 500);
+  }
+  return json({ success: true, qb_bill_id: qbBillId, qb_bill_number: qbBillNumber, ...summary });
 }
 
 // POST /wo/deposit-clear { wo_id, reason? } — undo a deposit entered in error. If a QuickBooks
@@ -12763,6 +12928,9 @@ async function depositClear(env, body) {
   const wo = findWO(wos, woId);
   if (!wo) return json({ error: `No work order ${woId} found` }, 404);
   if (!wo.Deposit_Amount) return json({ error: 'No deposit recorded on this WO' }, 404);
+  if (String(wo.Deposit_Applied || '').toUpperCase() === 'TRUE') {
+    return json({ error: `The $${parseFloat(wo.Deposit_Amount).toFixed(2)} deposit on ${woId} was already taken off the final vendor bill${wo.Deposit_Applied_Bill ? ' (' + wo.Deposit_Applied_Bill + ')' : ''}, so clearing it would put the records out of step with QuickBooks. Nothing was changed.` }, 409);
+  }
 
   let qbNote = '';
   if (wo.Deposit_QB_Bill_ID) {
@@ -12774,11 +12942,11 @@ async function depositClear(env, body) {
     } catch (e) { qbNote = `Hub record cleared, but clearing the QuickBooks bill failed: ${e.message} — check QuickBooks directly.`; }
   }
 
-  await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied', 'Deposit_QB_Bill_ID', 'Deposit_QB_Bill_Number']);
+  await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied', 'Deposit_QB_Bill_ID', 'Deposit_QB_Bill_Number', 'Deposit_Fee', 'Deposit_Applied_Bill', 'Deposit_Applied_Date']);
   await updateWOFields(env, woId, {
     Deposit_Amount: '', Deposit_Vendor_ID: '', Deposit_Approved_Date: '',
     Deposit_Notes: body.reason ? `Cleared: ${body.reason}` : 'Cleared', Deposit_Applied: 'FALSE',
-    Deposit_QB_Bill_ID: '', Deposit_QB_Bill_Number: '',
+    Deposit_QB_Bill_ID: '', Deposit_QB_Bill_Number: '', Deposit_Fee: '', Deposit_Applied_Bill: '', Deposit_Applied_Date: '',
   });
   return json({ success: true, wo_id: woId, qb_note: qbNote });
 }
@@ -16243,8 +16411,12 @@ async function smsGatedSend(env, opts) {
   // the send, so a failed status save afterwards can never leave a sent text looking "pending" and be sent again.
   const _earlyMorningOk = opts.allowEarlyMorning === true && etHour(new Date()) === 8;
   const _qw = opts.quietWindow && Number.isFinite(opts.quietWindow.start) && Number.isFinite(opts.quietWindow.end) ? opts.quietWindow : null;
-  const _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
-  const _holdNow = !!(_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk);
+  let _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
+  let _holdNow = !!(_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk);
+  // opts.holdUntil (Oct 23 2026, delivery tenant request): a caller may hold THIS text to a later batch slot (ISO string). The text is queued exactly like a
+  // quiet-hours hold (Status pending + Send_After) and released by the same sweep, which re-checks every gate at release. It can only delay a text, never advance one.
+  const _batchHold = opts.holdUntil ? new Date(opts.holdUntil) : null;
+  if (_batchHold && !isNaN(_batchHold) && _batchHold > new Date() && (!_holdNow || _batchHold > _holdUntil)) { _holdUntil = _batchHold; _holdNow = true; }
   const _sendNow = !!(sendOk && recipientPhone && !_holdNow);
   const rowObj = {
     ID: id, WO_ID: opts.wo_id || '', Message_Type: opts.message_type || '',
@@ -16377,7 +16549,7 @@ async function mqSendQueuedRowInner(env, row, deliverTo, extraFields) {
   let result;
   if (!dc.ok) { await smsReportRegionBlocked(env, id, dc); result = { skipped: true, region_blocked: true, reason: 'text not sent: destination outside enabled regions (' + dc.reason + ')' }; }
   else {
-    try { result = await sendSMSRaw(env, deliverTo, row.Message_Body, { keepAccents: String(row.Translated_To || '') === 'es', allowRepeat: String(row.Recipient_Type || '') === 'admin', context: { wo_id: row.WO_ID || '', message_type: row.Message_Type || '', recipient_type: row.Recipient_Type || '', queue_id: id } }); }
+    try { result = await sendSMSRaw(env, deliverTo, row.Message_Body, { keepAccents: String(row.Translated_To || '') === 'es', allowRepeat: String(row.Recipient_Type || '') === 'admin' || String(row.Message_Type || '') === 'delivery_tenant_notice', context: { wo_id: row.WO_ID || '', message_type: row.Message_Type || '', recipient_type: row.Recipient_Type || '', queue_id: id } }); }
     catch (e) { result = { error: 'no answer from Twilio: ' + smsMaskPhones(String((e && e.message) || e)).slice(0, 160) }; await mqReportFailure(env, id, 'the send to Twilio threw, the text may or may not have gone out - check the Twilio log before resending: ' + smsMaskPhones(String((e && e.message) || e)).slice(0, 200)); }
   }
   const o = smsSendOutcome(result);
@@ -16550,6 +16722,14 @@ async function processQuietHoursQueue(env) {
       } catch (e) {
         try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_skip_check_failed', Skill_Or_Endpoint: 'processQuietHoursQueue', Success: 'FALSE', Notes: 'row=' + id + ' err=' + String((e && e.message) || e).slice(0, 200) + ' - sending anyway' }); } catch (_) {}
       }
+    }
+    // Oct 23 2026: a batch-held tenant delivery notice is released at 6pm ET (the last window). If the sweep runs late and it is already quiet
+    // hours, push it to the next 9am rather than text a tenant at night. (Other held texts keep their old behaviour.)
+    if (row.Message_Type === 'delivery_tenant_notice' && isQuietHoursNow(now)) {
+      const nx = nextQuietHoursEnd(now).toISOString();
+      await updateMessageQueueRow(env, id, { Send_After: nx, Gate_Snapshot: String(row.Gate_Snapshot || '') + ' (released late in quiet hours, moved to ' + nx + ')' });
+      results.push({ id, sent: false, held: true, send_after: nx });
+      continue;
     }
     const property = properties.find(p => p.ID === row.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
@@ -17650,6 +17830,9 @@ function schedBadness(status, b) {
     if (b.unparseable_response) return 'unreadable response: ' + b.unparseable_response;
     if (b.error) return (typeof b.error === 'string' ? b.error : JSON.stringify(b.error)).slice(0, 300);
     if (b.ok === false) {
+      // Oct 29 2026: a job that stopped on Google's shared read quota says so ({quota_busy:true, reason:<the Sheets error>}, no errors[]). Hand the scheduler the
+      // raw Sheets error text so schedErrorsAreQuotaBusy sees it for what it is (a calm, retried "busy"). Any errors[] entry makes this branch stand aside.
+      if (b.quota_busy === true && b.reason && !(Array.isArray(b.errors) && b.errors.length)) return String(b.reason).slice(0, 300);
       // Oct 14 2026: the deposit sweep failed 70+ times in a row with the useless text "ok:false []" (its not_found list was the
       // reason, its errors list was empty). A failure must say WHY, or nobody can act on it.
       const why = (Array.isArray(b.errors) && b.errors.length) ? b.errors
@@ -17663,12 +17846,30 @@ function schedBadness(status, b) {
   }
   return null;
 }
+// Oct 29 2026. PURE. Is this step result a failure ONLY because Google's shared Sheets READ quota ran out (every error is a read-quota error, nothing else failed)?
+// Decided on the structured result, so the 300-character cut in schedBadness' text can never hide a second, real error or a not_found / failed count that the text
+// does not show. Anything else: false (stays loud).
+function schedBodyIsQuotaBusy(status, b) {
+  if (status >= 400 || !b || typeof b !== 'object' || b.unparseable_response) return false;
+  if (Array.isArray(b.not_found) && b.not_found.length) return false;
+  if (typeof b.failed === 'number' && b.failed > 0) return false;
+  if (Array.isArray(b.failed) && b.failed.length) return false;
+  if (b.error) return typeof b.error === 'string' && sheetsQuotaBusyText(b.error);
+  const list = b.errors;
+  if (Array.isArray(list) && list.length) return list.every(e => e && sheetsQuotaBusyText(e.error));
+  return b.ok === false && b.quota_busy === true && sheetsQuotaBusyText(b.reason);
+}
 // Runs one step: a throw OR a failure-shaped result is pushed to `errors`; the (unwrapped) body is returned.
+// quota_busy on an entry is the structured verdict: true = every error was the read quota; false = the text looks like it but the result also had something else wrong.
 async function schedStep(name, fn, errors) {
   try {
     const u = await schedUnwrap(await fn());
     const bad = schedBadness(u.status, u.body);
-    if (bad) errors.push({ step: name, error: bad });
+    if (bad) {
+      const entry = { step: name, error: bad };
+      if (schedBodyIsQuotaBusy(u.status, u.body)) entry.quota_busy = true; else if (sheetsQuotaBusyText(bad)) entry.quota_busy = false;
+      errors.push(entry);
+    }
     return u.body;
   } catch (e) { errors.push({ step: name, error: schedErrText(e) }); return undefined; }
 }
@@ -19308,11 +19509,36 @@ function sheetsQuotaBusyError(e) {
   const m = String((e && e.message) || e || '');
   return /^Sheets API error on GET /.test(m) && /quota exceeded|read requests per minute|RESOURCE_EXHAUSTED|\b429\b/i.test(m);
 }
+// Oct 29 2026 (queue 215/216/222). PURE. sheetsQuotaBusyError is anchored on "Sheets API error on GET", so it missed a read-quota error that a job had
+// WRAPPED: nested in a list (`ok:false [{"stage":"deposit_sweep_read","error":"Sheets API error on GET ..."}]`, `2 error(s): [...]`) or behind a plain label
+// ("Held cleaner texts could not be processed: Sheets API error on GET ..."). Those were filed as P0/P1 failures instead of the calm P2 sheets_quota_busy row.
+// Rule: EVERY error found must be a read-quota error. A list that also holds ONE real error (a write that failed, a bug, a telemetry write on POST) is NOT
+// busy, and a list with an `"error":` value we cannot read (an object, null, a cut-off tail that is not a quota message) is NOT busy either: when unsure it stays loud.
+const SHEETS_QUOTA_LABEL_RE = /^[A-Za-z][^"{}\[\]]{0,150}?:\s+(?=Sheets API error on GET )/;
+function sheetsQuotaBusyText(text) {
+  const m = String((text && text.message) || text || '');
+  if (!m) return false;
+  const one = v => {
+    const s = String(v || '').replace(SHEETS_QUOTA_LABEL_RE, '');
+    return sheetsQuotaBusyError(s) && (s.match(/Sheets API error on /g) || []).length === 1;   // exactly one Sheets error, and it is the GET quota one
+  };
+  if (one(m)) return true;
+  // The scheduler cuts a job's error text at 300 characters. A list that is cut off may have lost a second, REAL error after the quota one, so a text that does not
+  // close (end in a closing bracket) is never assumed busy here; schedStep flags such runs from the structured result instead, see schedBodyIsQuotaBusy. When unsure: loud.
+  if (!/[\]\x7d]\s*$/.test(m)) return false;   // (\x7d is a closing curly brace, written this way so the function's braces stay balanced for the tests that slice it out)
+  const vals = [], re = /"error":"((?:[^"\\]|\\.)*)"/g;
+  let x;
+  while ((x = re.exec(m))) vals.push(x[1].replace(/\\(.)/g, '$1'));   // undo JSON backslash escapes (the value is only compared against the quota pattern)
+  const total = (m.match(/"error"\s*:/g) || []).length;
+  return vals.length > 0 && vals.length === total && vals.every(one);
+}
 // Oct 22 2026. PURE. A scheduler job's errors ([{step, error}]) where EVERY entry is the shared Sheets read quota ("busy"), not a bug in the job.
 // Such a run is retried on the next tick; it is a calm P2 "sheets_quota_busy" row, not a P0 "scheduler_job" failure that pages Brett.
 // (A job that stays unable to run is still caught loudly: the "Scheduled job X is overdue" condition is P0.)
+// Oct 29 2026: an entry's error may be the raw message OR a job's wrapped text with the quota error nested inside (see sheetsQuotaBusyText).
+// An entry schedStep flagged has its structured verdict honoured either way (schedBodyIsQuotaBusy); the cut-off text alone can neither prove nor disprove it.
 function schedErrorsAreQuotaBusy(errors) {
-  return Array.isArray(errors) && errors.length > 0 && errors.every(x => x && sheetsQuotaBusyError(x.error));
+  return Array.isArray(errors) && errors.length > 0 && errors.every(x => x && (x.quota_busy === true || (x.quota_busy !== false && sheetsQuotaBusyText(x.error))));
 }
 function aiCreditIsPausedError(e) { return !!e && e.code === AI_CREDIT_CODE; }
 
@@ -21462,7 +21688,7 @@ async function selftestCallEndpoint(env, name) {
   const u = (p) => new URL('https://selftest.internal' + p);
   switch (name) {
     case 'health': return await health(env);
-    case 'version': return json({ version: BUILD_VERSION });
+    case 'version': return json({ version: buildVersion(env).version });
     case 'config': return await getConfig(env);
     case 'properties': return await getSheet(env, 'Properties');
     case 'units': return await getSheet(env, 'Units');
@@ -23419,6 +23645,32 @@ async function gmailSendEmailWithAttachment(env, { to, subject, html, attachment
   const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
     method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ raw: _utf8B64url(raw) }),
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
+  return { sent: true, message_id: data.id };
+}
+
+// Multi-photo email with an optional Cc (Oct 28 2026, field-inspection urgent items). Staging never sends real mail with attachments:
+// it goes through gmailSendEmail's stub/redirect policy unchanged (recipient overridden, nothing reaches a real requester).
+async function gmailSendEmailMulti(env, { to, cc, subject, html, attachments }) {
+  if (!to) throw new Error('gmailSendEmailMulti: to required');
+  const atts = Array.isArray(attachments) ? attachments : [];
+  if (env.__STAGING__ ?? isStaging(env)) return await gmailSendEmail(env, { to, subject: (subject || '') + (atts.length ? ' [' + atts.length + ' photo(s) not attached on staging]' : ''), html });
+  const accessToken = await gmailAccessToken(env);
+  const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
+  const subjectEncoded = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject || '')))}?=`;
+  const boundary = 'ridgeco_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
+  const head = [`From: Ridge Co <${from}>`, `To: ${to}`].concat(cc ? [`Cc: ${cc}`] : [], [`Subject: ${subjectEncoded}`, 'MIME-Version: 1.0', `Content-Type: multipart/mixed; boundary="${boundary}"`, '', `--${boundary}`, 'Content-Type: text/html; charset="UTF-8"', '', html || '', '']);
+  const parts = head.slice();
+  for (const a of atts) {
+    const safeName = String(a.filename || 'photo.jpg').replace(/[^\w .-]/g, '_').slice(0, 80);
+    parts.push(`--${boundary}`, `Content-Type: ${a.mimeType || 'application/octet-stream'}; name="${safeName}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${safeName}"`, '', String(a.base64Data || '').replace(/(.{76})/g, '$1\r\n'), '');
+  }
+  parts.push(`--${boundary}--`);
+  const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw: _utf8B64url(parts.join('\r\n')) }),
   });
   const data = await resp.json().catch(() => null);
   if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
@@ -26779,8 +27031,24 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/owner/tenant-roster/preview') return true;
   if (path === '/owner/tenant-roster/apply') return !!(body && body.owner_id) && await isTestRecord(env, 'Owners', body.owner_id);
   // Oct 15 2026 (field inspection): the staging token may only write inspections whose id starts TEST-, brands named TEST- (never default, never a non-TEST brand); structure/summarize write nothing.
-  if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report') return String((body && body.id) || '').startsWith('TEST-');
+  if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report' || path === '/fi/urgent-send') return String((body && body.id) || '').startsWith('TEST-');
   if (path === '/fi/structure' || path === '/fi/summarize' || path === '/fi/route' || path === '/fi/brand/scrape' || path === '/fi/transcribe/json') return true; // AI / read-only: no sheet writes
+  if (path === '/fi/reword') return true; // AI only: writes nothing
+  if (path === '/admin/fi-premier-repair') { // staging may only repair a TEST- partner's links, to a TEST- inspection
+    if (!body || body.dry_run !== false) return true; // a dry run writes nothing
+    const _cu = (await fetchTab(env, 'Insp_Customers')).find(c => String(c.ID) === String(body.customer_id));
+    if (body.copy_partner_contact === true) { // copying contact details onto an owner may only ever touch a TEST- owner on staging
+      const _ow = (await fetchTab(env, 'Owners')).find(o => String(o.ID) === String(body.owner_id));
+      if (!_ow || !String(_ow.Company || '').startsWith('TEST-')) return false;
+    }
+    return !!_cu && String(_cu.Name || '').startsWith('TEST-') && Array.isArray(body.links) && body.links.every(l => String((l && l.inspection_id) || '').startsWith('TEST-'));
+  }
+  if (path === '/fi/booking/start') { // staging may only claim a TEST- booking (address starts TEST-) for a TEST- inspection id
+    if (!String((body && body.inspection_id) || '').startsWith('TEST-')) return false;
+    const _bk = await fetchTab(env, 'Insp_Bookings');
+    const _br = _bk.find(r => String(r.ID) === String(body && body.booking_id));
+    return !!_br && String(_br.Address || '').startsWith('TEST-');
+  }
   if (path === '/fi/read-label') return String((body && body.inspection_id) || '').startsWith('TEST-'); // reads a private photo: TEST- inspections only
   if (path === '/fi/folder/organize') return String((body && body.inspection_id) || '').startsWith('TEST-');
   if (path === '/fi/property/create') { // staging may only create a TEST- address owned by a TEST- owner (new TEST- company, or an existing TEST- owner)
@@ -26841,6 +27109,19 @@ async function hubTestWriteAllowed(env, path, body) {
     if (_a.status !== 'ok') return { ok: true };
     const _okProp = String((_a.property && _a.property.Access_Notes) || '').startsWith('TEST-');
     return { ok: _okProp, debug: _okProp ? undefined : 'intake-guard: email resolves to a non-TEST property ' + (_a.property && _a.property.ID) };
+  }
+  // Delivery email watcher (Oct 23 2026): staging-only token. The message id must be TEST- prefixed, and when the email resolves to a real
+  // property it must be a TEST- one (Access_Notes marker, same as /workorder). Parked / unmatched outcomes write only a Deliveries row + the alert.
+  if (path === '/intake/delivery-email') {
+    const _mid = String((body && (body.rfc_message_id || body.message_id || body.gmail_id)) || '');
+    if (!_mid.startsWith('TEST-')) return { ok: false, debug: 'delivery-intake-guard: message_id must start with TEST-' };
+    const _p = deliveryParseEmail({ subject: String(body.subject || ''), body: body.body != null ? body.body : body.text, html: String(body.html || '').slice(0, 200000), received_at: body.received_at });
+    if (!_p.address) return { ok: true };
+    const [_props, _units, _tenants] = await fetchTabs(env, ['Properties', 'Units', 'Tenants']);
+    const _pl = deliveryMatchPlace(_p.address, _p.unit_raw, _props, _units, _tenants);
+    if (_pl.status !== 'matched') return { ok: true };
+    const _okProp = String(_pl.property.Access_Notes || '').startsWith('TEST-');
+    return { ok: _okProp, debug: _okProp ? undefined : 'delivery-intake-guard: email resolves to a non-TEST property ' + _pl.property.ID };
   }
   if (path === '/intake/retry') {
     const _q = (await fetchTab(env, INTAKE_TAB).catch(() => [])).find(r => String(r.ID) === String(body && body.id));
@@ -28943,7 +29224,11 @@ async function ensureColumns(env, tab, columns) {
     // if THAT specific call is what's failing, logging the failure via logTelemetry would call
     // straight back into this same failing path instead of just reporting it.
     if (tab !== TELEMETRY_TAB) {
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ensure_columns_failed', Skill_Or_Endpoint: tab, Success: 'FALSE', Notes: `columns=${(columns || []).join(',')} err=${String((e && e.message) || e)}` }); } catch (_) {}
+      // Oct 29 2026 (queue 216): the header check is a plain READ of the tab. When Google's shared per-minute read quota is what stopped it, that is the calm P2
+      // "sheets_quota_busy" row (the caller still gets the throw and retries), not a P1 "ensure_columns_failed". A real failure (a write, a bad range) is unchanged.
+      // (typeof: other tests slice this function out of module scope without the helper; they keep the old row.)
+      const _busy = typeof sheetsQuotaBusyError === 'function' && sheetsQuotaBusyError(e);
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: _busy ? 'sheets_quota_busy' : 'ensure_columns_failed', Skill_Or_Endpoint: _busy ? 'ensure_columns/' + tab : tab, Success: 'FALSE', Notes: `columns=${(columns || []).join(',')} err=${String((e && e.message) || e)}` }); } catch (le) { console.error('ensureColumns: could not log the failure to Ops_Telemetry (the original error is still thrown):', tab, le && le.message); }
     }
     throw e;
   }
@@ -29866,8 +30151,9 @@ async function qbVendorTransactions(env, token, qboVendorId) {
 // UNLINKED Hub rows (blank QB_Bill_ID) are candidates. A WO with >1 QB bill is ambiguous (never
 // auto-linked). Also reports QB bills with no Hub row and Hub rows with no QB bill. Amount
 // mismatches are flagged, not resolved — linking never changes a dollar figure. Kept pure.
-function qbMatchBillsToHub(hubBills, qbBills) {
+function qbMatchBillsToHub(hubBills, qbBills, scopeBillsByWo) {
   const digits = s => String(s || '').replace(/\D/g, '');
+  const qbById = {}; for (const q of (qbBills || [])) qbById[String(q.id)] = q;
   const qbByWo = {};
   for (const q of (qbBills || [])) { const k = digits(q.doc); if (!k) continue; (qbByWo[k] = qbByWo[k] || []).push(q); }
   const alreadyLinked = new Set((hubBills || []).map(h => String(h.qb_bill_id || '').trim()).filter(Boolean));
@@ -29878,7 +30164,39 @@ function qbMatchBillsToHub(hubBills, qbBills) {
     if (String(h.qb_bill_id || '').trim()) continue;            // already linked — leave it
     const k = digits(h.wo_id);
     const matches = (k ? (qbByWo[k] || []) : []).filter(q => !alreadyLinked.has(String(q.id)) && !usedQb.has(String(q.id)));
-    if (!matches.length) { hubNoMatch.push({ row_id: h.row_id, wo_id: h.wo_id, property: h.property, hub_total: h.total }); continue; }
+    if (!matches.length) {
+      // No QB bill carries this WO number. But a signed-proposal job's bills were created BY the Hub
+      // (Payment_Milestones.QB_Bill_ID), usually with a blank DocNumber, so the Hub already knows which
+      // QB bills belong to the WO. One bill -> link it; several -> link the single OPEN one (that is the
+      // payable); anything else is ambiguous and never auto-linked. Amounts are still only flagged.
+      const sb = (k && scopeBillsByWo && scopeBillsByWo[k]) || [];
+      const seenSb = new Set(), cands = [];
+      for (const s of sb) {
+        const id = String(s.qb_bill_id || '').trim();
+        if (!id || seenSb.has(id)) continue;
+        seenSb.add(id);
+        const q = qbById[id];
+        if (q && !alreadyLinked.has(id) && !usedQb.has(id)) cands.push({ q, inv: String(s.qb_invoice_id || '').trim() });
+      }
+      if (cands.length) {
+        let pick = cands.length === 1 ? cands[0] : null;
+        if (!pick) { const open = cands.filter(c => !c.q.paid); if (open.length === 1) pick = open[0]; }
+        if (!pick) {
+          ambiguous.push({ row_id: h.row_id, wo_id: h.wo_id, property: h.property, hub_total: h.total, candidates: cands.map(c => ({ qb_bill_id: String(c.q.id), qb_doc: c.q.doc, qb_total: c.q.total, qb_paid: c.q.paid })) });
+          continue;
+        }
+        usedQb.add(String(pick.q.id));
+        links.push({
+          row_id: h.row_id, wo_id: h.wo_id, property: h.property,
+          qb_bill_id: String(pick.q.id), qb_doc: pick.q.doc || '', qb_total: pick.q.total, qb_paid: pick.q.paid, qb_balance: pick.q.balance,
+          hub_total: h.total, amount_mismatch: Math.abs((Number(pick.q.total) || 0) - (Number(h.total) || 0)) > 0.005,
+          via: 'scope_milestone', qb_invoice_id: pick.inv,
+          scope_bills: cands.map(c => ({ qb_bill_id: String(c.q.id), qb_total: c.q.total, qb_paid: c.q.paid })),
+        });
+        continue;
+      }
+      hubNoMatch.push({ row_id: h.row_id, wo_id: h.wo_id, property: h.property, hub_total: h.total }); continue;
+    }
     if (matches.length > 1) { ambiguous.push({ row_id: h.row_id, wo_id: h.wo_id, property: h.property, hub_total: h.total, candidates: matches.map(q => ({ qb_bill_id: String(q.id), qb_doc: q.doc, qb_total: q.total, qb_paid: q.paid })) }); continue; }
     const q = matches[0];
     usedQb.add(String(q.id));
@@ -29930,7 +30248,23 @@ async function qbLinkVendorBills(env, body) {
       return { id: String(x.Id), doc: x.DocNumber || '', total: +(Number(x.TotalAmt) || 0).toFixed(2), balance: +bal.toFixed(2), paid: bal <= 0.005 };
     });
 
-    const plan = qbMatchBillsToHub(hubBills, qbBills);
+    // The Hub's own record of which QB bills a signed-proposal job created: Payment_Milestones.QB_Bill_ID /
+    // QB_Invoice_ID, joined to the WO through Scopes.WO_ID. A missing tab just means no scope-based matches;
+    // any other read failure is surfaced as a warning, never swallowed.
+    const scopeBillsByWo = {}; const warnings = [];
+    try {
+      const [scopes, milestones] = await Promise.all([fetchTab(env, 'Scopes'), fetchTab(env, 'Payment_Milestones')]);
+      const woByScope = {};
+      for (const sc of (scopes || [])) { if (sc && sc.ID && sc.WO_ID) woByScope[String(sc.ID)] = String(sc.WO_ID).replace(/\D/g, ''); }
+      for (const m of (milestones || [])) {
+        if (String(m.Active || '').toUpperCase() === 'FALSE') continue;
+        const wk = woByScope[String(m.Scope_ID || '')], bid = String(m.QB_Bill_ID || '').trim();
+        if (!wk || !bid) continue;
+        (scopeBillsByWo[wk] = scopeBillsByWo[wk] || []).push({ qb_bill_id: bid, qb_invoice_id: String(m.QB_Invoice_ID || '').trim() });
+      }
+    } catch (e) { if (!isMissingTabError(e)) warnings.push('Could not read signed-proposal billing, so only bill-number matching was used: ' + ((e && e.message) || e)); }
+
+    const plan = qbMatchBillsToHub(hubBills, qbBills, scopeBillsByWo);
 
     if (!apply) {
       // Identify each QB-only bill: if a Work Order exists for that number, say what/where it is
@@ -29949,7 +30283,7 @@ async function qbLinkVendorBills(env, body) {
       return json({ ok: true, applied: false, vendor: { id: vid, name: qbVendorDisplayName(vrow || {}) },
         link_count: plan.links.length, ambiguous_count: plan.ambiguous.length,
         hub_no_match_count: plan.hubNoMatch.length, qb_no_hub_count: qbNoHub.length,
-        links: plan.links, ambiguous: plan.ambiguous, hub_no_match: plan.hubNoMatch, qb_no_hub: qbNoHub });
+        links: plan.links, ambiguous: plan.ambiguous, hub_no_match: plan.hubNoMatch, qb_no_hub: qbNoHub, warnings });
     }
 
     const byRow = {}; for (const l of plan.links) byRow[l.row_id] = l;
@@ -29957,10 +30291,15 @@ async function qbLinkVendorBills(env, body) {
     const ids = wanted.slice(0, 50);
     const remaining = wanted.length - ids.length;
     const updated = [], failed = [];
+    // updateRow silently drops a field whose header is missing, so make sure the link columns exist first
+    // (appended at the END, never reordering) and then write each row with a read-back check.
+    if (ids.length) await ensureColumns(env, 'Vendor_Bills', ['QB_Bill_ID', 'QB_Invoice_ID']);
     for (const id of ids) {
       const l = byRow[id];
       try {
-        await updateRow(env, 'Vendor_Bills', id, { QB_Bill_ID: l.qb_bill_id });
+        const fields = { QB_Bill_ID: l.qb_bill_id };
+        if (l.qb_invoice_id) fields.QB_Invoice_ID = l.qb_invoice_id;
+        await updateRowVerified(env, 'Vendor_Bills', id, fields);
         updated.push({ row_id: id, wo_id: l.wo_id, qb_bill_id: l.qb_bill_id, qb_doc: l.qb_doc, qb_paid: l.qb_paid });
       } catch (e) { failed.push({ row_id: id, wo_id: l.wo_id, error: e.message }); }
     }
@@ -32499,6 +32838,60 @@ function proposalNettingPlan(o) {
   };
 }
 
+// ── Vendor deposit paid outside the proposal schedule (Oct 26 2026, WO-1253 / Cesar) ─────────────────────
+// A deposit recorded on the work order (POST /wo/deposit-approve) is a real QuickBooks bill Brett pays by hand. It is NOT a Vendor_Bills row
+// (so the vendor can never be paid for it twice) and it is NOT on the proposal's milestone schedule, so nothing netted it off the final bill.
+// woDepositCredit() says what comes off the final bill; woDepositEstimateCap() is the most a deposit may be.
+//   - credit only while Deposit_Applied !== TRUE, a QuickBooks bill id is on file (no bill = nothing was paid = nothing to deduct), and the
+//     deposit belongs to the vendor being billed.
+//   - the credit rides the same visible negative-line path as the proposal credit; Deposit_Applied flips only after QuickBooks returns the bill id.
+function woDepositCredit(wo, vendorId, irRows) {
+  if (!wo) return null;
+  const amt = money2(parseFloat(wo.Deposit_Amount) || 0);
+  if (!(amt > 0)) return null;
+  if (String(wo.Deposit_Applied || '').toUpperCase() === 'TRUE') return null;
+  const billId = String(wo.Deposit_QB_Bill_ID || '').trim();
+  if (!billId) return null;
+  const dv = String(wo.Deposit_Vendor_ID || '').trim();
+  if (dv && vendorId != null && String(vendorId).trim() !== '' && dv !== String(vendorId).trim()) return null;
+  // Belt and braces: if a vendor bill on this work order already recorded taking this deposit off (Invoice_Review.Deposit_Credit) but the flag flip failed,
+  // the deposit is spent. Never deduct it a second time just because the flag did not save.
+  const woKey = String(wo.WO_ID || wo.ID || '').trim();
+  if (woKey && (irRows || []).some(r => String(r.WO_ID) === woKey && String(r.Active || '').toUpperCase() !== 'FALSE' && (parseFloat(r.Deposit_Credit) || 0) > 0 && String(r.QB_Bill_ID || '').trim())) return null;
+  const ref = String(wo.Deposit_QB_Bill_Number || '').trim() || ('#' + billId);
+  return { type: 'deposit_credit', amount: amt, bill_id: billId, bill_number: String(wo.Deposit_QB_Bill_Number || '').trim(),
+    desc: 'Less: deposit already paid to you (Bill ' + ref + ')', desc_es: 'Menos: depósito ya pagado a usted (Factura ' + ref + ')' };
+}
+// Latest live estimate for the work order (a declined or withdrawn one is not what the vendor agreed to). null = no estimate on file.
+function woDepositEstimateCap(estimateRows, woId, wo) {
+  const mine = (estimateRows || []).filter(e => String(e.WO_ID) === String(woId) && !/^(declined|withdrawn)$/i.test(String(e.Status || '').trim()));
+  if (!mine.length) return null;
+  const latest = mine.slice().sort((a, b) => (parseInt(a.Version || '0', 10) || 0) - (parseInt(b.Version || '0', 10) || 0)).pop();
+  const subtotal = money2(parseFloat(latest.Subtotal) || 0);
+  if (!(subtotal > 0)) return null;
+  // A deposit that was already taken off a final bill is spent: the next one can only be the rest.
+  const spent = (wo && String(wo.Deposit_Applied || '').toUpperCase() === 'TRUE') ? money2(parseFloat(wo.Deposit_Amount) || 0) : 0;
+  return { estimate_id: String(latest.ID || ''), version: String(latest.Version || ''), subtotal, spent, cap: Math.max(0, money2(subtotal - spent)) };
+}
+// Mark the deposit as taken off a final bill — called ONLY after QuickBooks returned that bill's id. The write is read back; a miss is loud
+// (warning + Ops_Telemetry) because the bill already carries the deduction and an unflipped flag would deduct the deposit a second time.
+async function woDepositMarkApplied(env, woId, dep, finalBill, warnings, source) {
+  try {
+    await ensureColumns(env, 'Work_Orders', ['Deposit_Applied', 'Deposit_Applied_Bill', 'Deposit_Applied_Date']);
+    await updateWOFields(env, woId, { Deposit_Applied: 'TRUE', Deposit_Applied_Bill: String(finalBill.number || finalBill.id || ''), Deposit_Applied_Date: new Date().toISOString().split('T')[0] });
+    invalidateTabCache('Work_Orders');
+    const back = findWO(await fetchTab(env, 'Work_Orders'), woId);
+    if (!back || String(back.Deposit_Applied || '').toUpperCase() !== 'TRUE') throw new Error('Deposit_Applied read back as "' + (back ? back.Deposit_Applied : 'no row') + '"');
+    return true;
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 160);
+    warnings.push('⚠ The vendor bill went out with the $' + dep.amount.toFixed(2) + ' deposit already deducted, but marking the deposit as used failed (' + msg + '). Set Deposit_Applied to TRUE on ' + woId + ' by hand now, or the next bill to this vendor will deduct it again.');
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_deposit_apply_flag_failed', Skill_Or_Endpoint: source || '/qb/send-invoice', Success: 'FALSE', Notes: ('wo=' + woId + ' deposit_bill=' + dep.bill_id + ' final_bill=' + (finalBill.id || '') + ' ' + msg).slice(0, 480) }); }
+    catch (e2) { warnings.push('(That failure also could not be written to Ops_Telemetry: ' + String((e2 && e2.message) || e2).slice(0, 100) + '.)'); }
+    return false;
+  }
+}
+
 // The vendor bill's extra lines: proposal credit(s), then the instant-pay fee. Every adjustment is a
 // visible line to the vendor (never a silently smaller total). `payable` is the amount the main work
 // line carries after any loan deduction. `bill_total` is what the whole bill adds up to = what Brett sends.
@@ -32897,7 +33290,7 @@ async function qbSendInvoice(env, body) {
         groupRows, bills, vendors, wo: _ctxWo, woList: wos, owner, prop, unit, billTo, trade, tradeName,
         warnings, previewOnly, batch: body.batch, timeEntries: _ctxTimeEntries,
         overridePendingInfo: !!body.override_pending_info,
-        netting: body.netting, overrideOverbill: body.override_overbill === true, instantPay: body.instant_pay,
+        netting: body.netting, overrideOverbill: body.override_overbill === true, instantPay: body.instant_pay, irRows,
       });
     }
 
@@ -32956,6 +33349,16 @@ async function qbSendInvoice(env, body) {
         SalesItemLineDetail: { ItemRef: { value: trade.item }, Qty: 1, UnitPrice: -creditCust } });
     }
     const netCustTotal = money2(custTotal - creditCust);
+    // Oct 26 2026: a vendor deposit recorded on this work order (paid by hand in QuickBooks, never a Vendor_Bills row) comes off THIS vendor bill as its
+    // own visible line. Only a bill that is still to be created takes it; a retry that already has its bill never re-deducts.
+    const depCredit = (!haveBill && !vendorInHousePre && vendorCost > 0) ? woDepositCredit(wo, ir.Vendor_ID, irRows) : null;
+    if (depCredit) {
+      warnings.push('💰 A $' + depCredit.amount.toFixed(2) + ' deposit was already paid to this vendor (QuickBooks bill ' + (depCredit.bill_number || depCredit.bill_id) + ') — it comes off this bill automatically.');
+      if (money2(vendorCost - creditVend) < depCredit.amount - 0.005) warnings.push('⛔ The $' + depCredit.amount.toFixed(2) + ' deposit is more than what is left to pay this vendor ($' + money2(vendorCost - creditVend).toFixed(2) + ') — the bill cannot be sent until the amounts are fixed.');
+    } else if (!haveBill && wo && parseFloat(wo.Deposit_Amount) > 0 && String(wo.Deposit_Applied || '').toUpperCase() !== 'TRUE') {
+      warnings.push(vendorInHousePre ? '⚠ This work order has an unapplied vendor deposit, but this vendor bill is not being created (in-house), so the deposit was not deducted.' :
+        '⚠ This work order has an unapplied $' + (parseFloat(wo.Deposit_Amount) || 0).toFixed(2) + ' vendor deposit that was NOT deducted from this bill (' + (!String(wo.Deposit_QB_Bill_ID || '').trim() ? 'it has no QuickBooks bill on file' : 'it belongs to a different vendor') + ') — check the work order before paying.');
+    }
     // Instant-pay fee for THIS payment: the per-bill toggle if Brett set one, else the vendor's own setting.
     // A retry of a send that already recorded its fee reuses that exact number.
     const storedFee = (String(ir.Instant_Fee || '').trim() !== '' && (haveInv || haveBill || body.instant_pay === undefined)) ? { on: String(ir.Instant_Pay || '').toUpperCase() === 'TRUE', amount: +ir.Instant_Fee || 0 } : null;
@@ -32976,7 +33379,8 @@ async function qbSendInvoice(env, body) {
     const buildAdj = (loanDed, forceFee) => vendorBillAdjustments({
       payable: money2(vendorCostGross - (loanDed || 0)), lang: vendorLang, feeOn: (forceFee === true || feeOn) && !vendorInHousePre && vendorCostGross > 0, cfg: feeCfg,
       feeOverride: storedFee && storedFee.on ? storedFee.amount : undefined, pad: irPad, feeCredit: feeCreditAvail,
-      credits: creditVend > 0 ? [{ type: 'proposal_credit', amount: creditVend, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [],
+      credits: (creditVend > 0 ? [{ type: 'proposal_credit', amount: creditVend, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [])
+        .concat(depCredit ? [{ type: 'deposit_credit', amount: depCredit.amount, desc: depCredit.desc, desc_es: depCredit.desc_es }] : []),
     });
 
     const custDisplay = owner ? (owner.Billing_Name || owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim()) : '';
@@ -33071,7 +33475,7 @@ async function qbSendInvoice(env, body) {
           if (previewLoanBalance > 0) {
             const isFlatPrev = String((billRow && billRow.Bill_Type) || '').toLowerCase() === 'flat';
             const laborPrev = isFlatPrev ? (parseFloat(billRow && billRow.Flat_Rate) || 0) : (parseFloat(billRow && billRow.Labor_Total) || 0);
-            previewLoanDeduction = Math.min(computeLoanDeduction(laborPrev, previewLoanBalance), vendorCost);
+            previewLoanDeduction = Math.min(computeLoanDeduction(laborPrev, previewLoanBalance), money2(vendorCost - creditVend - (depCredit ? depCredit.amount : 0)));
             if (previewLoanDeduction > 0) warnings.push(`Loan repayment: $${previewLoanDeduction.toFixed(2)} will be deducted from ${vendDisplay}'s payment (current balance $${previewLoanBalance.toFixed(2)}).`);
           }
         } catch (e) { /* best-effort — confirm still applies/records the real deduction */ }
@@ -33093,10 +33497,11 @@ async function qbSendInvoice(env, body) {
                     vendor_id: vendor.ID || '', suggest: vendSuggest, qb_list: qbVendors },
         invoice:  { total: +netCustTotal.toFixed(2), gross_total: +custTotal.toFixed(2), credit: +creditCust.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
         netting:  nres.block,
+        deposit:  depCredit ? { amount: depCredit.amount, bill: depCredit.bill_number || depCredit.bill_id, label: depCredit.desc } : null,
         fee:      (() => { const a = buildAdj(previewLoanDeduction); return { applies: !vendorInHousePre && vendorCost > 0 && (feeDefaultOn || feeOn), on: feeOn, vendor_default_on: feeDefaultOn, amount: a.fee, pad: a.pad || 0, amount_if_on: buildAdj(previewLoanDeduction, true).fee, send_amount: a.bill_total, vendor_credit: +creditVend.toFixed(2),
           rate: feeCfg.rate, min: feeCfg.min, max: feeCfg.max, notes: a.notes,
           lines: a.lines.map(l => ({ type: l.type, desc: l.desc, amount: l.amount })) }; })(),
-        bill:     { total: +buildAdj(previewLoanDeduction).bill_total.toFixed(2), gross_total: +(vendorCost - previewLoanDeduction).toFixed(2), account: trade.expense,
+        bill:     { total: +buildAdj(previewLoanDeduction).bill_total.toFixed(2), gross_total: +(vendorCost - previewLoanDeduction).toFixed(2), deposit_credit: depCredit ? depCredit.amount : 0, account: trade.expense,
                     terms: vendorTermLabel(vendor),
                     doc_number: qbBillDocNumber(billRow, ir, 0).number,
                     doc_from: qbBillDocNumber(billRow, ir, 0).source,
@@ -33123,12 +33528,15 @@ async function qbSendInvoice(env, body) {
       }, 409);
     }
 
+    if (depCredit && money2(vendorCost - creditVend) < depCredit.amount - 0.005) {
+      return json({ ok: false, deposit_blocked: true, error: 'The $' + depCredit.amount.toFixed(2) + ' deposit already paid to this vendor is more than what is left to pay them on this bill ($' + money2(vendorCost - creditVend).toFixed(2) + '), so nothing was sent. Fix the bill amount, or clear the deposit on the work order if it was entered in error.', warnings }, 409);
+    }
     // Size the vendor-side adjustments (loan deduction, proposal credit, instant fee) and RECORD the
     // decision on the review row before anything is written to QuickBooks — a retry must see exactly
     // what this attempt decided. If it cannot be saved, nothing is sent.
     let loanAdjPre = { deduction: 0, laborAmount: 0, balance: 0 };
     if (!haveBill && vendorCostGross > 0 && !vendorInHousePre && vendor.ID) {
-      try { loanAdjPre = await computeVendorLoanAdjustment(env, { vendorId: vendor.ID, vendorCost: money2(vendorCostGross - creditVend), billRow }); }
+      try { loanAdjPre = await computeVendorLoanAdjustment(env, { vendorId: vendor.ID, vendorCost: money2(vendorCostGross - creditVend - (depCredit ? depCredit.amount : 0)), billRow }); }
       catch (e) { warnings.push('Loan-ledger check failed (' + (e.message || 'error') + ') — bill sent at the full amount; nothing was deducted.'); }
     }
     const adjPre = buildAdj(loanAdjPre.deduction);
@@ -33318,6 +33726,7 @@ async function qbSendInvoice(env, body) {
           if (loanAdj.deduction > 0) vendorCost = +(vendorCost + loanAdj.deduction).toFixed(2);
         } else {
           billDocAssigned = (r.Bill && r.Bill.DocNumber) || '';
+          if (depCredit) await woDepositMarkApplied(env, ir.WO_ID, depCredit, { id: billId, number: billDocAssigned }, warnings, '/qb/send-invoice');
           if (adjFinal.credit_applied > 0) {
             // Mark the credit used ONLY now that QuickBooks returned the bill id. If this write fails the bill already carries the credit line, so say so loudly.
             try {
@@ -33328,7 +33737,7 @@ async function qbSendInvoice(env, body) {
               await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' vendor=' + vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
             }
           }
-          if (adjFinal.fee > 0) warnings.push('Instant-pay fee: send $' + adjFinal.bill_total.toFixed(2) + ' to ' + vendDisplay + ' (bill $' + money2(vendorCostGross - loanAdj.deduction).toFixed(2) + (creditVend > 0 ? ' − $' + creditVend.toFixed(2) + ' already billed' : '') + ' − $' + adjFinal.fee.toFixed(2) + ' fee).');
+          if (adjFinal.fee > 0) warnings.push('Instant-pay fee: send $' + adjFinal.bill_total.toFixed(2) + ' to ' + vendDisplay + ' (bill $' + money2(vendorCostGross - loanAdj.deduction).toFixed(2) + (creditVend > 0 ? ' − $' + creditVend.toFixed(2) + ' already billed' : '') + (depCredit ? ' − $' + depCredit.amount.toFixed(2) + ' deposit already paid' : '') + ' − $' + adjFinal.fee.toFixed(2) + ' fee).');
           if (loanAdj.deduction > 0) {
             try {
               const newBalance = await recordVendorLoanDeduction(env, {
@@ -33358,9 +33767,9 @@ async function qbSendInvoice(env, body) {
     // Record WHICH ledger this landed on, and whether a bill was deliberately not raised.
     // Without these, an owner ledger lighter than expected has no explanation in the sheet,
     // and in-house rows carry a Vendor_Cost with no matching payable to reconcile against.
-    try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number']); }
+    try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number', 'Deposit_Credit', 'Deposit_Credit_Bill']); }
     catch (e) { warnings.push('Could not record which ledger this billed to — the invoice and bill ids are still saved.'); }
-    await updateRow(env, 'Invoice_Review', ir.ID, {
+    await updateRow(env, 'Invoice_Review', ir.ID, Object.assign({
       QB_Invoice_ID: invoiceId, QB_Bill_ID: billId, QB_Invoice_Status: status,
       // The NUMBER, kept apart from the internal id. Screens were showing the id
       // (a five-digit QuickBooks key) under the label "invoice number".
@@ -33368,7 +33777,7 @@ async function qbSendInvoice(env, body) {
       QB_Bill_Number: billDocAssigned,
       QB_Bill_To: billTo.level + (billTo.display ? ': ' + billTo.display : ''),
       QB_In_House: vendorInHouse ? 'TRUE' : 'FALSE',
-    });
+    }, (depCredit && billId && !haveBill) ? { Deposit_Credit: depCredit.amount.toFixed(2), Deposit_Credit_Bill: depCredit.bill_number || depCredit.bill_id } : {}));
     if (status === 'sent' && ir.WO_ID) {
       try {
         await updateWOFields(env, ir.WO_ID, { Status: 'Invoiced' });
@@ -33507,6 +33916,8 @@ async function qbSendCombinedInvoice(env, ctx) {
         }
       }
     }
+    // Oct 26 2026: a vendor deposit recorded on this work order comes off the SAME vendor's bill, once (the first row for that vendor that still needs a bill).
+    let depTaken = false;
     for (const rb of rowBuilds) {
       const feeDefaultOn = instantPayEnabled(rb.vendor, cfgAll, undefined);
       // The per-send toggle can only switch a vendor that is already on OFF here; to turn instant pay ON for another vendor, set it on that vendor.
@@ -33514,12 +33925,32 @@ async function qbSendCombinedInvoice(env, ctx) {
       rb.feeDefaultOn = feeDefaultOn;
       rb.vendorLang = String(rb.vendor.Language || '').toLowerCase() === 'es' ? 'es' : 'en';
       rb.credit = (creditRow === rb) ? applied.plan.credit_vendor : 0;
+      rb.dep = null;
+      // The first row for that vendor that still needs a bill AND can cover the deposit takes it (a $100 row and a $300 row: the $300 row).
+      if (!depTaken && !rb.vendorInHouse && rb.vendorCost > 0 && !(rb.row.QB_Bill_ID && String(rb.row.QB_Bill_ID).trim())) {
+        const d = woDepositCredit(wo, rb.row.Vendor_ID, ctx.irRows);
+        if (d && money2(rb.vendorCost - rb.credit) >= d.amount - 0.005) { rb.dep = d; depTaken = true;
+          warnings.push('💰 A $' + d.amount.toFixed(2) + ' deposit was already paid to ' + rb.vendDisplay + ' (QuickBooks bill ' + (d.bill_number || d.bill_id) + ') — it comes off their bill automatically.'); }
+      }
       rb.pad = money2(+rb.row.Instant_Pad || 0);
       rb.creditAvail = creditLeft.get(String(rb.row.Vendor_ID)) || 0;
       const mk = (forceOn) => vendorBillAdjustments({ payable: rb.vendorCost, lang: rb.vendorLang, feeOn: (forceOn === true || rb.feeOn) && !rb.vendorInHouse && rb.vendorCost > 0, cfg: feeCfg, pad: rb.pad, feeCredit: rb.creditAvail,
-        credits: rb.credit > 0 ? [{ type: 'proposal_credit', amount: rb.credit, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [] });
+        credits: (rb.credit > 0 ? [{ type: 'proposal_credit', amount: rb.credit, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [])
+          .concat(rb.dep ? [{ type: 'deposit_credit', amount: rb.dep.amount, desc: rb.dep.desc, desc_es: rb.dep.desc_es }] : []) });
       rb.adj = mk(false); rb.adjIfOn = mk(true);
       if (rb.adj.credit_applied > 0) creditLeft.set(String(rb.row.Vendor_ID), money2(rb.creditAvail - rb.adj.credit_applied));
+    }
+
+    // A deposit that exists but could not be taken off ANY bill in this group is never skipped quietly: say why, and stop the real send when a vendor's bill
+    // was simply too small to cover it.
+    let depUntaken = null;
+    if (!depTaken && wo && (parseFloat(wo.Deposit_Amount) || 0) > 0 && String(wo.Deposit_Applied || '').toUpperCase() !== 'TRUE') {
+      const cand = rowBuilds.filter(rb => !rb.vendorInHouse && rb.vendorCost > 0 && !(rb.row.QB_Bill_ID && String(rb.row.QB_Bill_ID).trim()) && woDepositCredit(wo, rb.row.Vendor_ID, ctx.irRows));
+      if (cand.length) {
+        const d = woDepositCredit(wo, cand[0].row.Vendor_ID, ctx.irRows);
+        depUntaken = { amount: d.amount, vendor: cand[0].vendDisplay };
+        warnings.push('⛔ The $' + d.amount.toFixed(2) + ' deposit already paid to ' + cand[0].vendDisplay + ' is more than any one of their bills in this group can cover — the bills cannot be sent until the amounts are fixed.');
+      } else warnings.push('⚠ This work order has an unapplied $' + (parseFloat(wo.Deposit_Amount) || 0).toFixed(2) + ' vendor deposit that was NOT deducted from these bills (no QuickBooks bill on file, it belongs to a vendor that is not being billed here, or it was already taken off) — check the work order before paying.');
     }
 
     const photoFolderId  = wo.Drive_Folder_ID || '';
@@ -33551,7 +33982,7 @@ async function qbSendCombinedInvoice(env, ctx) {
           billsPreview.push({
             bill_id: rb.row.Bill_ID,
             vendor: { display: rb.vendDisplay, existing_id: rb.vendor.QBO_Vendor_ID || '', vendor_id: rb.vendor.ID || '', suggest: vendSuggestRow },
-            total: +rb.adj.bill_total.toFixed(2), gross_total: +rb.vendorCost.toFixed(2), account: trade.expense, terms: vendorTermLabel(rb.vendor),
+            total: +rb.adj.bill_total.toFixed(2), gross_total: +rb.vendorCost.toFixed(2), deposit_credit: rb.dep ? rb.dep.amount : 0, account: trade.expense, terms: vendorTermLabel(rb.vendor),
             doc_number: rb.billDoc.number, doc_from: rb.billDoc.source,
             skipped: rb.vendorCost <= 0 || rb.vendorInHouse, in_house: rb.vendorInHouse,
             fee: { applies: !rb.vendorInHouse && rb.vendorCost > 0 && rb.feeDefaultOn, on: rb.feeOn, vendor_default_on: rb.feeDefaultOn, amount: rb.adj.fee, pad: rb.adj.pad || 0, amount_if_on: rb.adjIfOn.fee, send_amount: rb.adj.bill_total,
@@ -33595,6 +34026,7 @@ async function qbSendCombinedInvoice(env, ctx) {
       }, 409);
     }
 
+    if (depUntaken) return json({ ok: false, deposit_blocked: true, warnings, error: 'The $' + depUntaken.amount.toFixed(2) + ' deposit already paid to ' + depUntaken.vendor + ' is more than any single bill to them in this group can cover, so nothing was sent. Fix the bill amounts, or clear the deposit on the work order if it was entered in error.' }, 409);
     try {
       const feeTotal = money2(rowBuilds.reduce((sum, rb) => sum + (rb.adj.fee || 0), 0));
       await qbPersistNettingDecision(env, leadIr.ID, {
@@ -33739,6 +34171,7 @@ async function qbSendCombinedInvoice(env, ctx) {
           if (!billId) errors.push('Bill (' + rb.vendDisplay + '): ' + (qbFault(br) || 'unknown error'));
           else {
             rb.billDocAssigned = (br.Bill && br.Bill.DocNumber) || '';
+            if (rb.dep) await woDepositMarkApplied(env, wo.WO_ID || wo.ID || rb.row.WO_ID, rb.dep, { id: billId, number: rb.billDocAssigned }, warnings, '/qb/send-invoice');
             if (rb.adj.credit_applied > 0) {
               try {
                 const used = await feeCreditApplyOnce(env, { vendorId: rb.vendor.ID, vendorName: rb.vendDisplay, amount: rb.adj.credit_applied, irId: rb.row.ID, qbBillId: billId, woId: rb.row.WO_ID });
@@ -33748,7 +34181,7 @@ async function qbSendCombinedInvoice(env, ctx) {
                 await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + rb.row.ID + ' vendor=' + rb.vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
               }
             }
-            if (rb.adj.fee > 0) warnings.push('Instant-pay fee: send $' + rb.adj.bill_total.toFixed(2) + ' to ' + rb.vendDisplay + ' (bill $' + rb.vendorCost.toFixed(2) + (rb.credit > 0 ? ' − $' + rb.credit.toFixed(2) + ' already billed' : '') + ' − $' + rb.adj.fee.toFixed(2) + ' fee).');
+            if (rb.adj.fee > 0) warnings.push('Instant-pay fee: send $' + rb.adj.bill_total.toFixed(2) + ' to ' + rb.vendDisplay + ' (bill $' + rb.vendorCost.toFixed(2) + (rb.credit > 0 ? ' − $' + rb.credit.toFixed(2) + ' already billed' : '') + (rb.dep ? ' − $' + rb.dep.amount.toFixed(2) + ' deposit already paid' : '') + ' − $' + rb.adj.fee.toFixed(2) + ' fee).');
           }
         }
       } else if (rb.vendorInHouse && rb.vendorCost > 0) {
@@ -33832,7 +34265,13 @@ const TRASH_DOW = { Mon:0, Tue:1, Wed:2, Thu:3, Fri:4, Sat:5, Sun:6 };
 // A Delivery record is the spine: what was ordered, where it's going, who meets it,
 // and which WO(s) it belongs to. SAFE class — no Twilio, no money, no customer send.
 // Tab self-provisions (mirrors the Trash pattern) so first use just works.
-const DELIVERY_HEADERS = ['ID','Order_Number','Store','Item_Type','New_Make_Model','New_Dims','Property_ID','Unit_ID','Tenant_ID','Delivery_Address','Expected_Date','Expected_Window','Onsite_Contact','Onsite_Contact_Phone','Backup_Contact','Backup_Phone','Delivery_Notes','Linked_WO_IDs','Status','Source','Message_ID','Created_Date','Active'];
+const DELIVERY_HEADERS = ['ID','Order_Number','Store','Item_Type','New_Make_Model','New_Dims','Property_ID','Unit_ID','Tenant_ID','Delivery_Address','Expected_Date','Expected_Window','Onsite_Contact','Onsite_Contact_Phone','Backup_Contact','Backup_Phone','Delivery_Notes','Linked_WO_IDs','Status','Source','Message_ID','Created_Date','Active',
+  // Oct 23 2026 email watcher: every Message-ID seen for the order, last email applied (kind/time/signature), "N stops away", tenant-notice bookkeeping, result of Brett's last text.
+  'Seen_Message_IDs','Last_Event','Last_Event_At','Last_Event_Sig','Stops_Away','Tenant_Notice_Sig','Tenant_Notice_Status','Tenant_Notice_Draft','Brett_SMS_Status',
+  // Oct 23 2026 addendum: tenant RSVP (blank | Confirmed | Declined | Unsure), when the request text was handed to the text gate, and a claim marker that stops two mailboxes double-alerting on one update.
+  'Tenant_RSVP','Tenant_RSVP_At','Tenant_RSVP_Note','Tenant_Notice_Sent_At','Event_Claim',
+  // Oct 23 2026: the Hub writes the calendar event itself (as Brett): its Google event id (so a move/cancel finds it) and the last result.
+  'Calendar_Event_ID','Calendar_Status'];
 
 async function ensureDeliveryTab(env) {
   const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
@@ -33869,6 +34308,7 @@ async function deliveriesList(env, url) {
       backup_contact: d.Backup_Contact || '', backup_phone: d.Backup_Phone || '',
       notes: d.Delivery_Notes || '', linked_wo_ids: d.Linked_WO_IDs || '',
       status: d.Status || 'Ordered', source: d.Source || '',
+      tenant_rsvp: d.Tenant_RSVP || '', tenant_rsvp_at: d.Tenant_RSVP_At || '', tenant_rsvp_note: d.Tenant_RSVP_Note || '', tenant_notice_sent_at: d.Tenant_Notice_Sent_At || '', tenant_notice_status: d.Tenant_Notice_Status || '', calendar_status: d.Calendar_Status || '', calendar_event_id: d.Calendar_Event_ID || '',
     };
   });
   out.sort((a, b) => String(a.expected_date || '9999').localeCompare(String(b.expected_date || '9999')));
@@ -33943,6 +34383,1429 @@ async function deliveryRelay(env, body) {
   try { await logSMS(env, (d.Linked_WO_IDs || '').split(',')[0] || '', 'delivery_relay', id, targetPhone, message); } catch (_) {}
   return json({ success: true, sms_sent: smsSent, email_sent: emailSent, phone: targetPhone, email: tenantEmail });
 }
+
+// ── Delivery EMAIL watcher, Hub side (Phase 1, Oct 23 2026) ──────────────────────────────────────────────
+// context/DELIVERY_SYSTEM_BUILD_BRIEF_v1.0.md section 7 + the Oct 23 spec. The Apps Script in info@ (apps-script/delivery-intake/)
+// forwards every store email here: POST /intake/delivery-email {subject, body, html?, from, message_id, received_at, mailbox, dry_run?}.
+// Auth: the narrow INTAKE_TOKEN (same one /intake/email uses), accepted for that exact path only.
+//
+// This file section has two halves:
+//   1. DELIVERY-EMAIL-PURE (below): the parser and every decision that needs no Sheets. Pure functions, unit-tested
+//      directly in test/delivery-email-intake.test.mjs. ALL wording the parser keys on lives in ONE table, DEP.
+//   2. The handler (deliveryEmailIntake, further down): matching, records, texts, calendar object.
+//
+// No real delivery-scheduling email existed when this was written (Brett's mailbox only had receipts), so every pattern
+// below is written from Home Depot's / Lowe's typical wording and is deliberately TOLERANT. When the first real email
+// arrives, tighten DEP and add that email as a fixture. An email from a store sender that mentions an order or a delivery
+// but matches no kind is NEVER dropped: it is parked (Deliveries row, Status "Needs Review") and Brett is texted.
+// ═══ DELIVERY-EMAIL-PURE-START ═══
+const DELIVERY_SENDER_DOMAINS_DEFAULT = 'homedepot.com,lowes.com,acehardware.com,walmart.com';
+const DELIVERY_STORE_NAMES = { 'homedepot.com': 'Home Depot', 'lowes.com': "Lowe's", 'acehardware.com': 'Ace Hardware', 'walmart.com': 'Walmart' };
+// Status only ever moves RIGHT along this line (except reschedule -> Scheduled, cancel -> Cancelled).
+const DELIVERY_STATUS_ORDER = ['Ordered', 'Scheduled', 'Window-Set', 'En-Route', 'Approaching', 'Arrived', 'Delivered'];
+const DELIVERY_KIND_STATUS = { order_confirmation: 'Ordered', prep: 'Ordered', scheduled: 'Scheduled', window_set: 'Window-Set', en_route: 'En-Route', approaching: 'Approaching', delivered: 'Delivered', reschedule: 'Scheduled', cancel: 'Cancelled' };
+
+// THE PATTERNS TABLE. Everything the parser keys on is here. Tighten after the first real email.
+const DEP = {
+  // Kind detection. For each kind: `strong` runs on subject AND body, `subj` only on the subject.
+  // The subject is read first (first kind found wins); only if it names no kind is the body read.
+  // Within one text the kinds are tried in this order (DEP_KIND_ORDER).
+  kinds: {
+    cancel: {
+      strong: [/\b(?:has|have|was|been)\s+(?:been\s+)?cancel+ed\b/i, /\border\s+cancel+ation\b/i, /\bcancel+ation\s+(?:confirmation|notice)\b/i, /\bwe(?:'|’)?ve\s+cancel+ed\b/i, /\bdelivery\s+cancel+ed\b/i],
+      subj: [/\bcancel/i],
+    },
+    delivered: {
+      strong: [/\b(?:was|has\s+been|been|successfully)\s+delivered\b/i, /\bdelivery\s+(?:is\s+)?complete(?:d)?\b/i, /\bdelivered\s+(?:on|at|today)\b/i],
+      subj: [/\bdelivered\b/i],
+    },
+    reschedule: {   // past tense only: "need to reschedule? call us" is footer text on ordinary scheduled emails
+      strong: [/\b(?:has\s+been|was|been)\s+rescheduled\b/i, /\brescheduled\s+(?:for|to)\b/i, /\bdelivery\s+rescheduled\b/i, /\bnew\s+delivery\s+date\b/i, /\bdelivery\s+(?:date\s+)?(?:has\s+been|was)\s+(?:changed|updated|moved)\b/i, /\bwe(?:'|\u2019)?ve\s+(?:changed|updated|moved|rescheduled)\s+your\s+delivery\b/i],
+      subj: [/\breschedul/i],
+    },
+    approaching: {   // also carries the "N stops away" number
+      strong: [/\b(\d{1,2})\s+stops?\s+away\b/i, /\bnext\s+stop\b/i, /\byou(?:'|’)?re\s+next\b/i],
+      subj: [],
+    },
+    en_route: {
+      strong: [/\bon\s+(?:its|the)\s+way\b/i, /\bout\s+for\s+delivery\b/i, /\bdriver\s+is\s+(?:on|en)\b/i, /\ben\s+route\b/i, /\barriving\s+(?:soon|today)\b/i],
+      subj: [],
+    },
+    // Oct 27 2026 (Brett's real Home Depot order WH49670828): "Prep for Appliance Delivery!" is a how-to-get-ready notice with NO new date or window. The store's order
+    // emails also print "Delivery Window Pending" before a window exists, which is not a window. Tried before window_set / scheduled so neither phrase in its body wins.
+    prep: {
+      strong: [/\bget\s+ready\s+for\s+your\s+(?:appliance|delivery)\b/i, /\blook\s+for\s+a\s+delivery\s+scheduled\s+email\s+next\b/i],
+      subj: [/\bprep(?:are)?\s+for\b[^.!?\n]{0,40}\b(?:delivery|installation)\b/i],
+    },
+    window_set: {
+      strong: [/\bdelivery\s+(?:time\s+)?window\b(?!\s*(?:is\s+|are\s+)?(?:still\s+)?(?:pending|tbd|tba|to\s+be|not\s+(?:yet\s+)?(?:set|scheduled|available|determined)|unavailable|coming|soon))/i, /\barrival\s+window\b(?!\s*(?:is\s+|are\s+)?(?:still\s+)?(?:pending|tbd|tba|to\s+be|not\s+(?:yet\s+)?(?:set|scheduled|available|determined)|unavailable|coming|soon))/i, /\barrive\s+between\b/i, /\bbetween\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\s*(?:and|to|-|–)\s*\d{1,2}(?::\d{2})?\s*(?:a|p)\.?m\.?/i],
+      subj: [],
+    },
+    scheduled: {
+      strong: [/\bscheduled\s+for\s+delivery\b/i, /\bdelivery\s+date\b/i, /\bdelivery\s+(?:is|has\s+been)\s+scheduled\b/i, /\bscheduled\s+delivery\b/i, /\bdelivery\s+scheduled\b/i, /\bwe(?:'|’)?ve\s+scheduled\b/i],
+      subj: [],
+    },
+    order_confirmation: {
+      strong: [/\border\s+confirmation\b/i, /\border\s+confirmed\b/i, /\bprocessing\s+your\s+order\b/i, /\bthank\s+you\s+for\s+your\s+(?:order|purchase)\b/i, /\bwe\s+(?:have\s+)?received\s+your\s+order\b/i, /\border\s+(?:received|placed)\b/i, /\byour\s+order\s+(?:has\s+been|was)\s+(?:placed|received)\b/i],
+      subj: [],
+    },
+    // Weakest signal, tried last: "track your delivery" shows up in confirmations too.
+    en_route_weak: {
+      strong: [/\btrack(?:ing)?\s+(?:your\s+)?(?:delivery|order|driver)\b/i, /\blive\s+tracking\b/i],
+      subj: [],
+    },
+  },
+  // Body-only emails that carry BOTH a confirmation phrase from this list and a date/window phrase are read as confirmations
+  // (the date is still saved). "Thank you for your order" alone is not enough: scheduled emails say it too.
+  confirmationOverride: [/\border\s+confirmation\b/i, /\bwe\s+(?:have\s+)?received\s+your\s+order\b/i, /\border\s+(?:received|placed)\b/i],
+  // Marketing. Only matters when the email carries NO order number (a real order email is never promo).
+  promo: [/\b\d{1,3}\s?%\s+off\b/i, /\bsave\s+(?:up\s+to\s+)?\$?\d/i, /\bshop\s+now\b/i, /\bspecial\s+offers?\b/i, /\blimited[-\s]time\b/i, /\bblack\s+friday\b/i, /\bclearance\b/i, /\bdoorbusters?\b/i, /\bcoupons?\b/i, /\bexclusive\b/i, /\bsales?\b/i, /\bdeals?\b/i, /\bnew\s+arrivals\b/i, /\bgift\s+cards?\b/i, /\brewards?\b/i, /\bbuy\s+now\b/i, /\bnewsletter\b/i, /\bview\s+(?:this\s+)?(?:email\s+)?in\s+(?:your\s+)?browser\b/i],
+  unsubscribe: /\bunsubscribe\b/i,
+  // A promo-looking email with no order number still gets through when its SUBJECT names one of these kinds.
+  promoOverrideKinds: ['delivered', 'en_route', 'approaching', 'reschedule', 'cancel'],
+  // "This email is about an order or a delivery" (used only to decide park-vs-ignore when no kind matched).
+  mentionsOrder: /\b(?:your\s+order|order\s*(?:#|number|no\b)|deliver(?:y|ies|ed|ing)?\b|shipment|shipped)/i,
+  // Order numbers. First the store formats, then a labelled fallback ("Order #...", "Order Number:", "Order No.").
+  orderStore: [/\bH\d{4}-\d{6}\b/i, /\bW\d{9}\b/i, /\bCM\d{8}\b/i],
+  orderLabel: /\border\s*(?:#|number|no\.?|num\.?)\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{5,19})\b/gi,
+  // Item type -> the vocabulary deliveries.html's item dropdown already uses.
+  items: [
+    [/\bwater\s+heaters?\b/i, 'Water heater'], [/\bmicrowaves?\b/i, 'Microwave'], [/\bdishwashers?\b/i, 'Dishwasher'],
+    [/\b(?:refrigerators?|fridges?)\b/i, 'Refrigerator'], [/\bfreezers?\b/i, 'Other'], [/\b(?:ranges?|stoves?|ovens?|cooktops?)\b/i, 'Range'],
+    [/\bwashers?\b/i, 'Washer'], [/\bdryers?\b/i, 'Dryer'],
+  ],
+  // Text removed before the item scan so "price range" / "over-the-range microwave" do not read as a range.
+  itemNoise: [/over[-\s]the[-\s]range/gi, /microwave\s+oven/gi, /\b(?:price|time|date|temperature|delivery)\s+range\b/gi, /\brange\s+of\b/gi, /\bwithin\s+range\b/gi],
+  // Where the item scan stops (cross-sell blocks list other appliances).
+  itemStop: /you\s+may\s+also\s+like|recommended\s+for\s+you|customers\s+also\s+(?:bought|viewed)|related\s+items|frequently\s+bought/i,
+  brands: ['Whirlpool', 'GE', 'Samsung', 'LG', 'Frigidaire', 'Maytag', 'Kenmore', 'Amana', 'Hotpoint', 'Bosch', 'Haier', 'Midea', 'Electrolux', 'KitchenAid', 'Insignia', 'Danby', 'Avanti', 'Magic Chef', 'Crosley', 'Speed Queen', 'Fisher & Paykel', 'Beko', 'Café', 'Cafe', 'Monogram', 'Signature Kitchen'],
+  caseSensitiveBrands: ['GE', 'LG'],
+  modelLabel: /\bmodel\s*(?:#|number|no\.?)?\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{4,17})\b/i,
+  modelToken: /\b([A-Z]{1,5}\d[A-Z0-9-]{3,16})\b/,
+  // Address.
+  addressLabel: /(?:deliver(?:y|ed)?\s+(?:to|address|location)|ship(?:ping)?\s+(?:to|address)|service\s+address)\s*[:\-]?/gi,
+  addressSkipBefore: /pick\s?up|store\s|return|bill(?:ing)?\s+(?:to|address)|sold\s+to|from:/i,
+  streetSuffix: 'st|street|ave|avenue|av|rd|road|dr|drive|ln|lane|ct|court|pl|place|blvd|boulevard|way|ter|terrace|cir|circle|pkwy|parkway|hwy|highway|sq|square|trl|trail',
+  unitWord: 'apt|apartment|unit|ste|suite|bldg|fl|floor',
+  // Dates and windows.
+  dateKeywords: [
+    /new\s+delivery\s+date/gi, /delivery\s+date/gi, /scheduled\s+(?:for|delivery)(?:\s+on)?/gi, /deliver(?:y|ed)?\s+(?:on|is\s+scheduled\s+for)/gi, /will\s+(?:be\s+)?deliver(?:ed)?(?:\s+on)?/gi,
+    /arriv(?:e|es|ing|al)(?:\s+on)?/gi, /estimated\s+delivery/gi, /expected(?:\s+delivery)?/gi,
+    /deliver(?:y|ed|ies)?/gi,   // weakest, tried last
+  ],
+  dateAfterWindowChars: 140,
+  dateSkipBefore: /(?:order(?:ed)?\s+(?:date|on|placed)|placed\s+on|purchased|order\s+date)\s*[:\-]?\s*$/i,
+  // How far in the past a year-less date may sit before it rolls to next year (late-processed "delivered" mail).
+  pastGraceDays: 14,
+};
+const DEP_KIND_ORDER = ['cancel', 'delivered', 'reschedule', 'approaching', 'en_route', 'prep', 'window_set', 'scheduled', 'order_confirmation', 'en_route_weak'];
+const DEP_MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
+
+// HTML -> text. Keeps line breaks (the address parser reads lines); never turns &lt; back into a tag.
+function deliveryEmailText(body, html) {
+  let t = String(body == null ? '' : body);
+  const looksHtml = /<\/?[a-z][^>]*>/i.test(t);
+  if ((t.replace(/\s/g, '').length < 40 || looksHtml) && (html || looksHtml)) {
+    t = String(looksHtml && !html ? t : (html || t));
+    t = t.slice(0, 250000).replace(/<(style|script)[\s\S]*?<\/\1>/gi, ' ').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(?:p|div|tr|li|h[1-6]|table|td|th)>/gi, '\n').replace(/<[^>]{0,500}>/g, ' ');
+  }
+  return t.slice(0, 250000).replace(/&nbsp;| /g, ' ').replace(/&#39;|&apos;|&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&lt;|&gt;/g, ' ').replace(/&#(\d{2,4});/g, (m, n) => String.fromCharCode(+n)).replace(/&amp;/g, '&')
+    .replace(/\r\n?/g, '\n').replace(/[ \t\f\v]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// The real sender address (bare, or the LAST <...> of "Name <addr>") must be on an allowed domain or a subdomain of one.
+// A display name like "Home Depot homedepot.com" <x@evil.io> must not pass. domainsCsv defaults to the built-in list.
+function deliverySenderDomain(from, domainsCsv) {
+  const s = String(from == null ? '' : from).toLowerCase().slice(0, 300).trim();
+  const m = /<\s*([^<>\s@]{1,64}@[a-z0-9.-]{3,200})\s*>\s*$/.exec(s) || /^([^<>\s@"]{1,64}@[a-z0-9.-]{3,200})$/.exec(s);
+  if (!m) return '';
+  const host = m[1].split('@')[1].replace(/\.+$/, '');
+  const allowed = String(domainsCsv || DELIVERY_SENDER_DOMAINS_DEFAULT).toLowerCase().split(/[,\s;]+/).map(x => x.trim().replace(/^@/, '')).filter(Boolean);
+  for (const d of allowed) if (host === d || host.endsWith('.' + d)) return d;
+  return '';
+}
+
+function deliveryParseOrderNumber(text) {
+  for (const re of DEP.orderStore) { const m = re.exec(text); if (m) return m[0].toUpperCase(); }
+  DEP.orderLabel.lastIndex = 0;
+  let m;
+  while ((m = DEP.orderLabel.exec(text))) {
+    const v = m[1].toUpperCase();
+    if (/\d/.test(v) && !/^\d{1,2}$/.test(v)) return v.replace(/-+$/, '');
+  }
+  return '';
+}
+
+function deliveryDetectKind(text, isSubject) {
+  for (const k of DEP_KIND_ORDER) {
+    const def = DEP.kinds[k];
+    const pats = isSubject ? def.strong.concat(def.subj) : def.strong;
+    for (const re of pats) { const m = re.exec(text); if (m) return { kind: k === 'en_route_weak' ? 'en_route' : k, weak: k === 'en_route_weak', match: m }; }
+  }
+  return null;
+}
+
+// The "Job / PO Number:" line the store prints from the PO field Brett types when he orders: "WO 1237 115 W 29th St Apt 2". Returns { wo_ref: 'WO-1237' | '', unit_raw: 'Apt 2' | '', raw }.
+// Only a LABELLED line counts, and only "WO <digits>" in it names a work order (a bare number or a name never does). The unit is read from the same line (never from the phone
+// number or street number, which have no unit word).
+function deliveryParseJobRef(text) {
+  const out = { wo_ref: '', unit_raw: '', raw: '' };
+  const flat = String(text == null ? '' : text).replace(/\s+/g, ' ');
+  const labelRe = /\b(?:job\s*\/\s*po|job|po)(?:\s+(?:number|no\.?|num\.?))?\s*(?::|#)\s*/gi;
+  let lm;
+  while ((lm = labelRe.exec(flat))) {
+    let v = flat.slice(lm.index + lm[0].length, lm.index + lm[0].length + 140);
+    const stop = /\b(?:customer\s+phone|phone|delivery|estimated|order|deliver\s+to|sku|qty|manage|job\s*\/|po\s+number)\b/i.exec(v);
+    if (stop) v = v.slice(0, stop.index);
+    const wm = /\bwo\s*[-#]?\s*(\d{1,7})\b/i.exec(v);
+    if (!wm) continue;
+    out.wo_ref = 'WO-' + wm[1];
+    out.raw = v.trim().slice(0, 120);
+    const rest = v.slice(wm.index + wm[0].length);
+    const um = /\b(apt|apartment|unit|ste|suite)\.?\s*#?\s*([A-Za-z0-9-]+)/i.exec(rest) || /#\s*([A-Za-z0-9-]+)/.exec(rest);
+    if (um) {
+      const word = um.length > 2 ? ({ apt: 'Apt', apartment: 'Apt', unit: 'Unit', ste: 'Ste', suite: 'Suite' })[um[1].toLowerCase()] : 'Unit';
+      out.unit_raw = word + ' ' + (um.length > 2 ? um[2] : um[1]).replace(/-+$/, '');
+    }
+    return out;
+  }
+  return out;
+}
+
+function deliveryParseItem(flat) {
+  let t = flat; const stop = DEP.itemStop.exec(t); if (stop) t = t.slice(0, stop.index);
+  for (const re of DEP.itemNoise) t = t.replace(re, ' ');
+  let best = null; const found = [];
+  for (const [re, label] of DEP.items) { const m = re.exec(t); if (m) { found.push({ idx: m.index, label }); if (!best || m.index < best.idx) best = { idx: m.index, label }; } }
+  const others = [...new Set(found.filter(f => !best || f.label !== best.label).map(f => f.label))];
+  return { item_type: best ? best.label : '', also: others, scan: t };
+}
+
+function deliveryParseMakeModel(scan, orderNo) {
+  let brand = '', bidx = -1;
+  for (const b of DEP.brands) {
+    const cs = DEP.caseSensitiveBrands.indexOf(b) >= 0;
+    const re = new RegExp('(?:^|[^A-Za-z])(' + b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')(?![A-Za-z])', cs ? '' : 'i');
+    const m = re.exec(scan);
+    if (m) { const idx = m.index + m[0].indexOf(m[1]); if (bidx < 0 || idx < bidx) { bidx = idx; brand = m[1].length <= 2 ? m[1].toUpperCase() : b; } }
+  }
+  const okModel = v => v && /[A-Za-z]/.test(v) && /\d/.test(v) && v.toUpperCase() !== String(orderNo || '').toUpperCase() && !/^H\d{4}-\d{6}$/i.test(v) && !/^W\d{9}$/i.test(v);
+  let model = '';
+  const lm = DEP.modelLabel.exec(scan);
+  if (lm && okModel(lm[1])) model = lm[1].toUpperCase();
+  if (!model) {
+    const region = bidx >= 0 ? scan.slice(bidx, bidx + 220) : scan.slice(0, 400);
+    const re = new RegExp(DEP.modelToken.source, 'g'); let tm;
+    while ((tm = re.exec(region))) { if (okModel(tm[1])) { model = tm[1]; break; } }
+  }
+  // No model number printed (the store prints SKU / Internet numbers instead): the product title is the make/model line. "FRIGIDAIRE 30 in. 5 Burner Freestanding Gas
+  // Range in Stainless Steel with Quick Boil..." -> "Frigidaire 30 in. 5 Burner Freestanding Gas Range". Only a title that starts with a size (a digit) is trusted, so a sentence that
+  // merely mentions the brand ("Your Whirlpool refrigerator will be delivered...") never becomes the model.
+  if (!model && brand && bidx >= 0) {
+    let desc = scan.slice(bidx + brand.length).replace(/^[\s:,\u2013\u2014-]+/, '');
+    const cut = /\s+(?:in\s+(?!\.)|with\s+|sku\b|internet\b|model\b|qty\b|item\b|\$|parts\s*&|haul\s+away)/i.exec(' ' + desc);
+    if (cut) desc = (' ' + desc).slice(0, cut.index).trim();
+    desc = desc.replace(/\s+/g, ' ').replace(/[\s,.;:-]+$/, '').trim();
+    if (desc.length > 80) { desc = desc.slice(0, 80); desc = desc.slice(0, desc.lastIndexOf(' ') > 20 ? desc.lastIndexOf(' ') : 80).trim(); }
+    if (/^\d/.test(desc) && /[A-Za-z]{3}/.test(desc) && desc.length >= 8) model = desc;
+  }
+  return { brand, model, make_model: [brand, model].filter(Boolean).join(' ') };
+}
+
+function deliveryParseAddress(flat) {
+  const suf = DEP.streetSuffix, uw = DEP.unitWord;
+  const streetRe = new RegExp("\\b(\\d{1,6}\\s+(?:[NSEW]\\.?\\s+|North\\s+|South\\s+|East\\s+|West\\s+)?(?:[A-Za-z0-9.'\\u2019-]+\\s+){0,4}(?:" + suf + ")\\b\\.?)(?:\\s*[,.]?\\s*((?:" + uw + ")\\.?\\s*#?\\s*[A-Za-z0-9-]+|#\\s*[A-Za-z0-9-]+))?", 'i');
+  const tailRe = /^[,\s]+([A-Za-z][A-Za-z .'-]{1,30}?)[,\s]+([A-Z]{2})[,\s]+(\d{5})(?:-\d{4})?/;
+  const build = (seg, offset) => {
+    const m = streetRe.exec(seg); if (!m) return null;
+    const after = seg.slice(m.index + m[0].length);
+    const t = tailRe.exec(after);
+    const street = m[1].replace(/\s+/g, ' ').replace(/[.,]+$/, '').trim();
+    const unit = (m[2] || '').replace(/\s+/g, ' ').replace(/^#\s*/, 'Unit ').trim();
+    const addr = street + (unit ? ' ' + unit : '') + (t ? ', ' + t[1].trim() + ', ' + t[2] + ' ' + t[3] : '');
+    return { address: addr, unit_raw: unit, has_zip: !!t, index: offset + m.index };
+  };
+  DEP.addressLabel.lastIndex = 0; let lm;
+  while ((lm = DEP.addressLabel.exec(flat))) {
+    const start = lm.index + lm[0].length;
+    const r = build(flat.slice(start, start + 240), start);
+    if (r) return r;
+  }
+  const re = new RegExp(streetRe.source, 'gi'); let m;
+  while ((m = re.exec(flat))) {
+    const before = flat.slice(Math.max(0, m.index - 60), m.index);
+    if (DEP.addressSkipBefore.test(before)) continue;
+    const r = build(flat.slice(m.index, m.index + 240), m.index);
+    if (r && r.has_zip) return r;
+  }
+  return { address: '', unit_raw: '', has_zip: false, index: -1 };
+}
+
+// Date helpers. All dates are plain 'YYYY-MM-DD' strings; arithmetic goes through UTC noon so no zone can shift a day.
+function deliveryIsoDate(y, m, d) { return String(y).padStart(4, '0') + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0'); }
+function deliveryDayNum(iso) { return Math.round(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 86400000); }
+function deliveryAddDays(iso, n) { const t = new Date((deliveryDayNum(iso) + n) * 86400000 + 12 * 3600000); return deliveryIsoDate(t.getUTCFullYear(), t.getUTCMonth() + 1, t.getUTCDate()); }
+function deliveryValidDate(y, m, d) { if (m < 1 || m > 12 || d < 1 || d > 31) return false; const t = new Date(Date.UTC(y, m - 1, d, 12)); return t.getUTCMonth() === m - 1 && t.getUTCDate() === d; }
+// The date part of an ISO instant in Eastern time (received_at is UTC; an evening email belongs to that ET day).
+function deliveryEtDate(iso) {
+  const d = new Date(iso); if (isNaN(d)) return '';
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+// A date with no year: nearest FUTURE occurrence relative to received_at (ET), allowing a short grace into the past.
+function deliveryInferYear(m, d, recvIso) {
+  const recv = deliveryEtDate(recvIso) || deliveryEtDate(new Date().toISOString());
+  const ry = +recv.slice(0, 4), rn = deliveryDayNum(recv);
+  for (const y of [ry - 1, ry, ry + 1, ry + 2]) {
+    if (!deliveryValidDate(y, m, d)) continue;
+    const diff = deliveryDayNum(deliveryIsoDate(y, m, d)) - rn;
+    if (diff >= -DEP.pastGraceDays) return deliveryIsoDate(y, m, d);
+  }
+  return '';
+}
+function deliveryDateCandidates(flat, recvIso) {
+  const out = [];
+  const monthRe = /(?:(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+)?\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s+(20\d{2}))?/gi;
+  let m;
+  while ((m = monthRe.exec(flat))) {
+    const mo = DEP_MONTHS[m[1].toLowerCase()], d = +m[2];
+    const iso = m[3] ? (deliveryValidDate(+m[3], mo, d) ? deliveryIsoDate(+m[3], mo, d) : '') : deliveryInferYear(mo, d, recvIso);
+    if (iso) out.push({ idx: m.index, end: m.index + m[0].length, iso });
+  }
+  const isoRe = /\b(20\d{2})-(\d{2})-(\d{2})\b/g;
+  while ((m = isoRe.exec(flat))) { if (deliveryValidDate(+m[1], +m[2], +m[3])) out.push({ idx: m.index, end: m.index + m[0].length, iso: m[0] }); }
+  const slashRe = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?\b/g;
+  while ((m = slashRe.exec(flat))) {
+    const mo = +m[1], d = +m[2];
+    let iso = '';
+    if (m[3]) { const y = m[3].length === 2 ? 2000 + +m[3] : +m[3]; if (deliveryValidDate(y, mo, d)) iso = deliveryIsoDate(y, mo, d); }
+    else if (deliveryValidDate(2024, mo, d)) iso = deliveryInferYear(mo, d, recvIso);
+    if (iso) out.push({ idx: m.index, end: m.index + m[0].length, iso });
+  }
+  out.sort((a, b) => a.idx - b.idx);
+  return out;
+}
+// The delivery date: the first date that follows a delivery keyword (strongest keyword first). Order/placed dates never count.
+function deliveryParseDate(flat, recvIso) {
+  const cands = deliveryDateCandidates(flat, recvIso);
+  const recv = deliveryEtDate(recvIso);
+  for (const kwRe of DEP.dateKeywords) {
+    const re = new RegExp(kwRe.source, 'gi'); let km;
+    while ((km = re.exec(flat))) {
+      const kend = km.index + km[0].length;
+      const c = cands.find(x => x.idx >= kend - 1 && x.idx <= kend + DEP.dateAfterWindowChars && !DEP.dateSkipBefore.test(flat.slice(Math.max(0, x.idx - 40), x.idx)));
+      if (c) return c.iso;
+      const rel = /^[\s:,-]*(?:\w+\s+){0,3}?(today|tomorrow)\b/i.exec(flat.slice(kend, kend + 50));
+      if (rel && recv) return rel[1].toLowerCase() === 'today' ? recv : deliveryAddDays(recv, 1);
+      const relBefore = /\b(today|tomorrow)\b[^.]{0,30}$/i.exec(flat.slice(Math.max(0, km.index - 40), km.index));
+      if (relBefore && recv) return relBefore[1].toLowerCase() === 'today' ? recv : deliveryAddDays(recv, 1);
+    }
+  }
+  return '';
+}
+
+// "between 9:00 AM and 1:00 PM" / "9am-1pm" / "8 AM - 12 PM" / "11 AM - 3 PM" -> "9a-1p" style (deliveries.html). '' when none.
+function deliveryParseWindow(flat) {
+  const T = '(\\d{1,2})(?::(\\d{2}))?\\s*(?:([ap])\\.?m\\.?)?';
+  const re = new RegExp('(?:between\\s+)?' + T + '\\s*(?:and|to|-|\\u2013|\\u2014)\\s*' + T, 'gi');
+  let m;
+  const fmt = (h, mi, ap) => String(h) + (mi && mi !== '00' ? ':' + mi : '') + ap;
+  while ((m = re.exec(flat))) {
+    const h1 = +m[1], m1 = m[2], a1raw = (m[3] || '').toLowerCase(), h2 = +m[4], m2 = m[5], a2raw = (m[6] || '').toLowerCase();
+    if (!a1raw && !a2raw) continue;                             // "8-12" with no am/pm anywhere is not a window
+    if (h1 < 1 || h1 > 12 || h2 < 1 || h2 > 12) continue;
+    const a2 = a2raw || a1raw;
+    let a1 = a1raw;
+    if (!a1) {                                                  // "11 - 3 PM": the first hour borrows the suffix unless that would run backwards
+      const t1 = (h1 % 12) + (a2 === 'p' ? 12 : 0), t2 = (h2 % 12) + (a2 === 'p' ? 12 : 0);
+      a1 = t1 <= t2 ? a2 : (a2 === 'p' ? 'a' : 'p');
+    }
+    return fmt(h1, m1, a1) + '-' + fmt(h2, m2, a2);
+  }
+  return '';
+}
+// "9a-1p" -> {start:[h,m], end:[h,m]} in 24h.
+function deliveryWindowTimes(win) {
+  const m = /^(\d{1,2})(?::(\d{2}))?([ap])-(\d{1,2})(?::(\d{2}))?([ap])$/.exec(String(win || ''));
+  if (!m) return null;
+  const to24 = (h, ap) => (+h % 12) + (ap === 'p' ? 12 : 0);
+  return { start: [to24(m[1], m[3]), +(m[2] || 0)], end: [to24(m[4], m[6]), +(m[5] || 0)] };
+}
+function deliveryParseStops(flat) {
+  const m = /\b(\d{1,2})\s+stops?\s+away\b/i.exec(flat);
+  if (m) return +m[1];
+  if (/\bnext\s+stop\b|\byou(?:'|’)?re\s+next\b/i.test(flat)) return 0;
+  return null;
+}
+
+// The whole parse. Pure. Returns:
+// { kind, store, order_number, item_type, make_model, address, unit_raw, expected_date, expected_window, stops_away, missing[], notes[], reason }
+// kind is one of order_confirmation|scheduled|window_set|en_route|approaching|delivered|reschedule|cancel|not_delivery|unknown.
+function deliveryParseEmail(msg) {
+  const subject = String((msg && msg.subject) || '').slice(0, 500);
+  const text = deliveryEmailText(msg && (msg.body != null ? msg.body : msg.text), msg && msg.html);
+  const flat = (subject + ' \n ' + text).replace(/\s+/g, ' ');
+  const out = { kind: 'unknown', order_number: '', wo_ref: '', item_type: '', make_model: '', address: '', unit_raw: '', expected_date: '', expected_window: '', stops_away: null, missing: [], notes: [], reason: '', excerpt: flat.slice(0, 400) };
+  const recvIso = (msg && msg.received_at) || new Date().toISOString();
+  out.order_number = deliveryParseOrderNumber(subject + '\n' + text);
+
+  const sk = deliveryDetectKind(subject, true);
+  const bk = sk ? null : deliveryDetectKind(text, false);
+  let kind = (sk || bk) ? (sk || bk).kind : '';
+  if (!sk && bk && (kind === 'scheduled' || kind === 'window_set') && DEP.confirmationOverride.some(re => re.test(text))) kind = 'order_confirmation';
+  out.kind_source = sk ? 'subject' : (bk ? 'body' : '');
+
+  // Marketing: no order number and (promo wording or an unsubscribe footer), unless the SUBJECT names a live-delivery kind.
+  if (!out.order_number) {
+    const promoHit = DEP.promo.some(re => re.test(flat)) || DEP.unsubscribe.test(flat);
+    if (promoHit && !(sk && DEP.promoOverrideKinds.indexOf(sk.kind) >= 0)) { out.kind = 'not_delivery'; out.reason = 'promotional email (no order number)'; return out; }
+  }
+  if (!kind) {
+    if (out.order_number || DEP.mentionsOrder.test(flat)) { out.kind = 'unknown'; out.reason = 'store email mentions an order or delivery but matches no known kind'; }
+    else { out.kind = 'not_delivery'; out.reason = 'store email with no order or delivery content'; return out; }
+  } else out.kind = kind;
+
+  const it = deliveryParseItem(flat);
+  out.item_type = it.item_type;
+  if (it.also.length) out.notes.push('also mentions: ' + it.also.join(', '));
+  out.make_model = deliveryParseMakeModel(it.scan, out.order_number).make_model;
+  const ad = deliveryParseAddress(flat);
+  out.address = ad.address; out.unit_raw = ad.unit_raw;
+  // The Job / PO line names the work order and the unit. Some store emails leave the unit out of the address block (the Prep email), so the unit is taken from here too.
+  const jr = deliveryParseJobRef(flat);
+  out.wo_ref = jr.wo_ref;
+  if (!out.unit_raw && jr.unit_raw) {
+    out.unit_raw = jr.unit_raw;
+    if (out.address && !/\b(?:apt|apartment|unit|ste|suite|bldg|fl|floor)\b|#/i.test(out.address.split(',')[0])) out.address = out.address.replace(/^([^,]*)/, '$1 ' + jr.unit_raw);
+  }
+  out.expected_date = deliveryParseDate(flat, recvIso);
+  out.expected_window = deliveryParseWindow(flat);
+  const stops = deliveryParseStops(flat);
+  if (out.kind === 'approaching' || out.kind === 'en_route') out.stops_away = stops;
+  // A scheduled email that also carries a time window IS a window-set email (status Window-Set).
+  if (out.kind === 'scheduled' && out.expected_window) out.kind = 'window_set';
+  // "N stops away" in a mail that otherwise reads en-route is an approaching mail.
+  if (out.kind === 'en_route' && stops !== null && stops <= 20) out.kind = 'approaching';
+
+  if (out.kind !== 'unknown') {
+    if (!out.order_number) out.missing.push('order_number');
+    if (!out.address && ['order_confirmation', 'prep', 'scheduled', 'window_set', 'reschedule'].indexOf(out.kind) >= 0) out.missing.push('delivery_address');
+    if ((out.kind === 'scheduled' || out.kind === 'reschedule') && !out.expected_date) out.missing.push('expected_date');
+    if (out.kind === 'window_set' && !out.expected_window) out.missing.push('expected_window');
+    if ((out.kind === 'order_confirmation' || out.kind === 'prep') && !out.item_type) out.missing.push('item_type');
+    if (out.kind === 'approaching' && out.stops_away === null) out.missing.push('stops_away');
+  }
+  return out;
+}
+
+// Status only moves forward, except reschedule -> Scheduled and cancel -> Cancelled.
+// Returns {status, changed, anomaly}. anomaly = a note for Brett (e.g. a reschedule on a delivered order); status is then unchanged.
+function deliveryNextStatus(cur, kind) {
+  cur = String(cur || 'Ordered');
+  const want = DELIVERY_KIND_STATUS[kind];
+  if (!want) return { status: cur, changed: false, anomaly: '' };
+  if (cur === 'Needs Review') return { status: want, changed: want !== cur, anomaly: '' };
+  if (cur === 'Cancelled') {
+    if (kind === 'reschedule') return { status: 'Scheduled', changed: true, anomaly: 'order was Cancelled, a reschedule email arrived: reopened' };
+    if (kind === 'cancel') return { status: cur, changed: false, anomaly: '' };
+    return { status: cur, changed: false, anomaly: 'order is Cancelled but a ' + kind + ' email arrived' };
+  }
+  if (cur === 'Delivered') {
+    if (kind === 'delivered') return { status: cur, changed: false, anomaly: '' };
+    if (kind === 'cancel' || kind === 'reschedule') return { status: cur, changed: false, anomaly: 'order is already Delivered but a ' + kind + ' email arrived' };
+    return { status: cur, changed: false, anomaly: '' };   // an older email processed late: nothing to do
+  }
+  if (kind === 'cancel') return { status: 'Cancelled', changed: true, anomaly: '' };
+  if (kind === 'reschedule') return { status: 'Scheduled', changed: cur !== 'Scheduled', anomaly: '' };
+  const ci = DELIVERY_STATUS_ORDER.indexOf(cur), wi = DELIVERY_STATUS_ORDER.indexOf(want);
+  if (ci < 0) return { status: want, changed: true, anomaly: '' };   // an unrecognised hand-typed status: let the email set it
+  return wi > ci ? { status: want, changed: true, anomaly: '' } : { status: cur, changed: false, anomaly: '' };
+}
+
+// Text for Brett's own phone: plain GSM characters only (no emoji, curly quotes, dashes) so it stays one segment where it can.
+function deliveryPlainSms(s, keepNewlines) {
+  return String(s == null ? '' : s).replace(/[‘’‚′]/g, "'").replace(/[“”„″]/g, '"').replace(/[–—−]/g, '-').replace(/…/g, '...').replace(/ /g, ' ')
+    .replace(/[^\x20-\x7e\n]/g, '').replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, keepNewlines ? '\n' : ' ').trim();
+}
+function deliveryShortDate(iso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return '';
+  const t = new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10), 12));
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][t.getUTCDay()] + ' ' + (+iso.slice(5, 7)) + '/' + (+iso.slice(8, 10));
+}
+// One concise text per event. o: { event, order, item, make, date, window, address, wo_id, stops, note, store }
+function deliveryBrettText(o) {
+  const lead = { new: 'Delivery order found', scheduled: 'Delivery date set', window_set: 'Delivery window set', reschedule: 'Delivery changed', en_route: 'Delivery on its way', approaching: 'Delivery close', delivered: 'Delivered', cancel: 'Delivery CANCELLED', review: 'DELIVERY EMAIL NEEDS REVIEW', problem: 'Delivery problem' }[o.event] || 'Delivery';
+  const when = [deliveryShortDate(o.date), o.window].filter(Boolean).join(' ');
+  const parts = [lead + (o.order ? ' ' + o.order : ''), o.item || '', when, o.event === 'approaching' && o.stops != null ? (o.stops === 0 ? 'you are next' : o.stops + ' stop' + (o.stops === 1 ? '' : 's') + ' away') : '', o.address || '', o.wo_id ? 'WO ' + o.wo_id : '', o.note || ''].filter(Boolean);
+  let s = deliveryPlainSms(parts.join('. ').replace(/\.\s*\./g, '.'));
+  if (s.length > 300) s = s.slice(0, 297) + '...';
+  return s;
+}
+
+// Tenant notice timing (Oct 23 decision, BACKLOG B-20261023-0302-mb): tenants are batched at 9am / 12pm / 6pm ET; 6pm is the last window.
+// A delivery dated TODAY (ET) is urgent and goes out at once (quiet hours 7pm-9am still apply inside smsGatedSend). Anything else is
+// held to the next allowed slot: today 6pm ET if it is before 6pm now, otherwise tomorrow 9am ET. Returns null (send now) or a Date.
+function deliveryEtWallToUtc(y, m, d, h) {
+  const guess = Date.UTC(y, m - 1, d, h, 0, 0);
+  const off1 = nyOffsetMinutes(new Date(guess));
+  const r = guess - off1 * 60000;
+  const off2 = nyOffsetMinutes(new Date(r));
+  return new Date(guess - off2 * 60000);
+}
+function deliveryNoticeHoldUntil(now, expectedDate) {
+  now = now || new Date();
+  const today = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  if (expectedDate && String(expectedDate).slice(0, 10) === today) return null;
+  const y = +today.slice(0, 4), mo = +today.slice(5, 7), d = +today.slice(8, 10);
+  if (etHour(now) < 18) return deliveryEtWallToUtc(y, mo, d, 18);
+  const nxt = deliveryAddDays(today, 1);
+  return deliveryEtWallToUtc(+nxt.slice(0, 4), +nxt.slice(5, 7), +nxt.slice(8, 10), 9);
+}
+
+// The calendar event the Apps Script upserts (it runs as Brett; the Hub never writes the calendar here). One event per order number.
+// o: { order, delivery_id, item, date, window, address, wo_id, kind, status, brett_note }
+function deliveryCalendarObject(o) {
+  const key = 'delivery-' + (o.order ? String(o.order).toLowerCase() : 'id-' + (o.delivery_id || 'unknown'));
+  const item = o.item || 'appliance';
+  const base = { key, title: 'Delivery: ' + item + (o.order ? ' (' + o.order + ')' : ''), start_iso: '', end_iso: '', all_day: false, location: o.address || '', description: '' };
+  const desc = [o.order ? 'Order ' + o.order : '', o.make ? 'Item: ' + o.make : '', o.wo_id ? 'Work order ' + o.wo_id + ' - https://ridge-co.github.io/RidgeCo/deliveries.html' : 'Deliveries: https://ridge-co.github.io/RidgeCo/deliveries.html',
+    'Driver calls Brett. Tenant should be there if they can; Brett receives otherwise and makes sure the old unit is hauled away.', o.status ? 'Status: ' + o.status : ''].filter(Boolean).join('\n');
+  base.description = desc;
+  if (o.kind === 'cancel' || o.status === 'Cancelled') return Object.assign(base, { action: 'cancel', title: 'CANCELLED - ' + base.title });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date || '')) return Object.assign(base, { action: 'none' });
+  const action = o.is_new ? 'create' : 'update';
+  if (o.kind === 'delivered' || o.status === 'Delivered') base.title = 'Delivered: ' + item + (o.order ? ' (' + o.order + ')' : '');
+  const w = deliveryWindowTimes(o.window);
+  if (!w) return Object.assign(base, { action, all_day: true, start_iso: o.date, end_iso: deliveryAddDays(o.date, 1) });   // all-day: end date is exclusive
+  const iso = (hm) => {
+    const utc = deliveryEtWallToUtc(+o.date.slice(0, 4), +o.date.slice(5, 7), +o.date.slice(8, 10), 0).getTime() + (hm[0] * 60 + hm[1]) * 60000;
+    const zone = nyOffsetMinutes(new Date(utc));   // ET wall clock minus UTC, in minutes (-240 in summer)
+    const sign = zone < 0 ? '-' : '+', az = Math.abs(zone);
+    const wall = new Date(utc + zone * 60000);
+    return wall.getUTCFullYear() + '-' + String(wall.getUTCMonth() + 1).padStart(2, '0') + '-' + String(wall.getUTCDate()).padStart(2, '0') + 'T' + String(wall.getUTCHours()).padStart(2, '0') + ':' + String(wall.getUTCMinutes()).padStart(2, '0') + ':00' + sign + String(Math.floor(az / 60)).padStart(2, '0') + ':' + String(az % 60).padStart(2, '0');
+  };
+  return Object.assign(base, { action, all_day: false, start_iso: iso(w.start), end_iso: iso(w.end) });
+}
+
+// ── Tenant-facing wording (Oct 23 2026 addendum). Warm, brief, never scolding. Plain GSM characters only. ──
+// "9a-1p" -> "9am-1pm"; "" -> "".
+function deliveryWindowHuman(win) {
+  const m = /^(\d{1,2})(?::(\d{2}))?([ap])-(\d{1,2})(?::(\d{2}))?([ap])$/.exec(String(win || '').trim());
+  if (!m) return String(win || '').trim();
+  return m[1] + (m[2] ? ':' + m[2] : '') + m[3] + 'm-' + m[4] + (m[5] ? ':' + m[5] : '') + m[6] + 'm';
+}
+// "5425 Belle Vista Ave, Baltimore, MD 21206" -> "5425 Belle Vista Ave" (the tenant knows the city); a unit stays: "928 N Calvert St Apt 2".
+function deliveryStreet(addr) { return String(addr || '').split(',')[0].replace(/\s+/g, ' ').trim(); }
+// "2026-10-16" -> "Friday, October 16" (the page).
+function deliveryLongDate(iso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return '';
+  const t = new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10), 12));
+  return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][t.getUTCDay()] + ', ' + ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][+iso.slice(5, 7) - 1] + ' ' + (+iso.slice(8, 10));
+}
+// SMS segments: GSM-7 text is 160 for one segment and 153 per segment after that (all our tenant text is plain ASCII, so GSM-7).
+function deliverySmsSegments(s) { const n = String(s || '').length; return n === 0 ? 0 : (n <= 160 ? 1 : Math.ceil(n / 153)); }
+// "2026-10-18" -> "10/18/26" (the tenant text: terse, unambiguous, plain ASCII).
+function deliveryDateYY(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || '')); return m ? (+m[2]) + '/' + (+m[3]) + '/' + m[1].slice(2) : ''; }
+// Oct 23 2026 (Brett): the tenant text is a terse summary; the warm wording, street, haul-away and "may be rescheduled" lines live on the RSVP page.
+// o: { kind: 'request'|'changed'|'cancel', item, date, window, link }.  Plain ASCII only (stays GSM-7).
+function deliveryTenantText(o) {
+  const item = String(o.item || 'appliance').toLowerCase();
+  const when = [deliveryWindowHuman(o.window), deliveryDateYY(o.date)].filter(Boolean).join(' ');
+  let msg;
+  if (o.kind === 'cancel') msg = item.charAt(0).toUpperCase() + item.slice(1) + ' delivery is no longer scheduled. No need to be home.';
+  else if (o.kind === 'fyi') msg = 'Update: ' + item + ' delivery' + (when ? ' now ' + when : ' time changed') + '. Thanks for being there, no need to reply.';   // Oct 30 2026 (Brett): the tenant already said yes, so a better window is news, not a new question: no link, no ask
+  else if (o.kind === 'changed') msg = 'Delivery changed: ' + item + (when ? ' now ' + when : '') + '. Can you be there? ' + o.link;
+  else msg = 'New ' + item + ' ordered.' + (when ? ' Delivery ' + when + '.' : '') + ' Please let us know if you can be there: ' + o.link;
+  return deliveryPlainSms(msg, true);
+}
+// ═══ DELIVERY-EMAIL-PURE-END ═══
+
+// ═══ DELIVERY-EMAIL-HANDLER-START ═══
+// 2. The handler. Reads are cheap and run first; every write is verified by a read-back (updateRowVerified / addRow landing check).
+// What it writes: ONE Deliveries row per order (created, or updated on every later email), at most one Work Order per delivery,
+// Ops_Telemetry, and (only when the tenant-notice switch allows it) one tenant text through the gated chokepoint.
+// What it never does: write the calendar (the Apps Script does, as Brett: the response carries the event), send a text on a dry run,
+// text a tenant directly, create a record from a promo email, or drop a store email that mentions an order.
+const DELIVERY_EXTRA_COLS = ['Seen_Message_IDs', 'Last_Event', 'Last_Event_At', 'Last_Event_Sig', 'Stops_Away', 'Tenant_Notice_Sig', 'Tenant_Notice_Status', 'Tenant_Notice_Draft', 'Brett_SMS_Status', 'Tenant_RSVP', 'Tenant_RSVP_At', 'Tenant_RSVP_Note', 'Tenant_Notice_Sent_At', 'Event_Claim', 'Calendar_Event_ID', 'Calendar_Status'];
+const DELIVERY_NOTICE_DEFAULT_TEXT = 'Hi {FirstName}, this is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}. Your {Item} has been ordered{When}. Please be home if you can. If not, Ridge Co will be there to receive it, so you do not need to do anything.';
+const DELIVERY_DRIVER_NOTE = 'Driver calls Brett (ok to call me for now). Tenant: be there if you can; otherwise Brett receives and makes sure the old unit is hauled away.';
+
+const deliveryNormOrder = s => String(s == null ? '' : s).trim().toUpperCase();
+const deliveryRowNum = r => { const n = parseInt(r && r.ID, 10); return Number.isFinite(n) ? n : 1e12; };
+// Message keys: the RFC Message-ID (same in every mailbox that got the email), the caller's message_id, and "gmail:<mailbox>:<gmail id>". Compared case-insensitively.
+function deliveryKeyList(x) { return (Array.isArray(x) ? x : [x]).map(k => String(k == null ? '' : k).replace(/[,\s]+/g, '').trim()).filter(Boolean); }
+function deliverySawMessage(row, keys) {
+  const want = deliveryKeyList(keys).map(k => k.toLowerCase());
+  if (!row || !want.length) return false;
+  const have = [String(row.Message_ID || '')].concat(String(row.Seen_Message_IDs || '').split(',')).map(x => x.trim().toLowerCase()).filter(Boolean);
+  return want.some(k => have.indexOf(k) >= 0);
+}
+function deliverySeenAppend(row, keys) {
+  const list = String(row && row.Seen_Message_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
+  const lc = () => list.map(x => x.toLowerCase());
+  if (String(row && row.Message_ID || '') && lc().indexOf(String(row.Message_ID).toLowerCase()) < 0) list.push(String(row.Message_ID));
+  for (const k of deliveryKeyList(keys)) if (lc().indexOf(k.toLowerCase()) < 0) list.push(k);
+  return list.slice(-60).join(',');   // an order sends maybe a dozen emails, times two mailboxes; 60 is plenty and keeps the cell small
+}
+function deliveryNoteAppend(existing, line, recvIso) {
+  const stamp = (deliveryEtDate(recvIso) || '').slice(5).replace('-', '/');
+  const next = (String(existing || '').trim() ? String(existing).trim() + '\n' : '') + (stamp ? '[' + stamp + '] ' : '') + line;
+  return next.length > 6000 ? '...' + next.slice(-5900) : next;
+}
+function deliveryEventSig(status, date, win, stops) { return [status, date || '', win || '', stops == null ? '' : stops].join('|'); }
+
+// Address -> property/unit/tenant. Reuses the Buildium intake matchers (intakeMatchProperty / intakeResolveUnit) so there is ONE address-matching rule.
+// status: 'matched' | 'none' | 'ambiguous' | 'no_address'. Never guesses: 0 or 2+ properties leave everything blank.
+function deliveryMatchPlace(address, unitRaw, properties, units, tenants) {
+  if (!String(address || '').trim()) return { status: 'no_address', detail: 'no delivery address in the email' };
+  const m = intakeMatchProperty(address, properties);
+  if (m.matches.length === 0) return { status: 'none', detail: 'no active property matches "' + address + '"' };
+  if (m.matches.length > 1) return { status: 'ambiguous', detail: m.matches.map(x => x.property.ID + ' ' + x.property.Address).join(' | ') };
+  const property = m.matches[0].property;
+  const ur = intakeResolveUnit(property, m.matches[0].unit_raw || (unitRaw || '').replace(/^(?:apt|apartment|unit|ste|suite)\.?\s*#?\s*/i, ''), units);
+  const out = { status: 'matched', property, unit_id: ur.ok ? ur.unit_id : '', unit_label: ur.ok ? ur.unit_label : '', unit_problem: ur.ok ? '' : (ur.detail || ur.reason), tenant_id: '', tenant: null };
+  const pool = tenantsForDispatch(tenants, null, { Unit_ID: out.unit_id, Property_ID: String(property.ID) });
+  if (pool.length === 1) { out.tenant_id = String(pool[0].ID); out.tenant = pool[0]; }
+  return out;
+}
+
+// The Job / PO line names a work order ("WO 1237"). Link the delivery to THAT work order (never create a second one) and take its unit and tenant, but only when it
+// is safe: the work order must exist, not be closed (Paid / Cancelled / Closed / Void), and be on the same property the address matched. Returns { wo_id, note, place }; `place` is the (possibly
+// upgraded) address match. Never throws; every refusal comes back as a note that reaches Brett's text and the delivery's notes (nothing is guessed silently).
+function deliveryApplyWoRef(woRef, wos, place, priorPropertyId, properties, units, tenants) {
+  const none = (note) => ({ wo_id: '', note, place });
+  if (!woRef) return none('');
+  const w = (wos || []).find(x => String(x.ID).toUpperCase() === String(woRef).toUpperCase());
+  if (!w) return none('JOB/PO names ' + woRef + ' but no such work order exists: not linked');
+  if (WOStatus.sets.CLOSED_FINAL.indexOf(String(w.Status || '')) >= 0) return none('JOB/PO names ' + woRef + ' but it is ' + w.Status + ' (closed): not linked');
+  const expected = place.status === 'matched' ? String(place.property.ID) : String(priorPropertyId || '');
+  if (expected && String(w.Property_ID) !== expected) return none('JOB/PO names ' + woRef + ' but it is on property ' + w.Property_ID + ' and the address is property ' + expected + ': not linked');
+  const property = place.status === 'matched' ? place.property : (properties || []).find(x => String(x.ID) === String(w.Property_ID));
+  if (!property) return none('JOB/PO names ' + woRef + ' but its property ' + w.Property_ID + ' is not in Properties: not linked');
+  const np = Object.assign({}, place, { status: 'matched', property });
+  const notes = [];
+  if (w.Unit_ID) {
+    const u = (units || []).find(x => String(x.ID) === String(w.Unit_ID));
+    if (place.unit_id && String(place.unit_id) !== String(w.Unit_ID)) notes.push('the email address says unit "' + (place.unit_label || place.unit_id) + '" but ' + woRef + ' is unit "' + (u ? u.Unit_Label : w.Unit_ID) + '": using the work order\'s');
+    np.unit_id = String(w.Unit_ID); np.unit_label = u ? u.Unit_Label : ''; np.unit_problem = '';
+  }
+  const wt = w.Tenant_ID ? (tenants || []).find(x => String(x.ID) === String(w.Tenant_ID) && x.Active !== 'FALSE' && String(x.Property_ID) === String(property.ID)) : null;
+  if (wt) {
+    if (place.tenant_id && String(place.tenant_id) !== String(wt.ID)) notes.push('tenant from the address (' + place.tenant_id + ') differs from ' + woRef + '\'s tenant ' + wt.ID + ': using the work order\'s');
+    np.tenant_id = String(wt.ID); np.tenant = wt;
+  } else if (w.Unit_ID && String(place.unit_id || '') !== String(w.Unit_ID)) {
+    const pool = tenantsForDispatch(tenants, null, { Unit_ID: np.unit_id, Property_ID: String(property.ID) });
+    np.tenant_id = pool.length === 1 ? String(pool[0].ID) : ''; np.tenant = pool.length === 1 ? pool[0] : null;
+  }
+  return { wo_id: String(w.ID), note: notes.join('; '), place: np };
+}
+
+async function deliveryReadTabs(env) {
+  invalidateTabCache('Deliveries');
+  let dels = [];
+  try { dels = await fetchTab(env, 'Deliveries'); } catch (e) { if (!isMissingTabError(e)) throw e; }   // first use: the tab does not exist yet, which is fine for a read
+  const [properties, units, tenants] = await fetchTabs(env, ['Properties', 'Units', 'Tenants']);
+  return { dels, properties, units, tenants };
+}
+
+async function deliveryTelemetry(env, t0, ok, notes) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'delivery_email_intake', Skill_Or_Endpoint: '/intake/delivery-email', Success: ok ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: String(notes).slice(0, 480) }); return true; }
+  catch (_) { return false; }
+}
+
+// Creates the install WO once per delivery. Returns {wo_id, created, error}. Never throws.
+const DELIVERY_WO_HEAL_AFTER_MS = 45000;
+async function deliveryEnsureWO(env, row, p, msgId, adminName) {
+  const existing = String(row.Linked_WO_IDs || '').split(',').map(x => x.trim()).filter(Boolean)[0];
+  if (existing) return { wo_id: existing, created: false, error: '' };
+  if (!row.Property_ID) return { wo_id: '', created: false, error: '' };
+  // PLACEHOLDER (Phase 2 size check): later, compare the new unit's dimensions (New_Dims) with the old unit / opening and flag a mismatch BEFORE the WO is created. Not built; no dimension logic here.
+  // PLACEHOLDER (Phase 4 voice routing): later, route the driver's phone call (store gives Brett's number) through the Hub voice line. Not built; the store-facing contact is Brett's own number for now.
+  try {
+    const what = [row.Item_Type, row.New_Make_Model].filter(Boolean).join(' ') || 'appliance';
+    const desc = ('Receive appliance delivery (' + (row.Store || 'store') + (row.Order_Number ? ' order ' + row.Order_Number : '') + '): ' + what + '. Ridge Co receives the delivery; the delivery crew must haul away the old unit and leave the new one. Tenant should be there if they can; otherwise ' + adminName + ' opens the door and lets the crew in. ' + adminName + ' installs (tenant does not install). Driver calls ' + adminName + '.').slice(0, 1500);
+    const res = await createWorkOrder(env, {
+      property_id: row.Property_ID, unit_id: row.Unit_ID || '', tenant_id: row.Tenant_ID || '', trade: 'Appliance', type: 'delivery', description: desc, priority: 'normal',
+      created_by: 'email-watcher', tenant_notify_created: false, tenant_notify_updates: false,
+      notes: 'Delivery #' + row.ID + (row.Order_Number ? ' / order ' + row.Order_Number : '') + '. ' + DELIVERY_DRIVER_NOTE,
+    });
+    const j = await res.clone().json();
+    if (res.status !== 200 || !j || j.success !== true || !j.id) return { wo_id: '', created: false, error: 'createWorkOrder failed: ' + JSON.stringify(j).slice(0, 160) };
+    const woId = j.id;
+    let warn = '';
+    try {
+      await ensureColumns(env, 'Work_Orders', ['Source', 'Intake_Message_ID']);
+      await updateWOFields(env, woId, { Source: 'email-watcher', Intake_Message_ID: msgId });
+      invalidateTabCache('Work_Orders');
+      const back = (await fetchTab(env, 'Work_Orders')).find(w => String(w.ID) === String(woId));
+      if (!back || String(back.Source || '') !== 'email-watcher') warn = 'WO ' + woId + ' created but its Source column did not save';
+    } catch (e) { warn = 'WO ' + woId + ' created but Source could not be set: ' + String((e && e.message) || e).slice(0, 120); }
+    await updateRowVerified(env, 'Deliveries', row.ID, { Linked_WO_IDs: woId });
+    return { wo_id: woId, created: !j.duplicate, error: '', warning: warn };
+  } catch (e) {
+    return { wo_id: '', created: false, error: String((e && e.message) || e).slice(0, 200) };
+  }
+}
+
+// ── Tenant RSVP link token (Oct 23 2026 addendum). Bearer token tied to the DELIVERY ID (not the date), so it survives a reschedule.
+// Format: "<delivery id>.<16 chars>" where the 16 chars are the first 96 bits of HMAC-SHA256(WORKER_SECRET, "delivery-rsvp|<id>"), base64url.
+// It never contains the date, the phone or the order number. Expiry is checked against the row's CURRENT Expected_Date (3 days after).
+const DELIVERY_RSVP_PAGE = 'rsvp.html';
+const DELIVERY_RSVP_GRACE_DAYS = 3;
+async function deliveryRsvpToken(env, id) {
+  if (!env.WORKER_SECRET) throw new Error('WORKER_SECRET is not set: cannot sign the tenant link');
+  return String(id) + '.' + (await _hmac('delivery-rsvp|' + String(id), env.WORKER_SECRET)).slice(0, 16);
+}
+function deliveryRsvpLink(token) { return PORTAL_BASE + '/' + DELIVERY_RSVP_PAGE + '?t=' + encodeURIComponent(token); }
+// ── Short link (Oct 23 2026, Brett: shorter links). STATELESS: nothing is stored. The code is "<delivery id>.<8 chars>", the 8 chars being the first 48 bits of
+// HMAC-SHA256(WORKER_SECRET, "delivery-short|<id>") (a different message than the page token, so one cannot be derived from the other). GET <base>/r/<code> answers
+// 302 -> PORTAL_BASE/rsvp.html?t=<full token>. Tied to the delivery id (not the date), so it survives a reschedule. Expiry stays with the page/API: the redirect never reads
+// the sheet, and the page + API give a bad code and an expired one the same "link not working" result.
+const DELIVERY_SHORT_PATH = '/r/';
+async function deliveryShortCode(env, id) {
+  if (!env.WORKER_SECRET) throw new Error('WORKER_SECRET is not set: cannot sign the tenant link');
+  return String(id) + '.' + (await _hmac('delivery-short|' + String(id), env.WORKER_SECRET)).slice(0, 8);
+}
+// Base of the short link: Config Delivery_Link_Base (set to e.g. https://ridgeco.app once that domain is attached to this Worker) > the host this request came in on > WORKER_BASE_URL > production.
+function deliveryLinkBase(env, cfg) {
+  const ok = v => { v = String(v || '').trim().replace(/\/+$/, ''); return /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(v) ? v : ''; };
+  return ok(cfg && cfg.Delivery_Link_Base) || ok(env.__SELF_ORIGIN__) || ok(env.WORKER_BASE_URL) || 'https://maintenance-hub.brett-2f8.workers.dev';
+}
+async function deliveryShortLink(env, cfg, id) { return deliveryLinkBase(env, cfg) + DELIVERY_SHORT_PATH + (await deliveryShortCode(env, id)); }
+async function deliveryShortVerify(env, code) {
+  const m = /^(\d{1,9})\.([A-Za-z0-9_-]{8})$/.exec(String(code || '').trim());
+  if (!m || !env.WORKER_SECRET) return null;
+  const want = (await _hmac('delivery-short|' + m[1], env.WORKER_SECRET)).slice(0, 8);
+  return deliveryCtEq(want, m[2]) ? m[1] : null;
+}
+// GET /r/<code>  (PUBLIC). Rate limit per IP (same bucket as the page API). A bad code goes to the page with a dead token, so it shows the same friendly "link not working" as an expired one.
+async function deliveryShortRedirect(env, code, ip) {
+  const page = PORTAL_BASE + '/' + DELIVERY_RSVP_PAGE;
+  const go = (t) => new Response(null, { status: 302, headers: { 'Location': page + '?t=' + encodeURIComponent(t), 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' } });
+  try {
+    if (!deliveryRsvpRate('ip:' + ip, 120, DELIVERY_RSVP_RATE_WINDOW)) return new Response('That was a lot of taps at once. Please wait a minute and try again.', { status: 429, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+    const id = await deliveryShortVerify(env, code);
+    if (!id) return go('x');
+    return go(await deliveryRsvpToken(env, id));
+  } catch (e) {
+    await deliveryTelemetry(env, Date.now(), false, 'short link redirect failed: ' + String((e && e.message) || e));
+    return go('x');
+  }
+}
+function deliveryCtEq(a, b) { a = String(a); b = String(b); let d = a.length ^ b.length; const n = Math.max(a.length, b.length); for (let i = 0; i < n; i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0); return d === 0; }
+// Returns the delivery id when the token's signature is genuine, else null. Same null for every kind of bad token.
+async function deliveryRsvpVerify(env, t) {
+  const m = /^(\d{1,9})\.([A-Za-z0-9_-]{16})$/.exec(String(t || '').trim());
+  if (!m || !env.WORKER_SECRET) return null;
+  const want = (await _hmac('delivery-rsvp|' + m[1], env.WORKER_SECRET)).slice(0, 16);
+  return deliveryCtEq(want, m[2]) ? m[1] : null;
+}
+// Link works until DELIVERY_RSVP_GRACE_DAYS after the CURRENT Expected_Date (ET). No date = not usable.
+function deliveryRsvpExpired(row, now) {
+  const d = String(row && row.Expected_Date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return true;
+  const today = (now || new Date()).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  return today > deliveryAddDays(d, DELIVERY_RSVP_GRACE_DAYS);
+}
+const DELIVERY_RSVP_CURRENT = { Confirmed: 'yes', Declined: 'no', Unsure: 'unsure' };
+
+function deliveryNoticeMode(cfg) {
+  const raw = String(cfg.Delivery_Tenant_Notice == null ? '' : cfg.Delivery_Tenant_Notice).trim().toLowerCase();
+  const mode = raw === '' ? 'auto' : raw;
+  if (mode !== 'auto' && mode !== 'draft' && mode !== 'off') return { mode: 'off', bad: raw };
+  return { mode };
+}
+
+// Tenant request text. mode (Config Delivery_Tenant_Notice): 'auto' (default) | 'draft' | 'off'. Goes ONLY through smsGatedSend (global switch,
+// property, owner and tenant consent, opt-out, moved-out), as a held Message_Queue row released by the existing sweep (processQuietHoursQueue).
+// variant: 'request' (first ask) | 'changed' (date/window moved after we asked) | 'cancel' (we asked, then the delivery was cancelled).
+// No delivery date = no request at all. Timing: see deliveryNoticeHoldUntil. Returns {tenant_sms, detail, sig, draft, sent_at, record}. Never throws.
+async function deliveryTenantNotice(env, o) {
+  const { cfg, row, place, woId, date, win } = o;
+  const variant = o.variant || 'request';
+  const nm = deliveryNoticeMode(cfg);
+  if (nm.bad !== undefined) return { tenant_sms: 'off', detail: 'Delivery_Tenant_Notice has an unknown value "' + nm.bad + '" (use auto, draft or off): no tenant text', warn: true };
+  if (nm.mode === 'off') return { tenant_sms: 'off', detail: 'Delivery_Tenant_Notice is off' };
+  const tenant = place && place.tenant;
+  if (!tenant) return { tenant_sms: 'skipped', detail: 'no single tenant resolved for this delivery' };
+  if (variant !== 'cancel' && !date) return { tenant_sms: 'skipped', detail: 'no delivery date yet: the tenant is asked when a later email sets the date', no_date: true };
+  const sig = variant === 'cancel' ? 'CANCELLED' : (date || '') + '|' + (win || '');
+  if (String(row.Tenant_Notice_Sig || '') === sig && /^(queued|sent|draft)/.test(String(row.Tenant_Notice_Status || ''))) return { tenant_sms: 'skipped', detail: 'tenant already told this date/window', record: false };
+  // Oct 30 2026: everyone active in the unit gets the text (co-tenants), not only the one tenant on the delivery row. Same phone twice = once.
+  const people = [tenant].concat((Array.isArray(o.recipients) ? o.recipients : []).filter(x => x && String(x.ID) !== String(tenant.ID)));
+  const seenPhones = {};
+  const list = people.filter(x => { const ph = normalizePhone(x.Phone); if (!ph) return true; if (seenPhones[ph]) return false; seenPhones[ph] = true; return true; });
+  const multi = list.length > 1;
+  try {
+    const owners = await fetchTab(env, 'Owners');
+    const owner = owners.find(w => String(w.ID) === String(place.property.Owner_ID)) || null;
+    let queue = [];
+    try { queue = await fetchTab(env, MSG_QUEUE_TAB); } catch (e) { if (!isMissingTabError(e)) throw e; }
+    const item = String(row.Item_Type || '').toLowerCase() || 'appliance';
+    let link = '';
+    if (variant === 'request' || variant === 'changed') link = await deliveryShortLink(env, cfg, o.deliveryId || row.ID);
+    const hold = deliveryNoticeHoldUntil(new Date(), variant === 'cancel' ? (row.Expected_Date || date) : date);
+    const sendOne = async (tn) => {
+      const who = String(tn.First_Name || 'tenant');
+      const tag = (x) => Object.assign({ who }, x);
+      if (!tn.Phone) return tag({ state: 'skipped', detail: 'no phone on file' });
+      const ph = normalizePhone(tn.Phone);
+      const mine = r => r.Message_Type === 'delivery_tenant_notice' && woId && String(r.WO_ID) === String(woId) && normalizePhone(r.Recipient_Phone) === ph;
+      const waiting = queue.filter(r => mine(r) && r.Status === 'pending' && r.Send_After);
+      // A newer text replaces one still waiting for its slot: never two texts for one person for one delivery.
+      if (nm.mode !== 'draft') for (const q of waiting) {
+        const ok = await updateMessageQueueRow(env, q.ID, { Status: 'skipped', Gate_Snapshot: variant === 'cancel' ? 'delivery cancelled before this request went out' : 'superseded by a newer delivery notice', Send_After: '' });
+        if (ok === false) return tag({ state: 'failed', detail: 'could not retire the older waiting notice (queue row ' + q.ID + '), nothing new queued', warn: true });
+      }
+      if (variant === 'cancel' && !queue.some(r => mine(r) && r.Status === 'sent')) return tag({ state: 'skipped', detail: waiting.length ? 'the request had not gone out yet: it was withdrawn, tenant not texted' : 'tenant was never asked, nothing to cancel' });
+      const first = !queue.some(r => r.Status === 'sent' && normalizePhone(r.Recipient_Phone) === ph);
+      const ctx = { first: tn.First_Name || 'there', assistant: cfg.ASSISTANT_NAME || 'Riley', owner: (owner && (owner.Company || owner.First_Name)) || 'your property owner', item, street: deliveryStreet(row.Delivery_Address), date, window: win };
+      let msg;
+      if (variant === 'request' && cfg.Delivery_Tenant_Notice_Text) {
+        msg = deliveryPlainSms(renderTemplate(cfg.Delivery_Tenant_Notice_Text, { FirstName: ctx.first, AssistantName: ctx.assistant, Owner: ctx.owner, Item: item, Street: ctx.street, Address: row.Delivery_Address || '', When: [deliveryShortDate(date), deliveryWindowHuman(win)].filter(Boolean).join(' '), Link: link }), true);
+        if (link && msg.indexOf(link) < 0) msg += ' ' + link;   // a custom template that forgot {Link} must still carry the answer link
+      } else msg = deliveryTenantText(Object.assign({ kind: variant, link }, ctx));
+      if (first) msg = withTenantStopNote(msg);
+      if (nm.mode === 'draft') return tag({ state: 'draft', detail: 'draft saved on the delivery (Tenant_Notice_Draft), not sent', draft: msg });
+      const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'delivery_tenant_notice', recipient_type: 'tenant', tenant: tn, property: place.property, owner, message_body: msg, holdUntil: hold ? hold.toISOString() : undefined, allowRepeat: true });   // once-per-event is enforced above (Tenant_Notice_Sig + the waiting-row swap + Event_Claim); the D-16 same-text guard must NOT swallow a real second move that reads exactly like an earlier one (Y, back to X, Y again)
+      if (r && r.sent) return tag({ state: 'sent', detail: 'sent now (delivery is today)', text: msg });
+      if (r && r.held_for_quiet_hours) return tag({ state: 'queued', detail: 'held until ' + r.send_after, send_after: r.send_after, text: msg });
+      if (r && r.send_ok === false) return tag({ state: 'skipped', detail: 'blocked by the text gate: ' + r.gate_snapshot });
+      return tag({ state: 'failed', detail: 'not sent (' + ((r && (r.gate_snapshot || r.warning)) || 'unknown') + ')', warn: true });
+    };
+    const results = [];
+    for (const tn of list) {
+      try { results.push(await sendOne(tn)); }
+      catch (e) { results.push({ who: String(tn.First_Name || 'tenant'), state: 'failed', detail: String((e && e.message) || e).slice(0, 120), warn: true }); }   // one co-tenant failing must not hide the others' results
+    }
+    const nowIso = new Date().toISOString();
+    const detail = results.map(x => (multi ? x.who + ': ' : '') + x.detail).join(' | ');
+    const has = s => results.some(x => x.state === s);
+    const warn = results.some(x => x.warn) || undefined;
+    const withText = results.find(x => x.text);
+    const common = { detail, warn };
+    if (has('queued')) return Object.assign(common, { tenant_sms: 'queued', sig, send_after: (results.find(x => x.send_after) || {}).send_after, sent_at: nowIso, text: withText && withText.text });
+    if (has('sent')) return Object.assign(common, { tenant_sms: 'sent', sig, sent_at: nowIso, text: withText && withText.text });
+    if (has('draft')) return Object.assign(common, { tenant_sms: 'draft', sig, draft: results.filter(x => x.draft).map(x => (multi ? x.who + ': ' : '') + x.draft).join('\n') });
+    if (has('failed')) return Object.assign(common, { tenant_sms: 'failed', warn: true });
+    return { tenant_sms: 'skipped', detail };
+  } catch (e) { return { tenant_sms: 'failed', detail: String((e && e.message) || e).slice(0, 160), warn: true }; }
+}
+
+// ── Public RSVP endpoints. GET /delivery/rsvp?t=TOKEN and POST /delivery/rsvp {t, answer, note?}. Public at the gate; the signed token IS the credential. ──
+// Rate limits are per Worker instance (the same in-memory pattern as the other public pages): per token, per IP, and per IP for bad tokens.
+const __rsvpHits = new Map();
+function deliveryRsvpRate(key, max, windowMs) {
+  const now = Date.now();
+  if (__rsvpHits.size > 2000) for (const [k, v] of __rsvpHits) if (!v.length || now - v[v.length - 1] > windowMs) __rsvpHits.delete(k);
+  const arr = (__rsvpHits.get(key) || []).filter(t => now - t < windowMs);
+  if (arr.length >= max) { __rsvpHits.set(key, arr); return false; }
+  arr.push(now); __rsvpHits.set(key, arr); return true;
+}
+const DELIVERY_RSVP_RATE_WINDOW = 10 * 60000;
+function deliveryRsvpTooMany() { return json({ ok: false, expired: false, message: 'That was a lot of taps at once. Please wait a minute and try again.' }, 429); }
+function deliveryRsvpDead() { return json({ ok: false, expired: true, message: 'This link is no longer active. If you still need to reach us, please text or call Ridge Co and we will be glad to help.' }, 200); }   // the same answer for a bad, tampered, unknown or expired link
+function deliveryRsvpCleanNote(v) { return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300); }
+async function deliveryRsvpLoad(env, t, ip) {
+  if (!deliveryRsvpRate('ip:' + ip, 120, DELIVERY_RSVP_RATE_WINDOW)) return { resp: deliveryRsvpTooMany() };
+  const id = await deliveryRsvpVerify(env, t);
+  if (!id) {
+    if (!deliveryRsvpRate('bad:' + ip, 15, DELIVERY_RSVP_RATE_WINDOW)) return { resp: deliveryRsvpTooMany() };
+    return { resp: deliveryRsvpDead() };
+  }
+  if (!deliveryRsvpRate('tok:' + id, 60, DELIVERY_RSVP_RATE_WINDOW)) return { resp: deliveryRsvpTooMany() };
+  let dels = [];
+  try { invalidateTabCache('Deliveries'); dels = await fetchTab(env, 'Deliveries'); } catch (e) { if (!isMissingTabError(e)) throw e; }
+  const row = dels.find(d => String(d.ID) === id);
+  if (!row || row.Active === 'FALSE' || deliveryRsvpExpired(row)) return { resp: deliveryRsvpDead() };
+  return { row, id };
+}
+function deliveryRsvpClosed(row) {
+  if (row.Status === 'Delivered') return 'This delivery has already arrived. Thank you for being part of it!';
+  if (row.Status === 'Cancelled') return 'This delivery is no longer scheduled, so there is nothing to answer. We will let you know if a new date is set.';
+  return '';
+}
+async function deliveryRsvpGet(env, url, ip) {
+  try {
+    const ld = await deliveryRsvpLoad(env, url.searchParams.get('t'), ip);
+    if (ld.resp) return ld.resp;
+    const row = ld.row;
+    let first = '';
+    if (row.Tenant_ID) { try { const t = (await fetchTab(env, 'Tenants')).find(x => String(x.ID) === String(row.Tenant_ID)); first = t ? String(t.First_Name || '') : ''; } catch (e) { first = ''; } }
+    const closed = deliveryRsvpClosed(row);
+    // Only what the tenant needs. No phone numbers, no other tenants, no order number, no ids.
+    return json({ ok: true, closed: !!closed, delivered: row.Status === 'Delivered', cancelled: row.Status === 'Cancelled', message: closed, first_name: first, item_type: String(row.Item_Type || '').toLowerCase(), date_text: deliveryLongDate(row.Expected_Date), window_text: deliveryWindowHuman(row.Expected_Window), street: deliveryStreet(row.Delivery_Address),
+      current: DELIVERY_RSVP_CURRENT[row.Tenant_RSVP] || '', note: String(row.Tenant_RSVP_Note || '') });
+  } catch (e) {
+    await deliveryTelemetry(env, Date.now(), false, 'rsvp GET failed: ' + String((e && e.message) || e));
+    return json({ ok: false, expired: false, message: 'Sorry, something went wrong on our end. Please try the link again in a few minutes.' }, 500);
+  }
+}
+async function deliveryRsvpPost(env, url, body, ip) {
+  const t0 = Date.now();
+  body = body || {};
+  try {
+    const ld = await deliveryRsvpLoad(env, body.t, ip);
+    if (ld.resp) return ld.resp;
+    const row = ld.row;
+    if (!deliveryRsvpRate('post:' + ld.id, 20, DELIVERY_RSVP_RATE_WINDOW)) return deliveryRsvpTooMany();
+    const answer = String(body.answer || '').toLowerCase();
+    if (['yes', 'no', 'unsure'].indexOf(answer) < 0) return json({ ok: false, current: DELIVERY_RSVP_CURRENT[row.Tenant_RSVP] || '', message: 'Please tap one of the three buttons.' }, 400);
+    const closed = deliveryRsvpClosed(row);
+    if (closed) return json({ ok: false, closed: true, current: DELIVERY_RSVP_CURRENT[row.Tenant_RSVP] || '', message: closed });
+    if (isStaging(env, url) && !String(row.Message_ID || '').startsWith('TEST-')) return json({ ok: false, current: '', message: 'This is the test site: only test deliveries can be answered here.' }, 403);
+    const note = deliveryRsvpCleanNote(body.note);
+    const newRsvp = { yes: 'Confirmed', no: 'Declined', unsure: 'Unsure' }[answer];
+    const same = row.Tenant_RSVP === newRsvp;
+    const msgs = {
+      yes: 'Thank you, that is a big help! You can change your answer on this page any time before the delivery.',
+      no: "No problem at all, thank you for letting us know. We'll do our best to be there instead. The delivery may need to be rescheduled, and we will keep you posted.",
+      unsure: 'Thanks for letting us know. Come back to this page any time to update your answer.',
+    };
+    if (same && String(row.Tenant_RSVP_Note || '') === note) return json({ ok: true, current: answer, message: msgs[answer], unchanged: true });   // a repeat tap: nothing written, nobody texted
+    await ensureDeliveryTab(env);
+    const cfg = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values);
+    const adminPhone = normalizePhone(cfg.admin_phone || '');
+    const nowIso = new Date().toISOString();
+    const f = { Tenant_RSVP: newRsvp, Tenant_RSVP_At: nowIso, Tenant_RSVP_Note: note };
+    let noteLine = '';
+    if (!same) {
+      if (answer === 'no') { Object.assign(f, { Onsite_Contact: 'me', Onsite_Contact_Phone: adminPhone }); noteLine = "Tenant can't be present. Driver calls Brett."; }
+      else {
+        if (row.Tenant_ID) Object.assign(f, { Onsite_Contact: 'tenant', Onsite_Contact_Phone: '' });
+        noteLine = answer === 'yes' ? 'Tenant says they will be there. Driver still calls Brett.' : 'Tenant is not sure yet. Driver calls Brett.';
+      }
+      f.Delivery_Notes = deliveryNoteAppend(row.Delivery_Notes, 'Tenant answered "' + answer + '"' + (note ? ' (note: ' + note.slice(0, 80) + ')' : '') + '. ' + noteLine, nowIso);
+    }
+    await updateRowVerified(env, 'Deliveries', row.ID, f);
+    // Brett is texted only when the answer CHANGES to no / unsure (never for yes, never for a repeat).
+    let sms = '', warn = '';
+    if (!same && (answer === 'no' || answer === 'unsure')) {
+      const when = [deliveryShortDate(row.Expected_Date), row.Expected_Window].filter(Boolean).join(' ');
+      const street = deliveryStreet(row.Delivery_Address) || 'Delivery';
+      const txt = deliveryPlainSms(answer === 'no'
+        ? street + ": tenant can't be there for " + when + '. Driver will call you. Update the order if needed.'
+        : street + ': tenant is not sure yet about ' + when + '. They can still answer.');
+      let prop = null;
+      try { prop = row.Property_ID ? (await fetchTab(env, 'Properties')).find(x => String(x.ID) === String(row.Property_ID)) || null : null; } catch (e) { prop = null; }
+      sms = await intakeSmsAdmin(env, txt, String(row.Linked_WO_IDs || '').split(',')[0].trim(), prop);
+      if (sms !== 'sent') warn = 'Brett text about the tenant answer not sent: ' + sms;
+      try { await updateRowVerified(env, 'Deliveries', row.ID, { Brett_SMS_Status: sms }); } catch (e) { warn = (warn ? warn + ' / ' : '') + 'could not record the alert result: ' + String((e && e.message) || e).slice(0, 80); }
+    }
+    await deliveryTelemetry(env, t0, !warn, 'rsvp delivery ' + row.ID + ' ' + (row.Tenant_RSVP || '-') + ' -> ' + newRsvp + (sms ? '; brett=' + sms : '') + (warn ? '; WARN ' + warn : ''));
+    return json({ ok: true, current: answer, message: msgs[answer] });   // the tenant's answer is saved even when the text to Brett failed; that failure is in telemetry (Needs Attention)
+  } catch (e) {
+    await deliveryTelemetry(env, t0, false, 'rsvp POST failed: ' + String((e && e.message) || e));
+    return json({ ok: false, message: 'Sorry, something went wrong on our end and your answer was not saved. Please try again in a few minutes.' }, 500);
+  }
+}
+
+// ── Sign-in for the Apps Script without a shared secret (Oct 23 2026, Brett) ──
+// The script sends `Authorization: Bearer <Google OpenID identity token>` (ScriptApp.getIdentityToken(): the mailbox owner's own Google identity). We check, with WebCrypto only:
+// RS256 signature against Google's published keys (JWKS, cached per Worker instance), issuer, expiry (small skew), email_verified, and that the e-mail is in Config
+// Delivery_Mailboxes. `aud` is NOT pinned (it is the script project's own client id). The token is never logged. The X-Auth-Token INTAKE_TOKEN path still works beside it.
+const DELIVERY_MAILBOXES_DEFAULT = 'brett@bmoremanagement.com,info@bmoremanagement.com';
+const GOOGLE_JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
+const GOOGLE_ID_ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
+const GOOGLE_ID_SKEW_S = 60, GOOGLE_JWKS_MIN_TTL_MS = 5 * 60000, GOOGLE_JWKS_MAX_TTL_MS = 6 * 3600000, GOOGLE_JWKS_STALE_GRACE_MS = 6 * 3600000, GOOGLE_JWKS_REFETCH_GAP_MS = 60000;
+let __gJwks = null;          // { keys: Map(kid -> { jwk, key }), exp }
+let __gJwksTriedAt = 0;      // last network attempt: an unknown key id can force a refetch at most once a minute (forged ids cannot flood Google or us)
+let __gAuthAlertAt = {};     // reason -> last ledger report (ms)
+async function googleJwksLoad(env, force) {
+  const now = Date.now();
+  if (__gJwks && __gJwks.exp > now && !force) return __gJwks;
+  if (force && __gJwks && now - __gJwksTriedAt < GOOGLE_JWKS_REFETCH_GAP_MS) return __gJwks;
+  if (!force && __gJwks && now - __gJwksTriedAt < GOOGLE_JWKS_REFETCH_GAP_MS) return __gJwks;   // an expired list that just failed to refresh is not hammered
+  __gJwksTriedAt = now;
+  try {
+    const resp = await fetch(GOOGLE_JWKS_URL, { method: 'GET', headers: { Accept: 'application/json' } });
+    if (!resp.ok) throw new Error('Google key list answered HTTP ' + resp.status);
+    const j = await resp.json();
+    const keys = new Map();
+    for (const k of ((j && j.keys) || [])) if (k && k.kid && k.kty === 'RSA' && k.n && k.e) keys.set(String(k.kid), { jwk: k, key: null });
+    if (!keys.size) throw new Error('Google key list was empty');
+    const m = /max-age=(\d+)/.exec(resp.headers.get('Cache-Control') || '');
+    const ttl = Math.min(GOOGLE_JWKS_MAX_TTL_MS, Math.max(GOOGLE_JWKS_MIN_TTL_MS, m ? parseInt(m[1], 10) * 1000 : 3600000));
+    __gJwks = { keys, exp: now + ttl };
+    return __gJwks;
+  } catch (e) {
+    // Keep using a list we already have for a few hours (Google rotates keys slowly) but say so loudly; with nothing in memory, fail closed.
+    await deliveryAuthAlert(env, 'jwks_unavailable', 'P1', 'Could not fetch Google\'s sign-in keys (' + String((e && e.message) || e).slice(0, 120) + '). ' + (__gJwks && now - __gJwks.exp < GOOGLE_JWKS_STALE_GRACE_MS ? 'Using the last known keys for now.' : 'Delivery e-mails from the Apps Script are being refused until this clears.'));
+    if (__gJwks && now - __gJwks.exp < GOOGLE_JWKS_STALE_GRACE_MS) return __gJwks;
+    const err = new Error('jwks_unavailable'); err.code = 'jwks_unavailable'; throw err;
+  }
+}
+// Never throws. { ok:true, email } | { ok:false, reason, unavailable? }.  `reason` goes to the ledger only; the caller always answers 401 with the same body.
+async function deliveryVerifyIdToken(env, jwt) {
+  try {
+    jwt = String(jwt || '').trim();
+    if (!jwt || jwt.length > 4096) return { ok: false, reason: 'malformed' };
+    const parts = jwt.split('.');
+    if (parts.length !== 3 || parts.some(x => !/^[A-Za-z0-9_-]+$/.test(x))) return { ok: false, reason: 'malformed' };
+    let head, claims;
+    try { head = JSON.parse(_tdec.decode(_b64urlToBytes(parts[0]))); claims = JSON.parse(_tdec.decode(_b64urlToBytes(parts[1]))); } catch (e) { return { ok: false, reason: 'malformed' }; }
+    if (!head || head.alg !== 'RS256' || !head.kid || !claims || typeof claims !== 'object') return { ok: false, reason: 'bad_header' };
+    let list = await googleJwksLoad(env, false);
+    let ent = list.keys.get(String(head.kid));
+    if (!ent) { list = await googleJwksLoad(env, true); ent = list.keys.get(String(head.kid)); }   // unknown key id: refetch once (rate-limited)
+    if (!ent) return { ok: false, reason: 'unknown_kid' };
+    if (!ent.key) ent.key = await crypto.subtle.importKey('jwk', { kty: 'RSA', n: ent.jwk.n, e: ent.jwk.e, alg: 'RS256', ext: true }, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+    const okSig = await crypto.subtle.verify({ name: 'RSASSA-PKCS1-v1_5' }, ent.key, _b64urlToBytes(parts[2]), _tenc.encode(parts[0] + '.' + parts[1]));
+    if (!okSig) return { ok: false, reason: 'bad_signature' };
+    const nowS = Math.floor(Date.now() / 1000);
+    if (GOOGLE_ID_ISSUERS.indexOf(String(claims.iss)) < 0) return { ok: false, reason: 'bad_issuer' };
+    if (!Number.isFinite(claims.exp) || claims.exp < nowS - GOOGLE_ID_SKEW_S) return { ok: false, reason: 'expired' };
+    if (!Number.isFinite(claims.iat) || claims.iat > nowS + GOOGLE_ID_SKEW_S) return { ok: false, reason: 'not_yet_valid' };
+    if (!(claims.email_verified === true || claims.email_verified === 'true')) return { ok: false, reason: 'email_not_verified' };
+    const email = String(claims.email || '').trim().toLowerCase();
+    if (!email) return { ok: false, reason: 'no_email' };
+    let cfg;
+    try { cfg = await fetchConfig(env); } catch (e) { await deliveryAuthAlert(env, 'config_unreadable', 'P1', 'Could not read Config to check the mailbox allow-list (' + String((e && e.message) || e).slice(0, 100) + '); delivery e-mails are being refused.'); return { ok: false, reason: 'config_unreadable', unavailable: true }; }
+    const allowed = String(cfg.Delivery_Mailboxes || DELIVERY_MAILBOXES_DEFAULT).split(/[,;\s]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
+    if (allowed.indexOf(email) < 0) return { ok: false, reason: 'email_not_allowed', email_hint: email.replace(/^(.).*(@.*)$/, '$1***$2') };
+    return { ok: true, email };
+  } catch (e) {
+    if (e && e.code === 'jwks_unavailable') return { ok: false, reason: 'jwks_unavailable', unavailable: true };
+    return { ok: false, reason: 'verify_error', detail: String((e && e.message) || e).slice(0, 100) };
+  }
+}
+// Not silent, not a flood: at most one ledger report per where+ref per 10 minutes per Worker instance (the ledger also dedupes and caps by itself). Never contains a token.
+async function deliveryLedgerOnce(env, where, ref, severity, message) {
+  const now = Date.now(), k = where + '|' + ref;
+  if (__gAuthAlertAt[k] && now - __gAuthAlertAt[k] < 10 * 60000) return;
+  __gAuthAlertAt[k] = now;
+  await reportFailure(env, { system: 'hub', source: 'worker', where, ref: String(ref), severity, message: String(message).slice(0, 300) });   // never throws
+}
+function deliveryAuthAlert(env, reason, severity, message) { return deliveryLedgerOnce(env, 'delivery_auth_' + reason, reason, severity, message); }
+
+// ── The delivery lands on Brett's own Google Calendar, written by the Hub (Oct 23 2026). The Hub's service account acts as Brett (domain-wide delegation, narrow scope
+// calendar.events: the same mechanism as the cleaning calendar, getCalendarAccessToken). Config Delivery_Cal_Impersonate (falls back to STR_CAL_IMPERSONATE) names whose
+// primary calendar it is. One event per order (tagged with a private extended property, so a lost id can be found again); create / move / delete; every failure is
+// reported (failure ledger P1 + the response's calendar_status + the delivery row), never swallowed. On staging the write is a stub.
+const DELIVERY_CAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+const DELIVERY_CAL_KEY_PROP = 'ridgecoDeliveryKey';
+function deliveryCalEventBody(cal, patch) {
+  const ev = { summary: cal.title, location: cal.location || '', description: cal.description || '', status: 'confirmed', extendedProperties: { private: { [DELIVERY_CAL_KEY_PROP]: cal.key } } };
+  // patch=true (updating an event that may already exist in the OTHER shape): Google merges nested objects on PATCH, so a timed update on a
+  // date-only event would carry BOTH date and dateTime and answer 400 "Invalid start time" (the Oct 29 2026 range delivery). Null the other field out.
+  if (cal.all_day) { ev.start = patch ? { date: cal.start_iso, dateTime: null, timeZone: null } : { date: cal.start_iso }; ev.end = patch ? { date: cal.end_iso, dateTime: null, timeZone: null } : { date: cal.end_iso }; }
+  else { ev.start = Object.assign({ dateTime: cal.start_iso, timeZone: 'America/New_York' }, patch ? { date: null } : {}); ev.end = Object.assign({ dateTime: cal.end_iso, timeZone: 'America/New_York' }, patch ? { date: null } : {}); }
+  return ev;
+}
+async function deliveryCalFetch(env, sub, method, pathAndQuery, body) {
+  const token = await getCalendarAccessToken(env, { sub, scope: DELIVERY_CAL_SCOPE });
+  const resp = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary' + pathAndQuery, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  if (resp.status === 204) return { _status: 204 };
+  const text = await resp.text();
+  if (!resp.ok) {
+    const e = new Error('Google Calendar answered ' + resp.status + ' while acting as ' + sub + ': ' + smsMaskPhones(text).replace(/\s+/g, ' ').slice(0, 160) + (resp.status === 403 && /scope/i.test(text) ? ' (the narrow calendar.events permission is not enough; do not widen it without a decision)' : ''));
+    e.httpStatus = resp.status; throw e;
+  }
+  let j = {}; try { j = text ? JSON.parse(text) : {}; } catch (_) { throw new Error('Google Calendar returned unreadable JSON'); }
+  return j;
+}
+// -> { status, event_id, warn? } where status is created | updated | cancelled | nothing_to_cancel | none | staged: ... | dry_run: ... | failed: ...
+async function deliveryCalSync(env, cfg, deliveryId, row, cal, dry) {
+  const had = String(row && row.Calendar_Event_ID || '').trim();
+  if (!cal || cal.action === 'none') return { status: 'none', event_id: had };
+  if (dry) return { status: 'dry_run: would ' + cal.action, event_id: had };
+  if (inspCalStaged(env, cfg)) return { status: 'staged: calendar writes are stubbed on the test server', event_id: had };
+  const sub = String(cfg.Delivery_Cal_Impersonate || cfg.STR_CAL_IMPERSONATE || '').trim();
+  try {
+    if (!sub || !STR_EMAIL_RE.test(sub)) throw Object.assign(new Error('Config Delivery_Cal_Impersonate (or STR_CAL_IMPERSONATE) is ' + (sub ? 'not an email address' : 'not set') + ': set it to brett@bmoremanagement.com so the Hub can write deliveries to Brett\'s calendar'), { notConfigured: true });
+    const find = async () => {
+      const q = '/events?privateExtendedProperty=' + encodeURIComponent(DELIVERY_CAL_KEY_PROP + '=' + cal.key) + '&maxResults=10&fields=items(id,status)';
+      return ((await deliveryCalFetch(env, sub, 'GET', q)).items || []).filter(x => x && x.id && x.status !== 'cancelled').map(x => x.id);
+    };
+    const gone = e => e && (e.httpStatus === 404 || e.httpStatus === 410);
+    if (cal.action === 'cancel') {
+      const ids = Array.from(new Set([had].filter(Boolean).concat(await find())));
+      if (!ids.length) return { status: 'nothing_to_cancel', event_id: '' };
+      for (const id of ids) { try { await deliveryCalFetch(env, sub, 'DELETE', '/events/' + encodeURIComponent(id)); } catch (e) { if (!gone(e)) throw e; } }
+      return { status: 'cancelled', event_id: '' };
+    }
+    const body = deliveryCalEventBody(cal), patchBody = deliveryCalEventBody(cal, true);
+    let id = had, how = 'updated';
+    if (id) { try { await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), patchBody); } catch (e) { if (!gone(e)) throw e; id = ''; } }
+    if (!id) {
+      const found = await find();
+      if (found.length) { id = found[0]; await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), patchBody); }
+      else { const made = await deliveryCalFetch(env, sub, 'POST', '/events', body); id = String(made.id || ''); how = 'created'; if (!id) throw new Error('Google Calendar did not return an event id'); }
+    }
+    return { status: how, event_id: id };
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 220);
+    await deliveryLedgerOnce(env, 'delivery_calendar', (e && e.notConfigured ? 'not_configured' : deliveryId), 'P1', 'Delivery ' + deliveryId + ' was saved but its calendar event was NOT written: ' + msg);
+    return { status: 'failed: ' + msg, event_id: had, failed: true };
+  }
+}
+
+// POST /intake/delivery-email. See the contract at the top of this section.
+async function deliveryEmailIntake(env, body) {
+  const t0 = Date.now();
+  body = body || {};
+  const subject = String(body.subject || ''), from = String(body.from || ''), dry = body.dry_run === true;
+  // Which email is this? The RFC Message-ID is identical in every mailbox that received it (the key for cross-mailbox dedupe); the Gmail id differs per
+  // mailbox. The mailbox string is only logged: ANY value is accepted (info@, brett@, a future RidgeCo address), never allow-listed by name.
+  const rfcId = String(body.rfc_message_id || '').replace(/^[<\s]+|[>\s]+$/g, ''), gmailId = String(body.gmail_id || '').trim();
+  const mailboxStr = String(body.mailbox == null ? '' : body.mailbox).replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 120);
+  const msgId = deliveryKeyList(rfcId || String(body.message_id || '').trim() || gmailId)[0] || '';
+  const msgKeys = deliveryKeyList([rfcId, String(body.message_id || ''), gmailId ? 'gmail:' + (mailboxStr || 'x') + ':' + gmailId : '']);
+  const recvIso = (body.received_at && !isNaN(new Date(body.received_at))) ? new Date(body.received_at).toISOString() : new Date().toISOString();
+  if (!msgId) return json({ success: false, error: 'message_id (or rfc_message_id / gmail_id) required' }, 400);
+  let stage = 'config', cfg;
+  const warnings = [];
+  const R = (over) => json(Object.assign({
+    success: true, kind: 'unknown', delivery_id: '', created: false, updated: false, duplicate: false, parked: false, reason: '', detail: '', status: '',
+    order_number: '', item_type: '', make_model: '', expected_date: '', expected_window: '', delivery_address: '',
+    property_matched: false, property_id: '', unit_id: '', tenant_id: '', wo_id: '', wo_created: false,
+    brett_sms_sent: null, sms_status: '', tenant_sms: 'off', tenant_sms_detail: '',
+    calendar: { action: 'none' }, calendar_status: 'none', calendar_event_id: '', telemetry_ok: true, needs_attention: false, warnings, dry_run: dry,
+  }, over), 200);
+  try {
+    // Loud Config read (fetchConfig swallows errors and would silently fall back to defaults).
+    try { cfg = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values); }
+    catch (e) { return json({ success: false, error: 'could not read Config: ' + String((e && e.message) || e).slice(0, 160), stage }, 500); }
+    const domain = deliverySenderDomain(from, cfg.Delivery_Sender_Domains);
+    if (!domain) return json({ success: false, error: 'sender is not an allowed store domain (Config Delivery_Sender_Domains)' }, 400);
+    const store = DELIVERY_STORE_NAMES[domain] || domain;
+    const p = deliveryParseEmail({ subject, body: body.body != null ? body.body : body.text, html: String(body.html || '').slice(0, 200000), received_at: recvIso });
+    const parsedFields = { kind: p.kind, wo_ref: p.wo_ref || '', order_number: p.order_number, item_type: p.item_type, make_model: p.make_model, expected_date: p.expected_date, expected_window: p.expected_window, delivery_address: p.address };
+    if (p.kind === 'not_delivery') return R(Object.assign(parsedFields, { reason: p.reason }));   // promo / chatter: no record, no text, no write of any kind
+
+    stage = 'read';
+    const { dels, properties, units, tenants } = await deliveryReadTabs(env);
+    const adminPhone = normalizePhone(cfg.admin_phone || '');
+    const adminName = 'Brett';
+    if (!adminPhone) warnings.push('Config admin_phone is not set: Brett cannot be texted and the Backup_Phone on new deliveries is blank');
+    const order = deliveryNormOrder(p.order_number);
+
+    // ── dedupe 1: this exact email (RFC Message-ID) was already handled, by either mailbox ──
+    const seenRow = dels.find(d => deliverySawMessage(d, msgKeys));
+    if (seenRow) {
+      let wo = { wo_id: String(seenRow.Linked_WO_IDs || '').split(',')[0].trim(), created: false };
+      // A previous run made the row but could not make its WO (Sheets hiccup): finish that job now, loudly.
+      // ...but NOT while the first attempt may still be creating that WO (two mailboxes deliver the same email at the same instant; the row exists a moment before its WO is linked):
+      // a row younger than DELIVERY_WO_HEAL_AFTER_MS is left to the attempt that made it. If that attempt died, it reported itself and the Apps Script retries a minute later.
+      const _age = new Date().getTime() - Date.parse(seenRow.Created_Date || '');
+      if (!dry && seenRow.Property_ID && !wo.wo_id && seenRow.Active !== 'FALSE' && ['Cancelled', 'Needs Review', 'Delivered'].indexOf(seenRow.Status) < 0 && !(Number.isFinite(_age) && _age < DELIVERY_WO_HEAL_AFTER_MS)) {
+        stage = 'wo-heal';
+        wo = await deliveryEnsureWO(env, seenRow, p, msgId, adminName);
+        if (wo.error) { await deliveryTelemetry(env, t0, false, 'WO heal failed for delivery ' + seenRow.ID + ': ' + wo.error); return json({ success: false, error: 'Work order could not be created for delivery ' + seenRow.ID + ': ' + wo.error, delivery_id: String(seenRow.ID), stage }, 500); }
+      }
+      // The calendar of the delivery's CURRENT state rides along so a retry of an attempt whose calendar step failed can finish it (the upsert is idempotent by key).
+      const dupCal = seenRow.Status === 'Needs Review' ? { action: 'none' } : deliveryCalendarObject({ order: seenRow.Order_Number, delivery_id: seenRow.ID, item: seenRow.Item_Type, make: seenRow.New_Make_Model, date: seenRow.Expected_Date, window: seenRow.Expected_Window, address: seenRow.Delivery_Address, wo_id: wo.wo_id || '', kind: '', status: seenRow.Status, is_new: false });
+      // A copy of an email whose calendar write FAILED earlier retries it (idempotent: the event is found again by its key). Same 45 s rule as the WO: not while the first attempt may still be writing.
+      let dupCs = { status: 'none', event_id: String(seenRow.Calendar_Event_ID || '') };
+      if (!dry && dupCal.action !== 'none' && /^failed|^not_configured/.test(String(seenRow.Calendar_Status || '')) && !(Number.isFinite(_age) && _age < DELIVERY_WO_HEAL_AFTER_MS)) {
+        dupCs = await deliveryCalSync(env, cfg, seenRow.ID, seenRow, dupCal, false);
+        try { await updateRowVerified(env, 'Deliveries', seenRow.ID, { Calendar_Status: dupCs.status.slice(0, 200), Calendar_Event_ID: dupCs.event_id }); } catch (e) { warnings.push('could not record the calendar result on the delivery: ' + String((e && e.message) || e).slice(0, 100)); }
+        if (dupCs.failed) warnings.push('calendar: ' + dupCs.status);
+      }
+      return R(Object.assign(parsedFields, { duplicate: true, reason: 'already_processed', delivery_id: String(seenRow.ID), status: seenRow.Status || '', wo_id: wo.wo_id || '', wo_created: !!wo.created, property_id: seenRow.Property_ID || '', unit_id: seenRow.Unit_ID || '', tenant_id: seenRow.Tenant_ID || '', property_matched: !!seenRow.Property_ID, calendar: dupCal, calendar_status: dupCs.status, calendar_event_id: dupCs.event_id || '' }));
+    }
+
+    // ── find the existing delivery: by order number, else (no order number) the single open delivery at this address ──
+    const active = dels.filter(d => d.Active !== 'FALSE');
+    let row = null, matchedBy = '';
+    if (order) { row = active.filter(d => deliveryNormOrder(d.Order_Number) === order).sort((a, b) => deliveryRowNum(a) - deliveryRowNum(b))[0] || null; if (row) matchedBy = 'order'; }
+    else if (p.kind !== 'unknown' && p.address) {
+      const norm = a => qbNormAddress(String(a || '').replace(/,?\s*[A-Za-z]{2}\s*\d{5}(?:-\d{4})?\s*$/, ''));
+      const open = active.filter(d => d.Order_Number && ['Delivered', 'Cancelled', 'Needs Review'].indexOf(d.Status) < 0 && norm(d.Delivery_Address) && norm(d.Delivery_Address) === norm(p.address));
+      if (open.length === 1) { row = open[0]; matchedBy = 'address'; }
+    }
+
+    // ── unknown kind, or a clear kind with no way to tie it to an order: PARK + alert (never dropped) ──
+    const parkReason = p.kind === 'unknown' ? p.reason : ((!row && !order) ? 'no order number in the email and no single open delivery at that address' : '');
+    if (parkReason) {
+      const excerpt = 'NEEDS REVIEW: ' + parkReason + '. Subject: ' + subject.slice(0, 160) + ' | Excerpt: ' + p.excerpt;
+      const sms = deliveryBrettText({ event: 'review', order: p.order_number, item: p.item_type, address: p.address, note: parkReason + '. Subject: ' + subject.slice(0, 70) });
+      if (dry) return R(Object.assign(parsedFields, { parked: true, reason: 'needs_review', detail: parkReason, calendar: { action: 'none' } }));
+      stage = 'park';
+      await ensureDeliveryTab(env);
+      let parkedId, status = 'Needs Review';
+      if (row) {   // known order: keep its status, add the email to its notes, still tell Brett
+        status = row.Status;
+        await updateRowVerified(env, 'Deliveries', row.ID, { Delivery_Notes: deliveryNoteAppend(row.Delivery_Notes, 'UNRECOGNISED EMAIL: ' + subject.slice(0, 120) + ' | ' + p.excerpt.slice(0, 200), recvIso), Seen_Message_IDs: deliverySeenAppend(row, msgKeys) });
+        parkedId = String(row.ID);
+      } else {
+        const add = await addRow(env, 'Deliveries', { Order_Number: p.order_number, Store: store, Item_Type: p.item_type, New_Make_Model: p.make_model, Delivery_Address: p.address, Expected_Date: p.expected_date, Expected_Window: p.expected_window,
+          Onsite_Contact: 'me', Onsite_Contact_Phone: adminPhone, Backup_Contact: adminName, Backup_Phone: adminPhone, Delivery_Notes: excerpt.slice(0, 1500), Status: 'Needs Review', Source: 'email-watcher', Message_ID: msgId, Seen_Message_IDs: msgKeys.join(','),
+          Created_Date: new Date().toISOString(), Active: 'TRUE', Last_Event: p.kind, Last_Event_At: recvIso });
+        const aj = await add.clone().json();
+        if (add.status !== 200 || !aj || aj.success !== true || !aj.id) throw new Error('could not save the Needs Review row: ' + JSON.stringify(aj).slice(0, 120));
+        invalidateTabCache('Deliveries');
+        const back = (await fetchTab(env, 'Deliveries')).find(d => String(d.ID) === String(aj.id));
+        if (!back || back.Message_ID !== msgId) throw new Error('Needs Review row ' + aj.id + ' did not read back');
+        parkedId = String(aj.id);
+      }
+      stage = 'park-sms';
+      const smsRes = await intakeSmsAdmin(env, sms, '', null);
+      await updateRow(env, 'Deliveries', parkedId, { Brett_SMS_Status: smsRes }).catch(e => warnings.push('could not record the alert result on the delivery: ' + String((e && e.message) || e).slice(0, 100)));
+      const tok = await deliveryTelemetry(env, t0, smsRes === 'sent', 'parked ' + (order || '(no order)') + ' ' + parkReason.slice(0, 120) + '; sms=' + smsRes);
+      return R(Object.assign(parsedFields, { parked: true, reason: 'needs_review', detail: parkReason, delivery_id: parkedId, status, updated: !!row, created: !row, brett_sms_sent: smsRes === 'sent', sms_status: smsRes, telemetry_ok: tok, needs_attention: smsRes !== 'sent' || !tok, calendar: { action: 'none' } }));
+    }
+
+    // ── the email is clear and tied to an order ──
+    const isNew = !row;
+    const prior = row || {};
+    let place = deliveryMatchPlace(p.address || prior.Delivery_Address, p.unit_raw, properties, units, tenants);
+    // Job / PO line -> the work order Brett already made for this job: link it (no second WO), and take its unit + tenant.
+    let woRes = { wo_id: '', note: '', place };
+    if (p.wo_ref) {
+      stage = 'job-po';
+      woRes = deliveryApplyWoRef(p.wo_ref, await fetchTab(env, 'Work_Orders'), place, prior.Property_ID, properties, units, tenants);
+      place = woRes.place;
+      stage = 'read';
+    }
+    const notes = [];
+    if (p.missing.length) notes.push('MISSING from email: ' + p.missing.join(', '));
+    if (p.notes.length) notes.push(p.notes.join('; '));
+    const placeNotes = [];
+    if (!prior.Property_ID) {
+      if (place.status === 'none' || place.status === 'no_address') placeNotes.push('NEEDS PROPERTY: ' + (p.address ? 'address as received "' + p.address + '" matches no property' : 'no delivery address in the email'));
+      else if (place.status === 'ambiguous') placeNotes.push('NEEDS PROPERTY: address as received "' + p.address + '" matches more than one property (' + place.detail + ')');
+      else if (place.unit_problem) placeNotes.push('UNIT UNKNOWN: ' + place.unit_problem);
+    }
+    if (p.wo_ref && (woRes.note || !woRes.wo_id)) placeNotes.push(woRes.note || ('JOB/PO names ' + p.wo_ref + ' but it could not be linked'));
+    else if (woRes.wo_id && !prior.Linked_WO_IDs) notes.push('Linked to ' + woRes.wo_id + ' from the Job/PO line');
+    let anomaly = '';
+    if (prior.Property_ID && place.status === 'matched' && String(place.property.ID) !== String(prior.Property_ID)) anomaly = 'the address in this email matches property ' + place.property.ID + ' (' + place.property.Address + ') but the record is on property ' + prior.Property_ID + ' - not changed';
+
+    // stale = older than the last email applied to this row (Apps Script retries can deliver out of order): fill blanks only
+    const stale = !isNew && prior.Last_Event_At && recvIso < String(prior.Last_Event_At);
+    const next = isNew ? { status: DELIVERY_KIND_STATUS[p.kind], changed: true, anomaly: '' } : (stale ? { status: prior.Status, changed: false, anomaly: '' } : deliveryNextStatus(prior.Status, p.kind));
+    if (next.anomaly) anomaly = anomaly ? anomaly + '; ' + next.anomaly : next.anomaly;
+    const frozen = ['Delivered', 'Cancelled'].indexOf(prior.Status) >= 0 && !(prior.Status === 'Cancelled' && p.kind === 'reschedule');
+    let date = prior.Expected_Date || '', win = prior.Expected_Window || '';
+    if (!stale && !frozen) {
+      if (['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+        if (p.expected_date) { if (p.expected_date !== date && p.kind === 'reschedule' && !p.expected_window) win = ''; date = p.expected_date; }
+        if (p.expected_window) win = p.expected_window;
+      } else if (p.kind !== 'cancel') {
+        if (!date && p.expected_date) date = p.expected_date;
+        if (!win && p.expected_window) win = p.expected_window;
+      }
+      if (p.kind === 'delivered' && !date) date = deliveryEtDate(recvIso);
+    }
+    const stops = (!stale && (p.kind === 'approaching' || p.kind === 'en_route')) ? p.stops_away : (prior.Stops_Away === '' || prior.Stops_Away == null ? null : +prior.Stops_Away);
+    const newStatus = next.status;
+    const dateChanged = !isNew && date !== (prior.Expected_Date || ''), winChanged = !isNew && win !== (prior.Expected_Window || '');
+    const sig = deliveryEventSig(newStatus, date, win, p.kind === 'approaching' ? stops : null);
+    const statusChanged = isNew || newStatus !== prior.Status;
+
+    // who gets a text from Brett's phone: new order, date/window set or changed, en route / stops away, delivered, cancelled, problems. Nothing else.
+    let alertEvent = '';
+    if (!stale) {
+      if (anomaly) alertEvent = 'problem';
+      else if (isNew) alertEvent = ['order_confirmation', 'prep', 'scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0 ? 'new' : p.kind;
+      else if (['cancel', 'delivered', 'en_route'].indexOf(p.kind) >= 0) alertEvent = statusChanged ? p.kind : '';
+      else if (p.kind === 'approaching') alertEvent = (statusChanged || sig !== prior.Last_Event_Sig) ? 'approaching' : '';
+      else if (['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) alertEvent = (dateChanged || winChanged || (p.kind === 'reschedule' && statusChanged)) ? p.kind : '';
+      else if (p.kind === 'order_confirmation') alertEvent = (dateChanged || winChanged) ? 'scheduled' : '';
+    }
+
+    const fill = {};   // blanks on an existing row that this email can fill (never overwrites a value Brett or an earlier email set)
+    if (!isNew) {
+      if (!prior.Item_Type && p.item_type) fill.Item_Type = p.item_type;
+      if (!prior.New_Make_Model && p.make_model) fill.New_Make_Model = p.make_model;
+      if (!prior.Delivery_Address && p.address) fill.Delivery_Address = p.address;
+      if (prior.Property_ID && place.status === 'matched' && String(place.property.ID) === String(prior.Property_ID)) {   // a row made before the unit / tenant / work order were known: complete it
+        if (!prior.Unit_ID && place.unit_id) fill.Unit_ID = place.unit_id;
+        if (!prior.Tenant_ID && place.tenant_id && (!prior.Unit_ID || String(prior.Unit_ID) === String(place.unit_id))) { fill.Tenant_ID = place.tenant_id; if (prior.Onsite_Contact !== 'tenant') fill.Onsite_Contact = 'tenant'; }
+      }
+      if (!prior.Linked_WO_IDs && woRes.wo_id) fill.Linked_WO_IDs = woRes.wo_id;
+      if (!prior.Property_ID && place.status === 'matched') { fill.Property_ID = String(place.property.ID); if (place.unit_id) fill.Unit_ID = place.unit_id; if (place.tenant_id) { fill.Tenant_ID = place.tenant_id; if (prior.Onsite_Contact !== 'tenant') fill.Onsite_Contact = 'tenant'; } }
+    }
+    const merged = Object.assign({}, prior, fill);
+    const propertyId = isNew ? (place.status === 'matched' ? String(place.property.ID) : '') : (merged.Property_ID || '');
+    const unitId = isNew ? (place.unit_id || '') : (merged.Unit_ID || '');
+    const tenantId = isNew ? (place.tenant_id || '') : (merged.Tenant_ID || '');
+    const matchedPlace = place.status === 'matched' && (isNew || String(place.property.ID) === String(merged.Property_ID));
+
+    const calendarFor = (idForKey) => deliveryCalendarObject({ order: p.order_number || prior.Order_Number, delivery_id: idForKey, item: merged.Item_Type || p.item_type || prior.Item_Type, make: merged.New_Make_Model || p.make_model, date, window: win, address: merged.Delivery_Address || p.address, wo_id: String(merged.Linked_WO_IDs || '').split(',')[0], kind: p.kind, status: newStatus, is_new: isNew || (!prior.Expected_Date && !!date) });
+    const noChange = !isNew && !stale && !alertEvent && !statusChanged && !dateChanged && !winChanged && !Object.keys(fill).length;
+
+    const base = Object.assign(parsedFields, { item_type: merged.Item_Type || p.item_type, make_model: merged.New_Make_Model || p.make_model, expected_date: date, expected_window: win, delivery_address: merged.Delivery_Address || p.address, status: newStatus,
+      property_matched: !!propertyId, property_id: propertyId, unit_id: unitId, tenant_id: tenantId, order_number: p.order_number || prior.Order_Number || '' });
+
+    if (dry) {
+      const cal = (stale || noChange) ? { action: 'none' } : calendarFor(isNew ? 'new' : prior.ID);
+      return R(Object.assign(base, { created: isNew, updated: !isNew && !stale, delivery_id: isNew ? '' : String(prior.ID), reason: stale ? 'stale_email' : (noChange ? 'no_change' : (isNew ? 'would_create' : 'would_update')), detail: [placeNotes.join('; '), anomaly, 'would text Brett: ' + (alertEvent || 'no')].filter(Boolean).join(' | '), wo_id: isNew ? woRes.wo_id : String(prior.Linked_WO_IDs || '').split(',')[0].trim(), calendar: cal, calendar_status: cal.action === 'none' ? 'none' : 'dry_run: would ' + cal.action }));
+    }
+
+    // ── writes ──
+    let keepYes = false;   // Oct 30 2026: a tenant who said yes while the delivery was still all-day keeps that yes when only the window gets set
+    let deliveryId, claim = '', lostClaim = false, woInfo = { wo_id: String(prior.Linked_WO_IDs || '').split(',')[0].trim(), created: false };
+    const noteLine = 'Email (' + p.kind + ', ' + (mailboxStr || 'mailbox ?') + '): ' + subject.slice(0, 100);
+    await ensureDeliveryTab(env);
+    if (isNew) {
+      stage = 'create';
+      const tenantMeets = !!tenantId;
+      const row0 = {
+        Order_Number: p.order_number, Store: store, Item_Type: p.item_type, New_Make_Model: p.make_model, Delivery_Address: p.address, Expected_Date: date, Expected_Window: win,
+        Property_ID: propertyId, Unit_ID: unitId, Tenant_ID: tenantId, Linked_WO_IDs: woRes.wo_id,
+        Onsite_Contact: tenantMeets ? 'tenant' : 'me', Onsite_Contact_Phone: tenantMeets ? '' : adminPhone, Backup_Contact: adminName, Backup_Phone: adminPhone,
+        Delivery_Notes: [DELIVERY_DRIVER_NOTE, noteLine].concat(notes, placeNotes).join('\n').slice(0, 5000),
+        Status: newStatus, Source: 'email-watcher', Message_ID: msgId, Seen_Message_IDs: msgKeys.join(','), Created_Date: new Date().toISOString(), Active: 'TRUE',
+        Last_Event: p.kind, Last_Event_At: recvIso, Last_Event_Sig: sig, Stops_Away: stops == null ? '' : String(stops),
+      };
+      const add = await addRow(env, 'Deliveries', row0);
+      const aj = await add.clone().json();
+      if (add.status !== 200 || !aj || aj.success !== true || !aj.id) throw new Error('Deliveries row did not save: ' + JSON.stringify(aj).slice(0, 120));
+      deliveryId = String(aj.id);
+      invalidateTabCache('Deliveries');
+      const all = await fetchTab(env, 'Deliveries');
+      const mine = all.find(d => String(d.ID) === deliveryId);
+      if (!mine || mine.Message_ID !== msgId) throw new Error('Deliveries row ' + deliveryId + ' did not read back after the write');
+      // Both mailboxes can deliver the same email at the same instant: the LOWEST row id for an order / message wins; the other retires itself.
+      const rivals = all.filter(d => d.Active !== 'FALSE' && String(d.ID) !== deliveryId && ((order && deliveryNormOrder(d.Order_Number) === order) || deliverySawMessage(d, msgKeys)));
+      const winner = rivals.sort((a, b) => deliveryRowNum(a) - deliveryRowNum(b))[0];
+      if (winner && deliveryRowNum(winner) < deliveryRowNum(mine)) {
+        await updateRowVerified(env, 'Deliveries', deliveryId, { Active: 'FALSE', Delivery_Notes: 'Retired automatically: duplicate of delivery ' + winner.ID + ' created at the same moment (two mailboxes got the same email).' });
+        const tok = await deliveryTelemetry(env, t0, true, 'race: retired duplicate delivery ' + deliveryId + ' in favour of ' + winner.ID);
+        return R(Object.assign(base, { duplicate: true, reason: 'race_duplicate', delivery_id: String(winner.ID), telemetry_ok: tok }));
+      }
+      Object.assign(merged, mine);
+      if (propertyId && ['Cancelled', 'Delivered'].indexOf(newStatus) < 0) {
+        stage = 'wo';
+        woInfo = await deliveryEnsureWO(env, mine, p, msgId, adminName);
+        if (woInfo.error) {
+          const tok = await deliveryTelemetry(env, t0, false, 'delivery ' + deliveryId + ' saved but its WO failed: ' + woInfo.error);
+          const s2 = await intakeSmsAdmin(env, deliveryBrettText({ event: 'problem', order: p.order_number, item: p.item_type, address: p.address, note: 'record saved (delivery ' + deliveryId + ') but the work order could not be created' }), '', null);
+          return json({ success: false, error: 'Delivery ' + deliveryId + ' saved but its work order failed: ' + woInfo.error, delivery_id: deliveryId, brett_sms_sent: s2 === 'sent', telemetry_ok: tok, stage }, 500);
+        }
+        if (woInfo.warning) warnings.push(woInfo.warning);
+        merged.Linked_WO_IDs = woInfo.wo_id;
+      }
+    } else {
+      stage = 'update';
+      deliveryId = String(prior.ID);
+      const f = Object.assign({}, fill, { Seen_Message_IDs: deliverySeenAppend(prior, msgKeys) });
+      if (noChange) {
+        Object.assign(f, { Last_Event_At: recvIso, Last_Event_Sig: sig });   // same news again: only remember the email and its time
+      } else if (!stale) {
+        Object.assign(f, { Status: newStatus, Expected_Date: date, Expected_Window: win, Last_Event: p.kind, Last_Event_At: recvIso, Last_Event_Sig: sig, Stops_Away: stops == null ? '' : String(stops) });
+        const nl = [noteLine].concat(notes, placeNotes, anomaly ? ['CHECK: ' + anomaly] : []);
+        if (dateChanged || winChanged) nl.push('Date/window now ' + (date || '?') + (win ? ' ' + win : '') + ' (was ' + (prior.Expected_Date || '?') + (prior.Expected_Window ? ' ' + prior.Expected_Window : '') + ')');
+        // A new date/window makes the tenant's earlier answer out of date: reset it (the new request asks again). A Declined tenant is the on-site contact again.
+        // Exception (Brett, Oct 30 2026): a Confirmed answer given while the delivery had NO window yet (all day), and the date has not moved, still stands when the window gets set: the tenant gets an update text, not a new question.
+        if ((dateChanged || winChanged) && prior.Tenant_RSVP === 'Confirmed' && !dateChanged && !prior.Expected_Window && win && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+          keepYes = true;
+          nl.push('Tenant answer kept (Confirmed before the window was known): the window is now ' + win + ', tenant gets an update text, not a new question');
+        } else if ((dateChanged || winChanged) && prior.Tenant_RSVP && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+          Object.assign(f, { Tenant_RSVP: '', Tenant_RSVP_At: '', Tenant_RSVP_Note: '' });
+          if (prior.Tenant_RSVP === 'Declined' && merged.Tenant_ID) Object.assign(f, { Onsite_Contact: 'tenant', Onsite_Contact_Phone: '' });
+          nl.push('Tenant answer reset (was ' + prior.Tenant_RSVP + ') because the date/window changed');
+        }
+        // Two mailboxes can apply the same news at the same instant: each stamps a claim, and only the last writer alerts.
+        claim = sig + '#' + Math.random().toString(36).slice(2, 10);
+        f.Event_Claim = claim;
+        f.Delivery_Notes = deliveryNoteAppend(prior.Delivery_Notes, nl.join(' | '), recvIso);
+      } else {
+        f.Delivery_Notes = deliveryNoteAppend(prior.Delivery_Notes, 'Older email ignored for status/date (arrived after a newer one): ' + subject.slice(0, 100), recvIso);
+      }
+      try { await updateRowVerified(env, 'Deliveries', deliveryId, f); }
+      catch (e) {
+        // Two mailboxes writing the same row at once can each fail the other's read-back. If the row now carries the very news we were applying, the other run
+        // did the job: this is a duplicate, not an error (anything else is still a loud failure).
+        invalidateTabCache('Deliveries');
+        const r1 = (await fetchTab(env, 'Deliveries')).find(d => String(d.ID) === deliveryId);
+        if (claim && r1 && String(r1.Last_Event_Sig || '') === sig && r1.Event_Claim && r1.Event_Claim !== claim) lostClaim = true; else throw e;
+      }
+      if (claim && !lostClaim) {
+        // Settle, then look again: a run that wrote in the same moment is visible by now, and only the LAST writer alerts (default 600 ms, Config Delivery_Claim_Settle_Ms).
+        const settle = Math.max(0, Math.min(3000, parseInt(cfg.Delivery_Claim_Settle_Ms, 10) >= 0 ? parseInt(cfg.Delivery_Claim_Settle_Ms, 10) : 600));
+        if (settle) await new Promise(r => setTimeout(r, settle));
+        invalidateTabCache('Deliveries');
+        const r2 = (await fetchTab(env, 'Deliveries')).find(d => String(d.ID) === deliveryId);
+        if (r2 && r2.Event_Claim && r2.Event_Claim !== claim && String(r2.Last_Event_Sig || '') === sig) lostClaim = true;   // another run wrote the same news after us: it alerts, we stay quiet
+      }
+      if (merged.Property_ID && !woInfo.wo_id && !stale && ['Cancelled', 'Delivered'].indexOf(newStatus) < 0) {
+        stage = 'wo';
+        woInfo = await deliveryEnsureWO(env, merged, p, msgId, adminName);
+        if (woInfo.error) {
+          const tok = await deliveryTelemetry(env, t0, false, 'delivery ' + deliveryId + ' updated but its WO failed: ' + woInfo.error);
+          return json({ success: false, error: 'Delivery ' + deliveryId + ' updated but its work order failed: ' + woInfo.error, delivery_id: deliveryId, telemetry_ok: tok, stage }, 500);
+        }
+        if (woInfo.warning) warnings.push(woInfo.warning);
+        merged.Linked_WO_IDs = woInfo.wo_id;
+      }
+    }
+
+    // ── Brett's text (one per event; never on a repeat) ──
+    stage = 'brett-sms';
+    let smsRes = '', brettSent = null;
+    const woId = String(merged.Linked_WO_IDs || '').split(',')[0].trim();
+    if (lostClaim) alertEvent = '';
+    if (alertEvent) {
+      const noteBits = [placeNotes.join('; '), anomaly ? 'CHECK: ' + anomaly : '', p.missing.length ? 'missing: ' + p.missing.join(', ') : '', isNew && place.status === 'matched' ? (tenantId ? 'tenant meets, Brett backup' : 'no tenant on file, Brett meets') : '', (tenantId && !date && deliveryNoticeMode(cfg).mode !== 'off' && ['new', 'scheduled', 'window_set', 'reschedule'].indexOf(alertEvent) >= 0) ? 'tenant NOT texted yet: no delivery date' : ''].filter(Boolean).join('; ');
+      const text = deliveryBrettText({ event: alertEvent, order: p.order_number || prior.Order_Number, item: merged.Item_Type || p.item_type, date, window: win, address: merged.Delivery_Address || p.address, wo_id: woId, stops, note: noteBits });
+      smsRes = await intakeSmsAdmin(env, text, woId, matchedPlace ? place.property : null);
+      brettSent = smsRes === 'sent';
+      try { await updateRowVerified(env, 'Deliveries', deliveryId, { Brett_SMS_Status: smsRes }); } catch (e) { warnings.push('could not record the alert result on the delivery: ' + String((e && e.message) || e).slice(0, 100)); }
+    }
+
+    // ── tenant request (config-gated, batched, consent-gated; needs a delivery date) ──
+    stage = 'tenant-notice';
+    let tn = { tenant_sms: 'off', detail: '' };
+    const noticeKinds = ['order_confirmation', 'scheduled', 'window_set', 'reschedule'];
+    const cancelling = newStatus === 'Cancelled' && !isNew && prior.Status !== 'Cancelled';
+    // A Prep email carries no news, but if the tenant has never been asked (it was the first email we saw, or the unit / tenant only became known now) it asks, once.
+    const prepAsk = p.kind === 'prep' && !!date && !merged.Tenant_Notice_Sig;
+    const asking = (noticeKinds.indexOf(p.kind) >= 0 || prepAsk) && newStatus !== 'Cancelled' && newStatus !== 'Delivered' && !frozen;
+    if (!stale && (!noChange || prepAsk) && !lostClaim && (cancelling || asking)) {
+      const prop = propertyId ? properties.find(x => String(x.ID) === String(propertyId)) : null;
+      const tenantObj = tenantId ? tenants.find(t => String(t.ID) === String(tenantId)) : null;
+      const rowNow = Object.assign({}, merged, { Expected_Date: date || merged.Expected_Date || '' });
+      const unitMates = (prop && tenantObj && merged.Unit_ID) ? tenantsForDispatch(tenants, null, { Unit_ID: String(merged.Unit_ID), Property_ID: String(propertyId) }).filter(x => String(x.ID) !== String(tenantObj.ID)) : [];   // co-tenants in the same unit
+      tn = await deliveryTenantNotice(env, { cfg, row: rowNow, deliveryId, place: { property: prop, tenant: prop ? tenantObj : null }, recipients: unitMates, woId, date, win, variant: cancelling ? 'cancel' : (merged.Tenant_Notice_Sent_At ? (keepYes ? 'fyi' : 'changed') : 'request') });
+      if (tn.warn) warnings.push('tenant notice: ' + tn.detail);
+      if (tn.record !== false && tn.tenant_sms !== 'off') {
+        const upd = { Tenant_Notice_Status: (tn.tenant_sms + (tn.detail ? ': ' + tn.detail : '')).slice(0, 200) };
+        if (tn.sig) upd.Tenant_Notice_Sig = tn.sig;
+        if (tn.draft) upd.Tenant_Notice_Draft = tn.draft;
+        if (tn.sent_at) upd.Tenant_Notice_Sent_At = tn.sent_at;
+        try { await updateRowVerified(env, 'Deliveries', deliveryId, upd); } catch (e) { warnings.push('could not record the tenant notice result: ' + String((e && e.message) || e).slice(0, 100)); }
+      }
+    }
+    if (smsRes && smsRes !== 'sent') warnings.push('Brett text not sent: ' + smsRes);
+
+    // ── the calendar event, written by the Hub as Brett (not the Apps Script). A repeat that changes nothing re-tries only a previously FAILED write. ──
+    stage = 'calendar';
+    let cal = (stale || noChange || lostClaim) ? { action: 'none' } : calendarFor(deliveryId);
+    if (cal.action === 'none' && noChange && /^failed|^not_configured/.test(String(merged.Calendar_Status || ''))) cal = calendarFor(deliveryId);
+    const cs = await deliveryCalSync(env, cfg, deliveryId, merged, cal, false);
+    if (cs.failed) warnings.push('calendar: ' + cs.status);
+    if (cal.action !== 'none' && !cs.status.startsWith('staged')) {
+      const cu = { Calendar_Status: cs.status.slice(0, 200) };
+      if (cs.event_id !== String(merged.Calendar_Event_ID || '')) cu.Calendar_Event_ID = cs.event_id;
+      try { await updateRowVerified(env, 'Deliveries', deliveryId, cu); } catch (e) { warnings.push('could not record the calendar result on the delivery: ' + String((e && e.message) || e).slice(0, 100)); }
+    }
+    const telOk = await deliveryTelemetry(env, t0, warnings.length === 0, (isNew ? 'created ' : (stale ? 'stale ' : 'updated ')) + deliveryId + ' ' + (order || '') + ' ' + p.kind + ' -> ' + newStatus + '; brett=' + (smsRes || 'none') + '; tenant=' + tn.tenant_sms + '; wo=' + (woId || '-') + '; cal=' + cs.status.slice(0, 40) + (warnings.length ? '; WARN ' + warnings.join(' / ') : ''));
+    return R(Object.assign(base, {
+      created: isNew, updated: !isNew && !stale && !noChange && !lostClaim, duplicate: noChange || lostClaim, delivery_id: deliveryId, reason: stale ? 'stale_email' : (noChange ? 'no_change' : (lostClaim ? 'concurrent_duplicate' : '')), detail: [placeNotes.join('; '), anomaly ? 'CHECK: ' + anomaly : ''].filter(Boolean).join(' | '),
+      wo_id: woId, wo_created: !!woInfo.created, brett_sms_sent: brettSent, sms_status: smsRes, tenant_sms: tn.tenant_sms, tenant_sms_detail: tn.detail || '', calendar: cal, calendar_status: cs.status, calendar_event_id: cs.event_id || '', telemetry_ok: telOk,
+      needs_attention: warnings.length > 0 || brettSent === false || !telOk,
+    }));
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    const telOk = await deliveryTelemetry(env, t0, false, `error at ${stage}: ${msg}`);
+    let alertFailed = telOk ? '' : 'telemetry row not written';
+    // One alert text + one Error row per message (the Apps Script retries every run: do not spam).
+    try {
+      if (!dry) {
+        await intakeEnsureTab(env);
+        const priorErr = (await fetchTab(env, INTAKE_TAB)).filter(q => q.Message_ID === msgId && q.Status === 'Error');
+        if (!priorErr.length) {
+          const sms = await intakeSmsAdmin(env, deliveryBrettText({ event: 'problem', note: 'delivery email intake error (' + stage + '): ' + msg.slice(0, 120) }), '', null);
+          await intakeAppendRow(env, { Received_At: recvIso, Source: 'Delivery email', Message_ID: msgId, Subject: subject.slice(0, 200), Status: 'Error', Reason: `${stage}: ${msg}`.slice(0, 400), SMS_Status: sms, Raw_Body: String(body.body || '').slice(0, 45000), Processed_At: new Date().toISOString() });
+        }
+      }
+    } catch (e2) { alertFailed = (alertFailed ? alertFailed + '; ' : '') + 'could not write Error row / alert text: ' + String((e2 && e2.message) || e2).slice(0, 200); }
+    return json({ success: false, error: msg, stage, alert_failed: alertFailed }, 500);
+  }
+}
+// ═══ DELIVERY-EMAIL-HANDLER-END ═══
 
 // Monday-anchored week key (YYYY-MM-DD of that week's Monday). Date-only + UTC
 // noon so a Baltimore evening never rolls into the next day's bucket.
@@ -34393,14 +36256,14 @@ async function trashInvoice(env, body) {
 // no outreach/SMS/booking-link yet, that's Phase 2. Tabs self-provision on first
 // write, exact same pattern as Trash Service (ensureTrashTabs) just above.
 // ─────────────────────────────────────────────────────────────────────────────
-const INSP_CUSTOMER_HEADERS = ['ID','Name','Line','Contact_Name','Contact_Phone','Contact_Email','Notes','Active','Created_Date','Book_Token','Key_Address','Key_Pickup_Min'];
+const INSP_CUSTOMER_HEADERS = ['ID','Name','Line','Contact_Name','Contact_Phone','Contact_Email','Notes','Active','Created_Date','Book_Token','Key_Address','Key_Pickup_Min','Hub_Owner_ID'];
 const INSP_PROPERTY_HEADERS = ['ID','Customer_ID','Address','Zip','Type','Unit_Count','Visit_Duration_Min','Notes','Active','Created_Date'];
 const INSP_UNIT_HEADERS     = ['ID','Property_ID','Label','Tenant_Name','Tenant_Phone','Notes','Active','Created_Date'];
 const INSP_AVAIL_HEADERS    = ['ID','Day_Of_Week','Start_Time','End_Time','Active','Created_Date'];
 const INSP_BLACKOUT_HEADERS = ['ID','Type','Date','Date_End','Day_Of_Week','Month_Day','Start_Time','End_Time','Reason','Active','Created_Date'];
 // Phase 2 (Oct 7 2026) booking tabs — see the INSPECTION BOOKING block at the end of this file.
 const INSP_OPEN_BLOCK_HEADERS = ['ID','Customer_ID','Date','Start_Time','End_Time','Note','Active','Created_Date','Book_By_Hours','Book_By','Last_Start','Reopen_Log'];
-const INSP_BOOKING_HEADERS = ['ID','Customer_ID','Manage_Token','Status','Address','Formatted_Address','Lat','Lng','Buildings','Units','Duration_Min','Date','Start_Time','Start_ISO','End_ISO','Drive_Before_Min','Drive_After_Min','Drive_Source','Contact_Name','Contact_Phone','Contact_Email','Notes','Calendar_Event_ID','Decision_Note','Notify_Log','Created_At','Decided_At','Reminded_At','Active','Key_Pickup'];
+const INSP_BOOKING_HEADERS = ['ID','Customer_ID','Manage_Token','Status','Address','Formatted_Address','Lat','Lng','Buildings','Units','Duration_Min','Date','Start_Time','Start_ISO','End_ISO','Drive_Before_Min','Drive_After_Min','Drive_Source','Contact_Name','Contact_Phone','Contact_Email','Notes','Calendar_Event_ID','Decision_Note','Notify_Log','Created_At','Decided_At','Reminded_At','Active','Key_Pickup','Levels','Bedrooms','Bathrooms','Inspection_ID','Hub_Property_ID','Insp_Claimed_At'];
 const INSP_TABS = {
   Insp_Customers: INSP_CUSTOMER_HEADERS,
   Insp_Properties: INSP_PROPERTY_HEADERS,
@@ -35476,6 +37339,7 @@ function inspBookingEventBody(b, pending, approveUrl) {
   const s = Date.parse(b.Start_ISO), e = Date.parse(b.End_ISO);
   const lines = [
     `${b.Units} unit(s) in ${b.Buildings} building(s) — ${b.Duration_Min} min`,
+    `Size: ${inspSizeText(b) || 'not given'}`,
     `Booked by: ${b.Contact_Name || '?'} ${b.Contact_Phone || ''} ${b.Contact_Email || ''}`.trim(),
     b.Notes ? `Notes: ${b.Notes}` : '',
     (b.Drive_Before_Min || b.Drive_After_Min) ? `Drive: ${b.Drive_Before_Min || '-'} min from previous stop / ${b.Drive_After_Min || '-'} min to next (${b.Drive_Source})` : '',
@@ -35588,7 +37452,9 @@ async function inspGuardFailure(env, kind, e) {
     catch (se) { cfgNote = ' [could not record outage start: ' + String((se && se.message) || se).slice(0, 120) + ']'; console.error('insp guard: could not save STR_GUARD_FAIL_SINCE:', se && se.message); }
   }
   const mins = Number.isFinite(since) ? Math.round((now - since) / 60000) : 0;
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-book/' + kind + (isFeed ? '_feed' : '_quota'), Success: 'FALSE', Notes: ((isFeed ? 'Bookings feed unreadable' : 'Sheets read quota hit') + ', will retry next tick (failing ' + mins + ' min): ' + msg + cfgNote).slice(0, 480) }); }
+  // Oct 29 2026 (queue 215): a Sheets quota hit is the calm P2 "sheets_quota_busy" row (Job_Type decides the severity; the message text "Quota exceeded" made the old
+  // insp_booking row a P1). The 45-minute persistent alert below is unchanged. A bookings-feed outage is not a Sheets quota, so it keeps insp_booking.
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: isFeed ? 'insp_booking' : 'sheets_quota_busy', Skill_Or_Endpoint: 'insp-book/' + kind + (isFeed ? '_feed' : '_quota'), Success: 'FALSE', Notes: ((isFeed ? 'Bookings feed unreadable' : 'Sheets read quota hit') + ', will retry next tick (failing ' + mins + ' min): ' + msg + cfgNote).slice(0, 480) }); }
   catch (te) { console.error('insp guard: telemetry write failed:', te && te.message, '| original:', kind, msg); }
   if (Number.isFinite(since) && now - since >= INSP_GUARD_QUOTA_GRACE_MS) return inspAlert(env, kind + '_persistent', 'Cleaning-coverage check has not been able to read the ' + (isFeed ? 'bookings feed for ' + mins + ' minutes. ' : 'sheet for ' + mins + ' minutes (Sheets read quota). ') + msg);
 }
@@ -36236,7 +38102,9 @@ async function strEnsureTabs(env) {
   await ensureColumns(env, 'Vendors', ['Service_Area']);
   __strTabsReady = true;
 }
-async function strAddRows(env, tab, list) {
+// opts.soft (Oct 29 2026, queue 228): the append LANDED but the verification re-read could not be done (Sheets read quota, a 5xx). Instead of throwing (which
+// made the whole swap look FAILED although the rows were saved) the ids come back with .unverified = the reason. The caller must NOT treat that as saved-and-checked.
+async function strAddRows(env, tab, list, opts) {
   if (!list.length) return [];
   invalidateTabCache(tab);
   const data = await sheetsRequest(env, 'GET', `/values/${tab}`), rows = data.values || [[]], headers = rows[0] || [];
@@ -36247,7 +38115,9 @@ async function strAddRows(env, tab, list) {
   try { const g = await guardAppendedIds(env, tab, appendResp, rows.length, idc, ids); for (let i = 0; i < ids.length; i++) ids[i] = g.ids[i]; }
   catch (e) { throw strErr('write_not_landed', `A new ${tab} row may share its id with another row: ${strErrText(e)}`); }
   invalidateTabCache(tab);
-  const back = await fetchTab(env, tab);
+  let back;
+  try { back = await fetchTab(env, tab); }
+  catch (e) { if (!(opts && opts.soft)) throw e; ids.unverified = strErrText(e).slice(0, 160); return ids; }
   for (const id of ids) if (!back.some(r => String(r.ID) === id)) throw strErr('write_not_landed', `A new ${tab} row (#${id}) was not found after saving`);
   return ids;
 }
@@ -36272,7 +38142,9 @@ const __strSysAt = {};
 async function strSystemAlert(env, kind, message) {
   // Oct 22 2026: the shared Sheets read quota ran out under the cleaning scheduler. Recorded as the calm P2 "sheets_quota_busy" row; no text or email
   // (the next tick retries, and a scheduler that stays unable to run is still the P0 "overdue" condition).
-  if (sheetsQuotaBusyError(message)) {
+  // Oct 29 2026: also when the quota error sits behind a plain label ("Held cleaner texts could not be processed: Sheets API error on GET ...").
+  // (typeof: the STR block is also run on its own in tests, without the helper; the plain check still applies there.)
+  if (typeof sheetsQuotaBusyText === 'function' ? sheetsQuotaBusyText(message) : sheetsQuotaBusyError(message)) {
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'sheets_quota_busy', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); }
     catch (te) { /* silent-ok: alert code must not report its own failure (it would loop); the full text goes to the Worker log */ console.error('str alert: quota-busy telemetry failed:', te && te.message, '| original:', kind, message); }
     return;
@@ -37290,7 +39162,8 @@ function strExternalEvents(task, foreign) {
 }
 
 // ── Batched, verified Sheets writes (one read + one write + one re-read per tab, however many rows: a 40-date change must not burn the per-minute read quota) ──
-async function strBatchSet(env, tab, updates) {
+// opts.soft: a failed verification re-read (after the write went in) returns out.unverified = [ids] and out.unverified_error instead of throwing. Opt-in, so every other caller is unchanged.
+async function strBatchSet(env, tab, updates, opts) {
   const out = { ok: [], failed: [] }; if (!updates.length) return out;
   invalidateTabCache(tab);
   const data = await sheetsRequest(env, 'GET', `/values/${tab}`), rows = data.values || [], headers = rows[0] || [];
@@ -37307,7 +39180,9 @@ async function strBatchSet(env, tab, updates) {
   if (!cells.length) return out;
   await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: cells });
   invalidateTabCache(tab);
-  const back = await fetchTab(env, tab);
+  let back;
+  try { back = await fetchTab(env, tab); }
+  catch (e) { if (!(opts && opts.soft)) throw e; out.unverified = sent.map(u => u.id); out.unverified_error = strErrText(e).slice(0, 160); return out; }
   for (const u of sent) {
     const row = back.find(r => String(r.ID) === String(u.id)), badk = row ? Object.keys(u.fields).filter(k => String(row[k] == null ? '' : row[k]) !== String(u.fields[k] == null ? '' : u.fields[k])) : ['(row missing)'];
     if (badk.length) out.failed.push({ id: u.id, error: `${tab} #${u.id}: ${badk.join(', ')} did not save` }); else out.ok.push(u.id);
@@ -37315,8 +39190,9 @@ async function strBatchSet(env, tab, updates) {
   return out;
 }
 // Admin-set availability marks, many at once. changes: [{cleaner, date, mark:'can'|'out'|'', source}]. Returns { ok:[key], failed:[{key,error}] } and keeps ctx.st in step.
-async function strMarkBatch(ctx, changes) {
-  const iso = new Date(ctx.now).toISOString(), res = { ok: [], failed: [] }, upd = [], add = [];
+// opts.soft: a mark whose write went in but could not be re-read is returned in res.unverified [{key,error}] (neither ok nor failed).
+async function strMarkBatch(ctx, changes, opts) {
+  const soft = !!(opts && opts.soft), iso = new Date(ctx.now).toISOString(), res = { ok: [], failed: [], unverified: [] }, upd = [], add = [];
   for (const ch of changes) {
     const k = ch.cleaner.ID + '|' + ch.date, m = ch.mark || '', ex = ctx.st.availRows.find(a => String(a.Cleaner_ID) === String(ch.cleaner.ID) && a.Property_Key === STR_PROP && a.Date === ch.date);
     if (ex) upd.push({ id: ex.ID, k, ex, fields: { Mark: m, Updated_At: iso, Source: ch.source || 'admin' } });
@@ -37325,11 +39201,12 @@ async function strMarkBatch(ctx, changes) {
   }
   const keep = (k, mark) => { if (mark) ctx.st.marks[k] = mark; else delete ctx.st.marks[k]; };
   if (upd.length) {
-    let r; try { r = await strBatchSet(ctx.env, 'STR_Availability', upd.map(u => ({ id: u.id, fields: u.fields }))); } catch (e) { r = { ok: [], failed: upd.map(u => ({ id: u.id, error: strErrText(e) })) }; }
-    for (const u of upd) { const f = r.failed.find(x => String(x.id) === String(u.id)); if (f) res.failed.push({ key: u.k, error: f.error }); else { Object.assign(u.ex, u.fields); keep(u.k, u.fields.Mark); res.ok.push(u.k); } }
+    let r; try { r = await strBatchSet(ctx.env, 'STR_Availability', upd.map(u => ({ id: u.id, fields: u.fields })), soft ? { soft: true } : undefined); } catch (e) { r = { ok: [], failed: upd.map(u => ({ id: u.id, error: strErrText(e) })) }; }
+    const unvIds = new Set((r.unverified || []).map(String));
+    for (const u of upd) { const f = r.failed.find(x => String(x.id) === String(u.id)); if (f) res.failed.push({ key: u.k, error: f.error }); else if (unvIds.has(String(u.id))) res.unverified.push({ key: u.k, error: r.unverified_error || 'could not re-read the sheet' }); else { Object.assign(u.ex, u.fields); keep(u.k, u.fields.Mark); res.ok.push(u.k); } }
   }
   if (add.length) {
-    try { const ids = await strAddRows(ctx.env, 'STR_Availability', add.map(a => a.f)); add.forEach((a, i) => { ctx.st.availRows.push(Object.assign({ ID: ids[i] }, a.f)); keep(a.k, a.f.Mark); res.ok.push(a.k); }); }
+    try { const ids = await strAddRows(ctx.env, 'STR_Availability', add.map(a => a.f), soft ? { soft: true } : undefined); if (ids.unverified) { for (const a of add) res.unverified.push({ key: a.k, error: ids.unverified }); } else add.forEach((a, i) => { ctx.st.availRows.push(Object.assign({ ID: ids[i] }, a.f)); keep(a.k, a.f.Mark); res.ok.push(a.k); }); }
     catch (e) { for (const a of add) res.failed.push({ key: a.k, error: strErrText(e) }); }
   }
   return res;
@@ -37521,6 +39398,10 @@ function strRoom(ctx, est) { return ctx.subS0 === undefined || strSubUsed(ctx) +
 async function strFresh(ctx) { if (ctx.dirty) { await strLoad(ctx, true); ctx.dirty = false; } }
 const STR_STAGES = ['sheets', 'audit', 'calendar', 'queue', 'send', 'email', 'alerts', 'finish'];
 const STR_STAGE_EST = { sheets: 18, audit: 4, calendar: 8, queue: 4, send: 17, email: 7, alerts: 12, finish: 22 };
+// Oct 29 2026 (queue 228): a write that went in but could not be read back is "unconfirmed", never "failed". The sheets stage waits STR_UNV_GAP_MS between passes
+// (Google's read quota is per minute) and gives up after STR_UNV_MAX passes with a loud "saved, could not confirm". No text is lined up for an unconfirmed write.
+const STR_UNV_MAX = 5, STR_UNV_GAP_MS = 10000;
+const strPause = ms => new Promise(r => setTimeout(r, ms));
 const STR_STAGE_TEXT = { sheets: 'saving the schedule change', audit: 'writing the activity log', calendar: 'fixing the cleaning calendar', queue: 'lining up the texts', send: 'sending the texts', email: 'sending the calendar invite', alerts: 'checking the standing alerts', finish: 'wrapping up' };
 
 // ── Compact copy of the plan that is saved with the job (a cell holds at most 50,000 characters) ──
@@ -37559,6 +39440,7 @@ const strOkItems = J => J.items.filter(i => i.outcome === 'change' && J.state.ir
 async function strStageSheets(ctx, J) {
   const { env } = ctx, { req, state } = J, cleaner = J.cleaner, iso = new Date(ctx.now).toISOString(), isMark = req.action === 'mark', ires = state.ires, first = J.plan.cleaner.first;
   const toDo = J.items.filter(i => i.outcome === 'change');
+  if (state.unv) { const w = STR_UNV_GAP_MS - (Date.now() - (state.unv_at || 0)); if (w > 0) await strPause(w); state.unv_at = Date.now(); } // (resuming after an unconfirmed write) let Google's per-minute read quota clear
   const done = it => ires[it.ref].status === 'done', fail = (it, why) => { ires[it.ref] = { status: 'failed', reason: why }; state.errors.push({ step: 'change_item', error: `${it.label}: ${why}` }); };
   if (!isMark) {
     invalidateTabCache('STR_Turnovers');
@@ -37566,36 +39448,60 @@ async function strStageSheets(ctx, J) {
     for (const it of toDo) {
       if (ires[it.ref].status !== 'pending') continue; // (resuming) already settled
       const row = cur.get(it.task_key), f = { Status: 'covered', Assigned_Cleaner_ID: cleaner.ID, Assigned_Via: 'admin_swap', Checkout_Text_Sent: '', Note: '', Updated_At: iso };
-      if (row) { if (row.Status === 'cancelled') { fail(it, 'The booking was cancelled a moment ago.'); continue; } if (row.Status === 'covered' && String(row.Assigned_Cleaner_ID) === cleaner.ID) { ires[it.ref] = { status: 'done', reason: `${first} already has this one.` }; continue; } upd.push({ id: row.ID, fields: f, it }); }
+      if (row) { if (row.Status === 'cancelled') { fail(it, 'The booking was cancelled a moment ago.'); continue; } if (row.Status === 'covered' && String(row.Assigned_Cleaner_ID) === cleaner.ID) { ires[it.ref] = { status: 'done', reason: `${first} already has this one.` }; continue; } /* (also how a write that could not be re-read last pass is confirmed) */ upd.push({ id: row.ID, fields: f, it }); }
       else adds.push({ it, f: Object.assign({ Task_Key: it.task_key, Property_Key: STR_PROP, Kind: it.kind, Date: it.date, Win_Start: it._t.winStart, Win_End: it._t.winEnd, Next_Arrival: it._t.next || '', Guests: '', Missing_Count: '0', Created_At: iso }, f) });
     }
-    if (upd.length) { let r; try { r = await strBatchSet(env, 'STR_Turnovers', upd.map(u => ({ id: u.id, fields: u.fields }))); } catch (e) { r = { ok: [], failed: upd.map(u => ({ id: u.id, error: strErrText(e) })) }; } for (const u of upd) { const f = r.failed.find(x => String(x.id) === String(u.id)); if (f) fail(u.it, f.error); else ires[u.it.ref] = { status: 'done', reason: '' }; } }
-    if (adds.length) { try { await strAddRows(env, 'STR_Turnovers', adds.map(a => a.f)); for (const a of adds) ires[a.it.ref] = { status: 'done', reason: 'The scheduler had not picked this date up yet; it was added now.' }; } catch (e) { for (const a of adds) fail(a.it, 'Could not save this date (it may or may not have saved - Refresh and check before retrying): ' + strErrText(e)); } }
+    if (upd.length) { let r; try { r = await strBatchSet(env, 'STR_Turnovers', upd.map(u => ({ id: u.id, fields: u.fields })), { soft: true }); } catch (e) { r = { ok: [], failed: upd.map(u => ({ id: u.id, error: strErrText(e) })) }; } const unvIds = new Set((r.unverified || []).map(String)); for (const u of upd) { const f = r.failed.find(x => String(x.id) === String(u.id)); if (f) fail(u.it, f.error); else if (unvIds.has(String(u.id))) ires[u.it.ref] = { status: 'pending', reason: '', unv: r.unverified_error || 'could not re-read the sheet' }; else ires[u.it.ref] = { status: 'done', reason: '' }; } }
+    if (adds.length) { try { const ids = await strAddRows(env, 'STR_Turnovers', adds.map(a => a.f), { soft: true }); for (const a of adds) ires[a.it.ref] = ids.unverified ? { status: 'pending', reason: '', unv: ids.unverified } : { status: 'done', reason: 'The scheduler had not picked this date up yet; it was added now.' }; } catch (e) { for (const a of adds) fail(a.it, 'Could not save this date (it may or may not have saved - Refresh and check before retrying): ' + strErrText(e)); } }
     // quietly close any waiting offers on the dates we just assigned
-    const offUpd = []; for (const it of toDo.filter(done)) for (const o of it.offers_closed) offUpd.push({ id: o.id, fields: { Status: o.status === 'queued' ? 'failed' : 'superseded', Responded_At: iso, Note: 'closed by admin swap' }, it });
-    if (offUpd.length) { let r; try { r = await strBatchSet(env, 'STR_Offers', offUpd.map(u => ({ id: u.id, fields: u.fields }))); } catch (e) { r = { ok: [], failed: offUpd.map(u => ({ id: u.id, error: strErrText(e) })) }; } for (const f of r.failed) { const it = (offUpd.find(u => String(u.id) === String(f.id)) || {}).it; state.errors.push({ step: 'close_offers', error: `${it ? it.label : ''}: a waiting offer could not be closed (${f.error}). Check the board before anyone replies.` }); if (it) ires[it.ref].flag = 'offer_not_closed'; } }
+    const offUpd = []; for (const it of toDo.filter(x => done(x) && !ires[x.ref].oc)) for (const o of it.offers_closed) offUpd.push({ id: o.id, fields: { Status: o.status === 'queued' ? 'failed' : 'superseded', Responded_At: iso, Note: 'closed by admin swap' }, it });
+    if (offUpd.length) { let r; try { r = await strBatchSet(env, 'STR_Offers', offUpd.map(u => ({ id: u.id, fields: u.fields })), { soft: true }); } catch (e) { r = { ok: [], failed: offUpd.map(u => ({ id: u.id, error: strErrText(e) })) }; } if ((r.unverified || []).length) state.warnings.push(`A waiting offer was closed but the Hub could not read the sheet back to confirm it (${r.unverified_error}). Check the board before anyone replies.`); for (const f of r.failed) { const it = (offUpd.find(u => String(u.id) === String(f.id)) || {}).it; state.errors.push({ step: 'close_offers', error: `${it ? it.label : ''}: a waiting offer could not be closed (${f.error}). Check the board before anyone replies.` }); if (it) ires[it.ref].flag = 'offer_not_closed'; } }
   }
   // availability marks (displaced cleaners become backup; out-marks cleared; or the whole mark action)
   const markChanges = [], markIt = new Map();
-  if (isMark) { for (const it of toDo) { markChanges.push({ cleaner, date: it.date, mark: req.mark, source: 'admin' }); markIt.set(cleaner.ID + '|' + it.date, it); } }
-  else for (const it of toDo.filter(done)) for (const m of it.marks) { markChanges.push({ cleaner: ctx.st.cmap[m.cleaner_id], date: m.date, mark: m.mark, source: 'admin_swap' }); markIt.set(m.cleaner_id + '|' + m.date, it); }
+  if (isMark) { for (const it of toDo.filter(x => ires[x.ref].status === 'pending')) { markChanges.push({ cleaner, date: it.date, mark: req.mark, source: 'admin' }); markIt.set(cleaner.ID + '|' + it.date, it); } }
+  else for (const it of toDo.filter(x => done(x) && !ires[x.ref].mk)) for (const m of it.marks) { markChanges.push({ cleaner: ctx.st.cmap[m.cleaner_id], date: m.date, mark: m.mark, source: 'admin_swap' }); markIt.set(m.cleaner_id + '|' + m.date, it); }
   if (markChanges.length) {
-    const r = await strMarkBatch(ctx, markChanges.filter(m => m.cleaner));
-    if (isMark) { for (const it of toDo) { const f = r.failed.find(x => x.key === cleaner.ID + '|' + it.date); if (f) fail(it, 'Could not save the mark: ' + f.error); else ires[it.ref] = { status: 'done', reason: '' }; } }
-    else for (const f of r.failed) { const it = markIt.get(f.key); state.errors.push({ step: 'backup_mark', error: `${it ? it.label : f.key}: the assignment went through but a backup mark did not save (${f.error}).` }); if (it) ires[it.ref].flag = 'mark_failed'; }
+    const r = await strMarkBatch(ctx, markChanges.filter(m => m.cleaner), { soft: true }), unvKeys = new Map(r.unverified.map(u => [u.key, u.error]));
+    if (isMark) { for (const it of toDo.filter(x => ires[x.ref].status === 'pending')) { const k = cleaner.ID + '|' + it.date, f = r.failed.find(x => x.key === k); if (f) fail(it, 'Could not save the mark: ' + f.error); else if (unvKeys.has(k)) ires[it.ref] = { status: 'pending', reason: '', unv: unvKeys.get(k) }; else ires[it.ref] = { status: 'done', reason: '' }; } }
+    else {
+      for (const f of r.failed) { const it = markIt.get(f.key); state.errors.push({ step: 'backup_mark', error: `${it ? it.label : f.key}: the assignment went through but a backup mark did not save (${f.error}).` }); if (it) ires[it.ref].flag = 'mark_failed'; }
+      for (const it of new Set(markIt.values())) { const bad = [...unvKeys.keys()].find(k => markIt.get(k) === it); if (bad) ires[it.ref].mku = unvKeys.get(bad); else { delete ires[it.ref].mku; ires[it.ref].mk = 1; } } // mk = this date's backup marks are settled; mku = written but not yet read back
+    }
   }
   if (isMark && req.mark === 'out') { // close waiting offers the cleaner can no longer take; the scheduler asks the next cleaner on its next run
-    const upd = []; for (const it of toDo.filter(done)) for (const o of it.offers_declined) upd.push({ id: o.id, fields: { Status: 'declined', Responded_At: iso, Note: 'marked out by Brett' } });
-    if (upd.length) { try { const r = await strBatchSet(env, 'STR_Offers', upd); for (const f of r.failed) state.errors.push({ step: 'close_offers', error: `A waiting offer could not be closed (${f.error}).` }); } catch (e) { state.errors.push({ step: 'close_offers', error: strErrText(e) }); } }
+    const upd = []; for (const it of toDo.filter(x => done(x) && !ires[x.ref].oc)) for (const o of it.offers_declined) upd.push({ id: o.id, fields: { Status: 'declined', Responded_At: iso, Note: 'marked out by Brett' } });
+    if (upd.length) { try { const r = await strBatchSet(env, 'STR_Offers', upd, { soft: true }); for (const f of r.failed) state.errors.push({ step: 'close_offers', error: `A waiting offer could not be closed (${f.error}).` }); if ((r.unverified || []).length) state.warnings.push(`A waiting offer was closed but the Hub could not read the sheet back to confirm it (${r.unverified_error}).`); } catch (e) { state.errors.push({ step: 'close_offers', error: strErrText(e) }); } }
   }
+  for (const it of toDo.filter(done)) ires[it.ref].oc = 1; // offers for this date are settled (not redone on a later pass)
   ctx.dirty = true;
+  // a write that went in but could not be read back is NOT an error and NOT done: wait for the next pass, which confirms it through the "already has this one" branch above
+  if (toDo.some(it => (ires[it.ref].status === 'pending' && ires[it.ref].unv) || ires[it.ref].mku)) {
+    state.unv = (state.unv || 0) + 1; state.unv_at = Date.now();
+    if (state.unv < STR_UNV_MAX) { state.tries.sheets = Math.max(0, (state.tries.sheets || 1) - 1); return false; }
+    strGiveUpUnverified(J);
+  }
   return true;
+}
+// The tries ran out and the read-back never worked: say so, loudly, and keep every text back. Used by the stage itself and by the driver's 3-try cap.
+function strGiveUpUnverified(J) {
+  const { state } = J, ires = state.ires;
+  for (const it of J.items) {
+    const r = ires[it.ref]; if (!r) continue;
+    if (r.status === 'pending' && r.unv) {
+      ires[it.ref] = { status: 'unverified', reason: `Saved, but the Hub could not read the sheet back to confirm it (${String(r.unv).slice(0, 120)}). It most likely saved. Refresh and check this date before trying again. No text was sent for it.` };
+      state.errors.push({ step: 'save_unverified', error: `${it.label}: saved but NOT confirmed - the Hub could not read the sheet back (${String(r.unv).slice(0, 120)}). Refresh and check before doing it again. No text was sent for it.` });
+    } else if (r.mku) {
+      state.errors.push({ step: 'backup_mark', error: `${it.label}: the assignment went through but a backup mark could not be confirmed (${String(r.mku).slice(0, 120)}).` });
+      r.flag = 'mark_unverified'; delete r.mku; r.mk = 1; state.unvMarks = (state.unvMarks || []).concat((it.marks || []).map(m => String(m.cleaner_id)));
+    }
+  }
 }
 
 // ── Stage 2: audit trail, one STR_Log row per date ──
 async function strStageAudit(ctx, J) {
   const { req, state } = J, cleaner = J.cleaner, iso = new Date(ctx.now).toISOString(), isMark = req.action === 'mark', first = J.plan.cleaner.first;
-  const logRows = J.items.filter(it => ['change', 'blocked', 'not_found'].includes(it.outcome) || state.ires[it.ref].status === 'failed').map(it => { const r = state.ires[it.ref], ok = r.status === 'done'; return { Timestamp: iso, Task_Key: it.task_key || '', Cleaner_ID: cleaner.ID, Event: isMark ? (ok ? 'admin_mark' : 'admin_mark_failed') : (ok ? 'admin_swap' : 'admin_swap_failed'), Detail: (isMark ? `${it.date}: ${it.current || '-'} -> ${req.mark || 'cleared'}` : `${it.label}: ${(it.displaced || []).map(d => d.name + (d.source === 'calendar' ? ' (calendar entry)' : '')).concat(it.unmatched || []).join(', ') || 'nobody'} -> ${first}${req.action === 'assign_range' ? ' [range]' : ''}`) + (ok ? '' : ` [${r.status}: ${r.reason}]`) + ` plan ${J.planId}`.slice(0, 480) }; });
+  const logRows = J.items.filter(it => ['change', 'blocked', 'not_found'].includes(it.outcome) || state.ires[it.ref].status === 'failed').map(it => { const r = state.ires[it.ref], ok = r.status === 'done'; return { Timestamp: iso, Task_Key: it.task_key || '', Cleaner_ID: cleaner.ID, Event: isMark ? (ok ? 'admin_mark' : (r.status === 'unverified' ? 'admin_mark_unverified' : 'admin_mark_failed')) : (ok ? 'admin_swap' : (r.status === 'unverified' ? 'admin_swap_unverified' : 'admin_swap_failed')), Detail: (isMark ? `${it.date}: ${it.current || '-'} -> ${req.mark || 'cleared'}` : `${it.label}: ${(it.displaced || []).map(d => d.name + (d.source === 'calendar' ? ' (calendar entry)' : '')).concat(it.unmatched || []).join(', ') || 'nobody'} -> ${first}${req.action === 'assign_range' ? ' [range]' : ''}`) + (ok ? '' : ` [${r.status}: ${r.reason}]`) + ` plan ${J.planId}`.slice(0, 480) }; });
   try { if (logRows.length) await strAddRows(ctx.env, 'STR_Log', logRows.map(r => Object.assign({}, r, { Detail: r.Detail.slice(0, 480) }))); } catch (e) { state.errors.push({ step: 'audit_log', error: 'Could not write the audit rows to the Activity log: ' + strErrText(e) }); }
   return true;
 }
@@ -37659,14 +39565,15 @@ async function strStageQueue(ctx, J) {
   for (const r of J.recipients) {
     const c = ctx.st.cmap[r.cleaner_id], base = { key: r.key, name: r.name, first: r.first, kind: r.kind, dates: r.dates }, tx = J.texts[r.key] || { send: false, text: '' };
     const refs = r.refs.filter(x => okRefs.has(x)); if (!c) { state.texts.push(Object.assign(base, { status: 'failed', detail: 'Cleaner not found.' })); continue; }
-    if (!refs.length) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: 'Nothing changed for this person, so no text.' })); continue; }
+    if (!refs.length) { const unv = r.refs.some(x => (state.ires[x] || {}).status === 'unverified'); state.texts.push(Object.assign(base, { status: 'not_sent', detail: unv ? 'The change was saved but could not be confirmed, so no text was sent.' : 'Nothing changed for this person, so no text.' })); if (unv) state.warnings.push(`${r.name} was NOT texted: the change was saved but the Hub could not confirm it. Check the schedule, then tell them yourself.`); continue; }
+    if (r.kind === 'back' && (state.unvMarks || []).includes(String(r.cleaner_id))) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: 'Their backup mark was saved but could not be confirmed, so no text was sent.' })); state.warnings.push(`${r.name} was NOT texted: their backup mark could not be confirmed. Check the schedule, then tell them yourself.`); continue; }
     if (!tx.send && (r.can_send || r.kind === 'mark')) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: 'You unticked this text.' })); continue; }
     if (!r.can_send) { state.texts.push(Object.assign(base, { status: 'not_sent', detail: r.reason })); state.warnings.push(`${r.name} was NOT texted: ${r.reason} Tell them yourself.`); continue; }
     let text = tx.text, replaced = false, ds = r.dates;
     if (refs.length !== r.refs.length) { // some dates failed: Brett's text would be wrong, so use the standard wording for the dates that DID change
       const its = J.items.filter(i => refs.includes(i.ref)); ds = [...new Set(its.map(i => i.date))].sort();
       text = (await strRenderRecipient(ctx, r.kind, c, ds, r.kind === 'mark' ? { key: 'x', kind: 'checkout', date: ds[0], next: '' } : its[0]._t, { newC: cleaner, mark: req.mark })).text; replaced = true;
-      state.warnings.push(`${r.name}'s text was reworded to list only the dates that really changed (some dates failed), so your edit was replaced.`);
+      state.warnings.push(`${r.name}'s text was reworded to list only the dates that really changed (some dates did not save or could not be confirmed), so your edit was replaced.`);
     }
     const expect = r.kind === 'mark' ? ds.map(d => ({ date: d, mark: req.mark })) : J.items.filter(i => refs.includes(i.ref)).map(i => ({ task_key: i.task_key, date: i.date, assigned_id: cleaner.ID }));
     rows.push({ Plan_ID: J.planId, Cleaner_ID: c.ID, Kind: r.kind, Msg_Type: r.type, Body: text, Task_Keys: refs.join(','), Expect: JSON.stringify(expect), Not_Before: win ? iso : heldIso, Status: 'parked', Created_At: iso, Note: '' });
@@ -37727,6 +39634,7 @@ function strChangeSummaryText(plan, res) {
   else bits.push(`${plan.cleaner.first} now has ${c.done} of ${res.items.length} turnover(s) you asked for`);
   if (c.skipped) bits.push(`${c.skipped} skipped (nothing to do or not allowed)`);
   if (c.failed) bits.push(`${c.failed} FAILED`);
+  if (c.unverified) bits.push(`${c.unverified} saved but NOT confirmed (the Hub could not read the sheet back); no text sent for them`);
   const t = res.texts, sent = t.filter(x => x.status === 'sent'), held = t.filter(x => x.status === 'held'), bad = t.filter(x => x.status === 'failed'), no = t.filter(x => x.status === 'not_sent');
   if (sent.length) bits.push(`texted ${sent.map(x => x.first).join(', ')}`);
   if (held.length) bits.push(`text held until 8 AM for ${held.map(x => x.first).join(', ')}`);
@@ -37792,7 +39700,7 @@ async function strChangeContinue(ctx, row) {
       else complete = await stageFns[stage](ctx, J);
     } catch (e) {
       state.errors.push({ step: 'stage_' + stage, error: `The step "${STR_STAGE_TEXT[stage]}" hit a problem: ${strErrText(e)}` });
-      if (state.tries[stage] >= 3) { complete = true; if (stage === 'sheets') for (const k of Object.keys(state.ires)) if (state.ires[k].status === 'pending') state.ires[k] = { status: 'failed', reason: 'The schedule change did not save (see the error below).' }; }
+      if (state.tries[stage] >= 3) { complete = true; if (stage === 'sheets') { for (const k of Object.keys(state.ires)) if (state.ires[k].status === 'pending' && !state.ires[k].unv) state.ires[k] = { status: 'failed', reason: 'The schedule change did not save (see the error below).' }; strGiveUpUnverified(J); } }
       else { const er = state.errors.pop(); state.warnings.push('Hiccup (tried again): ' + er.error); break; }
     }
     state.errors.push(...ctx.errors.splice(0));
@@ -37824,8 +39732,8 @@ async function strStageFinish(ctx, J) {
     textRes.push(out);
   }
   const items = J.items.map(it => { const r = state.ires[it.ref], ci = state.cal.items[it.ref]; return { ref: it.ref, task_key: it.task_key || '', date: it.date, label: it.label, status: r.status, reason: r.reason || '', flag: r.flag || '', notes: it.notes || [], sentence: it.sentence || '', calendar: ci || null }; });
-  const counts = { done: items.filter(i => i.status === 'done').length, skipped: items.filter(i => i.status === 'skipped').length, failed: items.filter(i => i.status === 'failed').length };
-  const anyProblem = errors.length > 0 || counts.failed > 0, status = !anyProblem ? 'done' : (counts.done > 0 ? 'partial' : 'failed');
+  const counts = { done: items.filter(i => i.status === 'done').length, skipped: items.filter(i => i.status === 'skipped').length, failed: items.filter(i => i.status === 'failed').length, unverified: items.filter(i => i.status === 'unverified').length };
+  const anyProblem = errors.length > 0 || counts.failed > 0 || counts.unverified > 0, status = !anyProblem ? 'done' : (counts.done > 0 || counts.unverified > 0 ? 'partial' : 'failed'); // "saved, could not confirm" is partial, never "did NOT go through"
   const cal = Object.assign({ mode: plan.calendar.mode }, state.cal); delete cal.done; delete cal.fatal;
   const res = { ok: status === 'done', status, plan_id: J.planId, action: req.action, cleaner: plan.cleaner, mark: req.mark, items, counts, texts: textRes, email: state.email, calendar: cal, warnings: warnings.concat(plan.warnings || []), errors, calls: state.calls, duplicate: false };
   res.summary = strChangeSummaryText({ action: plan.action, cleaner: plan.cleaner, mark: req.mark }, res);
@@ -38370,6 +40278,31 @@ function inspCleanInput(body) {
   return { address, units, buildings };
 }
 
+// Property size asked at booking time (Oct 27 2026). Each of levels / bedrooms / bathrooms is REQUIRED but may be "unknown" (the
+// "I don't know" bypass). For multi-unit properties bedrooms/bathrooms mean "each unit" (one dropdown, never per-unit entry) and may be "vary".
+// It never changes the visit duration (that stays units/buildings based) - it only informs Brett and pre-fills the inspection layout.
+function inspSizeVal(v, kind, multi) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (!s) throw inspErr('bad_size', 'Please give the number of levels, bedrooms and bathrooms - or tap “I don’t know” for any you are not sure of.', 400);
+  if (s === 'unknown') return 'unknown';
+  if (s === 'vary') return multi ? 'vary' : 'unknown';
+  const n = Number(s), min = kind === 'levels' ? 1 : (kind === 'bedrooms' ? 0 : 0.5), max = kind === 'levels' ? 6 : 20;
+  const stepOk = kind === 'bathrooms' ? (n * 2) % 1 === 0 : Number.isInteger(n);
+  if (!Number.isFinite(n) || n < min || n > max || !stepOk) throw inspErr('bad_size', `Please check the number of ${kind}.`, 400);
+  return String(n);
+}
+function inspCleanSize(body, units) {
+  const multi = (+units || 1) > 1;
+  return { Levels: inspSizeVal(body && body.levels, 'levels', multi), Bedrooms: inspSizeVal(body && body.bedrooms, 'bedrooms', multi), Bathrooms: inspSizeVal(body && body.bathrooms, 'bathrooms', multi) };
+}
+// One readable line for Brett's approval page / calendar / texts. Blank or "unknown" parts are left out ("" when nothing is known).
+function inspSizeText(b) {
+  const one = (v, s, p) => { v = String(v == null ? '' : v).trim().toLowerCase(); if (!v || v === 'unknown') return ''; if (v === 'vary') return p + ' vary'; return v + ' ' + (Number(v) === 1 ? s : p); };
+  const multi = (+(b && b.Units) || 1) > 1;
+  const bb = [one(b && b.Bedrooms, 'bed', 'beds'), one(b && b.Bathrooms, 'bath', 'baths')].filter(Boolean).join(' / ');
+  return [bb && (multi ? 'each unit: ' + bb : bb), one(b && b.Levels, 'level', 'levels')].filter(Boolean).join(', ');
+}
+
 function inspKeyMin(customer) { const m = Math.floor(+(customer && customer.Key_Pickup_Min)); return Number.isFinite(m) && m > 0 && String((customer && customer.Key_Address) || '').trim() ? Math.min(m, 180) : 0; }
 function inspPackSlackMin(cfg) { const raw = String((cfg && cfg.INSP_PACK_SLACK_MIN) == null ? '' : cfg.INSP_PACK_SLACK_MIN).trim(); if (/^off$/i.test(raw)) return null; const n = parseFloat(raw); return Number.isFinite(n) && n >= 0 ? n : INSP_PACK_SLACK_MIN; }
 function inspBlockWindowEndMs(b) { const l = String(b.Last_Start == null ? '' : b.Last_Start).trim(); const ls = l ? inspEtWallToMs(b.Date, l) : NaN; return Number.isFinite(ls) ? ls : inspEtWallToMs(b.Date, b.End_Time); }
@@ -38478,6 +40411,7 @@ async function inspBookRequest(env, body) {
     const c = await inspCustomerByToken(env, body && body.k);
     if (!c) return json({ ok: false, error: 'invalid_link', message: 'This booking link is not valid.' }, 404);
     const input = inspCleanInput(body); input.freshGuard = true; // cleaning-coverage is re-read live for a real booking
+    const size = inspCleanSize(body, input.units);   // required (with "unknown" bypass) - rejected BEFORE any calendar hold is placed
     const contactName = String(body.contact_name || '').trim().slice(0, 80);
     const contactPhone = body.contact_phone ? normalizePhone(String(body.contact_phone).slice(0, 30)) : '';
     const contactEmail = String(body.contact_email || '').trim().slice(0, 120);
@@ -38504,6 +40438,7 @@ async function inspBookRequest(env, body) {
       Drive_Before_Min: adj.before ? adj.before.min : '', Drive_After_Min: adj.after ? adj.after.min : '', Drive_Source: a.driveSource,
       Contact_Name: contactName, Contact_Phone: contactPhone, Contact_Email: contactEmail, Notes: String(body.notes || '').trim().slice(0, 500),
       Calendar_Event_ID: '', Decision_Note: '', Notify_Log: '', Created_At: nowIso, Decided_At: '', Reminded_At: '', Active: 'TRUE', Key_Pickup: keyNote,
+      Levels: size.Levels, Bedrooms: size.Bedrooms, Bathrooms: size.Bathrooms, Inspection_ID: '', Hub_Property_ID: '', Insp_Claimed_At: '',
     };
     // 1) Reserve the slot on Brett's calendar FIRST. If this fails nothing is booked and the partner is told.
     let ev;
@@ -38536,7 +40471,7 @@ async function inspBookRequest(env, body) {
     // 3b) Keep the day's single "Key pickup" block on the calendar in step with the earliest booking.
     notify.push(...await inspReconcileKeyPickup(env, a.cfg, c, rec.Date));
     // 4) Tell Brett.
-    const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}.${keyNote ? ' Key pickup first: ' + keyNote + '.' : ''} Approve/decline: ${approveUrl}`;
+    const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}. Size: ${inspSizeText(rec) || 'not given'}.${keyNote ? ' Key pickup first: ' + keyNote + '.' : ''} Approve/decline: ${approveUrl}`;
     notify.push(...await inspNotifyBrett(env, a.cfg, 'Inspection request: ' + a.geo.formatted, msg, approveUrl, rec));
     // 4b) Tell the partner their request landed, with the link that lets them check status or cancel later.
     notify.push(...await inspNotifyPartner(env, rec, 'requested'));
@@ -39974,7 +41909,7 @@ async function inspCalendarTest(env, url) {
 const FI_DATA_COLS = 8, FI_DATA_CHUNK = 45000, FI_MAX_DOC_CHARS = FI_DATA_COLS * FI_DATA_CHUNK;
 const FI_BRAND_HEADERS = ['ID','Name','Primary_Color','Accent_Color','Tagline','Contact_Line','Footer_Text','Logo_Data','Is_Default','Active','Created_At','Updated_At','Website','Phone','Email','Address'];
 const FI_INSP_HEADERS = ['ID','Property_ID','Address','Inspection_Type','Status','Brand_ID','Client_Name','Client_Email','Inspector','Inspection_Date','Report_Token','Published_At','Published_Rev','Rev','Doc_Hash','Issue_Count','Photo_Count','Created_At','Updated_At','Active'].concat(Array.from({ length: FI_DATA_COLS }, (_, i) => 'Data_' + (i + 1)), ['Owner_ID','Owner_Name','Drive_Folder_ID','Drive_Folder_URL']);
-const FI_PHOTO_HEADERS = ['ID','Inspection_ID','Drive_File_ID','Mime','Bytes','Created_At','Active'];
+const FI_PHOTO_HEADERS = ['ID','Inspection_ID','Drive_File_ID','Mime','Bytes','Created_At','Active','Orig_Drive_File_ID','Orig_Mime','Orig_Bytes','Orig_At'];   // Orig_* (Nov 2 2026): the untouched full-resolution photo from the phone; Drive_File_ID stays the fast ~1600 px copy the report shows
 const FI_EMAIL_HEADERS = ['ID','Inspection_ID','To_Email','Subject','Result','Sent_At'];
 const FI_TYPE_TAB_HEADERS = ['ID','Name','Trade','Default_Severity','Areas','Detail','Likely_Cause','Recommended_Fix','Uses','Source','Active','Created_At','Updated_At'];
 const FI_TABS = { FI_Brands: FI_BRAND_HEADERS, FI_Inspections: FI_INSP_HEADERS, FI_Photos: FI_PHOTO_HEADERS, FI_Email_Log: FI_EMAIL_HEADERS, FI_Issue_Types: FI_TYPE_TAB_HEADERS };
@@ -39983,15 +41918,23 @@ const FI_SEVERITIES = ['urgent','high','medium','low','info'];
 const FI_CONDITIONS = ['good','fair','poor','nothing_to_do','not_inspected','na'];
 const FI_PAGE_BASE = 'https://ridge-co.github.io/RidgeCo';
 const FI_MAX_PHOTO_BYTES = 8 * 1024 * 1024;
+const FI_MAX_ORIG_BYTES = 30 * 1024 * 1024;   // Nov 2 2026: full-resolution originals (a 50 MP phone JPEG is 10-20 MB). Held in Worker memory twice while it is sent to Drive (60 MB of the 128 MB limit).
+const FI_ORIG_COLS = ['Orig_Drive_File_ID', 'Orig_Mime', 'Orig_Bytes', 'Orig_At'];
 const FI_ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
 
 let __fiTabsReady = false;
 async function fiRoute(env, label, fn) {
   try { return await fn(); }
   catch (e) {
+    // Oct 30 2026: Google's shared per-minute READ quota running out is a "busy, retry in a moment" state, not a bug. It used to leave here as a generic
+    // 500 'internal' (one P1 row per photo, and the phone gave up on the photo). Rethrow it so the Worker's top-level handler answers with the typed 429
+    // (busy:true, retry_after_seconds) plus ONE calm P2 sheets_quota_busy row, exactly like every other Hub route (see strHandleErr).
+    if (sheetsQuotaBusyError(e)) throw e;
     console.error('fi/' + label + ' failed:', e && e.message);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_route_error', Skill_Or_Endpoint: '/fi/' + label, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (_) { /* telemetry is best-effort; the error itself is returned below */ }
-    return fiErr(500, 'internal', 'The server hit an error (' + label + '). Nothing was reported as saved. Retry; if it repeats, tell Brett.', { detail: String((e && e.message) || e).slice(0, 160) });
+    let telemetryError = '';
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_route_error', Skill_Or_Endpoint: '/fi/' + label, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); }
+    catch (te) { telemetryError = String((te && te.message) || te).slice(0, 120); console.error('fi/' + label + ': could not log to Ops_Telemetry:', telemetryError, '| original:', e && e.message); }
+    return fiErr(500, 'internal', 'The server hit an error (' + label + '). Nothing was reported as saved. Retry; if it repeats, tell Brett.', Object.assign({ detail: String((e && e.message) || e).slice(0, 160) }, telemetryError ? { telemetry_error: telemetryError } : {}));
   }
 }
 function fiErr(status, error, message, extra) { return json(Object.assign({ ok: false, error, message }, extra || {}), status); }
@@ -40039,6 +41982,7 @@ function fiScrubDocForReport(doc) {
   if (!doc || typeof doc !== 'object') return doc;
   for (const a of (doc.areas || [])) for (const is of (a.issues || [])) {
     if (!is) continue;
+    delete is.flag_send; delete is.sent;   // 'send to the requester' flags and sent marks are for the phone only (Oct 28 2026), never on the public report
     if (is.ai === true) { for (const k of ['title', 'detail', 'likely_cause', 'recommended_fix']) if (typeof is[k] === 'string') is[k] = fiContractorize(is[k]); }
     else if (is.fix_source === 'suggested' && typeof is.recommended_fix === 'string') is.recommended_fix = fiContractorize(is.recommended_fix);   // catalog / AI-suggested fix text the inspector did not write (older inspections kept the old "Have an electrician" wording)
   }
@@ -40101,6 +42045,39 @@ function fiExtractJson(text) {
   if (a >= 0 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; } }
   return null;
 }
+// Visit details + per-area "No access" (Oct 27 2026). Both are optional and stored on the doc as-is; these only bound their shape/size.
+const FI_ACCESS_REASONS = ['tenant_declined', 'blocked', 'other'];
+const FI_COOP_CHOICES = ['completed', 'not_present', 'limited', 'ended_early'];
+function fiValidateAccess(ac, where, errors) {
+  if (ac === undefined || ac === null) return;
+  if (typeof ac !== 'object' || Array.isArray(ac)) { errors.push(`${where}.access must be an object`); return; }
+  if (ac.reason && !FI_ACCESS_REASONS.includes(ac.reason)) errors.push(`${where}.access.reason invalid`);
+  if (String(ac.note || '').length > 500) errors.push(`${where}.access.note too long (max 500)`);
+}
+function fiValidateVisit(v, errors) {
+  if (v === undefined || v === null) return;
+  if (typeof v !== 'object' || Array.isArray(v)) { errors.push('doc.visit must be an object'); return; }
+  const an = v.animals;
+  if (an !== undefined && an !== null) {
+    if (typeof an !== 'object' || Array.isArray(an)) errors.push('doc.visit.animals must be an object');
+    else if (an.items !== undefined && !Array.isArray(an.items)) errors.push('doc.visit.animals.items must be an array');
+    else if ((an.items || []).length > 10) errors.push('too many animal lines (max 10)');
+    else (an.items || []).forEach((it, i) => {
+      if (!it || typeof it !== 'object') { errors.push(`doc.visit.animals.items[${i}] invalid`); return; }
+      if (String(it.type || '').length > 60) errors.push(`doc.visit.animals.items[${i}].type too long`);
+      const n = Number(it.count);
+      if (it.count !== undefined && it.count !== '' && (!Number.isFinite(n) || n < 0 || n > 999)) errors.push(`doc.visit.animals.items[${i}].count invalid`);
+    });
+  }
+  const ac = v.access_cooperation;
+  if (ac !== undefined && ac !== null) {
+    if (typeof ac !== 'object' || Array.isArray(ac)) errors.push('doc.visit.access_cooperation must be an object');
+    else {
+      if (ac.choice && !FI_COOP_CHOICES.includes(ac.choice)) errors.push('doc.visit.access_cooperation.choice invalid');
+      if (String(ac.note || '').length > 600) errors.push('doc.visit.access_cooperation.note too long (max 600)');
+    }
+  }
+}
 function fiValidateDoc(doc) {
   const errors = [];
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { ok: false, errors: ['doc must be an object'] };
@@ -40115,15 +42092,21 @@ function fiValidateDoc(doc) {
       if (!a.name || typeof a.name !== 'string') errors.push(`areas[${i}].name missing`);
       if (a.condition && !FI_CONDITIONS.includes(a.condition)) errors.push(`areas[${i}].condition invalid`);
       fiValidateEquipment(a.equipment, `areas[${i}]`, errors);
+      fiValidateAccess(a.access, `areas[${i}]`, errors);
       if (!Array.isArray(a.issues || [])) errors.push(`areas[${i}].issues must be an array`);
       else if ((a.issues || []).length > 60) errors.push(`areas[${i}] has too many issues (max 60)`);
       else (a.issues || []).forEach((is, j) => {
         if (!is || typeof is !== 'object' || !is.id || !is.title) errors.push(`areas[${i}].issues[${j}] needs id and title`);
-        else { if (!FI_TRADES.includes(is.trade)) errors.push(`areas[${i}].issues[${j}].trade invalid`); if (!FI_SEVERITIES.includes(is.severity)) errors.push(`areas[${i}].issues[${j}].severity invalid`); }
+        else { if (!FI_TRADES.includes(is.trade)) errors.push(`areas[${i}].issues[${j}].trade invalid`); if (!FI_SEVERITIES.includes(is.severity)) errors.push(`areas[${i}].issues[${j}].severity invalid`);
+          if (is.flag_send !== undefined && typeof is.flag_send !== 'boolean') errors.push(`areas[${i}].issues[${j}].flag_send must be true or false`);
+          if (is.sent !== undefined && (!is.sent || typeof is.sent !== 'object' || Array.isArray(is.sent) || typeof is.sent.at !== 'string' || String(is.sent.at).length > 40 || String(is.sent.to || '').length > 120)) errors.push(`areas[${i}].issues[${j}].sent invalid`);
+        }
       });
     });
   }
   fiValidateVoiceNotes(doc.voice_notes, errors);
+  fiValidateVisit(doc.visit, errors);
+  if (doc.booking !== undefined && (!doc.booking || typeof doc.booking !== 'object' || Array.isArray(doc.booking))) errors.push('doc.booking must be an object');
   if (!doc.property || typeof doc.property !== 'object' || !String(doc.property.address || '').trim()) errors.push('doc.property.address required');
   if (doc.owner !== undefined && (!doc.owner || typeof doc.owner !== 'object' || Array.isArray(doc.owner) || String(doc.owner.name || '').length > 160)) errors.push('doc.owner must be an object with a name under 160 characters');
   return { ok: errors.length === 0, errors: errors.slice(0, 10) };
@@ -40170,7 +42153,10 @@ function fiPublishChecks(doc, serverPhotoIds) {
   for (const a of active) {
     if (String(a.pending_text || '').trim()) blocks.push({ code: 'dictation_pending', message: `"${a.name}" has dictation not yet turned into issues (or cleared)`, area: a.name });
   }
-  const skipped = active.filter(a => !a.condition || a.condition === 'not_inspected').map(a => a.name);
+  // "No access" counts as handled (it is reported in its own "Areas not accessed" section); "Other" needs its description.
+  const noAcc = a => !!(a.access && a.access.no_access);
+  for (const a of active) if (noAcc(a) && a.access.reason === 'other' && !String(a.access.note || '').trim()) blocks.push({ code: 'access_reason_missing', message: `Say why "${a.name}" was not accessed (you chose “Other”)`, area: a.name });
+  const skipped = active.filter(a => !noAcc(a) && (!a.condition || a.condition === 'not_inspected')).map(a => a.name);
   if (skipped.length) warnings.push({ code: 'areas_not_inspected', message: `Not marked inspected: ${skipped.slice(0, 12).join(', ')}`, areas: skipped });
   const sm = doc.summary;
   if (sm && sm.fp && sm.fp !== fiFingerprint(doc)) warnings.push({ code: 'summary_stale', message: 'The AI summary is out of date and will be left out of the report' });
@@ -40242,32 +42228,46 @@ async function fiEnsureTabs(env) {
   __fiTabsReady = true;
 }
 // Uncached read (a read-modify-write or verify must never see a stale 6s-cached copy).
+// Oct 30 2026: this used to be its own raw fetch loop (3 tries, ~2.4 s of waiting, invisible to the read meter, and its error text was not recognised as
+// the shared quota, so a busy minute became a 500 and the phone gave up on the photo). It now goes through sheetsRequest - the same 6-try backoff
+// (~15 s, Google's quota is per MINUTE), the read meter, and the "Sheets API error on GET" text that sheetsQuotaBusyError() recognises - after dropping
+// any cached or in-flight copy of the tab so the data is still always fresh.
 async function fiReadFresh(env, tab) {
-  for (let attempt = 1; ; attempt++) {
-    const token = await getAccessToken(env);
-    const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}/values/${tab}`, { headers: { Authorization: `Bearer ${token}` } });
-    const data = await res.json();
-    if (data.error) {
-      const code = data.error.code || res.status;
-      if ((code === 429 || code >= 500) && attempt < 4) { await new Promise(r => setTimeout(r, 400 * attempt)); continue; }
-      throw new Error(`FI: Sheets read of ${tab} failed: ${data.error.message || code}`);
-    }
-    const vals = data.values || [];
-    const headers = vals[0] || [];
-    const rows = vals.slice(1).map((r, i) => { const o = {}; headers.forEach((h, j) => { o[h] = r[j] == null ? '' : String(r[j]); }); return { o, rowNum: i + 2 }; });
-    return { headers, rows };
-  }
+  invalidateTabCache(tab);
+  const data = await sheetsRequest(env, 'GET', `/values/${tab}`);
+  const vals = (data && data.values) || [];
+  const headers = vals[0] || [];
+  const rows = vals.slice(1).map((r, i) => { const o = {}; headers.forEach((h, j) => { o[h] = r[j] == null ? '' : String(r[j]); }); return { o, rowNum: i + 2 }; });
+  return { headers, rows };
 }
 async function fiWriteRow(env, tab, headers, obj, rowNum) {
   if (!headers.length) throw new Error(`FI: ${tab} has no header row`);
   const vals = headers.map(h => (obj[h] === undefined || obj[h] === null) ? '' : String(obj[h]));
-  if (rowNum) await sheetsRequest(env, 'PUT', `/values/${tab}!A${rowNum}:${col(headers.length - 1)}${rowNum}?valueInputOption=RAW`, { values: [vals] });
-  else await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, { values: [vals] });
+  if (rowNum) return await sheetsRequest(env, 'PUT', `/values/${tab}!A${rowNum}:${col(headers.length - 1)}${rowNum}?valueInputOption=RAW`, { values: [vals] });
+  return await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`, { values: [vals] });
 }
 async function fiFindInspection(env, id) {
   const t = await fiReadFresh(env, 'FI_Inspections');
   const hits = t.rows.filter(r => r.o.ID === id && r.o.Active !== 'FALSE');
   return { headers: t.headers, row: hits[0] || null, dupes: hits.length };
+}
+// Oct 30 2026: every photo used to re-read the WHOLE FI_Inspections tab (up to 8 rows x 360 KB of report JSON) twice just to learn the inspection exists
+// and which Drive folder it uses. Photos only ever need: "does it exist" + its folder id. POSITIVE answers only are remembered (an inspection that was
+// saved stays saved), trimmed to the few columns a photo needs, for 10 minutes per Worker instance. A miss, a row with no folder yet, or a failed upload
+// always goes to a real read, so a just-saved inspection is never reported as missing and a moved folder is re-found.
+const __fiInspCache = new Map();
+const FI_INSP_CACHE_MS = 10 * 60 * 1000;
+function fiInspCacheDrop(id) { __fiInspCache.delete(id); }
+async function fiFindInspectionForPhoto(env, id) {
+  const hit = __fiInspCache.get(id);
+  if (hit && Date.now() - hit.at < FI_INSP_CACHE_MS) return { headers: hit.headers, row: hit.row, dupes: 1, cached: true };
+  const f = await fiFindInspection(env, id);
+  if (f.row && f.row.o.Drive_Folder_ID) {
+    if (__fiInspCache.size >= 200) __fiInspCache.delete(__fiInspCache.keys().next().value);
+    const o = f.row.o;
+    __fiInspCache.set(id, { headers: f.headers, at: Date.now(), row: { rowNum: f.row.rowNum, o: { ID: o.ID, Active: o.Active, Drive_Folder_ID: o.Drive_Folder_ID, Drive_Folder_URL: o.Drive_Folder_URL || '' } } });
+  }
+  return f;
 }
 function fiBrandOut(o, withLogo) {
   const b = { id: o.ID, name: o.Name, primary_color: o.Primary_Color || '#1d4ed8', accent_color: o.Accent_Color || '#166534', tagline: o.Tagline || '', contact_line: o.Contact_Line || '', footer_text: o.Footer_Text || '', website: o.Website || '', phone: o.Phone || '', email: o.Email || '', address: o.Address || '', is_default: o.Is_Default === 'TRUE', has_logo: !!o.Logo_Data };
@@ -40305,6 +42305,15 @@ async function fiGetInspection(env, url) {
   try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'The saved inspection data could not be read. Do not overwrite it — contact Brett.'); }
   return json({ ok: true, inspection: fiInspHeaderOut(row.o), doc, drive_folder_url: row.o.Drive_Folder_URL || '' });
 }
+// True when the two saved docs differ ONLY in phone-only fields (the 'send to requester' flag / sent mark, and the touch timestamp).
+function fiPublicDocKey(serialized) {
+  try { const d = JSON.parse(serialized); delete d.updated; for (const a of (d.areas || [])) for (const is of (a.issues || [])) { delete is.flag_send; delete is.sent; } return JSON.stringify(d); }
+  catch (e) { return null; }
+}
+function fiOnlyPhoneMarksChanged(prevSerialized, nextSerialized) {
+  const a = fiPublicDocKey(prevSerialized), b = fiPublicDocKey(nextSerialized);
+  return a !== null && b !== null && a === b;
+}
 async function fiSave(env, body) {
   body = body || {};
   const id = String(body.id || '');
@@ -40329,7 +42338,7 @@ async function fiSave(env, body) {
   const hash = await fiSha256(serialized);
   const changed = !row || row.o.Doc_Hash !== hash;
   const wasPublished = !!row && row.o.Status === 'published';
-  const unpublish = wasPublished && changed;
+  const unpublish = wasPublished && changed && !fiOnlyPhoneMarksChanged(fiJoinRow(row.o), serialized);   // marking an item 'sent to the requester' (phone-only) must not hide a published report
   const now = new Date().toISOString();
   const newRev = (row ? Number(row.o.Rev) || 0 : 0) + 1;
   const chunks = fiChunk(serialized);
@@ -40359,15 +42368,31 @@ async function fiSave(env, body) {
   }
   return json({ ok: true, rev: newRev, hash, report_token: o.Report_Token, status: o.Status, unpublished: unpublish, updated_at: now, recreated: !row && baseRev > 0 });
 }
+const FI_PHOTO_COLS = ['ID', 'Inspection_ID', 'Drive_File_ID', 'Mime', 'Bytes', 'Created_At', 'Active'];
+// Oct 30 2026: a photo does NOT set up the tabs on every cold Worker instance any more (that cost ~7 Sheets reads each time, 30 instances in 30 minutes).
+// Photos are only uploaded for an inspection that already saved, so the tabs and columns exist. If a tab or column IS missing, the first read/write says so
+// and we run fiEnsureTabs once and try again - never a silent drop.
+function fiTabMissingError(e) { return /unable to parse range|requested entity was not found|FI: .* missing column/i.test(String((e && e.message) || e || '')); }
 async function fiPhotoUpload(env, request, url) {
   const inspId = url.searchParams.get('inspection_id') || '', photoId = url.searchParams.get('photo_id') || '';
   if (!FI_ID_RE.test(inspId) || !FI_ID_RE.test(photoId)) return fiErr(400, 'bad_id', 'inspection_id and photo_id are required.');
   const mime = (request.headers.get('Content-Type') || '').split(';')[0].trim().toLowerCase();
   if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) return fiErr(415, 'bad_type', 'Only JPEG, PNG or WebP photos are accepted.');
-  await fiEnsureTabs(env);
-  const { row } = await fiFindInspection(env, inspId);
+  if (url.searchParams.get('kind') === 'orig') return fiPhotoUploadOriginal(env, request, url, inspId, photoId, mime);
+  let found, pt;
+  try {
+    found = await fiFindInspectionForPhoto(env, inspId);
+    if (found.row) pt = await fiReadFresh(env, 'FI_Photos');
+  } catch (e) {
+    if (__fiTabsReady || !fiTabMissingError(e)) throw e;
+    await fiEnsureTabs(env);
+    found = await fiFindInspectionForPhoto(env, inspId);
+    if (found.row) pt = await fiReadFresh(env, 'FI_Photos');
+  }
+  const row = found.row;
   if (!row) return fiErr(409, 'inspection_not_saved', 'Save the inspection to the server first, then retry this photo.');
-  const pt = await fiReadFresh(env, 'FI_Photos');
+  if (!FI_PHOTO_COLS.every(c => pt.headers.includes(c))) { await fiEnsureTabs(env); pt = await fiReadFresh(env, 'FI_Photos'); }
+  if (!FI_PHOTO_COLS.every(c => pt.headers.includes(c))) throw new Error('FI: FI_Photos is missing column ' + FI_PHOTO_COLS.filter(c => !pt.headers.includes(c)).join(', '));
   const ex = pt.rows.find(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
   if (ex) return json({ ok: true, existing: true, photo_id: photoId });
   const buf = await request.arrayBuffer();
@@ -40377,38 +42402,145 @@ async function fiPhotoUpload(env, request, url) {
   if (!root) return fiErr(500, 'not_configured', 'DRIVE_PROPERTIES_ROOT is not configured.');
   const token = await getAccessToken(env);
   let folder;
-  try { folder = await fiInspectionFolder(env, token, row, (await fiFindInspection(env, inspId)).headers, false); }
-  catch (e) { return fiErr(502, 'drive_folder', 'Could not set up the property’s Drive folder: ' + String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
+  try { folder = await fiInspectionFolder(env, token, row, found.headers, false); }
+  catch (e) { if (sheetsQuotaBusyError(e)) throw e; return fiErr(502, 'drive_folder', 'Could not set up the property’s Drive folder: ' + String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
   const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
   let shared;
   try { shared = await fiDriveSharedRoot(token, root); } catch (e) { return fiErr(502, 'drive_folder', String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
   let up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, folder.id, shared);
   if ((!up || !up.id) && row.o.Drive_Folder_ID) {
-    // The remembered folder may have been deleted or moved: look it up again once, then retry.
+    // The remembered folder may have been deleted or moved: forget the cached copy, look it up again once (a real read), then retry.
+    fiInspCacheDrop(inspId);
     try { const cur = await fiFindInspection(env, inspId); folder = await fiInspectionFolder(env, token, cur.row, cur.headers, true); up = await uploadFileToDrive(token, buf, `${photoId}.${ext}`, mime, folder.id, shared); }
-    catch (e) { return fiErr(502, 'drive_folder', 'The Drive folder could not be re-created: ' + String((e && e.message) || e).slice(0, 160)); }
+    catch (e) { if (sheetsQuotaBusyError(e)) throw e; return fiErr(502, 'drive_folder', 'The Drive folder could not be re-created: ' + String((e && e.message) || e).slice(0, 160)); }
   }
   if (!up || !up.id) return fiErr(502, 'drive_upload', 'Drive did not accept the photo. Retry.');
   if (up.size !== undefined && Number(up.size) !== buf.byteLength) return fiErr(502, 'drive_size_mismatch', 'Drive stored a different number of bytes than were sent. Retry.');
-  await fiWriteRow(env, 'FI_Photos', pt.headers, { ID: photoId, Inspection_ID: inspId, Drive_File_ID: up.id, Mime: mime, Bytes: buf.byteLength, Created_At: new Date().toISOString(), Active: 'TRUE' }, 0);
-  const chk = await fiReadFresh(env, 'FI_Photos');
-  const hits = chk.rows.filter(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
-  if (hits.length !== 1 || hits[0].o.Drive_File_ID !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
+  const wrote = await fiWriteRow(env, 'FI_Photos', pt.headers, { ID: photoId, Inspection_ID: inspId, Drive_File_ID: up.id, Mime: mime, Bytes: buf.byteLength, Created_At: new Date().toISOString(), Active: 'TRUE' }, 0);
+  // Verify the write by reading back just the row the append reported (one tiny read), not the whole tab. If the append did not say where it landed,
+  // fall back to the full-tab check - a write is never reported saved without a read-back.
+  const rr = /^[A-Za-z0-9_]+!([A-Z]+)(\d+):([A-Z]+)(\d+)$/.exec(String((wrote && wrote.updates && wrote.updates.updatedRange) || ''));
+  if (rr && rr[2] === rr[4] && Number(rr[2]) >= 2) {
+    const back = await sheetsRequest(env, 'GET', `/values/FI_Photos!A${rr[2]}:${col(pt.headers.length - 1)}${rr[2]}`);
+    const v = (back && back.values && back.values[0]) || [];
+    if (v[pt.headers.indexOf('ID')] !== photoId || v[pt.headers.indexOf('Drive_File_ID')] !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
+  } else {
+    const chk = await fiReadFresh(env, 'FI_Photos');
+    const hits = chk.rows.filter(r => r.o.ID === photoId && r.o.Active !== 'FALSE');
+    if (hits.length !== 1 || hits[0].o.Drive_File_ID !== up.id) return fiErr(500, 'verify_failed', 'The photo record could not be verified. Retry.');
+  }
+  fiViewCacheDropInsp(inspId);   // a photo that just arrived must be viewable at once, not 404 until the lookup list ages out
   return json({ ok: true, photo_id: photoId, bytes: buf.byteLength });
+}
+// ── Full-size photos (Nov 2 2026, Brett: "full size from original photo. they need as much detail as possible", links "indefinitely") ──
+// The phone still uploads the fast ~1600 px copy first (the report and PDF use it). It then sends the UNTOUCHED original as a second file
+// (POST /fi/photo?kind=orig): stored next to the copy in the inspection's Drive folder and recorded on the same FI_Photos row (Orig_*).
+// Nothing is re-encoded here: the bytes the phone sent are the bytes a recipient downloads. A photo with no original (everything uploaded before
+// this build) falls back to the ~1600 px copy and the report says so; it never pretends.
+async function fiPhotoUploadOriginal(env, request, url, inspId, photoId, mime) {
+  let found, pt;
+  try {
+    found = await fiFindInspectionForPhoto(env, inspId);
+    if (found.row) pt = await fiReadFresh(env, 'FI_Photos');
+  } catch (e) {
+    if (__fiTabsReady || !fiTabMissingError(e)) throw e;
+    await fiEnsureTabs(env);
+    found = await fiFindInspectionForPhoto(env, inspId);
+    if (found.row) pt = await fiReadFresh(env, 'FI_Photos');
+  }
+  const row = found.row;
+  if (!row) return fiErr(409, 'inspection_not_saved', 'Save the inspection to the server first, then retry this photo.');
+  if (!FI_ORIG_COLS.every(c => pt.headers.includes(c))) { await ensureColumns(env, 'FI_Photos', FI_PHOTO_HEADERS); pt = await fiReadFresh(env, 'FI_Photos'); }   // an FI_Photos tab made before this feature gets the Orig_* columns here (ensureColumns logs its own failures)
+  if (!FI_ORIG_COLS.every(c => pt.headers.includes(c))) throw new Error('FI: FI_Photos is missing column ' + FI_ORIG_COLS.filter(c => !pt.headers.includes(c)).join(', '));
+  const ph = pt.rows.find(r => r.o.ID === photoId && r.o.Inspection_ID === inspId && r.o.Active !== 'FALSE');
+  if (!ph) return fiErr(409, 'photo_not_saved', 'The standard copy of this photo has not reached the server yet. It goes first; the full-size copy follows.');
+  if (ph.o.Orig_Drive_File_ID) return json({ ok: true, existing: true, photo_id: photoId });
+  const buf = await request.arrayBuffer();
+  if (!buf.byteLength) return fiErr(400, 'empty', 'The photo was empty.');
+  if (buf.byteLength > FI_MAX_ORIG_BYTES) return fiErr(413, 'too_large', 'The full-size photo is larger than 30 MB, so only the standard copy is kept.');
+  const root = env.DRIVE_PROPERTIES_ROOT;
+  if (!root) return fiErr(500, 'not_configured', 'DRIVE_PROPERTIES_ROOT is not configured.');
+  const token = await getAccessToken(env);
+  let folder, shared;
+  try { folder = await fiInspectionFolder(env, token, row, found.headers, false); }
+  catch (e) { if (sheetsQuotaBusyError(e)) throw e; return fiErr(502, 'drive_folder', 'Could not set up the property’s Drive folder: ' + String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
+  try { shared = await fiDriveSharedRoot(token, root); } catch (e) { return fiErr(502, 'drive_folder', String((e && e.message) || e).slice(0, 160) + ' Retry.'); }
+  const ext = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg';
+  let up = await uploadFileToDrive(token, buf, `${photoId}_original.${ext}`, mime, folder.id, shared);
+  if ((!up || !up.id) && row.o.Drive_Folder_ID) {
+    fiInspCacheDrop(inspId);
+    try { const cur = await fiFindInspection(env, inspId); folder = await fiInspectionFolder(env, token, cur.row, cur.headers, true); up = await uploadFileToDrive(token, buf, `${photoId}_original.${ext}`, mime, folder.id, shared); }
+    catch (e) { if (sheetsQuotaBusyError(e)) throw e; return fiErr(502, 'drive_folder', 'The Drive folder could not be re-created: ' + String((e && e.message) || e).slice(0, 160)); }
+  }
+  if (!up || !up.id) return fiErr(502, 'drive_upload', 'Drive did not accept the full-size photo. Retry.');
+  if (up.size !== undefined && Number(up.size) !== buf.byteLength) return fiErr(502, 'drive_size_mismatch', 'Drive stored a different number of bytes than were sent. Retry.');
+  await fiWriteRow(env, 'FI_Photos', pt.headers, Object.assign({}, ph.o, { Orig_Drive_File_ID: up.id, Orig_Mime: mime, Orig_Bytes: buf.byteLength, Orig_At: new Date().toISOString() }), ph.rowNum);
+  // Read back just that row: the pointer to the original must really be on it before the phone is told the original is safe.
+  const back = await sheetsRequest(env, 'GET', `/values/FI_Photos!A${ph.rowNum}:${col(pt.headers.length - 1)}${ph.rowNum}`);
+  const v = (back && back.values && back.values[0]) || [];
+  if (v[pt.headers.indexOf('ID')] !== photoId || v[pt.headers.indexOf('Orig_Drive_File_ID')] !== up.id || String(v[pt.headers.indexOf('Orig_Bytes')]) !== String(buf.byteLength)) return fiErr(500, 'verify_failed', 'The full-size photo record could not be verified. Retry.');
+  fiViewCacheDropInsp(inspId);
+  return json({ ok: true, photo_id: photoId, bytes: buf.byteLength, original: true });
+}
+// Per Worker instance: report token -> { inspId, photos: Map(photoId -> {drive, mime, orig, origMime, origBytes}) }. Looking a photo up used to read the whole
+// FI_Inspections tab AND the whole FI_Photos tab from Google Sheets for EVERY image (a 139-photo report = ~280 reads against a shared limit of 60 a minute),
+// so most images failed ("Photo could not be loaded") and the PDF printed with holes. Now one pair of reads fills the whole inspection for a few minutes,
+// concurrent first requests share it, and /fi/report fills it for free. Positive answers only expire on a clock (a few minutes); an unknown photo triggers
+// at most one refresh per FI_VIEW_REFRESH_GAP_MS, and an unknown token is remembered as unknown for 30 s so a scan cannot drain the Sheets quota.
+const __fiViewCache = new Map(), __fiViewInflight = new Map(), __fiViewMiss = new Map();
+const FI_VIEW_CACHE_MS = 3 * 60 * 1000, FI_VIEW_REFRESH_GAP_MS = 15 * 1000, FI_VIEW_MISS_MS = 30 * 1000;
+function fiViewPhotoMap(rows, inspId) {
+  const m = new Map();
+  for (const x of rows) if (x.o.Inspection_ID === inspId && x.o.Active !== 'FALSE' && x.o.Drive_File_ID) m.set(x.o.ID, { drive: x.o.Drive_File_ID, mime: x.o.Mime || 'image/jpeg', orig: x.o.Orig_Drive_File_ID || '', origMime: x.o.Orig_Mime || '', origBytes: Number(x.o.Orig_Bytes) || 0 });
+  return m;
+}
+function fiViewCacheSet(token, inspId, rows) {
+  if (__fiViewCache.size >= 100) __fiViewCache.delete(__fiViewCache.keys().next().value);
+  __fiViewCache.set(token, { at: Date.now(), inspId, photos: fiViewPhotoMap(rows, inspId) });
+  __fiViewMiss.delete(token);
+}
+function fiViewCacheDropInsp(inspId) { for (const [k, v] of __fiViewCache) if (v.inspId === inspId) __fiViewCache.delete(k); }
+async function fiViewLoad(env, token) {
+  if (__fiViewInflight.has(token)) return __fiViewInflight.get(token);
+  const pr = (async () => {
+    const it = await fiReadFresh(env, 'FI_Inspections');
+    const insp = it.rows.find(x => x.o.Report_Token === token && x.o.Active !== 'FALSE');
+    if (!insp) { __fiViewMiss.set(token, Date.now()); if (__fiViewMiss.size > 200) __fiViewMiss.delete(__fiViewMiss.keys().next().value); return null; }
+    const pt = await fiReadFresh(env, 'FI_Photos');
+    fiViewCacheSet(token, insp.o.ID, pt.rows);
+    return __fiViewCache.get(token);
+  })();
+  __fiViewInflight.set(token, pr);
+  try { return await pr; } finally { __fiViewInflight.delete(token); }
+}
+async function fiViewLookup(env, token, photoId) {
+  const miss = __fiViewMiss.get(token);
+  if (miss && Date.now() - miss < FI_VIEW_MISS_MS) return null;
+  let e = __fiViewCache.get(token);
+  const age = e ? Date.now() - e.at : Infinity;
+  if (e && age < FI_VIEW_CACHE_MS && e.photos.has(photoId)) return e.photos.get(photoId);
+  if (e && age < FI_VIEW_REFRESH_GAP_MS) return null;   // refreshed moments ago and it is still not there
+  e = await fiViewLoad(env, token);
+  return e ? (e.photos.get(photoId) || null) : null;
 }
 async function fiPhotoView(env, url) {
   const r = url.searchParams.get('r') || '', p = url.searchParams.get('p') || '';
   if (!r || !FI_ID_RE.test(p)) return fiErr(404, 'not_found', 'Not found.');
-  const it = await fiReadFresh(env, 'FI_Inspections');
-  const insp = it.rows.find(x => x.o.Report_Token === r && x.o.Active !== 'FALSE');
-  if (!insp) return fiErr(404, 'not_found', 'Not found.');
-  const pt = await fiReadFresh(env, 'FI_Photos');
-  const ph = pt.rows.find(x => x.o.ID === p && x.o.Inspection_ID === insp.o.ID && x.o.Active !== 'FALSE');
+  const full = url.searchParams.get('full') === '1', dl = url.searchParams.get('dl') === '1';
+  const ph = await fiViewLookup(env, r, p);
   if (!ph) return fiErr(404, 'not_found', 'Not found.');
+  const useOrig = full && !!ph.orig;
+  const fileId = useOrig ? ph.orig : ph.drive, mime = (useOrig ? ph.origMime : ph.mime) || 'image/jpeg';
   const token = await getAccessToken(env);
-  const dr = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(ph.o.Drive_File_ID)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
-  if (!dr.ok || !dr.body) return fiErr(502, 'drive_read', 'Could not load the photo.');
-  return new Response(dr.body, { status: 200, headers: { ...CORS, 'Content-Type': ph.o.Mime || 'image/jpeg', 'Cache-Control': 'private, max-age=3600' } });
+  const get = () => fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+  let dr = await get();
+  if (!dr.ok && (dr.status === 429 || dr.status >= 500)) { await new Promise(res => setTimeout(res, 700)); dr = await get(); }   // Drive hiccup: one more try before the page sees a broken image
+  if (!dr.ok || !dr.body) return fiErr(502, 'drive_read', 'Could not load the photo.', { drive_status: dr.status });
+  const ext = /png/i.test(mime) ? 'png' : /webp/i.test(mime) ? 'webp' : 'jpg';
+  const headers = { ...CORS, 'Content-Type': mime, 'Cache-Control': 'private, max-age=86400', 'X-Photo-Variant': useOrig ? 'original' : 'standard', 'Access-Control-Expose-Headers': 'X-Photo-Variant, Content-Length' };
+  const len = dr.headers && dr.headers.get && dr.headers.get('Content-Length'); if (len) headers['Content-Length'] = len;
+  if (dl) headers['Content-Disposition'] = `attachment; filename="inspection-photo-${p}${useOrig ? '-original' : ''}.${ext}"`;
+  return new Response(dr.body, { status: 200, headers });
 }
 async function fiReport(env, request, url) {
   const r = url.searchParams.get('r') || '';
@@ -40426,15 +42558,19 @@ async function fiReport(env, request, url) {
   const pt = await fiReadFresh(env, 'FI_Photos');
   const have = new Set(pt.rows.filter(x => x.o.Inspection_ID === insp.o.ID && x.o.Active !== 'FALSE').map(x => x.o.ID));
   const photoIds = fiPhotoIds(doc).filter(p => have.has(p));
+  fiViewCacheSet(r, insp.o.ID, pt.rows);   // the report page is about to request every photo: answer them from this read, not from a read each
+  const fullMap = fiViewPhotoMap(pt.rows, insp.o.ID), photoFull = {};
+  for (const p of photoIds) { const m = fullMap.get(p); if (m && m.orig) photoFull[p] = m.origBytes; }   // photo id -> original size in bytes (only photos that HAVE an original)
   const summaryOk = !!(doc.summary && doc.summary.accepted && doc.summary.fp === fiFingerprint(doc));
   if (!summaryOk) delete doc.summary;
   delete doc.dictation_log;
   delete doc.voice_notes;
   if (doc.property) { delete doc.property.id; delete doc.property.unit_id; }
   if (doc.owner) delete doc.owner.id;
+  delete doc.booking;   // the requester's phone/email and booking notes are internal - never on the public report
   for (const a of (doc.areas || [])) { delete a.pending_text; delete a.dictation; }
   fiScrubDocForReport(doc);
-  return json({ ok: true, preview: !published, inspection: Object.assign(fiInspHeaderOut(insp.o), { property_id: '' }), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, rollup: fiTradeRollup(doc) });
+  return json({ ok: true, preview: !published, inspection: Object.assign(fiInspHeaderOut(insp.o), { property_id: '' }), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, photo_full: photoFull, rollup: fiTradeRollup(doc) });
 }
 async function fiStructure(env, body) {
   body = body || {};
@@ -40555,6 +42691,161 @@ async function fiEmailReport(env, request, body) {
   await fiWriteRow(env, 'FI_Email_Log', lt.headers, { ID: 'em_' + inspRandToken(9), Inspection_ID: id, To_Email: to, Subject: mail.subject, Result: res && res.staged ? 'staged' : 'sent', Sent_At: new Date().toISOString() }, 0);
   return json({ ok: true, sent: !(res && res.staged), staged: !!(res && res.staged), to, subject: mail.subject });
 }
+// ── Urgent items to the requester (Oct 28 2026, Brett) ───────────────────────────────────────────────
+// Brett flags report items (or types a quick list of urgent ones on the phone) and this emails the requester on the linked booking
+// ahead of the report. Preview-first like the report email. The server takes the ITEMS from the saved inspection (never from the
+// request), so what is emailed is exactly what is in the report. Photos are attached from Drive. An optional text goes out ONLY
+// 9am-4pm ET (otherwise email only, nothing is queued). A client send_key makes a retry safe: the same key never sends twice.
+const FI_URGENT_MAX_ITEMS = 20, FI_URGENT_MAX_PHOTOS = 6, FI_URGENT_TEXT_FROM_H = 9, FI_URGENT_TEXT_TO_H = 16;
+const FI_URGENT_SEV_LABEL = { urgent: 'Urgent', high: 'High', medium: 'Medium', low: 'Low', info: 'Note' };
+function fiUrgentTextWindow(ms) {
+  const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' }).format(new Date(ms)));
+  return { open: h >= FI_URGENT_TEXT_FROM_H && h < FI_URGENT_TEXT_TO_H, hour: h };
+}
+function fiUrgentCollect(doc, ids) {
+  const items = [], pos = new Map(ids.map((x, i) => [x, i]));
+  for (const a of (doc.areas || [])) {
+    if (a.excluded) continue;
+    for (const is of (a.issues || [])) if (pos.has(is.id)) items.push({ id: is.id, area: String(a.name || ''), title: String(is.title || ''), detail: String(is.detail || ''), severity: is.severity, photo_ids: (is.photo_ids || []).map(String) });
+  }
+  items.sort((x, y) => pos.get(x.id) - pos.get(y.id));
+  const have = new Set(items.map(i => i.id));
+  return { items, missing: ids.filter(i => !have.has(i)) };
+}
+function fiUrgentFirstName(name) { const w = String(name || '').trim().split(/\s+/)[0] || ''; return /^[A-Za-z][A-Za-z'.-]{0,30}$/.test(w) ? w : ''; }
+function fiUrgentAddress(doc) { const p = doc.property || {}; return String(p.address || '').trim() + (p.unit_label ? ' #' + String(p.unit_label).replace(/^#/, '') : ''); }
+// "Photo 2, 3" under an item so the requester can tell which attachment belongs to which item (only photos that are actually attached).
+function fiUrgentPhotoLine(item, photoNums) {
+  const ns = (item.photo_ids || []).map(p => photoNums && photoNums.get(p)).filter(Boolean);
+  return ns.length ? `<div style="margin-top:4px;color:#5b6573;font-size:13px">Photo${ns.length === 1 ? '' : 's'} ${ns.join(', ')} attached</div>` : '';
+}
+function fiBuildUrgentEmail(doc, items, note, who, photoCount, omitted, photoNums) {
+  const addr = fiUrgentAddress(doc), n = items.length;
+  const subject = `${items.some(i => i.severity === 'urgent') ? 'Urgent: ' : ''}${n} item${n === 1 ? '' : 's'} at ${addr} - inspection update`;
+  const rows = items.map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid #e5e9f0"><div style="font-weight:700">${fiHtmlEsc(i.title)}</div><div style="color:#5b6573;font-size:13px">${fiHtmlEsc(i.area)} &middot; ${fiHtmlEsc(FI_URGENT_SEV_LABEL[i.severity] || '')}</div>${i.detail ? `<div style="margin-top:4px">${fiHtmlEsc(i.detail)}</div>` : ''}${fiUrgentPhotoLine(i, photoNums)}</td></tr>`).join('');
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1c2430"><div style="background:#b91c1c;color:#fff;padding:14px 20px;font-size:17px;font-weight:700">Inspection update: ${fiHtmlEsc(addr)}</div><div style="padding:18px 20px;line-height:1.5">`
+    + `<p style="margin:0 0 12px">Hi ${fiHtmlEsc(who || 'there')},</p>`
+    + `<p style="margin:0 0 12px">I found ${n === 1 ? 'an item' : n + ' items'} at this property that need${n === 1 ? 's' : ''} your attention before the full inspection report is ready.</p>`
+    + (note ? `<p style="margin:0 0 12px">${fiHtmlEsc(note).replace(/\n/g, '<br>')}</p>` : '')
+    + `<table style="width:100%;border-collapse:collapse;margin:8px 0 14px">${rows}</table>`
+    + (photoCount ? `<p style="margin:0 0 12px">${photoCount} photo${photoCount === 1 ? ' is' : 's are'} attached.${omitted ? ` ${omitted} more will be in the full report.` : ''}</p>` : '')
+    + `<p style="margin:0">The full report will follow. Reply here with any questions.</p><p style="margin:14px 0 0">Brett<br>Ridge Co</p></div></div>`;
+  return { subject, html };
+}
+function fiUrgentSmsBody(doc, items) {
+  const p = doc.property || {}, street = String(p.address || '').split(',')[0].trim() + (p.unit_label ? ' #' + String(p.unit_label).replace(/^#/, '') : '');   // short on purpose: street only, no city/zip
+  const n = items.length, first = String(items[0].title).replace(/[^\x20-\x7e]/g, '').slice(0, 70);
+  return `Ridge Co: ${n === 1 ? 'urgent inspection item' : n + ' urgent inspection items'} at ${street.replace(/[^\x20-\x7e]/g, '')}: ${first}${n > 1 ? ' (+' + (n - 1) + ' more)' : ''}. Details sent to your email.`;
+}
+async function fiUrgentSend(env, body) {
+  body = body || {};
+  const id = String(body.id || '');
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  const rawIds = Array.from(new Set((Array.isArray(body.issue_ids) ? body.issue_ids : []).map(String)));
+  if (rawIds.some(x => !/^[A-Za-z0-9_-]{3,64}$/.test(x))) return fiErr(400, 'bad_items', 'One of the items has an invalid id. Reload the page and try again.');
+  const ids = rawIds;
+  if (!ids.length) return fiErr(400, 'no_items', 'Choose at least one item to send.');
+  if (ids.length > FI_URGENT_MAX_ITEMS) return fiErr(400, 'too_many', `Send at most ${FI_URGENT_MAX_ITEMS} items at a time.`);
+  const preview = body.preview !== false, alsoText = body.also_text === true;
+  const sendKey = String(body.send_key || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
+  if (!preview && sendKey.length < 8) return fiErr(400, 'no_send_key', 'Reload the page and try again (the send could not be made safe against doubles).');
+  const note = fiStr(body.note, 600).trim();
+  await fiEnsureTabs(env);
+  const { row } = await fiFindInspection(env, id);
+  if (!row) return fiErr(404, 'not_found', 'Inspection not found on the server.');
+  if (Number(body.rev) !== Number(row.o.Rev)) return fiErr(409, 'not_saved', 'This inspection has changes that have not finished saving. Wait for "Saved to server" and try again.');
+  let doc;
+  try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'The saved inspection could not be read.'); }
+  const { items, missing } = fiUrgentCollect(doc, ids);
+  if (missing.length) return fiErr(409, 'item_missing', 'Some of those items are not in the saved inspection yet or were removed. Wait for "Saved to server" and try again.');
+  const contact = (doc.booking && doc.booking.contact) || {};
+  const emailOk = e => /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(e);
+  const to = emailOk(String(contact.email || '').trim()) ? String(contact.email).trim() : (emailOk(String(body.to || '').trim()) ? String(body.to).trim() : '');
+  if (!to) return fiErr(400, 'no_recipient', 'This inspection has no booking contact with an email. Type the email address to send to.', { need_to: true });
+  const phone = normalizePhone(String(contact.phone || '')) || '';
+  const who = fiUrgentFirstName(contact.name);
+  // photos: from the chosen items, in order, capped; each must be fully uploaded
+  const pids = []; for (const it of items) for (const p of it.photo_ids) if (!pids.includes(p)) pids.push(p);
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const prow = new Map(pt.rows.filter(r => r.o.Inspection_ID === id && r.o.Active !== 'FALSE').map(r => [r.o.ID, r.o]));
+  const notUp = pids.filter(p => !prow.has(p));
+  if (notUp.length) return fiErr(409, 'photos_missing', `${notUp.length} photo${notUp.length === 1 ? ' has' : 's have'} not finished uploading. Wait a moment and try again.`);
+  const sendPids = pids.slice(0, FI_URGENT_MAX_PHOTOS), omitted = pids.length - sendPids.length;
+  const photoNums = new Map(sendPids.map((p, i) => [p, i + 1]));
+  const mail = fiBuildUrgentEmail(doc, items, note, who, sendPids.length, omitted, photoNums);
+  const cc = (env.FI_URGENT_CC || 'brett@bmoremanagement.com');
+  const ccList = String(cc).toLowerCase() === to.toLowerCase() ? '' : cc;
+  const win = fiUrgentTextWindow(Date.now());
+  const textInfo = { available: !!phone && win.open, phone_on_file: !!phone, window_open: win.open, window: '9am-4pm ET' };
+  const smsBody = fiUrgentSmsBody(doc, items);
+  if (preview) return json({ ok: true, preview: true, to, cc: ccList, subject: mail.subject, html: mail.html, photo_count: sendPids.length, photos_omitted: omitted, text: Object.assign({ body: smsBody }, textInfo) });
+  // idempotency + in-progress guard: one FI_Email_Log row per send_key, written BEFORE anything is sent
+  // The log id binds the key to WHAT is being sent (the sorted item ids): the same key with different items is a different send, never "already sent".
+  let hh = 2166136261; for (const ch of ids.slice().sort().join(',')) { hh ^= ch.charCodeAt(0); hh = Math.imul(hh, 16777619) >>> 0; }
+  const logId = 'ug_' + sendKey + '_' + hh.toString(16).padStart(8, '0');
+  const nonce = Math.random().toString(36).slice(2, 10);
+  const lt = await fiReadFresh(env, 'FI_Email_Log');
+  const prior = lt.rows.find(r => r.o.ID === logId);
+  const nowIso = () => new Date().toISOString();
+  if (prior && /^sent/.test(prior.o.Result)) return json({ ok: true, already_sent: true, to, result: prior.o.Result, sent_at: prior.o.Sent_At, text: { requested: alsoText, sent: /text:sent|text:staged/.test(prior.o.Result) } });
+  if (prior && /^sending/.test(prior.o.Result)) {
+    const age = Date.now() - Date.parse(prior.o.Sent_At || 0);
+    return fiErr(409, age < 120000 ? 'in_progress' : 'unknown_state', age < 120000 ? 'This send is still being processed. Wait a moment, then check before sending again.' : 'An earlier attempt of this send did not finish, so it may or may not have gone out. Check your inbox (you are copied on every one) before sending again.');
+  }
+  const logRow = (result) => ({ ID: logId, Inspection_ID: id, To_Email: to, Subject: mail.subject, Result: result, Sent_At: nowIso() });
+  await fiWriteRow(env, 'FI_Email_Log', lt.headers, logRow('sending:' + nonce), prior ? prior.rowNum : 0);
+  // claim check: two requests with the same key can both pass the read above. Re-read: only the FIRST row with this id may send; a loser steps aside and says so.
+  const claim = await fiReadFresh(env, 'FI_Email_Log');
+  const mine = claim.rows.filter(r => r.o.ID === logId);
+  if (!mine.length || mine[0].o.Result !== 'sending:' + nonce) {
+    const own = mine.find(r => r.o.Result === 'sending:' + nonce);
+    if (own) { try { await fiWriteRow(env, 'FI_Email_Log', claim.headers, logRow('duplicate-blocked'), own.rowNum); } catch (e2) { console.error('fi urgent log failed:', e2 && e2.message); } }
+    return fiErr(409, 'in_progress', 'The same send is already being processed. Wait a moment, then check before sending again.');
+  }
+  const cur = async () => { const t = await fiReadFresh(env, 'FI_Email_Log'); const r = t.rows.find(x => x.o.ID === logId); return { headers: t.headers, rowNum: r ? r.rowNum : 0 }; };
+  const finish = async (result) => { const c = await cur(); if (!c.rowNum) throw new Error('FI: the send log row for this send went missing'); await fiWriteRow(env, 'FI_Email_Log', c.headers, logRow(result), c.rowNum); };
+  // fetch photo bytes
+  const attachments = [];
+  try {
+    const token = await getAccessToken(env);
+    for (const p of sendPids) {
+      const ph = prow.get(p);
+      const dr = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(ph.Drive_File_ID)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!dr.ok) throw new Error('could not read a photo from Drive (HTTP ' + dr.status + ')');
+      attachments.push({ filename: `photo-${attachments.length + 1}.${/png/i.test(ph.Mime || '') ? 'png' : (/webp/i.test(ph.Mime || '') ? 'webp' : 'jpg')}`, mimeType: ph.Mime || 'image/jpeg', base64Data: bytesToB64(await dr.arrayBuffer()) });
+    }
+  } catch (e) {
+    try { await finish('failed: ' + String((e && e.message) || e).slice(0, 120)); } catch (e2) { console.error('fi urgent log failed:', e2 && e2.message); }
+    return fiErr(502, 'photo_read_failed', 'Nothing was sent. A photo could not be read: ' + String((e && e.message) || e).slice(0, 120) + '. Try again.');
+  }
+  let mres;
+  try { mres = await gmailSendEmailMulti(env, { to, cc: ccList, subject: mail.subject, html: mail.html, attachments }); }
+  catch (e) {
+    try { await finish('failed: ' + String((e && e.message) || e).slice(0, 120)); } catch (e2) { console.error('fi urgent log failed:', e2 && e2.message); }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_urgent_send_error', Skill_Or_Endpoint: '/fi/urgent-send', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (e3) { /* silent-ok: telemetry is best-effort, the caller already gets the error */ }
+    return fiErr(502, 'send_failed', 'The email was NOT sent: ' + String((e && e.message) || e).slice(0, 140));
+  }
+  const staged = !!(mres && mres.staged);
+  // optional text, only inside the window, after the email is safely out
+  const text = { requested: alsoText, sent: false, staged: false, reason: '' };
+  if (alsoText) {
+    if (!win.open) text.reason = 'Texts only go 9am-4pm ET, so this went by email only.';
+    else if (!phone) text.reason = 'There is no phone number on the booking, so this went by email only.';
+    else {
+      try {
+        const r = await sendSMS(env, phone, smsBody, { context: { message_type: 'fi_urgent', recipient_type: 'requester' } });
+        if (r && r.staged) { text.sent = true; text.staged = true; }
+        else if (r && r.sid) text.sent = true;
+        else text.reason = 'The text was not sent' + (r && (r.reason || r.error) ? ': ' + String(r.reason || r.error).slice(0, 120) : '') + '. The email did go out.';
+      } catch (e) { text.reason = 'The text failed (' + String((e && e.message) || e).slice(0, 100) + '). The email did go out.'; }
+      if (!text.sent) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_urgent_text_failed', Skill_Or_Endpoint: '/fi/urgent-send', Success: 'FALSE', Notes: text.reason.slice(0, 200) }); } catch (e3) { /* silent-ok: telemetry is best-effort, the caller sees text.reason */ } }
+    }
+  }
+  const result = (staged ? 'sent-staged' : 'sent') + (alsoText ? (text.sent ? ' text:' + (text.staged ? 'staged' : 'sent') : ' text:not-sent') : '');
+  let logged = true;
+  try { await finish(result); } catch (e) { logged = false; try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_urgent_log_error', Skill_Or_Endpoint: '/fi/urgent-send', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (e3) { /* silent-ok: the send itself succeeded and the caller is told logged:false */ } }
+  return json({ ok: true, sent: !staged, staged, to, cc: ccList, subject: mail.subject, photo_count: attachments.length, photos_omitted: omitted, sent_at: nowIso(), logged, text });
+}
 // ═══ Part 2 (Oct 15 2026, after field use): equipment info, brand capture from a website, voice-file transcription + routing, label reading ═══
 // Equipment kinds the phone offers. Keep field lists in sync with field-inspect.html (a unit test compares them).
 const FI_EQUIP_COMMON = ['brand', 'model', 'serial', 'year', 'notes'];
@@ -40571,6 +42862,7 @@ const FI_EQUIP_KINDS = {
   washer: { label: 'Washer', extra: [] },
   dryer: { label: 'Dryer', extra: ['fuel'] },
   disposal: { label: 'Garbage disposal', extra: [] },
+  electrical_panel: { label: 'Electrical panel', extra: ['amperage', 'spaces'] },   // Nov 2 2026: breaker box / service panel; the label is read from a photo like any other equipment label
   other: { label: 'Other equipment', extra: [] },
 };
 function fiEquipFields(kind) { const k = FI_EQUIP_KINDS[kind]; return k ? ['name'].concat(FI_EQUIP_COMMON, k.extra) : []; }
@@ -40583,6 +42875,7 @@ function fiNormalizeEquipment(raw) {
   if (kind === 'stove' || kind === 'oven' || kind === 'range_oven' || kind === 'stove_oven') kind = 'range';
   if (kind === 'fridge') kind = 'refrigerator';
   if (kind === 'hot_water_heater' || kind === 'waterheater') kind = 'water_heater';
+  if (['panel', 'electrical', 'electric_panel', 'electrical_panel', 'breaker_panel', 'breaker_box', 'service_panel', 'main_panel', 'sub_panel', 'subpanel', 'load_center', 'fuse_box', 'electric_box', 'electrical_box'].includes(kind)) kind = 'electrical_panel';
   if (!FI_EQUIP_KINDS[kind]) kind = 'other';
   const out = { kind };
   let any = false;
@@ -41061,7 +43354,7 @@ Rules:
 - severity: urgent = safety hazard or active damage needing action now; high = fix soon, will worsen; medium = next opportunity; low = cosmetic/minor; info = observation only.
 - Anything only the TENANT can address (debris, clutter, trash, pet or yard issues, blocked access) uses trade "tenant_action" and the fix is the request to the tenant.
 - If the property was built before 1978 and the notes mention peeling, chipping or deteriorated paint, add "Pre-1978 property: possible lead-paint concern" to the detail, use severity at least high, and recommend lead-safe repair practices. Never state that lead IS present.
-- Equipment details spoken (brand, model, serial, year, filter size, fuel, capacity, tonnage) go in "equipment" for the area where the equipment is (furnace/boiler/water heater are usually in a utility/HVAC/basement area). Numbers heard by voice may be wrong: say so in the equipment notes ("heard by voice - verify against the label").
+- Equipment details spoken (brand, model, serial, year, filter size, fuel, capacity, tonnage; for an electrical panel: brand, model, amperage like 100A or 200A, number of breaker spaces) go in "equipment" (kind electrical_panel for a breaker box / service panel) for the area where the equipment is (furnace/boiler/water heater are usually in a utility/HVAC/basement area; the panel is usually in its own Electrical Panel area or the basement). Numbers heard by voice may be wrong: say so in the equipment notes ("heard by voice - verify against the label").
 - "conditions": only when the inspector clearly states an area is good/fair/poor or has nothing to do.
 - "new_areas": only when the notes clearly describe a space that is not in the area list at all.
 - Wording: never write "licensed", "certified", "qualified" or "professional" before a contractor or trade, and never name a specific trade to hire (no "licensed electrician", "HVAC contractor", "plumber", "pest control"); whenever a repair needs someone, say "an appropriate contractor". Do not mention licensing.
@@ -41072,7 +43365,7 @@ function fiBuildRoutePrompt(b, catalog) {
   const types = catalog.slice(0, 90).map(t => t.name).join('; ');
   const notes = (b.notes || []).map(n => `=== NOTE ${fiStr(n.id, 40)}${n.label ? ' (' + fiStr(n.label, 80) + ')' : ''} ===\n${fiStr(n.text, 30000)}`).join('\n\n');
   const proposed = (b.proposed || []).slice(0, 80).map(t => `- ${fiStr(t, 80)}`).join('\n') || '(none)';
-  return `Property: ${fiStr(b.address, 160) || 'unknown'}${b.pre1978 ? ' - BUILT BEFORE 1978' : ''}\nInspection type: ${fiStr(b.inspection_type, 40) || 'periodic'}\n\nAreas (use these area_ids exactly):\n${areas}\n\nKnown issue types: ${types || '(none)'}\n\nAlready proposed from earlier notes (do not repeat):\n${proposed}\n\n${notes}\n\nReturn JSON only: {"issues":[{"area_id":"","note_id":"","quote":"","type":"","title":"","trade":"","severity":"","detail":"","likely_cause":"","recommended_fix":"","fix_source":"inspector|suggested"}],"equipment":[{"area_id":"","note_id":"","quote":"","kind":"","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","notes":""}],"conditions":[{"area_id":"","condition":"good|fair|poor|nothing_to_do","note_id":""}],"new_areas":[{"name":"","note_id":"","quote":""}],"unassigned":[{"note_id":"","text":"","why":""}]}\nAllowed trades: ${FI_TRADES.join(', ')}. Allowed severities: ${FI_SEVERITIES.join(', ')}. Equipment kinds: ${Object.keys(FI_EQUIP_KINDS).join(', ')}.`;
+  return `Property: ${fiStr(b.address, 160) || 'unknown'}${b.pre1978 ? ' - BUILT BEFORE 1978' : ''}\nInspection type: ${fiStr(b.inspection_type, 40) || 'periodic'}\n\nAreas (use these area_ids exactly):\n${areas}\n\nKnown issue types: ${types || '(none)'}\n\nAlready proposed from earlier notes (do not repeat):\n${proposed}\n\n${notes}\n\nReturn JSON only: {"issues":[{"area_id":"","note_id":"","quote":"","type":"","title":"","trade":"","severity":"","detail":"","likely_cause":"","recommended_fix":"","fix_source":"inspector|suggested"}],"equipment":[{"area_id":"","note_id":"","quote":"","kind":"","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","amperage":"","spaces":"","notes":""}],"conditions":[{"area_id":"","condition":"good|fair|poor|nothing_to_do","note_id":""}],"new_areas":[{"name":"","note_id":"","quote":""}],"unassigned":[{"note_id":"","text":"","why":""}]}\nAllowed trades: ${FI_TRADES.join(', ')}. Allowed severities: ${FI_SEVERITIES.join(', ')}. Equipment kinds: ${Object.keys(FI_EQUIP_KINDS).join(', ')}.`;
 }
 // Pure: validates/normalizes the AI routing output against the real area list. Anything that cannot be placed safely goes to "unassigned" - nothing is dropped.
 function fiNormalizeRoute(parsed, areaIds) {
@@ -41122,7 +43415,7 @@ async function fiRouteNotes(env, body) {
 }
 
 // ── Read a manufacturer label / data plate from a photo already uploaded to the inspection (Claude vision). Proposes values only; the inspector confirms. ──
-const FI_LABEL_SYSTEM = `You read the manufacturer's data plate / rating label in a photo of home equipment (furnace, boiler, air conditioner, water heater, appliance). Report ONLY text that is actually printed and legible. Never guess, never decode a serial number into a date unless a manufacture date is printed, never invent a model number. If a field is not visible, leave it empty. Copy model and serial numbers character for character. Output a single JSON object and nothing else.`;
+const FI_LABEL_SYSTEM = `You read the manufacturer's data plate / rating label in a photo of home equipment (furnace, boiler, air conditioner, water heater, appliance) or of an electrical service panel / breaker box (the label inside the door or on the cover: manufacturer, model or catalog number, amperage rating, number of spaces). Report ONLY text that is actually printed and legible. Never guess, never decode a serial number into a date unless a manufacture date is printed, never invent a model number. If a field is not visible, leave it empty. Copy model and serial numbers character for character. Output a single JSON object and nothing else.`;
 async function fiReadLabel(env, body) {
   body = body || {};
   const inspId = String(body.inspection_id || ''), photoId = String(body.photo_id || '');
@@ -41138,7 +43431,7 @@ async function fiReadLabel(env, body) {
   const bytes = new Uint8Array(await dr.arrayBuffer());
   const mime = ph.o.Mime || 'image/jpeg';
   const kind = FI_EQUIP_KINDS[body.kind] ? body.kind : '';
-  const prompt = `${kind ? 'This is a ' + FI_EQUIP_KINDS[kind].label.toLowerCase() + '. ' : ''}Read the label.\nReturn JSON only: {"readable":true,"kind":"${Object.keys(FI_EQUIP_KINDS).join('|')}","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","notes":""}\n"year" only if a manufacture date or year is printed (copy it as printed). "notes" may hold other printed ratings (BTU, voltage) in one short line. Set readable false if no label text can be read.`;
+  const prompt = `${kind ? 'This is a ' + FI_EQUIP_KINDS[kind].label.toLowerCase() + '. ' : ''}Read the label.\nReturn JSON only: {"readable":true,"kind":"${Object.keys(FI_EQUIP_KINDS).join('|')}","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","amperage":"","spaces":"","notes":""}\n"year" only if a manufacture date or year is printed (copy it as printed). "notes" may hold other printed ratings (BTU, voltage) in one short line. For an ELECTRICAL PANEL: brand = the panel manufacturer (e.g. Square D, Eaton / Cutler-Hammer, Siemens, GE, Murray, Federal Pacific, Zinsco, Challenger); model = the panel or enclosure model / catalog number exactly as printed (not a breaker's number); "amperage" = the panel or main bus / main breaker rating printed on it (e.g. 100A, 200A), never the amp rating of a single circuit breaker; "spaces" = the number of spaces / circuits the panel is rated for if printed (e.g. 20, 40); put voltage, phase, short-circuit rating or a "max main" in notes. If only the door directory (handwritten circuit list) is visible and no manufacturer label, set readable false. Set readable false if no label text can be read.`;
   let ai;
   try { ai = await routeAI(env, { type: 'fi_read_label', tier: 'REASON', schema: true, system: FI_LABEL_SYSTEM, prompt, media: { type: 'image', source: { type: 'base64', media_type: mime, data: bytesToB64(bytes) } }, maxTokens: 600, source: 'field-inspect' }); }
   catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Automatic label reading is paused (AI credit) - type the details by hand.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not read this photo. Type the details by hand.', { detail: String((e && e.message) || e).slice(0, 200) }); }
@@ -41238,6 +43531,197 @@ async function fiPropertyCreate(env, body) {
     }
   }
   return json({ ok: true, property: { id: propId, address, city, type, unit_count: Number(pback.o.Unit_Count) || 1, owner_id: String(owner.ID), owner_name: ownerName }, owner: { id: String(owner.ID), name: ownerName, created: createdOwner }, units: unitsOut });
+}
+
+// ── Approved bookings -> field inspection (Oct 27 2026, Brett) ──────────────────────────────────────────
+// Approved inspection bookings are listed on the phone's New-inspection screen. Tapping one finds (or, only then, creates) the Hub property
+// under the EXISTING owner - never a duplicate owner - hands the phone the requester's contact / size / notes, and claims the booking so it is
+// not offered twice. Linking an inspection that was already started (same endpoint, the phone's own inspection id) works the same way.
+function fiBookingAddrParts(b) {
+  const parts = String(b.Formatted_Address || b.Address || '').split(',').map(s => s.trim());
+  return { street: (parts[0] || '').slice(0, 120), city: (parts[1] || '').slice(0, 60) };
+}
+function fiBookingLabel(b) { return String(b.Formatted_Address || b.Address || '').replace(/,\s*(USA|United States)\s*$/i, '').slice(0, 200); }
+// The Hub owner behind a booking partner: the explicit Insp_Customers.Hub_Owner_ID link first, else an exact company-name match (one hit only).
+function fiBookingOwnerRow(cust, ownerRows) {
+  if (!cust) return null;
+  const hid = String(cust.Hub_Owner_ID || '').trim();
+  if (hid) { const o = ownerRows.find(r => String(r.ID) === hid); if (o) return o; }
+  const want = fiNormName(cust.Name);
+  if (want) { const m = ownerRows.filter(r => fiNormName(fiOwnerName(r)) === want); if (m.length === 1) return m[0]; }
+  return null;
+}
+function fiBookingPropMatches(ap, propRows, own) {
+  const key = qbNormAddress(ap.street), ck = qbNormAddress(ap.city);
+  let m = key ? propRows.filter(p => p.Active !== 'FALSE' && qbNormAddress(p.Address || '') === key) : [];
+  if (m.length > 1 && ck) { const bc = m.filter(p => qbNormAddress(p.City || '') === ck); if (bc.length) m = bc; }
+  if (m.length > 1 && own) { const bo = m.filter(p => String(p.Owner_ID) === String(own.ID)); if (bo.length) m = bo; }
+  return m;
+}
+function fiBookingOut(b, cust, ownerRows, propRows) {
+  const ap = fiBookingAddrParts(b), own = fiBookingOwnerRow(cust, ownerRows), pm = fiBookingPropMatches(ap, propRows, own);
+  const when = b.Start_ISO ? inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)) : '';
+  return {
+    id: String(b.ID), customer_id: String(b.Customer_ID || ''), customer_name: cust ? (cust.Name || '') : '', date: b.Date || '', start_time: b.Start_Time || '', when,
+    address: fiBookingLabel(b), street: ap.street, city: ap.city, units: +b.Units || 1, buildings: +b.Buildings || 1,
+    contact: { name: b.Contact_Name || '', phone: b.Contact_Phone || '', email: b.Contact_Email || '' }, notes: b.Notes || '',
+    size: { levels: b.Levels || '', bedrooms: b.Bedrooms || '', bathrooms: b.Bathrooms || '', text: inspSizeText(b) },
+    owner: own ? { id: String(own.ID), name: fiOwnerName(own) } : null,
+    property: pm.length ? { id: String(pm[0].ID), address: pm[0].Address, city: pm[0].City || '' } : null,
+    inspection_id: b.Inspection_ID || '',
+  };
+}
+async function fiBookings(env) {
+  await inspEnsureTabsOnce(env); await fiEnsureTabs(env);
+  const bt = await fiReadFresh(env, 'Insp_Bookings'), it = await fiReadFresh(env, 'FI_Inspections');
+  const cust = await fetchTab(env, 'Insp_Customers'), owners = (await fetchTab(env, 'Owners')).filter(o => o.Active !== 'FALSE'), props = await fetchTab(env, 'Properties');
+  const custById = {}; cust.forEach(c => { custById[String(c.ID)] = c; });
+  const have = new Set(it.rows.filter(r => r.o.Active !== 'FALSE').map(r => r.o.ID));
+  const from = inspEtDate(Date.now() - 21 * 86400000), to = inspEtDate(Date.now() + 120 * 86400000);
+  // Approved, in a sensible window, and not already turned into an inspection. A claim whose inspection never reached the server is offered again.
+  const list = bt.rows.map(r => r.o).filter(b => b.Active !== 'FALSE' && b.Status === 'approved' && b.Date >= from && b.Date <= to && (!b.Inspection_ID || !have.has(b.Inspection_ID)))
+    .sort((x, y) => String(x.Start_ISO).localeCompare(String(y.Start_ISO)));
+  return json({ ok: true, bookings: list.map(b => fiBookingOut(b, custById[String(b.Customer_ID)], owners, props)) });
+}
+async function fiBookingStart(env, body) {
+  body = body || {};
+  const bid = String(body.booking_id || '').trim(), inspId = String(body.inspection_id || '');
+  if (!bid) return fiErr(400, 'bad_request', 'booking_id is required.');
+  if (!FI_ID_RE.test(inspId)) return fiErr(400, 'bad_id', 'inspection_id is missing or malformed.');
+  await inspEnsureTabsOnce(env); await fiEnsureTabs(env);
+  const bt = await fiReadFresh(env, 'Insp_Bookings');
+  const hit = bt.rows.find(r => String(r.o.ID) === bid && r.o.Active !== 'FALSE');
+  if (!hit) return fiErr(404, 'not_found', 'That booking was not found.');
+  const b = hit.o;
+  if (b.Status !== 'approved') return fiErr(409, 'not_approved', `This booking is ${b.Status || 'not approved'}, so it cannot be started.`);
+  if (b.Inspection_ID && b.Inspection_ID !== inspId && (await fiFindInspection(env, b.Inspection_ID)).row) return fiErr(409, 'already_started', 'An inspection was already started from this booking.', { inspection_id: b.Inspection_ID });
+  const cust = (await fetchTab(env, 'Insp_Customers')).find(c => String(c.ID) === String(b.Customer_ID)) || null;
+  const owners = (await fetchTab(env, 'Owners')).filter(o => o.Active !== 'FALSE');
+  const owner = fiBookingOwnerRow(cust, owners), ap = fiBookingAddrParts(b);
+  const propRows = (await fiReadFresh(env, 'Properties')).rows.map(r => r.o);
+  let prop = null, created = false;
+  const savedId = String(b.Hub_Property_ID || '').trim();
+  if (savedId) prop = propRows.find(p => String(p.ID) === savedId && p.Active !== 'FALSE') || null;
+  if (!prop) prop = fiBookingPropMatches(ap, propRows, owner)[0] || null;
+  if (!prop && owner) {
+    const units = +b.Units || 1;
+    const res = await fiPropertyCreate(env, { address: ap.street, city: ap.city, type: units > 1 ? 'multi' : 'house', unit_count: units, owner: { id: String(owner.ID) }, force: true });
+    let rd = null; try { rd = await res.clone().json(); } catch (e) { rd = null; /* silent-ok: a null body becomes the error response just below */ }
+    if (!res.ok || !rd || rd.ok === false || !rd.property) return fiErr(res.status >= 400 ? res.status : 500, (rd && rd.error) || 'property_not_saved', (rd && rd.message) || 'The property could not be added to the Hub, so nothing was linked. Retry.');
+    prop = (await fiReadFresh(env, 'Properties')).rows.map(r => r.o).find(p => String(p.ID) === String(rd.property.id)) || null;
+    if (!prop) return fiErr(500, 'property_not_saved', 'The new property could not be read back from the Hub, so nothing was linked. Retry.');
+    created = true;
+  }
+  const propId = prop ? String(prop.ID) : '';
+  await updateRowVerified(env, 'Insp_Bookings', b.ID, { Inspection_ID: inspId, Hub_Property_ID: propId, Insp_Claimed_At: new Date().toISOString() });
+  const out = fiBookingOut(Object.assign({}, b, { Inspection_ID: inspId }), cust, owners, prop ? [prop] : []);
+  return json({ ok: true, booking: out, property: prop ? { id: propId, address: out.address, street: String(prop.Address || ap.street), city: prop.City || ap.city, unit_count: Number(prop.Unit_Count) || 1 } : null, property_created: created, owner: out.owner, owner_missing: !owner });
+}
+// ── One-time Premier repair (Oct 27 2026, Brett) ─────────────────────────────────────────────────────────
+// Ties a booking partner to its Hub owner and links inspections that were
+// started before the booking could be picked: claims the booking (no inspection edit, so a phone mid-edit never hits a version conflict) and,
+// only when a link says doc:true, fills the inspection's blank owner / property. Additive only: never overwrites a filled cell, never creates
+// an owner and never touches owner phone/email (texts), money or QuickBooks. A dry run (the default) changes nothing; every real write is read back.
+async function fiPremierRepair(env, body) {
+  body = body || {};
+  const dry = body.dry_run !== false;
+  const custId = String(body.customer_id || '').trim(), ownerId = String(body.owner_id || '').trim();
+  const links = Array.isArray(body.links) ? body.links : [];
+  if (!custId || !ownerId) return fiErr(400, 'bad_request', 'customer_id and owner_id are required.');
+  if (links.length > 20) return fiErr(400, 'bad_request', 'At most 20 links at a time.');
+  await inspEnsureTabsOnce(env); await fiEnsureTabs(env);
+  const cust = (await fiReadFresh(env, 'Insp_Customers')).rows.map(r => r.o).find(c => String(c.ID) === custId);
+  const owner = (await fiReadFresh(env, 'Owners')).rows.map(r => r.o).find(o => String(o.ID) === ownerId && o.Active !== 'FALSE');
+  if (!cust) return fiErr(404, 'not_found', 'That booking partner was not found.');
+  if (!owner) return fiErr(404, 'not_found', 'That Hub owner was not found (or is inactive).');
+  const steps = [], step = (what, status, detail) => steps.push({ what, status, detail: detail || '' });
+  // A step that ERRORED (as opposed to a refused conflict) is a failed data write: it reaches the failure log as well as the caller.
+  const done = async (ok) => {
+    const bad = steps.filter(s => s.status === 'error');
+    if (bad.length) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_premier_repair_error', Skill_Or_Endpoint: '/admin/fi-premier-repair', Success: 'FALSE', Notes: bad.map(s => s.what + ': ' + s.detail).join(' | ').slice(0, 200) }); } catch (_) { /* silent-ok: telemetry is best-effort; the steps are returned to the caller below */ } }
+    return json({ ok, dry_run: dry, steps }, ok ? 200 : 409);
+  };
+  // 1. partner -> owner link (blank only)
+  const cur = String(cust.Hub_Owner_ID || '').trim();
+  if (cur && cur !== ownerId) { step('partner_owner_link', 'conflict', 'partner is already linked to owner ' + cur + '; nothing changed'); return done(false); }
+  if (cur) step('partner_owner_link', 'skipped', 'already linked to owner ' + ownerId);
+  else if (dry) step('partner_owner_link', 'planned', 'set Hub_Owner_ID=' + ownerId);
+  else { await updateRowVerified(env, 'Insp_Customers', custId, { Hub_Owner_ID: ownerId }); step('partner_owner_link', 'done', 'Hub_Owner_ID=' + ownerId); }
+  // 1b. ONLY when asked (copy_partner_contact:true, Brett's explicit yes Oct 28): copy the partner's contact phone / email onto the owner, BLANK cells only.
+  // Never touches names, PIN, SMS_* flags, billing or QuickBooks, and sends nothing; it only fills two empty cells, each read back.
+  if (body.copy_partner_contact === true) {
+    const ph = normalizePhone(cust.Contact_Phone || '') || '', em = String(cust.Contact_Email || '').trim();
+    const fill = {};
+    if (ph && !String(owner.Phone || '').trim()) fill.Phone = ph;
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em) && !String(owner.Email || '').trim()) fill.Email = em;
+    const keys = Object.keys(fill);
+    if (!keys.length) step('owner_contact', 'skipped', 'nothing to copy (the partner has no usable phone/email, or the owner already has them)');
+    else if (dry) step('owner_contact', 'planned', 'fill blank owner ' + ownerId + ' ' + keys.join(' + ') + ' from the partner contact');
+    else { await updateRowVerified(env, 'Owners', ownerId, fill); step('owner_contact', 'done', 'filled owner ' + ownerId + ' ' + keys.join(' + ')); }
+  }
+  // 2. inspections <-> bookings (address + date must match)
+  const bt = (await fiReadFresh(env, 'Insp_Bookings')).rows.map(r => r.o);
+  const propRows = (await fiReadFresh(env, 'Properties')).rows.map(r => r.o);
+  for (const lk of links) {
+    const inspId = String(lk && lk.inspection_id || '').trim(), bid = String(lk && lk.booking_id || '').trim(), tag = 'link ' + bid + ' <-> ' + inspId;
+    const b = bt.find(x => String(x.ID) === bid && x.Active !== 'FALSE');
+    const ins = await fiFindInspection(env, inspId);
+    if (!b || !ins.row) { step(tag, 'conflict', !b ? 'booking not found' : 'inspection not found'); continue; }
+    if (ins.dupes > 1) { step(tag, 'conflict', 'duplicate inspection rows'); continue; }
+    const row = ins.row.o, ap = fiBookingAddrParts(b);
+    if (b.Status !== 'approved' || String(b.Customer_ID) !== custId) { step(tag, 'conflict', 'booking is not an approved booking of this partner'); continue; }
+    if (qbNormAddress(ap.street) !== qbNormAddress(fiStreetOf(row.Address)) || String(b.Date) !== String(row.Inspection_Date)) { step(tag, 'conflict', 'address or date does not match (booking ' + ap.street + ' on ' + b.Date + '; inspection ' + fiStreetOf(row.Address) + ' on ' + row.Inspection_Date + ')'); continue; }
+    if (row.Owner_ID && String(row.Owner_ID) !== ownerId) { step(tag, 'conflict', 'inspection already belongs to owner ' + row.Owner_ID); continue; }
+    if (b.Inspection_ID && b.Inspection_ID !== inspId && (await fiFindInspection(env, b.Inspection_ID)).row) { step(tag, 'conflict', 'booking already claimed by ' + b.Inspection_ID); continue; }
+    const claimed = b.Inspection_ID === inspId, needDoc = lk.doc === true && (!row.Owner_ID || !row.Property_ID);
+    if (claimed && !needDoc) { step(tag, 'skipped', 'already linked'); continue; }
+    // Editing a published report would quietly un-publish it (fiSave drafts it on any content change): refuse, never do that by surprise.
+    if (needDoc && row.Status === 'published') { step(tag, 'conflict', 'the inspection is published; editing it would un-publish the report. Nothing changed'); continue; }
+    // Which property will this link end up on? The same choice fiBookingStart makes, checked FIRST so a stranger's property is never attached.
+    let pre = null; const savedId = String(b.Hub_Property_ID || '').trim();
+    if (savedId) pre = propRows.find(p => String(p.ID) === savedId && p.Active !== 'FALSE') || null;
+    if (!pre) { const pm = fiBookingPropMatches(ap, propRows, owner); if (pm.length > 1) { step(tag, 'conflict', pm.length + ' properties match this address; pick one by hand. Nothing changed'); continue; } pre = pm[0] || null; }
+    if (pre && String(pre.Owner_ID || '') !== ownerId) { step(tag, 'conflict', 'property ' + pre.ID + ' (' + pre.Address + ') belongs to owner ' + (pre.Owner_ID || 'none') + ', not ' + ownerId + '. Nothing changed'); continue; }
+    if (row.Property_ID && String(row.Property_ID) !== String(pre ? pre.ID : '')) { step(tag, 'conflict', 'the inspection is on property ' + row.Property_ID + ' but this booking resolves to ' + (pre ? pre.ID : 'a new property') + '. Nothing changed'); continue; }
+    const propNote = pre ? 'property #' + pre.ID + ' (' + pre.Address + ')' : 'creates a new property under owner ' + ownerId;
+    if (dry) { step(tag, 'planned', [claimed ? '' : 'claim booking', needDoc ? 'fill inspection owner/property' : ''].filter(Boolean).join(' + ') + '; ' + propNote); continue; }
+    let propId = String(b.Hub_Property_ID || row.Property_ID || '');
+    if (!claimed) {
+      const res = await fiBookingStart(env, { booking_id: bid, inspection_id: inspId });
+      let rd = null; try { rd = await res.clone().json(); } catch (e) { rd = null; /* silent-ok: a null body becomes the error step just below */ }
+      if (!res.ok || !rd || rd.ok === false) { step(tag, 'error', (rd && rd.message) || 'could not claim the booking'); return done(false); }
+      if (rd.owner && String(rd.owner.id) !== ownerId) { step(tag, 'error', 'the booking resolved to a different owner (' + rd.owner.id + '); stop and check'); return done(false); }
+      propId = rd.property ? String(rd.property.id) : propId;
+    }
+    if (needDoc) {
+      const fresh = await fiFindInspection(env, inspId), o2 = fresh.row.o;
+      let doc = null; try { doc = JSON.parse(fiJoinRow(o2)); } catch (e) { doc = null; /* silent-ok: an unreadable doc becomes the error step just below */ }
+      if (!doc || !doc.property) { step(tag, 'error', 'the inspection could not be read; nothing edited'); return done(false); }
+      if (!doc.owner || !doc.owner.id) doc.owner = { id: ownerId, name: fiOwnerName(owner), source: 'hub' };
+      if (!doc.property.id && propId) { doc.property.id = propId; doc.property.source = 'hub'; }
+      if (!doc.booking) doc.booking = { id: String(b.ID), customer_id: custId, customer_name: cust.Name || '', contact: { name: b.Contact_Name || '', phone: b.Contact_Phone || '', email: b.Contact_Email || '' }, notes: b.Notes || '', size: { levels: b.Levels || '', bedrooms: b.Bedrooms || '', bathrooms: b.Bathrooms || '' }, size_text: inspSizeText(b), units: +b.Units || 1, buildings: +b.Buildings || 1, scheduled: b.Start_ISO ? inspFmtEt(Date.parse(b.Start_ISO)) : (b.Date || '') };
+      const sres = await fiSave(env, { id: inspId, base_rev: Number(o2.Rev) || 0, doc, meta: {} });
+      let sd = null; try { sd = await sres.clone().json(); } catch (e) { sd = null; /* silent-ok: a null body becomes the error step just below */ }
+      if (!sres.ok || !sd || sd.ok === false) { step(tag, 'error', (sd && sd.message) || 'the inspection could not be saved; nothing else changed'); return done(false); }
+      const back = (await fiFindInspection(env, inspId)).row;
+      if (!back || String(back.o.Owner_ID) !== ownerId || (propId && String(back.o.Property_ID) !== propId)) { step(tag, 'error', 'the inspection did not keep its owner/property link'); return done(false); }
+    }
+    step(tag, 'done', [claimed ? '' : 'booking claimed', needDoc ? 'inspection owner/property filled' : ''].filter(Boolean).join(' + '));
+  }
+  return done(!steps.some(s => s.status === 'conflict' || s.status === 'error'));
+}
+// Neutral, factual rewording of the inspector's own note about access / cooperation. Returns a SUGGESTION only - the phone never saves it without Brett's tap.
+const FI_REWORD_SYSTEM = `You rewrite an inspector's short note about access and cooperation during a rental property inspection into neutral, factual, professional wording for the property owner's report.
+Rules: state only what happened (who was or was not present, which areas were declined or blocked, whether the inspection ended early). No words about attitude or emotion (never rude, hostile, tense, unwelcoming, uncooperative, angry). No guesses about reasons, motives, personal circumstances, health, money or lifestyle. No judgement or advice. Do not add any fact that is not in the note. 1 to 3 short sentences, past tense, say "the occupant". If the note is already neutral, change as little as possible. Output a single JSON object {"text":""} and nothing else.`;
+async function fiReword(env, body) {
+  const text = fiStr(body && body.text, 1000).trim();
+  if (!text) return fiErr(400, 'empty', 'Type a note first.');
+  let ai;
+  try { ai = await routeAI(env, { type: 'fi_reword', customerFacing: true, schema: true, system: FI_REWORD_SYSTEM, prompt: `Inspector's note:\n"""\n${text}\n"""\n\nReturn JSON only: {"text":""}`, maxTokens: 400, source: 'field-inspect' }); }
+  catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Rewording is paused (AI credit). Your note is kept exactly as you wrote it.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not reword this. Your note is kept exactly as you wrote it.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  const parsed = fiExtractJson(ai.result), t = parsed ? fiClean(parsed.text, 600).trim() : '';
+  if (!t) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your note is kept exactly as you wrote it.');
+  return json({ ok: true, text: t });
 }
 
 // ── Drive: Properties root / <address> / Inspection MMDDYYYY ──

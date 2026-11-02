@@ -54,29 +54,62 @@ api.updateScheduleField(0, 'percent', '40');
 api.updateScheduleField(0, 'label', 'Deposit');
 ok(scheduleState.milestones[0].percent === 40 && scheduleState.milestones[0].label === 'Deposit', 'percent and label edits are unchanged');
 
-// ---- auto-rebalance (Oct 13 2026): editing one % reshapes the others so the total stays 100 ----
+// ---- cascade (Oct 27 2026): what you type is held; the NEXT untouched row absorbs; total forced to 100 ----
 {
-  const live = (arr) => { scheduleState.milestones = arr.map(p => ({ label: 'm', percent: p, trigger: 'manual', vendor_paid: true, calc_mode: 'percent', flat_customer_amount: null })); };
+  const live = (arr) => { scheduleState.milestones = arr.map((p, i) => ({ label: 'm' + i, percent: p, trigger: i === arr.length - 1 ? 'completion' : 'manual', vendor_paid: true, calc_mode: 'percent', flat_customer_amount: null })); scheduleState.note = ''; };
   const pcts = () => scheduleState.milestones.map(x => x.percent);
   const sum = () => +pcts().reduce((a, b) => a + b, 0).toFixed(2);
-  live([33.34, 66.66]); api.updateScheduleField(0, 'percent', '40');
-  ok(pcts()[0] === 40 && pcts()[1] === 60, "Brett's case: 40% upfront makes the final 60% automatically");
-  live([33.34, 66.66]); api.updateScheduleField(1, 'percent', '70');
-  ok(pcts()[1] === 70 && pcts()[0] === 30, 'editing the LAST row rebalances the first');
-  live([25, 25, 25, 25]); api.updateScheduleField(0, 'percent', '10');
-  ok(pcts()[0] === 10 && sum() === 100 && pcts()[1] === 30 && pcts()[2] === 30 && pcts()[3] === 30, 'three other rows share the rest in proportion (equal here)');
-  live([20, 30, 50]); api.updateScheduleField(0, 'percent', '40');
-  ok(pcts()[0] === 40 && sum() === 100 && pcts()[1] === 22.5 && pcts()[2] === 37.5, 'unequal rows keep their ratio (30:50 -> 22.5:37.5)');
-  live([50, 0, 0]); api.updateScheduleField(0, 'percent', '40');
-  ok(sum() === 100 && pcts()[1] === 30 && pcts()[2] === 30, 'rows that were all 0 split the remainder equally');
-  live([33.33, 33.33, 33.34]); api.updateScheduleField(1, 'percent', '33.33');
-  ok(sum() === 100, 'rounding never leaves the total off 100');
-  live([100]); api.updateScheduleField(0, 'percent', '60');
-  ok(pcts()[0] === 60, 'a single milestone has nothing to rebalance and is left as typed');
-  live([50, 50]); api.updateScheduleField(0, 'percent', '120');
-  ok(pcts()[1] === 0 && pcts()[0] === 120, 'over 100: the others drop to 0 and the 120 stays visible so the total warning fires');
-  live([50, 50]); api.updateScheduleField(0, 'percent', '');
+  const typeIn = (i, v) => api.updateScheduleField(i, 'percent', String(v));
+
+  live([33.34, 66.66]); typeIn(0, 40);
+  ok(pcts()[0] === 40 && pcts()[1] === 60, "40% upfront makes the final 60%");
+  live([33.34, 66.66]); typeIn(1, 70);
+  ok(pcts()[1] === 70 && pcts()[0] === 30, 'editing the LAST row pushes the difference up to the row above');
+
+  // Brett's case: add a milestone, deposit and final must not move
+  live([33.34, 66.66]);
+  scheduleState.milestones[0].trigger = 'upfront';
+  api.addScheduleRow();
+  ok(scheduleState.milestones.length === 3 && scheduleState.milestones[2].trigger === 'completion', 'a new milestone goes in BEFORE the Final row');
+  ok(pcts()[0] === 33.34 && pcts()[1] === 0 && pcts()[2] === 66.66 && sum() === 100, 'adding a milestone changes nothing already set and the total is still 100');
+  typeIn(1, 30);
+  ok(pcts()[0] === 33.34 && pcts()[1] === 30 && pcts()[2] === 36.66 && sum() === 100, 'typing the new milestone takes from the NEXT row (Final), deposit untouched');
+  typeIn(2, 50);
+  ok(pcts()[2] === 50 && pcts()[0] === 33.34 && pcts()[1] === 16.66 && sum() === 100, 'typing Final: the row above gives/takes; the deposit you set is held');
+
+  // everything is held -> neighbour below is forced to 100
+  live([30, 30, 40]); scheduleState.milestones.forEach(m => { m.locked = true; });
+  typeIn(0, 20);
+  ok(sum() === 100 && pcts()[0] === 20 && pcts()[1] === 40 && pcts()[2] === 40, 'all rows set: editing row 1 forces the next row to keep 100 (and says so)');
+  ok(/adjusted to keep 100%/.test(scheduleState.note), 'the screen says which row was adjusted');
+  typeIn(2, 30);
+  ok(sum() === 100 && pcts()[2] === 30 && pcts()[0] === 20 && pcts()[1] === 50, 'editing the LAST row when all are set adjusts the one above it');
+
+  // deposit edit with a middle row: next row down takes it, final held
+  live([33.34, 0, 66.66]); typeIn(0, 25);
+  ok(pcts()[0] === 25 && pcts()[1] === 8.34 && pcts()[2] === 66.66, 'deposit change goes to the NEXT part (milestone), Final held');
+
+  // typing path independence: 5 -> 50 -> 500 -> 50
+  live([33.34, 0, 66.66]); typeIn(1, 5); typeIn(1, 50); typeIn(1, 500); typeIn(1, 50);
+  ok(sum() === 100 && pcts()[1] === 50 && pcts()[0] === 33.34 && pcts()[2] === 16.66, 'typing through an absurd number and back lands on the same answer as typing 50 directly');
+
+  // over 100 is surfaced, not hidden
+  live([50, 50]); typeIn(0, 120);
+  ok(pcts()[0] === 120 && pcts()[1] === 0, 'over 100: the other row drops to 0 and the 120 stays visible so the total warning fires');
+  live([50, 50]); typeIn(0, '');
   ok(pcts()[0] === 0 && pcts()[1] === 100, 'clearing the box (mid-typing) is safe');
+  live([100]); typeIn(0, 60);
+  ok(pcts()[0] === 60, 'a single milestone has nothing to balance against and is left as typed');
+  live([33.33, 33.33, 33.34]); typeIn(1, 33.33);
+  ok(sum() === 100, 'rounding never leaves the total off 100');
+
+  // removing a row keeps 100 by handing its share to the next row
+  live([30, 20, 50]);
+  const rf = new Function('scheduleState', 'renderSchedule', grab('removeScheduleRow') + '\nreturn removeScheduleRow;')(scheduleState, () => {});
+  rf(1);
+  ok(pcts().length === 2 && pcts()[0] === 30 && pcts()[1] === 70, 'removing a milestone gives its % to the next one, nothing else moves');
+  rf(1);
+  ok(pcts().length === 1 && pcts()[0] === 100, 'removing the last of two gives it to the remaining row');
 }
 
 console.log(n + ' passed, 0 failed');

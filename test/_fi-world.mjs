@@ -13,7 +13,7 @@ export function grab(name, isAsync = false) {
   return src.slice(i, j + 1);
 }
 export function world() {
-  const h = { tabs: {}, calls: [], ai: null, mail: [], driveSize: null, corrupt: null, telemetry: [], tok: 0 };
+  const h = { tabs: {}, calls: [], ai: null, mail: [], multi: [], sms: [], driveSize: null, corrupt: null, telemetry: [], tok: 0 };
   const T = (n) => (h.tabs[n] = h.tabs[n] || { headers: [], rows: [] });
   const sheetsRequest = async (env, method, path, body) => {
     h.calls.push(method + ' ' + path);
@@ -33,7 +33,18 @@ export function world() {
       tab.rows[n - 2][ci] = body.values[0][0]; return {};
     }
     m = path.match(/^\/values\/([A-Za-z_]+):append/);
-    if (method === 'POST' && m) { const tab = T(m[1]); if (h.dropAppend === m[1]) return {}; for (const row of body.values) { let vals = row.slice(); if (h.corrupt) vals = h.corrupt(m[1], vals, tab.headers); tab.rows.push(vals); } if (h.corrupt && h.corruptOnce) h.corrupt = null; return {}; }
+    if (method === 'POST' && m) { const tab = T(m[1]); if (h.dropAppend === m[1]) return {}; for (const row of body.values) { let vals = row.slice(); if (h.corrupt) vals = h.corrupt(m[1], vals, tab.headers); tab.rows.push(vals); } if (h.corrupt && h.corruptOnce) h.corrupt = null; const last = tab.rows.length + 1; let cn = tab.headers.length, cl = ''; while (cn > 0) { const r = (cn - 1) % 26; cl = String.fromCharCode(65 + r) + cl; cn = Math.floor((cn - 1) / 26); } return h.noAppendRange ? {} : { updates: { updatedRange: m[1] + '!A' + last + ':' + cl + last, updatedRows: 1 } }; }
+    // Oct 30 2026: fiReadFresh now goes through sheetsRequest (whole-tab GET) and the photo verify reads back ONE row (ranged GET).
+    let g = path.match(/^\/values\/([A-Za-z_]+)$/);
+    if (method === 'GET' && g) {
+      if (h.sheetsReadError) { const er = h.sheetsReadError(g[1], method, path); if (er) throw er; }
+      const tb = T(g[1]); return { values: tb.headers.length ? [tb.headers].concat(tb.rows.filter(Boolean)) : [] };
+    }
+    g = path.match(/^\/values\/([A-Za-z_]+)!([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+    if (method === 'GET' && g) {
+      if (h.sheetsReadError) { const er = h.sheetsReadError(g[1], method, path); if (er) throw er; }
+      const row = T(g[1]).rows[Number(g[3]) - 2]; return { values: row ? [row] : [] };
+    }
     throw new Error('fake sheets: unhandled ' + method + ' ' + path);
   };
   const ensureColumns = async (env, tab, cols) => { const tb = T(tab); for (const c of cols) if (!tb.headers.includes(c)) tb.headers.push(c); };
@@ -66,12 +77,14 @@ export function world() {
         return R(200, { id: mid[1], parents: f.parents.slice() });
       }
     }
-    if (String(url).includes('alt=media')) return { ok: h.driveOk !== false, body: h.driveOk === false ? null : 'BYTES', status: 200 };
+    if (String(url).includes('alt=media')) return { ok: h.driveOk !== false, body: h.driveOk === false ? null : 'BYTES', status: h.driveOk === false ? 500 : 200, arrayBuffer: async () => new TextEncoder().encode('BYTES').buffer };
     throw new Error('fake fetch: ' + url);
   };
   const factory = new Function('h', 'sheetsRequest', 'ensureColumns', 'fetch', 'col', 'bytesToB64', `
-    const json = (data, status = 200) => ({ status, body: data });
+    const json = (data, status = 200) => ({ status, ok: status < 300, body: data, clone() { return this; }, json: async () => data });
     const CORS = {}; const env0 = {};
+    const invalidateTabCache = (tab) => { (h.invalidated = h.invalidated || []).push(tab); };
+    ${grab('sheetsQuotaBusyError')}
     const isStaging = () => true;
     const getAccessToken = async () => 'tok';
     const findOrCreateFolder = async () => ({ id: 'folder1' });
@@ -89,9 +102,30 @@ export function world() {
     const routeAI = async (env, job) => { h.calls.push('AI ' + job.type + ' customerFacing=' + job.customerFacing); if (h.ai instanceof Error) throw h.ai; return { result: typeof h.ai === 'function' ? h.ai(job) : h.ai, model_used: 'claude-test' }; };
     const gmailSendEmail = async (env, o) => { h.mail.push(o); return h.staged === false ? { sent: true } : { staged: true, sent: false }; };
     const logTelemetry = async (env, r) => { h.telemetry.push(r); };
+    const gmailSendEmailMulti = async (env, o) => { if (h.multiFail) throw new Error(h.multiFail); h.multi.push(o); return h.staged === false ? { sent: true } : { staged: true, sent: false }; };
+    const sendSMS = async (env, to, msg, opts) => { h.sms.push({ to, msg, opts }); if (h.smsThrow) throw new Error(h.smsThrow); return h.smsResult !== undefined ? h.smsResult : { staged: true }; };
+    const inspEnsureTabsOnce = async () => {};
+    const updateRowVerified = async (env, tab, id, fields) => {
+      if (h.updateFail) throw new Error(tab + ' row ' + id + ' did not keep: ' + Object.keys(fields).join(', '));
+      const tb = h.tabs[tab]; const ix = tb.headers.indexOf('ID'); const row = tb.rows.find(r => r && String(r[ix]) === String(id));
+      if (!row) throw new Error(tab + ' row ' + id + ' not found');
+      for (const [k, v] of Object.entries(fields)) { let ci = tb.headers.indexOf(k); if (ci < 0) { tb.headers.push(k); ci = tb.headers.length - 1; } while (row.length <= ci) row.push(''); row[ci] = String(v); }
+      return {};
+    };
+    const INSP_TZ = 'America/New_York';
+    ${grab('inspErr')}
+    ${grab('inspFmtEt')}
+    ${grab('inspFmtEtTime')}
+    ${grab('inspEtDate')}
+    ${grab('inspSizeVal')}
+    ${grab('inspCleanSize')}
+    ${grab('inspSizeText')}
+    ${src.slice(src.indexOf('const QB_ADDR_WORDS'), src.indexOf('\n};', src.indexOf('const QB_ADDR_WORDS')) + 3)}
+    ${grab('qbNormAddress')}
+    ${grab('normalizePhone')}
     ${aiCreditGuardPrelude()}
     ${block}
-    return { fiNormalizeEquipment, fiContractorize, fiScrubDocForReport, fiNormalizeSummary, fiTypeOut, FI_STRUCTURE_SYSTEM, FI_SUMMARY_SYSTEM, FI_ROUTE_SYSTEM, fiOwnerName, fiNormName, fiStreetOf, fiFolderSafe, fiInspFolderName, fiDirectory, fiPropertyCreate, fiDriveFindFolders, fiDriveEnsureFolder, fiWriteCells, fiInspectionFolder, fiFolderOrganize, fiDriveChildIds, fiFindInspection, fiReadFresh, FI_INSP_HEADERS, fiBrandScrape, fiParseBrandHtml, fiColorsFromCss, fiPickBrandColors, fiSafeUrl, fiFetchLimited, fiSniffImage, fiNormalizeEquipment, fiValidateEquipment, fiValidateVoiceNotes, FI_EQUIP_KINDS, fiEquipFields, fiTranscribe, fiTranscribeJson, FI_TRANSCRIBE_SYSTEM, fiAudioMime, fiRouteNotes, fiNormalizeRoute, fiBuildRoutePrompt, fiReadLabel, fiTypesList, fiTypesSave, fiTypesTouch, fiTypeClean, FI_TYPE_SEED, FI_TABS, FI_BRAND_HEADERS, fiBrandContactLine, fiBuildEmail, fiSave, fiPublish, fiReport, fiPhotoUpload, fiPhotoView, fiBrandSave, fiEmailReport, fiStructure, fiSummarize, fiList, fiGetInspection, fiRoute, fiNormalizeIssue, fiNormalizeIssues, fiExtractJson, fiValidateDoc, fiFingerprint, fiTradeRollup, fiPublishChecks, fiSerialize, fiChunk, fiJoinRow, fiBuildStructurePrompt, fiPhotoIds, fiIsAdmin, FI_DATA_CHUNK };
+    return { fiRoute, fiReadFresh, fiViewLookup, fiPhotoUploadOriginal, __fiViewCache, __fiViewMiss, fiFindInspectionForPhoto, fiInspCacheDrop, fiNormalizeEquipment, fiContractorize, fiScrubDocForReport, fiNormalizeSummary, fiTypeOut, FI_STRUCTURE_SYSTEM, FI_SUMMARY_SYSTEM, FI_ROUTE_SYSTEM, fiOwnerName, fiNormName, fiStreetOf, fiFolderSafe, fiInspFolderName, fiDirectory, fiPropertyCreate, fiDriveFindFolders, fiDriveEnsureFolder, fiWriteCells, fiInspectionFolder, fiFolderOrganize, fiDriveChildIds, fiFindInspection, fiReadFresh, FI_INSP_HEADERS, fiBrandScrape, fiParseBrandHtml, fiColorsFromCss, fiPickBrandColors, fiSafeUrl, fiFetchLimited, fiSniffImage, fiNormalizeEquipment, fiValidateEquipment, fiValidateVoiceNotes, FI_EQUIP_KINDS, fiEquipFields, fiTranscribe, fiTranscribeJson, FI_TRANSCRIBE_SYSTEM, fiAudioMime, fiRouteNotes, fiNormalizeRoute, fiBuildRoutePrompt, fiReadLabel, fiTypesList, fiTypesSave, fiTypesTouch, fiTypeClean, FI_TYPE_SEED, FI_TABS, FI_BRAND_HEADERS, fiBrandContactLine, fiBuildEmail, fiSave, fiPublish, fiReport, fiPhotoUpload, fiPhotoView, fiBrandSave, fiEmailReport, fiStructure, fiSummarize, fiList, fiGetInspection, fiRoute, fiNormalizeIssue, fiNormalizeIssues, fiExtractJson, fiValidateDoc, fiFingerprint, fiTradeRollup, fiPublishChecks, fiSerialize, fiChunk, fiJoinRow, fiBuildStructurePrompt, fiPhotoIds, fiIsAdmin, FI_DATA_CHUNK, fiBookings, fiBookingStart, fiPremierRepair, fiUrgentSend, fiUrgentTextWindow, fiUrgentCollect, fiBuildUrgentEmail, fiUrgentSmsBody, fiOnlyPhoneMarksChanged, fiPublicDocKey, fiReword, fiBookingOut, fiBookingOwnerRow, fiBookingPropMatches, fiBookingAddrParts, fiValidateAccess, fiValidateVisit, inspCleanSize, inspSizeText, FI_REWORD_SYSTEM };
   `);
   const env = { WORKER_SECRET: 'sek', HUB_TEST_TOKEN: 'tst', SHEET_ID: 'S', DRIVE_PROPERTIES_ROOT: 'root' };
   return { h, env, ...factory(h, sheetsRequest, ensureColumns, fetch, new Function('return ' + grab('col'))(), new Function('return ' + grab('bytesToB64'))()) };
