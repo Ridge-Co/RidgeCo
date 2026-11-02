@@ -418,6 +418,8 @@ async function sentWorld(extra) {
   await A.api.fixAnswer(A.env, { t: A.token, choice: 'dry' });
   const l = D(await A.api.followupList(A.env, url('/followup/list')));
   ok(l.ok && l.count === 1 && l.followups[0].needs_action === true && l.followups[0].suggestion.action === 'create_cosmetic_wo' && !('Token_Hash' in l.followups[0]), 'list: needs action, suggestion, no token hash', l.followups[0]);
+  // Tokens carry whole-second iat/exp and no nonce, so a link minted in the same wall-clock second as the first one can be byte-identical. Cross a second boundary so "a NEW link" is a real assertion, not a race.
+  await new Promise(r => setTimeout(r, 1100));
   const link = D(await A.api.followupLink(A.env, { id: '1' }, url('/x'))); const t2 = decodeURIComponent(link.link.split('t=')[1].split('&')[0]);
   ok(link.ok && t2 !== A.token && D(await A.api.fixPage(A.env, url('/fix/page', { t: t2 }))).ok && D(await A.api.fixPage(A.env, url('/fix/page', { t: A.token }))).ok, 'copy-link-again mints a new link; the first one still works until the same window ends');
   const cl = D(await A.api.followupClose(A.env, { id: '1', next_wo_id: '1300' })); ok(cl.ok && A.tabs.WO_Followups[0].Status === 'Closed' && A.tabs.WO_Followups[0].Next_WO_ID === '1300', 'closing links the follow-on WO');

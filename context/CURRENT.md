@@ -1,3 +1,35 @@
+# MOBILE TAP TARGETS + WIDE TABLES — Oct 29, 2026 — branch `feat/mobile-tap-targets-oct29` cut from main tip 6499515. HTML only (no worker.js, no BUILD_VERSION change). FEATURE_LOG `[FL-20261029-mobile-tap-targets]`.
+
+## 🟡 Built and tested; PR open for Brett's merge (NOT merged). Customer-facing HTML, so it needs a look on a real phone first. Unit suite 292/292 (same as main); `test/manual-verify-small-fixes-ui.mjs` 122/122 (70 before). Touch-only (same gate as #96): every button/select/tab/nav link/modal close is at least 44px on a phone, wide tables scroll inside their own box, and the Hub header nav on a phone is now one swipeable row (about 70px tall instead of about 320px). Mouse/desktop is unchanged. Not run: a real phone, staging, or the Hub with real data (all mocked).
+
+# PREMIER REPAIR ENDPOINT — Oct 27, 2026 — on `staging` ONLY (PRs #455, #456). BUILD_VERSION `2026-10-27.05-fi-premier-repair-guards`. FEATURE_LOG rule 235.
+
+## 🟡 Built, staging-verified, independently validated. NOT merged to main. After Brett's go-ahead and the production deploy: run `hub_prod_post /admin/fi-premier-repair` dry run, read every step, then the real run (body in FEATURE_LOG 235). Then verify read-only with `hub_prod_get`. Brett said yes (Oct 28) to copying Josiah's phone/email onto owner #25: send `copy_partner_contact:true` in the same body (blank cells only).
+
+# FIELD INSPECTION: ANIMALS, ACCESS & COOPERATION, NO ACCESS, BOOKING SIZE, APPROVED BOOKINGS — Oct 27, 2026 — PR #453 merged to `staging` ONLY (plus follow-up `fix/fi-report-note-weight-oct27`). BUILD_VERSION `2026-10-27.03-fi-visit-bookings`. FEATURE_LOG rule 234.
+
+## 🟡 Built, staging-verified (API + phone/desktop UI). NOT merged to main: waiting for Brett's go. Premier data fixes (owner #25 contact copy, `Hub_Owner_ID`, Dudley/Gilmor/Cliffmont links) happen after the production deploy. Still owed by Brett: the exact neutral wording for the Dudley tense-welcome note (not invented).
+
+# DELIVERY WATCHER: JOB/PO LINE + PREP EMAIL + PRODUCT NAME — Oct 27, 2026 — branch `fix/delivery-job-po-prep-oct27` cut from main tip 6502cfa. BUILD_VERSION `2026-10-27.02-delivery-job-po-prep`. FEATURE_LOG rule 233.
+
+## 🟡 Built and tested; PR open for Brett's merge (NOT merged). Fixes found by the first real dry run of order WH49670828 (WO-1237, 115 W 29th St Apt 2): the Job/PO line now links WO-1237 and supplies the unit and tenant, the Prep email is "no news", the model is the product title. Details in FEATURE_LOG rule 233. Tenant notice default is `auto` (unset Config key = texts the tenant, held to the 6pm batch); the dry run always shows `tenant_sms: off`.
+
+# WO VENDOR DEPOSIT, AFTER THE FACT, AUTO-DEDUCTED — Oct 26, 2026 — branch `feat/wo-deposit-auto-net-oct26` cut from main tip 9df0ba5. BUILD_VERSION `2026-10-26.01-wo-deposit-auto-net`. FEATURE_LOG rule 231.
+
+## 🟡 Built and offline-tested; staging + independent validation next. NOT merged to main: it touches QuickBooks bills, so Brett decides.
+Brett wants Cesar Diaz (Vendor 3) paid a $200 deposit on WO-1253 (411 West 23rd St, estimate $460, signed proposal Scope 11) even though the customer was never charged one, as a reusable capability. Decisions (Oct 26 08:38 ET): $200; instant-pay fee on BOTH the deposit and the final; create the live deposit bill; the deduction on the final bill is AUTOMATIC; NO Vendor_Bills record (so he cannot be paid twice).
+**Built:** panel shows on Converted estimates; deposit capped at the estimate; fee line on the deposit bill; preview-then-confirm in the UI; `woDepositCredit` takes it off the final vendor bill in all four billing paths as a visible line; `Deposit_Applied` flips only after QuickBooks returns the final bill id (verified, loud); the approve-time flip is gone. Expected WO-1253 numbers: deposit bill $200 − $10 fee = send $190; final vendor bill $460 − $200 = $260 − $10 fee = send $250; total fees $20.
+**After merge, with Brett's go:** create the live $200 bill from the work order screen (it only creates an OPEN bill, nothing is paid), then verify read-only (Deposit_* on WO-1253, bill in QuickBooks, no Vendor_Bills row).
+
+# DELIVERY EMAIL WATCHER, HUB SIDE (Phase 1) — Oct 23, 2026 — head `feat/delivery-email-intake-oct23` cut from main tip 883b868 (after PR #426). PR into `main` ("Delivery email watcher: Hub endpoint + parser (Phase 1)"). BUILD_VERSION `2026-10-27.01-delivery-email-watcher`. FEATURE_LOG rule 232.
+
+## 🟡 Built and tested; PR open for Brett's merge (NOT merged). Pairs with PR #430 (Apps Script that reads info@ and brett@) and PR #431 (Deliveries UI). Merge order does not matter for safety: the endpoint does nothing until the Apps Script posts to it.
+**What it does:** `POST /intake/delivery-email` reads a Home Depot / Lowe's email, keeps one Deliveries row per order, creates one install work order, texts Brett on real news, and queues a low-priority tenant heads-up (default ON, batched to the 6pm window; same-day deliveries go at once). Returns the calendar event for the Apps Script to write.
+**To turn it on after merge:** nothing new in Cloudflare (the Apps Script reuses the same `INTAKE_TOKEN` as the Buildium intake), then follow `context/DELIVERY_INTAKE_SETUP_v1.0.md` from PR #430. To keep tenants from being texted while testing, set Config `Delivery_Tenant_Notice` to `draft` or `off`.
+**Addendum 1 (same PR):** the tenant text now ASKS the tenant to be home and links to a one-tap answer page (`rsvp.html`, PR #431): `GET/POST /delivery/rsvp`, signed per-delivery token `<id>.<16 chars>`, Deliveries columns Tenant_RSVP / _At / _Note / Tenant_Notice_Sent_At. No date = no tenant text. Declined makes Brett the on-site contact and texts him once. Reschedule sends a short changed text and resets the answer; cancel sends a courteous no-need-to-be-home text. The same email arriving in info@ and brett@ (or forwarded) is one record, one alert, one tenant text. Tenant texts are SMS/PII: Brett merges this one himself; do NOT auto-merge.
+**Known limit:** parser untested on a real store email. First real email: check the Deliveries row, then tighten the `DEP` table and add the email as a test fixture.
+**Not built:** Phase 2 size check, Phase 4 voice routing (placeholders only); the general 9am / 12pm / 6pm text batching (BACKLOG B-20261023-0302-mb) is still a plan, only this one notice rides a 6pm hold.
+
 # D-16: CUT THE TWILIO TEXT BILL — Oct 23, 2026 — head `feat/sms-cost-d16-oct23` cut from main tip 883b868. Marker `sms-cost-d16-2026-10-23` (BUILD_VERSION is deploy-stamped, untouched). FEATURE_LOG rule 229.
 
 ## 🟡 Built, tested, merged to `staging` ONLY. NOT merged to main: Brett decides (it touches text sending). Draft PR to main is marked NOT FOR MERGE.

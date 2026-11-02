@@ -207,6 +207,9 @@ ok(led.filter(x => x[2] === 'P0' && x[10] === 'open').every(x => x[11]), 'texted
 const smsAfter1 = SMS.length;
 res = await L.failRollupRun(env, { nowMs: T0 + 15 * 60000 });
 ok(res.events_in === 0 && SMS.length === smsAfter1, 'a second run with nothing new reads nothing and texts nothing');
+// Event IDs are `<ms>-<4 random chars>` and the rollup skips ID <= Last_Event_ID, so a new event that lands in the SAME millisecond as the
+// previous one (this fake sheet is instant) can sort below it and be skipped. Real appends are never that close; let the clock tick here.
+await new Promise(r => setTimeout(r, 5));
 await L.reportFailure(env, { where: 'scheduler_job', message: 'deposit_paid: ok:false []' });
 res = await L.failRollupRun(env, { nowMs: T0 + 30 * 60000 });
 ok(res.events_in === 1 && SHEET.Failures.slice(1).find(x => x[4] === 'scheduler_job')[9] === '3' && SMS.length === smsAfter1, 'a new occurrence bumps the count without re-texting inside 6 h');

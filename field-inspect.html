@@ -47,7 +47,7 @@
   .banner{border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:14px}
   .banner.warn{background:#fdf3e0;border:1px solid #f0d9a8;color:#7a5b12} .banner.err{background:#fdecea;border:1px solid #f1b9b3;color:#8e281d} .banner.ok{background:#e7f6ec;border:1px solid #b5e0c4;color:#14623a} .banner.info{background:#eaf1fd;border:1px solid #bcd0f5;color:#1a3f94}
   #login{max-width:360px;margin:60px auto;padding:20px;text-align:center}
-  #syncbar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--surface);border-top:1px solid var(--border);padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px}
+  #syncbar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--surface);border-top:1px solid var(--border);padding:8px 12px calc(8px + env(safe-area-inset-bottom));display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;line-height:1.35}
   #syncbar .st{font-weight:700}
   #syncbar.ok .st{color:var(--accent2)} #syncbar.work .st{color:var(--accent)} #syncbar.off .st{color:var(--warn)} #syncbar.err .st{color:var(--danger)}
   .area-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 4px;border-top:1px solid var(--border);cursor:pointer;min-height:52px}
@@ -110,6 +110,7 @@
   <a href="index.html" style="color:#fff;text-decoration:none">← Hub</a>
   <span style="margin-left:auto" id="nav-ver">Field Inspection</span>
 </div>
+<script src="rc-related.js" data-group="inspections"></script>
 
 <div id="login">
   <h1>Field Inspection</h1>
@@ -125,6 +126,7 @@
   <div class="toast" id="toast"></div>
   <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
   <input type="file" id="photo-in" accept="image/*" multiple class="hide">
+  <input type="file" id="orig-in" accept="image/*" multiple class="hide">
   <input type="file" id="logo-in" accept="image/png,image/jpeg,image/webp" class="hide">
   <input type="file" id="audio-in" accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg,.flac,.amr,.3gp" multiple class="hide">
 </div>
@@ -141,11 +143,15 @@ var TRADE_LABEL = {}; TRADES.forEach(function(t){ TRADE_LABEL[t[0]] = t[1]; });
 var SEV_LABEL = {}; SEVS.forEach(function(t){ SEV_LABEL[t[0]] = t[1]; });
 var COND_LABEL = {good:'Good',fair:'Fair',poor:'Poor',nothing_to_do:'Nothing to do',not_inspected:'Not inspected',na:'N/A'};
 var INSP_TYPES = [['periodic','Periodic'],['move_in','Move-in'],['move_out','Move-out'],['pre_listing','Pre-listing'],['other','Other']];
+// Oct 27 2026: per-area "No access" reasons, neutral access & cooperation quick-picks, animal types
+var ACCESS_REASONS = [['','No reason given'],['tenant_declined','Tenant declined access'],['blocked','Area blocked'],['other','Other (describe)']];
+var COOP_CHOICES = [['completed','Occupant present; inspection completed as planned'],['not_present','Occupant not present'],['limited','Occupant present; access to some areas was limited'],['ended_early','Occupant asked that the inspection end early']];
+var ANIMAL_TYPES = ['Dog','Cat','Bird','Other'];
 
 // ── state ───────────────────────────────────────────────────────────────────
 var S = { view:'home', rec:null, areaId:null, list:[], listErr:'', brands:[], reportBase:'https://ridge-co.github.io/RidgeCo', props:[], dir:null, propsErr:'', propQ:'', newProp:null, newOwner:null, ownerQ:'', pickUnitFor:'', unitQ:'', hits:[], ownerHits:{},
   sync:{ state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null, lastErr:'' },
-  photoMsg:'', reorder:false, selMode:false, sel:{}, moveIds:[], types:[], typesErr:'', route:null, routeBusy:'', routeErr:'', pumping:false, proposals:null, structuring:false, summarizing:false, listening:false, interim:'', busy:{}, dictErr:'', noIdb:false, publishInfo:null, emailPreview:null };
+  photoMsg:'', reorder:false, selMode:false, sel:{}, moveIds:[], types:[], typesErr:'', route:null, routeBusy:'', routeErr:'', pumping:false, proposals:null, structuring:false, summarizing:false, listening:false, interim:'', busy:{}, dictErr:'', noIdb:false, publishInfo:null, emailPreview:null, bookings:null, bookErr:'', newBooking:null, newInspId:'', visitOpen:false, rw:'' };
 var blobUrl = {};           // photo id -> object URL (local copy)
 var photoState = {};        // photo id -> {state, err}
 var localOnly = {};         // id -> record for inspections only on this phone
@@ -231,7 +237,7 @@ function enterApp(d, err){
     (rows||[]).forEach(function(r){ localOnly[r.id] = r; });
     render(); setSync(); pumpPhotos();
   }).catch(function(e){ S.noIdb = true; render(); toast('Phone storage problem: '+e.message); });
-  render(); setSync(); loadTypes();
+  render(); setSync(); loadTypes(); loadBookings();
 }
 function applyList(d){ S.list = d.inspections || []; S.brands = d.brands || []; S.reportBase = d.report_base || S.reportBase; S.listErr=''; }
 function refreshList(){ return api('GET','/fi/list').then(function(d){ applyList(d); }).catch(function(e){ S.listErr = 'Could not refresh the server list: '+e.message; }); }
@@ -248,11 +254,11 @@ function setSync(){
   else if (ss.syncing){ cls='work'; txt='⏳ Saving…'; }
   else if (rec.dirty){ cls='work'; txt='⏳ Changes waiting to save'; }
   else { cls='ok'; txt='✓ Saved to server' + (rec.base_rev ? ' (v'+rec.base_rev+')' : ''); }
-  if (np){ txt += ' · 📷 '+np+' photo'+(np>1?'s':'')+' waiting'; if (S.photoMsg){ cls = cls==='ok'?'err':cls; txt += ' ⚠'; a = '<button class="btn sm" onclick="retryPhotos()">Retry photos</button>'; } }
+  if (np){ var ps = photoStatusHtml(np); txt += ' · '+ps.txt; if (ps.cls==='err'){ cls = 'err'; } else if (cls==='ok' || ps.cls==='off'){ cls = ps.cls; } a = ps.act || a; }
   bar.className = cls; st.innerHTML = txt; act.innerHTML = a;
 }
 function pendingPhotoCount(){ var n=0; for (var k in photoState){ if (photoState[k].state!=='done') n++; } return n; }
-window.addEventListener('online', function(){ if (S.rec) syncNow(true); pumpPhotos(); setSync(); });
+window.addEventListener('online', function(){ if (S.rec) syncNow(true); pumpPhotos(true); setSync(); });
 window.addEventListener('offline', setSync);
 window.addEventListener('beforeunload', function(e){ if ((S.rec && S.rec.dirty) || pendingPhotoCount()){ e.preventDefault(); e.returnValue=''; return ''; } });
 function mut(fn){
@@ -325,7 +331,7 @@ function photoSrc(id){
 function loadPhotoBlobs(inspId){
   return dbAll('photos').then(function(rows){
     (rows||[]).forEach(function(p){
-      if (p.insp !== inspId) return;
+      if (p.insp !== inspId || p.kind === 'orig') return;
       if (p.blob && !blobUrl[p.id]) blobUrl[p.id] = URL.createObjectURL(p.blob);
     });
   });
@@ -337,19 +343,48 @@ function allPhotoStates(){
     setSync();
   });
 }
-function compressImage(file){
+function compressImage(file, maxSide, quality){
   return new Promise(function(resolve, reject){
     var url = URL.createObjectURL(file), img = new Image();
     img.onload = function(){
       try{
-        var max = 1600, w = img.naturalWidth, h = img.naturalHeight, sc = Math.min(1, max/Math.max(w,h));
+        var max = maxSide || 1600, w = img.naturalWidth, h = img.naturalHeight, sc = Math.min(1, max/Math.max(w,h));
         var c = document.createElement('canvas'); c.width = Math.round(w*sc); c.height = Math.round(h*sc);
         c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-        c.toBlob(function(b){ URL.revokeObjectURL(url); if(b) resolve(b); else reject(new Error('Could not compress the photo')); }, 'image/jpeg', 0.82);
+        c.toBlob(function(b){ URL.revokeObjectURL(url); if(b) resolve(b); else reject(new Error('Could not compress the photo')); }, 'image/jpeg', quality || 0.82);
       }catch(e){ URL.revokeObjectURL(url); reject(e); }
     };
     img.onerror = function(){ URL.revokeObjectURL(url); reject(new Error('This photo could not be read ('+(file.type||'unknown type')+')')); };
     img.src = url;
+  });
+}
+// Nov 2 2026 (Brett): recipients get the FULL-SIZE photo "from the original photo, as much detail as possible". The ~1600 px copy above is still what uploads first and what the
+// report shows (fast, small). The untouched original file goes up afterwards as its own queue row (id <photo>__o, kind 'orig'), behind every standard copy, with the same
+// retry / wait / status bar as any photo. Its phone copy is dropped as soon as the server confirms it.
+var ORIG_MAX_BYTES = 30 * 1024 * 1024 - 65536;     // the server refuses more than 30 MB
+function prepareOriginal(file){
+  var okType = ['image/jpeg','image/png','image/webp'].indexOf(file.type) > -1;
+  if (okType && file.size > 0 && file.size <= ORIG_MAX_BYTES) return Promise.resolve({ blob:file, mime:file.type });
+  // A type the server cannot store (HEIC, AVIF...) or a file over the limit: re-save it at its FULL pixel size (never scaled down), best quality that fits.
+  return compressImage(file, 100000, 0.95).then(function(b){
+    if (b.size <= ORIG_MAX_BYTES) return { blob:b, mime:'image/jpeg' };
+    return compressImage(file, 100000, 0.88).then(function(b2){
+      if (b2.size <= ORIG_MAX_BYTES) return { blob:b2, mime:'image/jpeg' };
+      throw new Error('it is over 30 MB even re-saved at full size');
+    });
+  });
+}
+// Never throws and never hides a failure: the standard copy is already saved, and a missing original is toasted AND reported to the Hub's failure ledger.
+function queueOriginal(rec, photoId, file, opts){
+  // opts.late: the standard copy was uploaded long ago and is not on this phone (matching originals to earlier photos): the uploader must not wait for, or drop it for lack of, a local standard row.
+  return prepareOriginal(file).then(function(o){
+    var row = { id:photoId+'__o', photo_id:photoId, kind:'orig', insp:rec.id, blob:o.blob, mime:o.mime, state:'pending', err:'', at:Date.now() };
+    if (opts && opts.late) row.late = true;
+    return dbPut('photos', row).then(function(){ photoState[row.id] = { state:'pending', err:'' }; return true; });
+  }).catch(function(e){
+    toast('The full-size copy of one photo could not be kept ('+e.message+'). The standard copy is saved.');
+    reportPhoto('field-inspect original photo', 'Could not prepare/store the original: '+e.message, photoId);
+    return false;
   });
 }
 var photoTarget = null; // {areaId}
@@ -364,45 +399,381 @@ $('photo-in').addEventListener('change', function(ev){
       return dbPut('photos', row).then(function(){
         blobUrl[id] = URL.createObjectURL(blob); photoState[id] = { state:'pending', err:'' };
         mut(function(doc){ var a = findArea(doc, tg.areaId); (a.photo_ids = a.photo_ids||[]).push(id); });
+        if (tg.urgent && S.urg && S.urg.photoIds) S.urg.photoIds.push(id);
+        return queueOriginal(rec, id, f);
       });
     }).catch(function(e){ fails++; toast('Photo not added: '+e.message); });
   });
-  chain.then(function(){ render(); pumpPhotos(); if (!fails) toast(files.length+' photo'+(files.length>1?'s':'')+' added'); });
+  chain.then(function(){ render(); pumpPhotos(); if (tg.urgent && S.urg && S.urg.mode==='new') renderUrgentNew(); if (!fails) toast(files.length+' photo'+(files.length>1?'s':'')+' added'); });
 });
-function pumpPhotos(){
-  if (S.pumping) return Promise.resolve(); if (!navigator.onLine) { setSync(); return Promise.resolve(); }
-  S.pumping = true; S.photoMsg='';
+// ── attach full-size originals to EARLIER photos (Nov 2 2026, Brett) ───────────────────────────────────────────────────────────────────────────────────────
+// Photos added before the original-upload build only exist on the server at ~1600 px. The originals are still in the phone's gallery. Brett picks them (all at once, extras are fine);
+// the page shrinks each pick the same way the stored copy was made, fingerprints both, and attaches each original to the stored photo it matches - a photo is only attached when
+// it is the clear best match in BOTH directions with a safe gap to the runner-up. Anything it is not sure of is LEFT ALONE and listed, never guessed.
+// ORIG-MATCH-PURE-START
+var OM_W = 17, OM_H = 16;            // fingerprint = 16 x 16 brightness comparisons = 256 bits (64 hex characters)
+var OM_MAX_DIST = 48;                // more different than this (of 256 bits) = not the same picture
+var OM_MARGIN = 16;                  // the runner-up must be at least this much further away, on both sides, or the pick is "not sure"
+var OM_POP = [0,1,1,2,1,2,2,3,1,2,2,3,2,3,3,4];
+function omBitsToHex(bits){ var s = ''; for (var i = 0; i + 3 < bits.length; i += 4) s += ((bits[i]<<3)|(bits[i+1]<<2)|(bits[i+2]<<1)|bits[i+3]).toString(16); return s; }
+function omGrayToHex(g){   // g: OM_W x OM_H brightness values, row by row
+  var bits = [];
+  for (var y = 0; y < OM_H; y++) for (var x = 0; x < OM_W - 1; x++) bits.push(g[y*OM_W + x] > g[y*OM_W + x + 1] ? 1 : 0);
+  return omBitsToHex(bits);
+}
+function omDist(a, b){
+  if (!a || !b || a.length !== b.length) return 9999;
+  var d = 0; for (var i = 0; i < a.length; i++) d += OM_POP[parseInt(a.charAt(i), 16) ^ parseInt(b.charAt(i), 16)];
+  return d;
+}
+function omTwo(arr){   // smallest and second smallest of a list: {i, d, second}
+  var bi = -1, bd = Infinity, sd = Infinity;
+  for (var k = 0; k < arr.length; k++){ if (arr[k] < bd){ sd = bd; bd = arr[k]; bi = k; } else if (arr[k] < sd) sd = arr[k]; }
+  return { i:bi, d:bd, second:sd };
+}
+// stored: [{id, h}] (photos on the server without an original), picked: [{key, h}] (files chosen from the phone).
+// Returns {pairs:[{key,id,dist}], unsure:[{key, candidates:[id]}], noMatch:[key], unmatchedStored:[id]}.
+function omMatchOnce(stored, picked, maxD, margin){
+  var D = picked.map(function(p){ return stored.map(function(s){ return omDist(p.h, s.h); }); });
+  var rows = D.map(omTwo), cols = stored.map(function(s, j){ return omTwo(D.map(function(r){ return r[j]; })); });
+  var pairs = [], unsure = [], noMatch = [];
+  picked.forEach(function(p, i){
+    var rb = rows[i];
+    if (rb.i < 0 || rb.d > maxD){ noMatch.push(p.key); return; }
+    var cb = cols[rb.i];
+    if (cb.i === i && (rb.second - rb.d) >= margin && (cb.second - cb.d) >= margin) pairs.push({ key:p.key, id:stored[rb.i].id, dist:rb.d });
+    else {
+      var cand = []; D[i].forEach(function(d, j){ if (d <= maxD) cand.push({ id:stored[j].id, d:d }); });
+      cand.sort(function(x, y){ return x.d - y.d; });
+      unsure.push({ key:p.key, candidates:cand.map(function(c){ return c.id; }) });
+    }
+  });
+  return { pairs:pairs, unsure:unsure, noMatch:noMatch };
+}
+// Matches in rounds: once a pair is certain it is taken out, which often settles a pick that was only unsure because of it.
+function omMatch(stored, picked, opt){
+  opt = opt || {};
+  var maxD = opt.maxDist == null ? OM_MAX_DIST : opt.maxDist, margin = opt.margin == null ? OM_MARGIN : opt.margin;
+  var allPairs = [], st = stored.slice(), pk = picked.slice(), res = null;
+  for (var round = 0; round < 6; round++){
+    res = omMatchOnce(st, pk, maxD, margin);
+    if (!res.pairs.length) break;
+    allPairs = allPairs.concat(res.pairs);
+    var usedS = {}, usedP = {};
+    res.pairs.forEach(function(q){ usedS[q.id] = 1; usedP[q.key] = 1; });
+    st = st.filter(function(x){ return !usedS[x.id]; });
+    pk = pk.filter(function(x){ return !usedP[x.key]; });
+  }
+  res = omMatchOnce(st, pk, maxD, margin);   // what is left after the last certain pair was taken out
+  return { pairs:allPairs, unsure:res.unsure, noMatch:res.noMatch, unmatchedStored:st.map(function(x){ return x.id; }) };
+}
+// ORIG-MATCH-PURE-END
+var OM_QUEUE_AHEAD = 6;     // originals waiting in the phone's upload queue at once (each is several MB; the rest are fed in as they go up)
+var OM = null;              // the running / last matching job
+function omHashBlob(blob){
+  return new Promise(function(resolve, reject){
+    var url = URL.createObjectURL(blob), img = new Image();
+    img.onload = function(){
+      try{
+        var w = img.naturalWidth, h = img.naturalHeight, src = img, c1 = null;
+        if (!w || !h) throw new Error('empty picture');
+        if (Math.max(w, h) > 800){   // two steps (like the 1600 px copy was made from the original, then smaller again) so a 12 MP picture is not sampled with a huge jump
+          var sc = 800 / Math.max(w, h); c1 = document.createElement('canvas'); c1.width = Math.max(1, Math.round(w*sc)); c1.height = Math.max(1, Math.round(h*sc));
+          var x1 = c1.getContext('2d'); x1.imageSmoothingEnabled = true; x1.imageSmoothingQuality = 'high'; x1.drawImage(img, 0, 0, c1.width, c1.height); src = c1;
+        }
+        var cell = 8, c = document.createElement('canvas'); c.width = OM_W*cell; c.height = OM_H*cell;
+        var cx = c.getContext('2d', { willReadFrequently:true }); cx.imageSmoothingEnabled = true; cx.imageSmoothingQuality = 'high'; cx.drawImage(src, 0, 0, c.width, c.height);
+        var d = cx.getImageData(0, 0, c.width, c.height).data, g = [];
+        for (var y = 0; y < OM_H; y++) for (var x = 0; x < OM_W; x++){
+          var sum = 0;
+          for (var yy = 0; yy < cell; yy++) for (var xx = 0; xx < cell; xx++){ var q = ((y*cell + yy)*c.width + x*cell + xx)*4; sum += 0.299*d[q] + 0.587*d[q+1] + 0.114*d[q+2]; }
+          g.push(sum / (cell*cell));
+        }
+        URL.revokeObjectURL(url); resolve(omGrayToHex(g));
+      }catch(e){ URL.revokeObjectURL(url); reject(e); }
+    };
+    img.onerror = function(){ URL.revokeObjectURL(url); reject(new Error('could not be read ('+(blob.type||'unknown type')+')')); };
+    img.src = url;
+  });
+}
+function omPool(items, n, fn){   // run fn(item, index) on every item, n at a time; resolves when all are done (fn must not throw)
+  var i = 0;
+  function worker(){ if (i >= items.length) return Promise.resolve(); var k = i++; return fn(items[k], k).then(worker); }
+  var ws = []; for (var w = 0; w < Math.min(n, items.length); w++) ws.push(worker());
+  return Promise.all(ws);
+}
+function omWait(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+function omFetchStored(id, token){
+  function once(){ return fetch(WORKER+'/fi/photo/view?r='+encodeURIComponent(token)+'&p='+encodeURIComponent(id)).then(function(res){ if (!res.ok) throw new Error('HTTP '+res.status); return res.blob(); }); }
+  return once().catch(function(){ return omWait(1500).then(once); });
+}
+function omCard(){
+  var ok = !!(S.rec && S.rec.token && S.rec.base_rev);
+  return '<div class="card"><b>Full-size photos</b><div class="muted">Photos added before the full-size update only have the standard size. Choose their originals from this phone and the page attaches each one to the right photo by itself.</div>'
+    +'<div class="btns"><button class="btn" id="om-open" onclick="omOpen()"'+(ok?'':' disabled')+'>Attach full-size originals…</button></div>'+(ok?'':'<div class="muted">Save the inspection to the server first.</div>')+'</div>';
+}
+function omBox(){
+  var O = OM; if (!O) return '';
+  var h = '<h2>Full-size originals</h2>';
+  if (O.phase === 'check') return h + '<p>Checking which photos still have only the standard size…</p>';
+  if (O.phase === 'error') return h + '<div class="check">⛔ '+esc(O.err||'Something went wrong')+'</div><div class="btns"><button class="btn primary" onclick="omOpen(true)">Try again</button><button class="btn" onclick="closeSheet()">Close</button></div>';
+  if (O.phase === 'none') return h + '<div class="check">✅ Every photo in this inspection already has its full-size original'+(O.queuedAlready?' (or is uploading it now)':'')+'.</div><div class="btns"><button class="btn" onclick="closeSheet()">Close</button></div>';
+  if (O.phase === 'pick') return h + '<p><b>'+O.todo.length+'</b> of the '+O.total+' photos in this inspection have only the standard size.</p>'
+    +'<p class="muted">Tap the button, then select the pictures from your phone gallery — select as many as you like, in any order. Extra pictures (other jobs) are fine, they are ignored. Do not edit or crop them first.</p>'
+    +'<div class="btns"><button class="btn primary block" onclick="omPick()">Choose photos from my phone</button><button class="btn block" onclick="closeSheet()">Not now</button></div>';
+  if (O.phase === 'work') return h + '<p>'+esc(O.msg||'Working…')+'</p><div class="muted">Keep this page open until the bar at the bottom says everything is uploaded.</div><div class="btns"><button class="btn" onclick="OM.cancel=true">Stop</button></div>';
+  // done
+  var r = O.result || {}, hh = h;
+  hh += '<div class="check">'+(r.pairs ? '✅' : '⚠️')+' <b>'+(r.pairs||0)+'</b> photo'+(r.pairs===1?'':'s')+' matched and '+(O.cancelled?'queued before you stopped':'sent to upload')+'.</div>';
+  if (r.unsure && r.unsure.length) hh += '<div class="check">⚠️ <b>'+r.unsure.length+'</b> picture'+(r.unsure.length===1?' looks':'s look')+' like more than one photo here (near-identical shots) and '+(r.unsure.length===1?'was':'were')+' left alone: '+esc(r.unsure.slice(0,6).map(function(k){ return O.names[k]||k; }).join(', '))+(r.unsure.length>6?' …':'')+'</div>';
+  if (r.noMatch && r.noMatch.length) hh += '<div class="muted">'+r.noMatch.length+' picture'+(r.noMatch.length===1?'':'s')+' did not match any photo here (probably from another job)'+(r.noMatch.length<=6?': '+esc(r.noMatch.map(function(k){ return O.names[k]||k; }).join(', ')):'')+'.</div>';
+  if (r.readFail && r.readFail.length) hh += '<div class="check">⛔ '+r.readFail.length+' picture'+(r.readFail.length===1?'':'s')+' could not be read: '+esc(r.readFail.slice(0,5).map(function(f){ return f.name+' ('+f.err+')'; }).join('; '))+'</div>';
+  if (r.loadFail && r.loadFail.length) hh += '<div class="check">⛔ '+r.loadFail.length+' stored photo'+(r.loadFail.length===1?'':'s')+' could not be loaded to compare ('+esc(r.loadFail[0].err)+'). Try again in a minute.</div>';
+  if (r.queueFail) hh += '<div class="check">⛔ '+r.queueFail+' original'+(r.queueFail===1?'':'s')+' could not be kept on the phone (see the message shown earlier).</div>';
+  if (r.left) hh += '<div class="banner info">'+r.left+' photo'+(r.left===1?'':'s')+' here still '+(r.left===1?'has':'have')+' only the standard size.</div>';
+  else if (r.pairs) hh += '<div class="banner ok">Every photo here now has (or is uploading) its original.</div>';
+  hh += '<div class="btns">'+(r.left?'<button class="btn primary" onclick="omPick()">Choose more photos</button>':'')+'<button class="btn" onclick="closeSheet()">Done</button></div>';
+  return hh;
+}
+function omShow(force){
+  var box = $('om-box');
+  if (box){ box.innerHTML = omBox(); return; }
+  if (force) openSheet('<div id="om-box">'+omBox()+'</div>');
+}
+function omOpen(retry){
+  var rec = S.rec;
+  if (OM && OM.phase === 'work'){ omShow(true); return; }
+  if (!rec || !rec.token || !rec.base_rev){ toast('Save the inspection to the server first'); return; }
+  OM = { phase:'check', rec:rec, token:rec.token, todo:[], total:0, names:{}, cancel:false };
+  omShow(true);
+  var O = OM;
+  api('GET', '/fi/report?r='+encodeURIComponent(rec.token)).then(function(d){
+    var have = d.photo_full || {}, ids = (d.photo_ids || []).filter(function(id){ return !have[id]; });
+    return dbAll('photos').then(function(rows){
+      var queued = {}; (rows||[]).forEach(function(r){ if (r.kind === 'orig' && r.state !== 'done' && r.blob) queued[r.photo_id] = 1; });
+      O.todo = ids.filter(function(id){ return !queued[id]; }); O.queuedAlready = ids.length - O.todo.length; O.total = (d.photo_ids || []).length;
+      O.phase = O.todo.length ? 'pick' : 'none'; omShow();
+    });
+  }).catch(function(e){
+    O.phase = 'error'; O.err = 'Could not check the photos: '+e.message; omShow();
+    reportPhoto('field-inspect match originals', 'Could not list the photos: '+e.message, rec.id);
+  });
+}
+function omPick(){ if (!OM || !OM.todo || !OM.todo.length){ omOpen(); return; } var inp = $('orig-in'); inp.value = ''; inp.click(); }
+var omOne = '';   // set while Brett attaches an original to ONE photo he is looking at (no matching needed)
+function omAttachOne(id){ omOne = id; var inp = $('orig-in'); inp.value = ''; inp.click(); }
+$('orig-in').addEventListener('change', function(ev){
+  var files = Array.prototype.slice.call(ev.target.files || []); if (!files.length) return;
+  if (omOne){
+    var id = omOne; omOne = '';
+    if (files.length > 1) toast('Only the first picture was used');
+    queueOriginal(S.rec, id, files[0], { late:true }).then(function(ok){ if (ok){ pumpPhotos(); toast('Full-size original queued for this photo — uploading in the background'); } });
+    return;
+  }
+  if (!OM || !OM.todo || !OM.todo.length) return;
+  omRun(files);
+});
+function omRun(files){
+  var O = OM, rec = O.rec, token = O.token;
+  O.phase = 'work'; O.cancel = false; O.cancelled = false; O.msg = 'Starting…'; omShow(true);
+  var seen = {}, picks = [], dup = 0;
+  files.forEach(function(f){ var k = f.name+'|'+f.size+'|'+f.lastModified; if (seen[k]){ dup++; return; } seen[k] = 1; O.names[k] = f.name; picks.push({ key:k, file:f }); });
+  var stored = [], loadFail = [], picked = [], readFail = [], storedDone = 0, pickDone = 0;
+  function progress(){ O.msg = storedDone < O.todo.length ? 'Reading the stored photos… '+storedDone+' of '+O.todo.length : 'Reading your pictures… '+pickDone+' of '+picks.length; omShow(); }
+  progress();
+  return omPool(O.todo, 3, function(id){
+    return omFetchStored(id, token).then(omHashBlob).then(function(h){ stored.push({ id:id, h:h }); }).catch(function(e){ loadFail.push({ id:id, err:e.message }); })
+      .then(function(){ storedDone++; progress(); });
+  }).then(function(){
+    return omPool(picks, 2, function(p){
+      if (O.cancel) return Promise.resolve();
+      return omHashBlob(p.file).then(function(h){ picked.push({ key:p.key, h:h }); }).catch(function(e){ readFail.push({ name:p.file.name, err:e.message }); })
+        .then(function(){ pickDone++; progress(); });
+    });
+  }).then(function(){
+    if (loadFail.length) reportPhoto('field-inspect match originals', loadFail.length+' stored photo(s) could not be loaded to compare: '+loadFail[0].err, rec.id);
+    var m = omMatch(stored, picked), fileByKey = {}; picks.forEach(function(p){ fileByKey[p.key] = p.file; });
+    var queued = 0, queueFail = 0, total = m.pairs.length, okIds = {};
+    function feed(i){
+      if (i >= m.pairs.length) return Promise.resolve();
+      if (O.cancel){ O.cancelled = true; return Promise.resolve(); }
+      return dbAll('photos').then(function(rows){
+        var pend = (rows||[]).filter(function(r){ return r.kind === 'orig' && r.state !== 'done' && r.blob; }).length;
+        if (pend >= OM_QUEUE_AHEAD){ O.msg = 'Uploading originals… '+queued+' of '+total+' queued'; omShow(); pumpPhotos(); return omWait(2500).then(function(){ return feed(i); }); }
+        var q = m.pairs[i];
+        return queueOriginal(rec, q.id, fileByKey[q.key], { late:true }).then(function(ok){ if (ok){ queued++; okIds[q.id] = 1; } else queueFail++; pumpPhotos(); return feed(i + 1); });
+      });
+    }
+    return feed(0).then(function(){
+      O.todo = O.todo.filter(function(id){ return !okIds[id]; });   // only photos whose original is really queued stop counting as missing one
+      O.result = { pairs:queued, unsure:m.unsure.map(function(u){ return u.key; }), noMatch:m.noMatch, readFail:readFail, loadFail:loadFail, queueFail:queueFail, left:O.todo.length, dup:dup };
+      O.phase = 'done'; omShow(); pumpPhotos();
+      toast(queued+' original'+(queued===1?'':'s')+' matched — uploading in the background');
+    });
+  }).catch(function(e){
+    O.phase = 'error'; O.err = 'Matching stopped: '+e.message; omShow();
+    reportPhoto('field-inspect match originals', 'Matching stopped: '+e.message, rec.id);
+  });
+}
+
+// ── photo uploader ──────────────────────────────────────────────────────────
+// Photos go up one at a time. A failure that is NOT the photo's fault (Google Sheets read limit, a bad signal, a slow server) never marks the photo failed:
+// it stays queued, the reason is shown in the bar at the bottom, and the page retries by itself with a growing wait (5s, 10s, 20s, 40s, then every 60s).
+// Only a photo the server will never accept (too big, wrong type), or one that has failed PHOTO_MAX_TRIES times in a row, is marked failed and needs "Retry photos".
+var PHOTO_MAX_TRIES = 10, PHOTO_TIMEOUT_MS = 75000, PHOTO_ORIG_TIMEOUT_MS = 240000, PHOTO_GAP_MS = 900;   // an original is several MB: it gets a longer time on a weak signal
+function isOrigId(id){ return /__o$/.test(String(id)); }   // the queue row of a photo's full-size original is '<photo id>__o'
+var photoTries = {};          // photo id -> consecutive failed attempts (memory only)
+var pumpTimer = null, tickTimer = null;
+S.up = { done:0, nextAt:0, why:'', msg:'', sendingId:'', attempt:0, busyRounds:0, reported:{} };
+function photoBackoff(n){ return Math.min(60, 5 * Math.pow(2, Math.max(0, n - 1))); }
+function reportPhoto(where, msg, id){ if (S.up.reported[id]) return; S.up.reported[id] = 1; try{ if (window.hubReportFailure) window.hubReportFailure(where, msg, { photo_id:id }); }catch(e){ console.error('photo failure report failed', e); } }
+function schedulePump(sec, why, msg){
+  if (pumpTimer) clearTimeout(pumpTimer);
+  S.up.nextAt = Date.now() + sec*1000; S.up.why = why; S.up.msg = msg || '';
+  pumpTimer = setTimeout(function(){ pumpTimer = null; S.up.nextAt = 0; pumpPhotos(); }, sec*1000);
+  if (!tickTimer) tickTimer = setInterval(function(){ if (!S.up.nextAt && !S.pumping){ clearInterval(tickTimer); tickTimer = null; } setSync(); }, 1000);
+  setSync();
+}
+function sendPhoto(p){
+  // resolves {ok} | {kind:'busy'|'transient'|'unsaved'|'fatal', wait, text}; never rejects
+  var isOrig = p.kind === 'orig', tmo = isOrig ? PHOTO_ORIG_TIMEOUT_MS : PHOTO_TIMEOUT_MS;
+  var ctl = window.AbortController ? new AbortController() : null, timedOut = false;
+  var to = setTimeout(function(){ timedOut = true; if (ctl) ctl.abort(); }, tmo);
+  var opts = { method:'POST', headers:{'X-Auth-Token':AUTH_TOKEN,'Content-Type':isOrig ? (p.mime || 'image/jpeg') : 'image/jpeg'}, body:p.blob };
+  if (ctl) opts.signal = ctl.signal;
+  return fetch(WORKER+'/fi/photo?inspection_id='+encodeURIComponent(p.insp)+'&photo_id='+encodeURIComponent(isOrig ? p.photo_id : p.id)+(isOrig ? '&kind=orig' : ''), opts)
+    .then(function(res){
+      clearTimeout(to);
+      return res.text().then(function(t){
+        var j; try{ j = JSON.parse(t); }catch(e){ j = null; }
+        var msg = (j && (j.message || j.error)) || ('HTTP '+res.status);
+        if (res.ok && j && j.ok !== false) return { ok:true };
+        if (j && j.error === 'inspection_not_saved') return { kind:'unsaved', text:'waiting for the inspection to save' };
+        if (j && j.error === 'photo_not_saved') return { kind:'unsaved', text:'waiting for the standard copy to upload first' };
+        if (res.status === 429 || (j && j.busy)) return { kind:'busy', wait:Math.max(5, Number(j && j.retry_after_seconds) || 8), text:'Google Sheets is busy' };
+        if (res.status === 400 || res.status === 413 || res.status === 415) return { kind:'fatal', text:msg };
+        if (res.status === 401 || res.status === 403) return { kind:'fatal', auth:true, text:'Not signed in (' + msg + ') — reload the page and log in again' };
+        return { kind:'transient', text:msg + ' (HTTP '+res.status+')' };
+      });
+    })
+    .catch(function(e){
+      clearTimeout(to);
+      return { kind:'transient', text: timedOut ? 'the server did not answer in '+Math.round(tmo/1000)+'s' : 'no connection to the server' };
+    });
+}
+function pumpPhotos(force){
+  if (S.pumping){ S.pumpAgain = true; return Promise.resolve(); }   // rows queued while a pass is running (it works from a snapshot) get their own pass right after it
+  S.pumpAgain = false;
+  if (!navigator.onLine) { S.up.why = 'offline'; setSync(); return Promise.resolve(); }
+  if (!force && S.up.nextAt && S.up.nextAt > Date.now()) return Promise.resolve();   // honour the backoff; other code calls this often
+  if (pumpTimer){ clearTimeout(pumpTimer); pumpTimer = null; }
+  S.up.nextAt = 0; S.up.why = ''; S.up.msg = '';
+  S.pumping = true; S.photoMsg = '';
+  var retryIn = 0, retryWhy = '', retryMsg = '', consecutiveFail = 0;
   return dbAll('photos').then(function(rows){
-    var todo = (rows||[]).filter(function(p){ return p.state!=='done'; });
-    photoState = {}; todo.forEach(function(p){ photoState[p.id] = { state:p.state, err:p.err||'' }; });
+    var todo = (rows||[]).filter(function(p){ return p.state !== 'done'; });
+    var fresh = {}; todo.forEach(function(p){ fresh[p.id] = { state:p.state, err:p.err||'' }; });
+    photoState = fresh;
+    todo = todo.filter(function(p){ return p.state !== 'error'; });   // failed photos wait for the Retry photos button
+    todo.sort(function(a, b){ return (a.kind === 'orig' ? 1 : 0) - (b.kind === 'orig' ? 1 : 0); });   // every standard copy goes before any full-size original
     setSync();
-    var chain = Promise.resolve();
-    todo.forEach(function(p){
-      chain = chain.then(function(){
-        return dbGet('docs', p.insp).then(function(d){
-          if (!d || !d.base_rev){ photoState[p.id] = { state:'pending', err:'waiting for the inspection to save' }; return; }
-          return fetch(WORKER+'/fi/photo?inspection_id='+encodeURIComponent(p.insp)+'&photo_id='+encodeURIComponent(p.id), { method:'POST', headers:{'X-Auth-Token':AUTH_TOKEN,'Content-Type':'image/jpeg'}, body:p.blob })
-            .then(function(res){ return res.text().then(function(t){ var j; try{ j=JSON.parse(t); }catch(e){ j={ok:false,message:'HTTP '+res.status}; } if (!res.ok || j.ok===false){ var er=new Error(j.message||('HTTP '+res.status)); er.code=j.error; throw er; } return j; }); })
-            .then(function(){ p.state='done'; p.err=''; delete photoState[p.id]; return dbPut('photos', p); })
-            .catch(function(e){
-              if (e.code==='inspection_not_saved'){ photoState[p.id] = { state:'pending', err:'waiting for the inspection to save' }; if (S.rec && S.rec.id===p.insp){ S.rec.dirty=true; scheduleSync(); } return; }
-              p.err = e.message; p.state='error'; photoState[p.id] = { state:'error', err:e.message }; S.photoMsg = e.message; return dbPut('photos', p);
-            });
+    var i = 0;
+    function next(){
+      if (i >= todo.length) return Promise.resolve();
+      var p = todo[i++];
+      if (p.kind === 'orig'){
+        // An original only goes up after its own standard copy is on the server; if that photo was removed, the original is dropped with it.
+        var std = (rows||[]).filter(function(x){ return x.id === p.photo_id; })[0];
+        if (!std && !p.late){ delete photoState[p.id]; return dbDel('photos', p.id).then(next); }   // a 'late' original (matched to an earlier photo) has no local standard row by design
+        if (std && std.state !== 'done'){ photoState[p.id] = { state:'pending', err:'waiting for the standard copy' }; return next(); }
+        if (!p.blob){ p.state = 'done'; delete photoState[p.id]; return dbPut('photos', p).then(next); }
+      }
+      return dbGet('docs', p.insp).then(function(d){
+        if (!d || !d.base_rev){ photoState[p.id] = { state:'pending', err:'waiting for the inspection to save' }; retryIn = Math.max(retryIn, 20); retryWhy = retryWhy || 'unsaved'; return next(); }
+        S.up.sendingId = p.id; S.up.attempt = (photoTries[p.id] || 0) + 1; setSync();
+        return sendPhoto(p).then(function(r){
+          S.up.sendingId = '';
+          if (r.ok){
+            p.state = 'done'; p.err = ''; delete photoState[p.id]; delete photoTries[p.id]; S.up.done++; consecutiveFail = 0; S.up.busyRounds = 0;
+            if (p.kind === 'orig') delete p.blob;   // the server has the original: free this phone's storage
+            return dbPut('photos', p).then(function(){ setSync(); return new Promise(function(r2){ setTimeout(r2, PHOTO_GAP_MS); }); }).then(next);
+          }
+          if (r.kind === 'unsaved'){
+            photoState[p.id] = { state:'pending', err:r.text };
+            if (S.rec && S.rec.id === p.insp){ S.rec.dirty = true; scheduleSync(); }
+            retryIn = Math.max(retryIn, 20); retryWhy = retryWhy || 'unsaved'; return next();
+          }
+          if (r.kind === 'fatal' && p.kind === 'orig' && !r.auth){
+            // The server will never take this original (over 30 MB / wrong type). The standard copy is already safe, so do not leave a red bar that can never clear:
+            // say so, report it to the Hub's failure ledger, and drop the original.
+            reportPhoto('field-inspect original photo', r.text, p.photo_id);
+            toast('A full-size photo was not kept: '+r.text);
+            delete photoState[p.id]; delete photoTries[p.id];
+            return dbDel('photos', p.id).then(next);
+          }
+          if (r.kind === 'fatal'){
+            p.err = r.text; p.state = 'error'; photoState[p.id] = { state:'error', err:r.text }; S.photoMsg = r.text;
+            reportPhoto('field-inspect photo upload', r.text, p.id);
+            return dbPut('photos', p).then(next);
+          }
+          // busy or transient: the photo stays queued; stop the loop (the cause is shared by every photo) and try again later
+          var n = (photoTries[p.id] = (photoTries[p.id] || 0) + 1);
+          if (r.kind === 'busy'){
+            S.up.busyRounds++;
+            photoState[p.id] = { state:'pending', err:r.text };
+            retryIn = Math.max(retryIn, r.wait + Math.min(30, S.up.busyRounds * 4)); retryWhy = 'busy'; retryMsg = r.text;
+            if (S.up.busyRounds === 6) reportPhoto('field-inspect photo upload (still busy after 6 tries)', 'Google Sheets read limit has held photo uploads for several minutes', p.id);
+            return Promise.resolve();
+          }
+          if (n >= PHOTO_MAX_TRIES){
+            var m = 'Failed '+n+' times: '+r.text;
+            p.err = m; p.state = 'error'; photoState[p.id] = { state:'error', err:m }; S.photoMsg = m;
+            reportPhoto('field-inspect photo upload', m, p.id);
+            return dbPut('photos', p).then(next);
+          }
+          photoState[p.id] = { state:'pending', err:r.text };
+          retryIn = Math.max(retryIn, photoBackoff(n)); retryWhy = 'retry'; retryMsg = r.text;
+          if (n === 4) reportPhoto('field-inspect photo upload (4 failed tries)', r.text, p.id);
+          return (++consecutiveFail >= 2) ? Promise.resolve() : next();
         });
       });
-    });
-    return chain;
-  }).then(function(){ S.pumping=false; setSync(); if (S.view==='review'||S.view==='area') safeRender(); var stuck = Object.keys(photoState).some(function(k){ return photoState[k].state==='pending'; }); if (stuck) setTimeout(pumpPhotos, 20000); })
-    .catch(function(e){ S.pumping=false; S.photoMsg = e.message; setSync(); });
+    }
+    return next();
+  }).then(function(){
+    S.pumping = false;
+    if (retryIn){ S.pumpAgain = false; schedulePump(retryIn, retryWhy, retryMsg); }
+    else if (S.pumpAgain){ S.pumpAgain = false; setTimeout(function(){ pumpPhotos(); }, 300); }
+    setSync(); if (S.view==='review'||S.view==='area') safeRender();
+  }).catch(function(e){
+    S.pumping = false; S.pumpAgain = false; S.photoMsg = 'Photo uploader problem: '+e.message; reportPhoto('field-inspect photo uploader', e.message, 'pump'); schedulePump(30, 'retry', e.message);
+  });
 }
 function retryPhotos(){
-  dbAll('photos').then(function(rows){ var ps=[]; (rows||[]).forEach(function(p){ if (p.state==='error'){ p.state='pending'; ps.push(dbPut('photos',p)); } }); return Promise.all(ps); }).then(function(){ S.photoMsg=''; pumpPhotos(); });
+  dbAll('photos').then(function(rows){ var ps=[]; (rows||[]).forEach(function(p){ if (p.state==='error'){ p.state='pending'; ps.push(dbPut('photos',p)); } delete photoTries[p.id]; S.up.reported[p.id] = 0; }); return Promise.all(ps); }).then(function(){ S.photoMsg=''; S.up.busyRounds=0; pumpPhotos(true); });
+}
+// One plain-language line for the bottom bar: is the page working, waiting its turn, or actually stuck?
+function photoStatusHtml(np){
+  var nO = Object.keys(photoState).filter(isOrigId).length, nS = np - nO;
+  var up = S.up, n = (nS ? nS+' photo'+(nS>1?'s':'') : '') + (nS && nO ? ' + ' : '') + (nO ? nO+' full-size cop'+(nO>1?'ies':'y') : '') + ' waiting', secs = up.nextAt ? Math.max(0, Math.ceil((up.nextAt - Date.now())/1000)) : 0;
+  var failed = Object.keys(photoState).filter(function(k){ return photoState[k].state === 'error'; });
+  if (failed.length) return { cls:'err', txt:'📷 '+n+' · ⚠ '+failed.length+' failed — '+esc(photoState[failed[0]].err||''), act:'<button class="btn sm" onclick="retryPhotos()">Retry photos</button>' };
+  if (!navigator.onLine) return { cls:'off', txt:'📷 '+n+' · 📴 offline — they upload by themselves when signal returns', act:'' };
+  if (S.pumping && up.sendingId && isOrigId(up.sendingId)) return { cls:'work', txt:'🖼 Uploading a full-size photo ('+n+')… keep this page open', act:'' };
+  if (S.pumping && up.sendingId){ var tot = up.done + np; return { cls:'work', txt:'📷 Uploading photo '+(up.done+1)+' of '+tot+(up.attempt>1?' (try '+up.attempt+')':'')+'… keep this page open', act:'' }; }
+  if (up.nextAt){
+    var why = up.why === 'busy' ? 'Google is limiting how fast we can save (shared limit). Normal after a batch of photos — nothing is wrong.'
+      : up.why === 'unsaved' ? 'Waiting for the inspection to finish saving.'
+      : 'Last try failed: '+esc(up.msg||'')+'.';
+    return { cls:'work', txt:'📷 '+n+' · '+why+' Retrying by itself in '+secs+'s. Just keep this page open.', act:'<button class="btn sm" onclick="pumpPhotos(true)">Retry now</button>' };
+  }
+  if (S.pumping) return { cls:'work', txt:'📷 '+n+' · checking…', act:'' };
+  return { cls:'work', txt:'📷 '+n+' · starting…', act:'' };
 }
 
 // ── model ───────────────────────────────────────────────────────────────────
 function findArea(doc, id){ for (var i=0;i<doc.areas.length;i++) if (doc.areas[i].id===id) return doc.areas[i]; return null; }
 function issueCount(a){ return (a.issues||[]).length; }
-function inspectedCount(doc){ var act = doc.areas.filter(function(a){return !a.excluded;}); return { done: act.filter(function(a){ return a.condition && a.condition!=='not_inspected'; }).length, total: act.length }; }
+function inspectedCount(doc){ var act = doc.areas.filter(function(a){return !a.excluded;}); return { done: act.filter(function(a){ return (a.condition && a.condition!=='not_inspected') || (a.access && a.access.no_access); }).length, total: act.length }; }
 
 // ── views ───────────────────────────────────────────────────────────────────
 function render(){
@@ -419,7 +790,7 @@ function render(){
   var y = window.scrollY, key = S.view + ':' + (S.areaId||'');
   v.innerHTML = h; window.scrollTo(0, render._key === key ? y : 0); render._key = key;
   if (S.view==='route') saveRouteDraft();
-  if (S.view==='new' && !S.newProp) renderPropList();
+  if (S.view==='new' && !S.newProp) { renderBookList(); renderPropList(); }
   if (S.view==='area') bindArea();
   setSync();
 }
@@ -451,10 +822,87 @@ function viewHome(){
 
 // ---- new inspection ----
 function startNew(){
-  S.newProp = null; S.newOwner = null; S.ownerQ=''; S.pickUnitFor=''; S.propQ=''; S.view='new';
+  S.newProp = null; S.newOwner = null; S.ownerQ=''; S.pickUnitFor=''; S.propQ=''; S.view='new'; S.newBooking = null; S.newInspId = '';
   var d = defaultBrand();
   S.newOpts = { type:'periodic', date:todayStr(), inspector:lsGet('fi_inspector','Brett Lambert'), client:'', email:'', pre1978:false, brand:(d&&d.id)||'', beds:3, baths:1, sides:true, laundry:true, basement:true, attic:false };
-  render(); loadProps();
+  render(); loadProps(); loadBookings();
+}
+// ---- approved bookings (Oct 27 2026) ----
+// Approved bookings from the booking page, offered at the top of New inspection. Tapping one finds/creates the Hub property under the existing owner and pre-fills everything.
+function loadBookings(){
+  if (!S.bookings){ var c = lsGet('fi_bookings',''); if (c){ try{ S.bookings = JSON.parse(c); }catch(e){ S.bookings = null; } } }
+  return api('GET','/fi/bookings').then(function(d){
+    S.bookings = d.bookings||[]; S.bookErr=''; lsSet('fi_bookings', JSON.stringify(S.bookings));
+    if (S.view==='new' && !S.newProp && !S.pickUnitFor) renderBookList();
+    if (S.view==='insp') safeRender();
+  }).catch(function(e){ S.bookErr = 'Could not load approved bookings ('+e.message+')'+(S.bookings?' — showing the copy saved on this phone.':'.'); if (S.view==='new' && !S.newProp && !S.pickUnitFor) renderBookList(); });
+}
+function bookingRef(b){ return { id:b.id, customer_id:b.customer_id||'', customer_name:b.customer_name||'', contact:b.contact||{}, notes:b.notes||'', size:{ levels:(b.size&&b.size.levels)||'', bedrooms:(b.size&&b.size.bedrooms)||'', bathrooms:(b.size&&b.size.bathrooms)||'' }, size_text:(b.size&&b.size.text)||'', units:b.units||1, buildings:b.buildings||1, scheduled:b.when||b.date||'' }; }
+function bookingCardHtml(bk){
+  var c = bk.contact||{}, who = [c.name,c.phone,c.email].filter(Boolean).map(esc).join(' · ');
+  return '<div class="card"><b>Approved booking</b><div class="muted">'+esc(bk.scheduled||'')+(bk.customer_name?' · '+esc(bk.customer_name):'')+(who?'<br>Requested by '+who:'')+(bk.size_text?'<br>Size given: '+esc(bk.size_text):'<br>Size: not given')+(bk.notes?'<br>Notes: '+esc(bk.notes):'')+'</div></div>';
+}
+function renderBookList(){
+  var el = $('booklist'); if (!el) return;
+  var l = S.bookings||[], h = S.bookErr ? '<div class="banner warn">'+esc(S.bookErr)+'</div>' : '';
+  if (l.length) h += '<div class="card"><b>Approved bookings</b><div class="muted">Tap one to start — property, owner and contact are filled in for you.</div>'+l.map(function(b,i){
+    return '<div class="propitem" onclick="startFromBooking('+i+')"><b>'+esc(b.address)+'</b><div class="muted">'+esc(b.when||b.date)+(b.customer_name?' · '+esc(b.customer_name):'')+((b.contact&&b.contact.name)?' · '+esc(b.contact.name):'')+'</div>'+(b.size&&b.size.text?'<div class="muted">'+esc(b.size.text)+'</div>':'')+(b.property?'':'<div class="muted">New to the Hub — it will be added under '+esc((b.owner&&b.owner.name)||'an owner you choose')+'</div>')+'</div>';
+  }).join('')+'</div>';
+  el.innerHTML = h;
+}
+function startFromBooking(i){
+  var b = (S.bookings||[])[i]; if (!b) return;
+  if (!claim('book')) return;
+  var id = newId(); toast('Opening the booking…');
+  api('POST','/fi/booking/start',{ booking_id:b.id, inspection_id:id }).then(function(r){
+    release('book'); applyBooking(r, id);
+  }).catch(function(e){
+    release('book');
+    if (e.code==='already_started'){ toast('An inspection was already started from this booking — find it in the list'); loadBookings(); return; }
+    toast('Could not open the booking: '+e.message);
+  });
+}
+function applyBooking(r, id){
+  var b = r.booking, sz = b.size||{}, o = S.newOpts;
+  S.newInspId = id; S.newBooking = bookingRef(b);
+  if (b.contact && b.contact.name) o.client = b.contact.name;
+  if (b.contact && b.contact.email) o.email = b.contact.email;
+  var bd = parseFloat(sz.bedrooms), ba = parseFloat(sz.bathrooms);
+  if (isFinite(bd)) o.beds = Math.max(0, Math.min(12, Math.round(bd)));
+  if (isFinite(ba)) o.baths = Math.max(1, Math.min(12, Math.ceil(ba)));
+  S.newProp = r.property ? { id:r.property.id, address:b.address||r.property.address, street:r.property.street, source:'hub', unit_id:'', unit_label:'' } : null;
+  S.newOwner = r.owner ? { id:r.owner.id, name:r.owner.name, source:'hub' } : null;
+  S.pickUnitFor = ''; S.ownerQ = ''; if (!S.newProp) S.propQ = b.street||'';
+  S.dir = S.dir || null; if (r.property_created) loadProps();
+  render();
+  toast(r.property_created ? 'Added to the Hub — check the layout, then start' : (S.newProp ? 'Booking opened — check the layout, then start' : 'Property not found in the Hub — pick or add it'));
+}
+// An inspection that was started BEFORE its booking could be picked: offer a one-tap link when the street matches an approved booking.
+function streetLike(x, y){ var a = nz(x), b = nz(y); return !!a && !!b && (a===b || a.indexOf(b)===0 || b.indexOf(a)===0); }
+function bookingMatchFor(doc){
+  if (doc.booking || !S.bookings) return null;
+  var st = fiStreet(doc);
+  for (var i=0;i<S.bookings.length;i++) if (streetLike(S.bookings[i].street, st)) return S.bookings[i];
+  return null;
+}
+function bookingLinkHtml(doc){
+  var b = bookingMatchFor(doc); if (!b) return '';
+  return '<div class="banner info">This looks like the approved booking for <b>'+esc(b.address)+'</b> ('+esc(b.when||b.date)+').<div class="btns"><button class="btn sm primary" onclick="linkBooking(\''+esc(b.id)+'\')">Link it</button></div><div class="muted">Fills in the owner, requester and property from the booking.</div></div>';
+}
+function linkBooking(bid){
+  if (!claim('book')) return; var rec = S.rec; if (!rec){ release('book'); return; }
+  api('POST','/fi/booking/start',{ booking_id:bid, inspection_id:rec.id }).then(function(r){
+    release('book');
+    if (!S.rec || S.rec.id!==rec.id) return;
+    var b = r.booking;
+    mut(function(doc){
+      if (r.property) doc.property = Object.assign({}, doc.property, { source:'hub', id:r.property.id });
+      if (r.owner) doc.owner = { id:r.owner.id, name:r.owner.name, source:'hub' };
+      doc.booking = bookingRef(b);
+    });
+    mutMeta(function(m){ if (!m.client_name && b.contact && b.contact.name) m.client_name = b.contact.name; if (!m.client_email && b.contact && b.contact.email) m.client_email = b.contact.email; });
+    loadBookings(); render(); toast('Linked to the booking'+(r.owner?' and owner':'')+(r.owner_missing?' — choose the owner':''));
+  }).catch(function(e){ release('book'); toast(e.code==='already_started' ? 'That booking already has an inspection' : 'Could not link: '+e.message); });
 }
 // ---- Hub directory: properties, units, owners (searchable) ----
 function nz(s){
@@ -485,6 +933,8 @@ function viewNew(){
     return h;
   }
   if (!S.newProp){
+    if (S.newBooking) h += bookingCardHtml(S.newBooking)+'<div class="banner warn">Pick the property below (or add it) — the booking above stays linked to this inspection.</div>';
+    else h += '<div id="booklist"></div>';
     h += '<div class="card"><label class="fld" style="margin-top:0">1 · Which property?</label>'+addBtn()+'<input id="pq" style="margin-top:10px" placeholder="Type to search address, unit, city or owner…" value="'+esc(S.propQ)+'" oninput="S.propQ=this.value;renderPropList()" autocomplete="off">';
     if (S.propsErr) h += '<div class="banner warn" style="margin-top:8px">'+esc(S.propsErr)+'</div>';
     h += '<div id="proplist"></div>';
@@ -492,7 +942,7 @@ function viewNew(){
     return h;
   }
   var o = S.newOpts, p = S.newProp, ow = S.newOwner;
-  h += '<div class="card propcard"><b>'+esc(propLabel(p))+(p.unit_label?' · '+esc(unitText(p.unit_label)):'')+'</b><div class="muted">'+(p.id?'In the Hub':'Not in the Hub — saved with this inspection only (you can add it later)')+'</div><button class="btn sm" style="margin-top:6px" onclick="S.newProp=null;S.newOwner=null;S.pickUnitFor=\'\';render()">Change property</button></div>';
+  h += '<div class="card propcard"><b>'+esc(propLabel(p))+(p.unit_label?' · '+esc(unitText(p.unit_label)):'')+'</b><div class="muted">'+(p.id?'In the Hub':'Not in the Hub — saved with this inspection only (you can add it later)')+'</div><button class="btn sm" style="margin-top:6px" onclick="S.newProp=null;S.newOwner=null;S.pickUnitFor=\'\';render()">Change property</button></div>'+(S.newBooking ? bookingCardHtml(S.newBooking) : '');
   h += '<div class="card" id="ownercard"><label class="fld" style="margin-top:0">On behalf of (owner)</label>';
   if (ow){ h += '<div class="row"><b>'+esc(ow.name)+'</b><button class="btn sm" onclick="S.newOwner=null;S.ownerQ=\'\';render()">Change</button></div><div class="muted">Appears on the report as “On behalf of”.</div>'; }
   else {
@@ -564,9 +1014,29 @@ function pickProp(id, unitId, chosen){
   render();
 }
 // ---- owners ----
+// Oct 29 2026: a word still matches when it is only one letter off at the end ("Premiere" finds "Premier"), so a near-miss spelling never hides an owner.
+function tokHit(h, t){ return h.indexOf(t)>-1 || (t.length>=6 && h.indexOf(t.slice(0, t.length-1))>-1); }
 function ownerMatches(q){
   var toks = nz(q).split(' ').filter(Boolean), l = (S.dir&&S.dir.owners)||[];
-  return l.filter(function(o){ var h = nz(o.name); return toks.every(function(t){ return h.indexOf(t)>-1; }); }).sort(function(a,b){ return a.name.localeCompare(b.name); });
+  return l.filter(function(o){ var h = nz(o.name); return toks.every(function(t){ return tokHit(h, t); }); }).sort(function(a,b){ return a.name.localeCompare(b.name); });
+}
+// The owner list used to load only on the New-inspection screen, so opening an inspection straight from the list left it empty
+// ("The owner list has not loaded") and no owner could be found. Load it whenever an owner picker opens, and say so if it cannot load.
+function ensureDir(repaint){
+  if (!S.dir){ var c = lsGet('fi_dir',''); if (c){ try{ S.dir = JSON.parse(c); }catch(e){ S.dir = null; } } if (S.dir && repaint) repaint(); }
+  var had = !!S.dir;
+  return api('GET','/fi/directory').then(function(d){
+    S.dir = { properties:d.properties||[], units:d.units||[], owners:d.owners||[] }; S.propsErr='';
+    lsSet('fi_dir', JSON.stringify(S.dir)); if (repaint) repaint();
+  }).catch(function(e){
+    S.propsErr = 'Could not load the owner list ('+e.message+')'+(had?' — showing the copy saved on this phone.':'.');
+    if (repaint) repaint();
+  });
+}
+// The requester's company on the booking (e.g. Premier) is the most likely owner: offer it first, one tap.
+function bookingOwnerSuggest(doc){
+  var nm = doc && doc.booking && String(doc.booking.customer_name||'').trim(); if (!nm || !S.dir) return null;
+  var m = ownerMatches(nm); return m.length ? m[0] : null;
 }
 function renderOwnerList(elId, q, pickFn, typedFn){
   var el = $(elId); if (!el) return;
@@ -678,12 +1148,13 @@ function propOwnerSheet(){
   var doc = S.rec.doc, ow = doc.owner && doc.owner.name; S.ownerQ2='';
   openSheet('<h2>Property &amp; owner</h2><div class="muted">'+esc(doc.property.address)+'</div>'
     +'<label class="fld">On behalf of (owner)</label><div class="row"><b>'+(ow?esc(doc.owner.name):'<span style="color:var(--warn)">none</span>')+'</b>'+(ow?'<button class="btn sm" onclick="inspSetOwner(-1)">Clear</button>':'')+'</div>'
-    +'<input id="oq2" style="margin-top:8px" placeholder="Type to search owners…" oninput="S.ownerQ2=this.value;renderOwnerList(\'olist2\',S.ownerQ2,\'inspSetOwner\',\'inspTypedOwner\')" autocomplete="off"><div id="olist2"></div>'
+    +'<input id="oq2" style="margin-top:8px" placeholder="Type to search owners…" oninput="S.ownerQ2=this.value;paintOwnerPicker2()" autocomplete="off"><div id="olist2"></div>'
     +(doc.property.source==='new' ? '<div class="banner warn" style="margin-top:10px">This property is only on this inspection. Add it to the Hub so it can be found next time.<div class="btns"><button class="btn sm" onclick="addToHub()">Add to the Hub…</button></div></div>' : '')
     +'<label class="fld">Drive folder</label><div class="muted">Photos are filed under the property’s folder in Drive: <b>'+esc(fiStreet(doc))+'</b> / <b>Inspection '+esc(dateFolder(doc.date))+'</b>.</div>'
     +'<div class="btns">'+(S.rec.driveUrl?'<a class="btn" href="'+esc(S.rec.driveUrl)+'" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block;text-align:center">Open Drive folder</a>':'')+'<button class="btn" id="org-btn" onclick="organizeDrive()">Organize photos in Drive</button></div><div id="org-msg"></div>'
     +'<div class="btns"><button class="btn" onclick="closeSheet();render()">Done</button></div>');
-  renderOwnerList('olist2', '', 'inspSetOwner', 'inspTypedOwner');
+  paintOwnerPicker2();
+  ensureDir(paintOwnerPicker2);
   if (!S.rec.driveUrl && S.rec.base_rev){
     var rid0 = S.rec.id;
     api('GET','/fi/inspection?id='+encodeURIComponent(rid0)).then(function(d){
@@ -691,12 +1162,27 @@ function propOwnerSheet(){
     }).catch(function(e){ var el=$('org-msg'); if (el && !el.innerHTML) el.innerHTML = '<div class="muted" style="margin-top:8px">Could not check for the Drive folder link ('+esc(e.message)+').</div>'; });
   }
 }
+function paintOwnerPicker2(){
+  var el = $('olist2'); if (!el) return;
+  renderOwnerList('olist2', S.ownerQ2||'', 'inspSetOwner', 'inspTypedOwner');
+  var doc = S.rec && S.rec.doc, sg = !(S.ownerQ2||'').trim() && bookingOwnerSuggest(doc);
+  var h = '';
+  if (S.propsErr) h += '<div class="banner warn" style="margin-top:8px">'+esc(S.propsErr)+'</div>';
+  if (!S.dir && !S.propsErr) h += '<div class="muted" style="padding:10px 0">Loading the owner list…</div>';
+  if (sg) h += '<div class="banner info" style="margin-top:8px"><b>Suggested: '+esc(sg.name)+'</b><div class="muted" style="color:inherit">The company that asked for this inspection.</div><div class="btns"><button class="btn sm primary" onclick="inspSetOwnerId(\''+esc(sg.id)+'\')">Use '+esc(sg.name)+'</button></div></div>';
+  var old = document.getElementById('olist2-extra'); if (old) old.remove();
+  el.insertAdjacentHTML('beforebegin', '<div id="olist2-extra">'+h+'</div>');
+}
+function inspSetOwnerId(id){
+  var l = (S.dir&&S.dir.owners)||[], o = null; l.forEach(function(x){ if (String(x.id)===String(id)) o = x; }); if (!o) return;
+  mut(function(doc){ doc.owner = { id:o.id, name:o.name, source:'hub' }; }); closeSheet(); render(); toast('Owner set to '+o.name);
+}
 function fiStreet(doc){ return (doc.property && (doc.property.street || String(doc.property.address||'').split(',')[0])) || ''; }
 function dateFolder(d){ var m = String(d||'').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[2]+m[3]+m[1] : ''; }
 function inspSetOwner(i){
   if (i === -1){ mut(function(doc){ delete doc.owner; }); propOwnerSheet(); return; }
   var o = (S.ownerHits.olist2||[])[i]; if (!o) return;
-  mut(function(doc){ doc.owner = { id:o.id, name:o.name, source:'hub' }; }); propOwnerSheet(); toast('Owner set');
+  mut(function(doc){ doc.owner = { id:o.id, name:o.name, source:'hub' }; }); closeSheet(); render(); toast('Owner set to '+o.name);
 }
 function inspTypedOwner(){ var t = String(S.ownerQ2||'').trim(); if (!t) return; mut(function(doc){ doc.owner = { id:'', name:t, source:'typed' }; }); propOwnerSheet(); }
 function addToHub(){
@@ -727,9 +1213,11 @@ function createInspection(){
   if (!claim('create')) return; $('start-btn').disabled = true;
   var o = S.newOpts, p = S.newProp;
   lsSet('fi_inspector', o.inspector);
-  var id = newId(); S.route = null;
+  var id = S.newInspId || newId(); S.route = null; S.newInspId = '';
   var doc = { v:1, id:id, property:{ source:p.source, id:String(p.id||''), address:p.address, street:p.street||String(p.address||'').split(',')[0].trim(), unit_id:String(p.unit_id||''), unit_label:p.unit_label||'' }, type:o.type, date:o.date, inspector:o.inspector, client:{ name:o.client, email:o.email }, pre1978:!!o.pre1978, overall:{ condition:'not_inspected', notes:'' }, areas:buildAreas(o), created:new Date().toISOString(), updated:new Date().toISOString() };
   if (S.newOwner && S.newOwner.name) doc.owner = { id:String(S.newOwner.id||''), name:S.newOwner.name, source:S.newOwner.source||'hub' };
+  doc.visit = { animals:{ present:null, items:[] }, access_cooperation:{ choice:'', note:'' } };
+  if (S.newBooking){ doc.booking = S.newBooking; S.newBooking = null; }
   var rec = { id:id, doc:doc, meta:{ brand_id:o.brand, client_name:o.client, client_email:o.email, inspector:o.inspector, inspection_date:o.date, inspection_type:o.type }, base_rev:0, token:'', status:'draft', dirty:true, ver:1 };
   S.rec = rec; S.areaId = null; S.sync = { state:'idle', msg:'', syncing:false, again:false, timer:null, persistTimer:null, conflict:null }; S.publishInfo=null;
   persistLocal().then(function(){ release('create'); S.view='insp'; render(); syncNow(true); });
@@ -827,7 +1315,7 @@ function toggleIssuePhoto(p){ var l = editing.photo_ids = editing.photo_ids||[];
 function deleteIssueStep(){ var b=$('ie-del'); if (b.dataset.armed!=='1'){ b.dataset.armed='1'; b.textContent='Tap again to delete'; return; } var a=curArea(), id=editing.id; mut(function(){ a.issues = a.issues.filter(function(x){return x.id!==id;}); }); closeSheet(); render(); }
 // ---- sheet helpers ----
 function openSheet(html){ $('sheet').innerHTML = html; $('modal').classList.add('open'); }
-function closeSheet(){ $('modal').classList.remove('open'); }
+function closeSheet(){ $('modal').classList.remove('open'); if (S.visitOpen){ S.visitOpen = false; if (S.view==='insp') render(); } }
 $('modal').addEventListener('click', function(e){ if (e.target === $('modal')) closeSheet(); });
 
 // ---- review & publish ----
@@ -838,7 +1326,8 @@ function localChecks(doc){
   if (!(doc.owner && String(doc.owner.name||'').trim())) blocks.push('Choose who this inspection is on behalf of (the owner)');
   if (!doc.overall || !doc.overall.condition || doc.overall.condition==='not_inspected') blocks.push('Set the overall condition');
   active.forEach(function(a){ if ((a.pending_text||'').trim()) blocks.push('“'+a.name+'” has dictation not turned into issues (or cleared)'); });
-  var sk = active.filter(function(a){ return !a.condition || a.condition==='not_inspected'; }).map(function(a){return a.name;}); if (sk.length) warns.push('Not marked inspected: '+sk.join(', '));
+  active.forEach(function(a){ var ac = a.access; if (ac && ac.no_access && ac.reason==='other' && !String(ac.note||'').trim()) blocks.push('Say why “'+a.name+'” was not accessed (you chose Other)'); });
+  var sk = active.filter(function(a){ return !(a.access && a.access.no_access) && (!a.condition || a.condition==='not_inspected'); }).map(function(a){return a.name;}); if (sk.length) warns.push('Not marked inspected: '+sk.join(', '));
   var uns = (doc.voice_notes||[]).filter(function(n){ return !n.routed && String(n.transcript||'').trim(); }).length; if (uns) warns.push(uns+' voice note'+(uns>1?'s have':' has')+' not been sorted into areas yet');
   if (S.rec.dirty) blocks.push('Changes are not saved to the server yet');
   var sm = doc.summary; if (sm && sm.fp && sm.fp !== fpOf(doc)) warns.push('The AI summary is out of date and will be left out of the report');
@@ -864,14 +1353,45 @@ function viewReview(){
   ro.forEach(function(g){ h += '<div class="tradehead"><span>'+esc(TRADE_LABEL[g.trade]||g.trade)+'</span><span class="pill">'+g.items.length+'</span></div>'+g.items.map(function(it){ return '<div class="muted">• '+esc(it.area)+': '+esc(it.title)+' <span class="pill">'+esc(SEV_LABEL[it.severity]||'')+'</span></div>'; }).join(''); });
   h += '</div>';
   h += summaryCard(doc);
+  h += omCard();
   h += '<div class="card"><b>Before you publish</b>';
   if (!chk.blocks.length && !chk.warns.length) h += '<div class="check">✅ Everything looks ready.</div>';
   chk.blocks.forEach(function(m){ h += '<div class="check">⛔ '+esc(m)+'</div>'; });
   chk.warns.forEach(function(m){ h += '<div class="check">⚠️ '+esc(m)+'</div>'; });
+  h += blockFixHtml(doc);
   var woN = doc.areas.reduce(function(n,a){ return n + (a.issues||[]).filter(function(i){return i.wo;}).length; },0);
   if (woN) h += '<div class="muted" style="margin-top:6px">'+woN+' issue'+(woN>1?'s are':' is')+' flagged for work orders (conversion comes in a later update).</div>';
-  h += '<div class="btns"><button class="btn go" id="pub-btn" onclick="publishNow()"'+(chk.blocks.length?' disabled':'')+'>'+(rec.status==='published'?'Re-publish report':'Publish report')+'</button>'+(rec.status==='published'?'<button class="btn danger" onclick="unpublishNow()">Un-publish</button>':'')+'</div></div>';
+  var seen = previewSeen(), canPrev = !!rec.base_rev && !rec.dirty && !S.sync.syncing;
+  h += '<div class="banner '+(seen?'ok':'info')+'" style="margin-top:10px">'+(seen ? '✓ You previewed this version of the report.' : '<b>Step 1 — preview the report.</b> It opens exactly as the PDF will look, with nothing published or sent. Publishing unlocks after you have looked at it.')+'</div>';
+  h += '<div class="btns"><button class="btn primary" id="prev-btn" onclick="previewReport()"'+(canPrev?'':' disabled')+'>👁 '+(seen?'Preview again':'Preview report (PDF view)')+'</button></div>';
+  if (!canPrev) h += '<div class="muted">'+(rec.dirty||S.sync.syncing ? 'Waiting for “Saved to server” — the preview shows what is saved.' : 'Save the inspection to the server first.')+'</div>';
+  h += '<div class="btns"><button class="btn go" id="pub-btn" onclick="publishNow()"'+((chk.blocks.length||!seen)?' disabled':'')+'>'+(rec.status==='published'?'Step 2 — Re-publish report':'Step 2 — Publish report')+'</button>'+(rec.status==='published'?'<button class="btn danger" onclick="unpublishNow()">Un-publish</button>':'')+'</div></div>';
   if (rec.status==='published') h += publishedCard();
+  return h;
+}
+// ---- Oct 29 2026: fix the publish blockers right where they are listed, and require a preview before anything is published ----
+function previewSeen(){ var r = S.rec; return !!(r && r.base_rev && !r.dirty && S.previewed && S.previewed.id===r.id && S.previewed.rev===r.base_rev); }
+function previewReport(){
+  var rec = S.rec; if (!rec || !rec.base_rev || rec.dirty){ toast('Wait for “Saved to server”, then preview'); return; }
+  // Opens the saved DRAFT (the Hub shows unpublished drafts only to you, with a "Preview - not published" banner). Nothing is published or emailed.
+  var w = window.open(reportUrl(), '_blank');
+  if (!w){ toast('Your browser blocked the preview tab. Allow pop-ups for this site and tap Preview again.'); return; }
+  S.previewed = { id:rec.id, rev:rec.base_rev }; render();
+  toast('Preview opened in a new tab. Come back here to publish.');
+}
+function handleDictation(areaId){
+  var a = findArea(S.rec.doc, areaId); if (!a || !hasPending(a)) return;
+  mut(function(){ (a.dictation = a.dictation||[]).push({ at:new Date().toISOString(), text:String(a.pending_text) }); a.pending_text = ''; });
+  var ta = $('pending'); if (ta) ta.value = '';
+  render(); toast('“'+a.name+'” marked handled — the text is kept in its notes log');
+}
+function blockFixHtml(doc){
+  var h = '', hasOwner = !!(doc.owner && String(doc.owner.name||'').trim());
+  if (!hasOwner) h += '<div class="card" style="border-color:var(--warn);margin-top:8px"><b>Owner needed</b><div class="muted">The report says who it was done for.</div><div class="btns"><button class="btn primary" onclick="propOwnerSheet()">Choose the owner…</button></div></div>';
+  doc.areas.filter(function(a){ return !a.excluded && hasPending(a); }).forEach(function(a){
+    var t = String(a.pending_text).trim(), short = t.length>280 ? t.slice(0,280)+'…' : t;
+    h += '<div class="card" style="border-color:var(--warn);margin-top:8px"><b>'+esc(a.name)+' — leftover dictation</b><div class="quote">“'+esc(short)+'”</div><div class="muted">If every point above is already in the issue list ('+issueCount(a)+' issue'+(issueCount(a)===1?'':'s')+'), mark it handled. The text is kept in the area’s notes log, not deleted.</div><div class="btns"><button class="btn go" onclick="handleDictation(\''+a.id+'\')">✓ Already added — mark handled</button><button class="btn" onclick="openArea(\''+a.id+'\')">Open area</button></div></div>';
+  });
   return h;
 }
 function setOverall(c){ mut(function(d){ d.overall.condition = c; }); render(); }
@@ -897,6 +1417,7 @@ function brandSheet(){
 }
 function setBrand(id){ mutMeta(function(m){ m.brand_id = id; }); closeSheet(); render(); toast('Brand switched'); }
 function publishNow(ack){
+  if (!previewSeen()){ toast('Preview the report first (Step 1)'); render(); return; }
   if (!claim('pub')) return; var btn=$('pub-btn'); if (btn) btn.disabled=true;
   var rec = S.rec;
   (rec.dirty ? syncNow(true) : Promise.resolve()).then(function(){
@@ -944,6 +1465,204 @@ function emailSend(){
     .catch(function(e){ release('emsend'); $('em-send').disabled=false; toast('Send failed: '+e.message); });
 }
 
+// ---- urgent items to the requester (Oct 28 2026) ----
+// Type a quick list (one issue per line) + photos -> the items are added to the report (flagged "to send") and emailed to the requester
+// on the booking. Or tick "send" on any report item and send the waiting ones from the banner on the inspection page. Email always;
+// a text is an optional extra and only goes 9am-4pm ET (the server enforces it; the phone only mirrors it so the choice is honest).
+var TRADE_GUESS = [
+  ['safety', /\b(gas|smoke|carbon|monoxide|co detector|fire|mold|mildew|asbestos|lead|hazard|unsafe)\b/i],
+  ['electrical', /\b(outlet|wire|wiring|spark|sparking|breaker|electric|electrical|panel|socket|shock)\b/i],
+  ['plumbing', /\b(leak|leaking|leaks|pipe|pipes|faucet|toilet|drain|sink|sewer|water|flood|flooding|burst|clog|clogged)\b/i],
+  ['hvac', /\b(furnace|boiler|heater|heat pump|thermostat|duct|ducts|a\/c|air condition\w*|no heat)\b/i],
+  ['roofing', /\b(roof|gutter|gutters|shingle|shingles|flashing|downspout)\b/i],
+  ['pest', /\b(roach|roaches|cockroach\w*|mice|mouse|rat|rats|bed ?bugs?|pests?|termites?|infest\w*|wasps?|hornets?)\b/i],
+  ['structural', /\b(foundation|sagging|joist|joists|beam|collapse\w*|structural|settling)\b/i],
+  ['windows_doors', /\b(window|windows|door|doors|lock|deadbolt)\b/i],
+  ['appliances', /\b(stove|oven|range|refrigerator|fridge|dishwasher|washer|dryer|disposal)\b/i]
+];
+function guessTrade(t){ for (var i=0;i<TRADE_GUESS.length;i++) if (TRADE_GUESS[i][1].test(t)) return TRADE_GUESS[i][0]; return 'general'; }
+function reqName(doc){ var c = doc && doc.booking && doc.booking.contact; var w = String((c && c.name) || '').trim().split(/\s+/)[0]; return w || 'the requester'; }
+function reqContact(doc){ return (doc && doc.booking && doc.booking.contact) || {}; }
+function hasReqEmail(doc){ return /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(String(reqContact(doc).email||'').trim()); }
+function etHourNow(){ try { return Number(new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',hour:'numeric',hourCycle:'h23'}).format(new Date())); } catch(e){ return -1; } }
+function textWindowOpen(){ var h = etHourNow(); return h >= 9 && h < 16; }
+function unsentFlagged(doc){
+  var out = [];
+  doc.areas.forEach(function(a){ if (a.excluded) return; (a.issues||[]).forEach(function(is){ if (is.flag_send && !is.sent) out.push({ area:a, issue:is }); }); });
+  return out;
+}
+function sentWhen(s){ try { return new Date(s.at).toLocaleString('en-US',{ timeZone:'America/New_York', month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }); } catch(e){ return ''; } }
+function urgentCardHtml(doc){
+  var un = unsentFlagged(doc), nm = reqName(doc), h = '';
+  if (un.length) h += '<div class="banner warn" id="urg-banner"><b>'+un.length+' item'+(un.length===1?'':'s')+' waiting to send to '+esc(nm)+'</b><div class="muted" style="color:inherit">Marked “send” but not sent yet.</div><button class="btn primary block" style="margin-top:8px" onclick="urgentOpenFlagged()">Review &amp; send ›</button></div>';
+  h += '<div class="card"><div class="row"><b>🚨 Urgent issues</b><button class="btn sm" id="urg-new" onclick="urgentNew()">＋ Send an urgent issue</button></div><div class="muted">Type what you found and add photos. It is added to the report and emailed to '+esc(nm)+' now. You can also tick “Send to '+esc(nm)+'” on any item in the report.</div></div>';
+  return h;
+}
+function urgentToggleFlag(on){ if (on){ editing.flag_send = true; delete editing.sent; } else { editing.flag_send = false; } }
+function urgentNew(){
+  var doc = S.rec.doc, vis = doc.areas.filter(function(a){ return !a.excluded; });
+  if (!vis.length){ toast('Add an area first'); return; }
+  var last = S.lastUrgArea && findArea(doc, S.lastUrgArea);
+  S.urg = { mode:'new', areaId: (last && !last.excluded) ? last.id : vis[0].id, text:'', photoIds:[], links:{}, ids:[], checked:{}, note:'', alsoText:false, key:'', to:'', err:'', busy:'' };
+  renderUrgentNew();
+}
+function urgLines(){ return String(S.urg.text||'').split('\n').map(function(x){ return x.trim(); }).filter(Boolean); }
+function urgentSetArea(v){ S.urg.areaId = v; S.lastUrgArea = v; }
+function urgentPickPhotos(){ photoTarget = { areaId:S.urg.areaId, urgent:true }; var inp = $('photo-in'); inp.value=''; inp.click(); }
+function urgentLink(pid, i){ var l = S.urg.links[pid] = S.urg.links[pid]||[]; var k = l.indexOf(i); if (k>-1) l.splice(k,1); else l.push(i); renderUrgentNew(); }
+function urgentDropPhoto(pid){ S.urg.photoIds = S.urg.photoIds.filter(function(x){ return x!==pid; }); delete S.urg.links[pid]; renderUrgentNew(); }
+function renderUrgentNew(){
+  var u = S.urg, doc = S.rec.doc, nm = reqName(doc), lines = urgLines();
+  var vis = doc.areas.filter(function(a){ return !a.excluded; });
+  var h = '<h2>Send an urgent issue to '+esc(nm)+'</h2><div class="muted">One issue per line. They are added to this report as urgent items, and emailed to '+esc(nm)+' after you review the email.</div>';
+  h += '<label class="fld">Area</label><select id="ug-area" onchange="urgentSetArea(this.value)">'+vis.map(function(a){ return '<option value="'+a.id+'"'+(a.id===u.areaId?' selected':'')+'>'+esc(a.name)+'</option>'; }).join('')+'</select>';
+  h += '<label class="fld">What did you find? (one per line)</label><textarea id="ug-text" style="min-height:120px" placeholder="Gas smell near the stove&#10;Exposed wiring in the attic" oninput="S.urg.text=this.value;urgentRefreshPhotos()">'+esc(u.text)+'</textarea>';
+  h += '<label class="fld">Photos</label><div id="ug-photos">'+urgPhotosHtml()+'</div>';
+  h += '<div class="btns"><button class="btn" id="ug-photo" onclick="urgentPickPhotos()">📷 Add photos</button></div>';
+  if (u.err) h += '<div class="banner err" id="ug-err">'+esc(u.err)+'</div>';
+  h += '<div class="btns"><button class="btn primary" id="ug-go" onclick="urgentCreate()">Review email ›</button><button class="btn" onclick="urgentCancel()">Cancel</button></div>';
+  openSheet(h);
+}
+function urgPhotosHtml(){
+  var u = S.urg, lines = urgLines(), h = '';
+  if (u.photoIds.length){
+    h += u.photoIds.map(function(pid){
+      var chips = lines.slice(0,8).map(function(ln,i){ var on = (u.links[pid]||[]).indexOf(i)>-1; return '<button class="btn sm'+(on?' primary':'')+'" aria-label="photo belongs to item '+(i+1)+'" onclick="urgentLink(\''+pid+'\','+i+')">'+(i+1)+'</button>'; }).join('');
+      return '<div class="row" style="gap:10px;margin-bottom:8px"><div style="flex:none;width:72px">'+thumbHtml(pid,'void 0',false)+'</div><div style="flex:1"><div class="muted">'+(lines.length ? 'Belongs to item:' : 'Type the issues first, then tap which one this shows')+'</div><div class="chips" style="margin:4px 0">'+chips+'</div></div><button class="btn sm ghost" aria-label="remove photo" onclick="urgentDropPhoto(\''+pid+'\')">✕</button></div>';
+    }).join('')+'<div class="muted">A photo with nothing tapped goes with item 1. Up to 6 photos are emailed. Only the first 8 lines can be tapped for a photo.</div>';
+  }
+  return h;
+}
+// Update ONLY the photo list while typing: re-rendering the whole sheet would swallow the first tap on a button (the keyboard closes and the button moves under the finger).
+function urgentRefreshPhotos(){ var el = $('ug-photos'); if (el) el.innerHTML = urgPhotosHtml(); }
+function urgentCancel(){ S.urg = null; closeSheet(); }
+function urgNorm(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
+function urgentCreate(){
+  var u = S.urg, lines = urgLines();
+  if (!lines.length){ u.err = 'Type at least one issue first.'; renderUrgentNew(); return; }
+  if (lines.length > 20){ u.err = 'Send at most 20 items at a time.'; renderUrgentNew(); return; }
+  if (u.photoIds.length > 6) { u.err = 'Only 6 photos can be emailed. Remove some, or send them with the full report.'; renderUrgentNew(); return; }
+  if (!claim('urgcreate')) return;
+  var ids = [];
+  try { mut(function(doc){
+    var a = findArea(doc, u.areaId);
+    lines.forEach(function(ln, i){
+      var title = ln.slice(0,160), ex = (a.issues||[]).filter(function(x){ return urgNorm(x.title)===urgNorm(title); })[0];
+      var phs = u.photoIds.filter(function(pid){ var l = u.links[pid]||[]; return l.length ? l.indexOf(i)>-1 : i===0; });
+      var is = ex;
+      if (!is){ is = { id:'is_'+rid(8), title:title, trade:guessTrade(title), severity:'urgent', detail:'', likely_cause:'', recommended_fix:'', fix_source:'inspector', wo:false, photo_ids:[], src:'urgent' }; if (is.trade==='tenant_action') is.tenant_action = true; a.issues = a.issues||[]; a.issues.push(is); }
+      is.flag_send = true; delete is.sent; is.photo_ids = is.photo_ids||[];
+      phs.forEach(function(pid){ if (is.photo_ids.indexOf(pid)<0) is.photo_ids.push(pid); });
+      ids.push(is.id);
+    });
+    if (!a.condition || a.condition==='not_inspected') a.condition = 'fair';
+  }); } finally { release('urgcreate'); }
+  S.lastUrgArea = u.areaId; render();
+  urgentOpenFlagged(ids);
+}
+function urgentOpenFlagged(newIds){
+  var doc = S.rec.doc, un = unsentFlagged(doc);
+  if (!un.length){ toast('Nothing is waiting to send'); return; }
+  var prev = S.urg && S.urg.mode === 'review' ? S.urg : null;
+  S.urg = { mode:'review', ids: un.map(function(x){ return x.issue.id; }), checked:{}, note: prev ? prev.note : '', alsoText:false, key:'', to: prev ? prev.to : '', err:'', preview:null };
+  un.forEach(function(x){ S.urg.checked[x.issue.id] = true; });
+  renderUrgentReview();
+}
+function urgCheckedIds(){ return S.urg.ids.filter(function(id){ return S.urg.checked[id]; }); }
+function urgItem(id){ var doc = S.rec.doc; for (var i=0;i<doc.areas.length;i++){ var a = doc.areas[i], is = (a.issues||[]).filter(function(x){ return x.id===id; })[0]; if (is) return { area:a, issue:is }; } return null; }
+function urgPhotoIds(ids){ var out = []; ids.forEach(function(id){ var it = urgItem(id); if (it) (it.issue.photo_ids||[]).forEach(function(p){ if (out.indexOf(p)<0) out.push(p); }); }); return out; }
+function urgentToggleItem(id, on){ S.urg.checked[id] = !!on; S.urg.key = ''; S.urg.preview = null; }
+function renderUrgentReview(){
+  var u = S.urg, doc = S.rec.doc, nm = reqName(doc), c = reqContact(doc);
+  var h = '<h2>Send to '+esc(nm)+'</h2><div class="muted">Untick anything that should not go in this email. Ticked items are emailed together as one message for this property.</div>';
+  h += u.ids.map(function(id){
+    var it = urgItem(id); if (!it) return '';
+    var np = (it.issue.photo_ids||[]).length;
+    return '<div class="toggle"><span><b>'+esc(it.issue.title)+'</b><div class="muted">'+esc(it.area.name)+' · '+esc(SEV_LABEL[it.issue.severity]||'')+(np?' · 📷 '+np:'')+'</div></span><input type="checkbox" aria-label="send '+esc(it.issue.title)+'"'+(u.checked[id]?' checked':'')+' onchange="urgentToggleItem(\''+id+'\',this.checked)"></div>';
+  }).join('');
+  h += '<label class="fld">Short note (optional)</label><textarea id="ug-note" style="min-height:60px" placeholder="e.g. Please call me today." oninput="S.urg.note=this.value">'+esc(u.note)+'</textarea>';
+  if (!hasReqEmail(doc)) h += '<label class="fld">Send to (no email on the booking)</label><input id="ug-to" type="email" inputmode="email" autocapitalize="off" placeholder="name@example.com" value="'+esc(u.to)+'" oninput="S.urg.to=this.value">';
+  else h += '<div class="muted" style="margin-top:8px">To: '+esc(c.name||'')+' &lt;'+esc(c.email)+'&gt;. A copy comes to you.</div>';
+  var ph = String(c.phone||'').trim(), win = textWindowOpen();
+  if (ph) h += '<div class="toggle"><span>Also text '+esc(nm)+'<div class="muted">'+(win ? 'The email is always sent. This adds a short text about the same items.' : 'Texts only go 9am–4pm ET. It is outside that time, so this will go by email only.')+'</div></span><input type="checkbox" id="ug-text-on" aria-label="also text"'+(u.alsoText && win?' checked':'')+(win?'':' disabled')+' onchange="S.urg.alsoText=this.checked"></div>';
+  if (u.err) h += '<div class="banner err" id="ug-err">'+esc(u.err)+'</div>';
+  if (u.busy) h += '<div class="banner info" id="ug-busy">'+esc(u.busy)+'</div>';
+  h += '<div class="btns"><button class="btn primary" id="ug-prev"'+(u.busy?' disabled':'')+' onclick="urgentPreview()">Preview email ›</button><button class="btn" onclick="urgentCancel()">Close</button></div><div class="muted">Closing keeps the items flagged — they stay on the list at the top of the inspection.</div>';
+  openSheet(h);
+}
+function urgentEnsureSaved(photoIds){
+  return new Promise(function(resolve, reject){
+    var t0 = Date.now();
+    if (!navigator.onLine){ reject(new Error('No signal. The items are saved on this phone; send when you have service.')); return; }
+    if (S.rec.dirty || !S.rec.base_rev) syncNow(true);
+    pumpPhotos();
+    (function tick(){
+      var rec = S.rec, ss = S.sync; if (!rec){ reject(new Error('The inspection was closed.')); return; }
+      if (ss.conflict){ reject(new Error('A newer version of this inspection is on the server. Resolve that first (see the bar at the top).')); return; }
+      var pend = (photoIds||[]).filter(function(p){ return photoState[p]; });
+      var bad = pend.filter(function(p){ return photoState[p].state==='error'; });
+      if (bad.length){ reject(new Error('A photo failed to upload: '+photoState[bad[0]].err+' (use Retry photos in the bar at the top)')); return; }
+      if (ss.state==='error' && !ss.syncing){ reject(new Error('Not saved to the server: '+ss.msg)); return; }
+      if (!rec.dirty && !ss.syncing && rec.base_rev && !pend.length){ resolve(); return; }
+      if (Date.now()-t0 > 90000){ reject(new Error('Still saving. Wait for “Saved to server” in the bar at the top, then try again.')); return; }
+      if (rec.dirty && !ss.syncing) syncNow(true);
+      if (pend.length && !S.pumping) pumpPhotos();
+      setTimeout(tick, 600);
+    })();
+  });
+}
+function urgentBody(preview){
+  var u = S.urg, ids = urgCheckedIds();
+  var b = { id:S.rec.id, rev:S.rec.base_rev, issue_ids:ids, note:u.note||'', also_text: !!(u.alsoText && textWindowOpen()), preview: preview };
+  if (u.to && !hasReqEmail(S.rec.doc)) b.to = u.to.trim();
+  if (!preview) b.send_key = u.key;
+  return b;
+}
+function urgentPreview(){
+  var u = S.urg, ids = urgCheckedIds();
+  if (!ids.length){ u.err = 'Tick at least one item.'; renderUrgentReview(); return; }
+  if (!hasReqEmail(S.rec.doc) && !/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(String(u.to||'').trim())){ u.err = 'Type an email address to send to.'; renderUrgentReview(); return; }
+  if (!claim('urgprev')) return;
+  u.err = ''; u.busy = 'Saving and uploading photos…'; renderUrgentReview();
+  urgentEnsureSaved(urgPhotoIds(ids)).then(function(){ return api('POST','/fi/urgent-send', urgentBody(true)); }).then(function(r){
+    release('urgprev'); u.busy = ''; u.preview = r; if (!u.key) u.key = 'u'+rid(14); renderUrgentPreview();
+  }).catch(function(e){ release('urgprev'); u.busy = ''; u.err = e.message; renderUrgentReview(); });
+}
+function renderUrgentPreview(){
+  var u = S.urg, r = u.preview, nm = reqName(S.rec.doc), tx = r.text || {};
+  var h = '<h2>Email preview</h2><div class="muted">To: '+esc(r.to)+(r.cc?'<br>Copy to: '+esc(r.cc):'')+'<br>Subject: '+esc(r.subject)+'<br>📷 '+r.photo_count+' photo'+(r.photo_count===1?'':'s')+' attached'+(r.photos_omitted?' ('+r.photos_omitted+' more stay in the report)':'')+'</div>';
+  h += '<div style="border:1px solid var(--border);border-radius:10px;margin:10px 0;overflow:hidden">'+r.html+'</div>';
+  if (u.alsoText){
+    if (tx.available) h += '<div class="banner info" id="ug-textinfo"><b>Also texting '+esc(nm)+':</b><div>'+esc(tx.body)+'</div></div>';
+    else h += '<div class="banner warn" id="ug-textinfo">No text will go: '+(tx.window_open===false?'texts only go 9am–4pm ET.':'there is no phone number on the booking.')+' The email still goes.</div>';
+  }
+  if (u.err) h += '<div class="banner err" id="ug-err">'+esc(u.err)+'</div>';
+  h += '<div class="btns"><button class="btn go" id="ug-send" onclick="urgentSend()">Send now</button><button class="btn" onclick="renderUrgentReview()">‹ Back</button></div>';
+  openSheet(h);
+}
+function urgentSend(){
+  var u = S.urg, ids = urgCheckedIds();
+  if (!claim('urgsend')) return; var btn = $('ug-send'); if (btn){ btn.disabled = true; btn.textContent = 'Sending…'; }
+  urgentEnsureSaved(urgPhotoIds(ids)).then(function(){ return api('POST','/fi/urgent-send', urgentBody(false)); }).then(function(r){
+    release('urgsend');
+    var at = r.sent_at || new Date().toISOString();
+    mut(function(doc){ ids.forEach(function(id){ doc.areas.forEach(function(a){ (a.issues||[]).forEach(function(is){ if (is.id===id){ is.flag_send = true; is.sent = { at:at, to:String(r.to||'').slice(0,120), via:(r.text && r.text.sent)?'email+text':'email' }; } }); }); }); });
+    S.urg.result = r; render(); renderUrgentResult(r, ids.length);
+  }).catch(function(e){ release('urgsend'); u.err = e.message; if (e.code==='no_recipient'){ u.to = ''; renderUrgentReview(); } else renderUrgentPreview(); });
+}
+function renderUrgentResult(r, n){
+  var u = S.urg, nm = reqName(S.rec.doc), staged = r.staged === true;
+  var h = '<h2>'+(staged ? 'Test mode: nothing was really sent' : (r.already_sent ? 'Already sent' : '✓ Sent to '+esc(nm)))+'</h2>';
+  h += '<div class="banner '+(staged?'warn':'ok')+'">'+(r.already_sent ? 'This email had already gone out, so it was not sent twice.' : (staged ? 'This is the staging site, so no real email or text was sent.' : esc(String(n))+' item'+(n===1?'':'s')+' emailed to '+esc(r.to||'')+(r.cc?' (copy to you)':'')+'.'))+'</div>';
+  if (u.alsoText){
+    var t = r.text||{};
+    h += t.sent ? '<div class="banner ok">Text sent to '+esc(nm)+'.</div>' : '<div class="banner warn" id="ug-textres">Text not sent. '+esc(t.reason||'')+'</div>';
+  }
+  if (r.logged === false) h += '<div class="banner warn">The email went out, but the send record could not be saved. Do not send it again.</div>';
+  h += '<div class="muted">The items are marked “sent” on the report page. The final report does not mention this email.</div><div class="btns"><button class="btn primary" onclick="urgentCancel()">Done</button></div>';
+  openSheet(h);
+}
+
 // ---- brands ----
 function openBrands(){ S.view='brands'; render(); refreshList().then(function(){ if (S.view==='brands') render(); }); }
 function viewBrands(){
@@ -964,15 +1683,16 @@ var EQUIP_KINDS = {
   furnace:{label:'Furnace',extra:['fuel','filter_size']}, boiler:{label:'Boiler',extra:['fuel']}, central_ac:{label:'Central A/C',extra:['tonnage','filter_size']},
   heat_pump:{label:'Heat pump',extra:['tonnage','filter_size']}, water_heater:{label:'Water heater',extra:['fuel','capacity']}, refrigerator:{label:'Refrigerator',extra:[]},
   range:{label:'Range / oven',extra:['fuel']}, dishwasher:{label:'Dishwasher',extra:[]}, microwave:{label:'Microwave',extra:[]}, washer:{label:'Washer',extra:[]},
-  dryer:{label:'Dryer',extra:['fuel']}, disposal:{label:'Garbage disposal',extra:[]}, other:{label:'Other equipment',extra:[]}
+  dryer:{label:'Dryer',extra:['fuel']}, disposal:{label:'Garbage disposal',extra:[]}, electrical_panel:{label:'Electrical panel',extra:['amperage','spaces']}, other:{label:'Other equipment',extra:[]}
 };
-var EQUIP_LABEL = {name:'Label (optional, e.g. “Upstairs unit”)',brand:'Brand',model:'Model number',serial:'Serial number',year:'Year / date made',notes:'Notes',fuel:'Fuel type',filter_size:'Filter size',tonnage:'Tonnage',capacity:'Capacity'};
-var EQUIP_HINT = {filter_size:'e.g. 16x25x1', fuel:'gas, electric, oil', capacity:'gallons, e.g. 40', tonnage:'e.g. 3 ton', year:'e.g. 2008', model:'as printed on the label', serial:'as printed on the label'};
+var EQUIP_LABEL = {name:'Label (optional, e.g. “Upstairs unit”)',brand:'Brand',model:'Model number',serial:'Serial number',year:'Year / date made',notes:'Notes',fuel:'Fuel type',filter_size:'Filter size',tonnage:'Tonnage',capacity:'Capacity',amperage:'Amperage rating',spaces:'Breaker spaces'};
+var EQUIP_HINT = {filter_size:'e.g. 16x25x1', fuel:'gas, electric, oil', capacity:'gallons, e.g. 40', tonnage:'e.g. 3 ton', amperage:'e.g. 100A or 200A (main / panel rating)', spaces:'e.g. 20 or 40', year:'e.g. 2008', model:'as printed on the label', serial:'as printed on the label'};
 function equipKeys(kind){ return ['brand','model','serial','year'].concat((EQUIP_KINDS[kind]||EQUIP_KINDS.other).extra); }
 function equipSuggest(areaName){
   var n = String(areaName||'').toLowerCase(), out = [];
   if (/water heater/.test(n)) out = ['water_heater'];
   else if (/hvac|heat|furnace|boiler|mechanical|utility|cooling/.test(n)) out = ['furnace','boiler','central_ac','heat_pump'];
+  else if (/electric|panel|breaker/.test(n)) out = ['electrical_panel'];
   else if (/kitchen/.test(n)) out = ['refrigerator','range','dishwasher','microwave','disposal'];
   else if (/laundry/.test(n)) out = ['washer','dryer'];
   else if (/basement|cellar/.test(n)) out = ['furnace','boiler','water_heater','washer','dryer'];
@@ -982,7 +1702,7 @@ function equipTitle(e){ var k = EQUIP_KINDS[e.kind] || EQUIP_KINDS.other; return
 function equipSummary(e){
   var bits = [];
   ['brand','model','serial','year'].forEach(function(f){ if (e[f]) bits.push((f==='serial'?'S/N ':f==='model'?'Model ':'')+e[f]); });
-  ['filter_size','fuel','tonnage','capacity'].forEach(function(f){ if (e[f]) bits.push((f==='filter_size'?'filter ':'')+e[f]); });
+  ['filter_size','fuel','tonnage','capacity','amperage','spaces'].forEach(function(f){ if (e[f]) bits.push((f==='filter_size'?'filter ':f==='spaces'?'':'')+e[f]+(f==='spaces'?' spaces':'')); });
   return bits.join(' · ');
 }
 
@@ -1135,7 +1855,10 @@ function viewInsp(){
   var h = '<div class="row"><button class="btn sm ghost" onclick="leaveInsp()">‹ All inspections</button>'+(rec.status==='published'?'<span class="pill ok">Published</span>':'<span class="pill">Draft</span>')+'</div>';
   h += '<h1 style="margin-bottom:2px">'+esc(doc.property.address)+(doc.property.unit_label?' · '+esc(unitText(doc.property.unit_label)):'')+'</h1><div class="muted">'+esc(doc.date||'')+' · '+esc(typeLabel(doc.type))+' · '+(b?'<span class="sw" style="background:'+esc(b.primary_color)+'"></span> '+esc(b.name):'')+(doc.pre1978?' · pre-1978':'')+'</div>';
   h += '<div class="card" style="margin-top:10px"><div class="row"><b>'+c.done+' of '+c.total+' areas done</b><button class="btn sm" onclick="openReview()">Review &amp; report ›</button></div></div>';
+  h += urgentCardHtml(doc);
   h += ownerCardHtml(doc);
+  h += doc.booking ? bookingCardHtml(doc.booking) : bookingLinkHtml(doc);
+  h += visitCardHtml(doc);
   h += routeResumeHtml();
   var vn = doc.voice_notes||[], unsorted = vn.filter(function(n){ return !n.routed && String(n.transcript||'').trim(); }).length;
   h += '<div class="card"><div class="row"><b>🎙 Voice notes</b><button class="btn sm" onclick="openVoice()">Open</button></div><div class="muted">'+(vn.length ? vn.length+' recording'+(vn.length===1?'':'s')+(unsorted ? ' · <span style="color:var(--warn)">'+unsorted+' not sorted into areas yet</span>' : ' · all sorted') : 'Upload recordings of your notes — they are transcribed and sorted into the right areas for you to review.')+'</div></div>';
@@ -1149,11 +1872,84 @@ function viewInsp(){
   h += '<button class="btn primary block" style="margin-top:10px;min-height:52px" onclick="openReview()">Review &amp; report ›</button>';
   return h;
 }
+// ---- visit details: animals + access & cooperation (Oct 27 2026; both optional, neutral wording) ----
+function animalsText(v){
+  var an = v && v.animals; if (!an || an.present==null) return '';
+  if (!an.present) return 'No animals';
+  var it = (an.items||[]).filter(function(x){ return String(x.type||'').trim(); });
+  return it.length ? it.map(function(x){ return x.type + (x.count ? ' × '+x.count : ''); }).join(', ') : 'Animals present';
+}
+function coopText(v){
+  var c = v && v.access_cooperation; if (!c) return '';
+  var lab = ''; COOP_CHOICES.forEach(function(x){ if (x[0]===c.choice) lab = x[1]; });
+  return [lab, String(c.note||'').trim()].filter(Boolean).join(' — ');
+}
+function visitCardHtml(doc){
+  var v = doc.visit||{}, at = animalsText(v), ct = coopText(v);
+  return '<div class="card"><div class="row"><b>Visit details</b><button class="btn sm" onclick="visitSheet()">'+(at||ct?'Edit':'Add')+'</button></div><div class="muted">Animals: '+(at?esc(at):'not noted')+'<br>Access &amp; cooperation: '+(ct?esc(ct):'no comments (nothing is shown in the report)')+'</div></div>';
+}
+function vGet(doc){
+  doc.visit = doc.visit || {};
+  doc.visit.animals = doc.visit.animals || { present:null, items:[] };
+  doc.visit.animals.items = doc.visit.animals.items || [];
+  doc.visit.access_cooperation = doc.visit.access_cooperation || { choice:'', note:'' };
+  return doc.visit;
+}
+function visitSheet(){
+  var doc = S.rec.doc, v = doc.visit||{}, an = v.animals||{ present:null, items:[] }, ac = v.access_cooperation||{ choice:'', note:'' };
+  S.visitOpen = true;
+  var h = '<h2>Visit details</h2><div class="muted">Everything here is optional.</div>';
+  h += '<label class="fld">Animals present?</label><div class="seg"><button class="'+(an.present===false?'sel':'')+'" onclick="vAnimals(false)">No</button><button class="'+(an.present===true?'sel':'')+'" onclick="vAnimals(true)">Yes</button></div><div class="muted">Tap the selected one again to clear it.</div>';
+  if (an.present===true){
+    h += (an.items||[]).map(function(it,i){ return '<div class="row" style="gap:6px;margin-top:8px"><input list="animal-types" value="'+esc(it.type||'')+'" placeholder="Dog, cat…" oninput="vAnimalType('+i+',this.value)" style="flex:2"><span class="step"><button onclick="vAnimalCount('+i+',-1)">−</button><span class="n">'+(it.count||1)+'</span><button onclick="vAnimalCount('+i+',1)">＋</button></span><button class="btn sm" aria-label="Remove this animal" onclick="vAnimalDel('+i+')">✕</button></div>'; }).join('')
+      + '<datalist id="animal-types">'+ANIMAL_TYPES.map(function(t){ return '<option value="'+esc(t)+'">'; }).join('')+'</datalist><div class="btns"><button class="btn sm" onclick="vAnimalAdd()">＋ Add another animal</button></div>';
+  }
+  h += '<label class="fld">Access &amp; cooperation</label><div class="muted">Optional. Stick to what happened. Leave it blank for no comment — nothing is shown in the report.</div>';
+  h += COOP_CHOICES.map(function(c){ return '<button class="btn block'+(ac.choice===c[0]?' primary':'')+'" style="text-align:left;margin-top:6px" onclick="vCoop(\''+c[0]+'\')">'+esc(c[1])+'</button>'; }).join('');
+  h += '<label class="fld">Note (optional)</label><textarea id="v-note" style="min-height:80px" placeholder="A short, factual note about access during the visit" oninput="vNote(this.value)">'+esc(ac.note||'')+'</textarea>'
+    + '<div class="btns"><button class="btn sm" id="v-rw" onclick="vReword()">✨ Suggest neutral wording</button></div><div id="v-rw-out"></div>'
+    + '<div class="btns"><button class="btn primary" onclick="closeSheet()">Done</button></div>';
+  openSheet(h);
+}
+function vAnimals(p){ mut(function(d){ var an = vGet(d).animals; an.present = (an.present===p) ? null : p; if (an.present===true && !an.items.length) an.items.push({ type:'', count:1 }); }); visitSheet(); }
+function vAnimalType(i, val){ mut(function(d){ var it = vGet(d).animals.items[i]; if (it) it.type = String(val||'').slice(0,60); }); }
+function vAnimalCount(i, dlt){ mut(function(d){ var it = vGet(d).animals.items[i]; if (it) it.count = Math.max(1, Math.min(99, (Number(it.count)||1)+dlt)); }); visitSheet(); }
+function vAnimalDel(i){ mut(function(d){ vGet(d).animals.items.splice(i,1); }); visitSheet(); }
+function vAnimalAdd(){ mut(function(d){ var its = vGet(d).animals.items; if (its.length < 10) its.push({ type:'', count:1 }); }); visitSheet(); }
+function vCoop(c){ mut(function(d){ var ac = vGet(d).access_cooperation; ac.choice = (ac.choice===c) ? '' : c; }); visitSheet(); }
+function vNote(val){ mut(function(d){ vGet(d).access_cooperation.note = String(val||'').slice(0,600); }); }
+// AI rewording is a SUGGESTION only: nothing changes until Brett taps "Use this wording".
+function vReword(){
+  var ta = $('v-note'), t = ta ? ta.value.trim() : '', out = $('v-rw-out'); if (!out) return;
+  if (!t){ out.innerHTML = '<div class="banner warn" style="margin-top:8px">Type your note first, then ask for neutral wording.</div>'; return; }
+  if (!claim('rw')) return; var b = $('v-rw'); if (b) b.disabled = true; out.innerHTML = '<div class="muted" style="margin-top:8px">Working…</div>';
+  api('POST','/fi/reword',{ text:t }).then(function(r){
+    release('rw'); S.rw = r.text; var o2 = $('v-rw-out'); if (b) b.disabled = false; if (!o2) return;
+    o2.innerHTML = '<div class="banner info" style="margin-top:8px"><b>Suggested wording</b><div style="margin-top:4px">'+esc(r.text)+'</div><div class="btns"><button class="btn sm primary" onclick="vUseReword()">Use this wording</button><button class="btn sm" onclick="$(\'v-rw-out\').innerHTML=\'\'">Keep mine</button></div><div class="muted">Your own note stays as written unless you tap “Use this wording”.</div></div>';
+  }).catch(function(e){ release('rw'); if (b) b.disabled = false; var o3 = $('v-rw-out'); if (o3) o3.innerHTML = '<div class="banner warn" style="margin-top:8px">'+esc(e.message||'Could not reword')+' Your note is unchanged.</div>'; });
+}
+function vUseReword(){ var ta = $('v-note'); if (!ta || !S.rw) return; ta.value = S.rw; vNote(S.rw); var o = $('v-rw-out'); if (o) o.innerHTML = '<div class="muted" style="margin-top:8px">Replaced with the suggested wording.</div>'; }
+// ---- per-area "No access" ----
+function areaPill(a){ return (a.access && a.access.no_access) ? '<span class="pill warn">No access</span>' : condPill(a.condition); }
+function accessHtml(a){
+  var ac = a.access||{};
+  if (!ac.no_access) return '<button class="btn block" style="margin-bottom:12px" onclick="setNoAccess(true)">🚫 No access to this area</button>';
+  var needNote = ac.reason==='other' && !String(ac.note||'').trim();
+  return '<div class="card" style="border-color:var(--warn)"><div class="row"><b>🚫 No access</b><button class="btn sm" onclick="setNoAccess(false)">Undo — I got in</button></div>'
+    +'<label class="fld">Reason (optional)</label><select onchange="setAccessReason(this.value)">'+ACCESS_REASONS.map(function(r){ return '<option value="'+r[0]+'"'+((ac.reason||'')===r[0]?' selected':'')+'>'+esc(r[1])+'</option>'; }).join('')+'</select>'
+    +'<label class="fld">'+(ac.reason==='other'?'Describe why *':'Note (optional)')+'</label><input value="'+esc(ac.note||'')+'" oninput="setAccessNote(this.value)" placeholder="e.g. the resident asked me to leave before I finished">'
+    +(needNote?'<div class="banner warn" style="margin-top:8px">Describe why — needed before you can publish.</div>':'')
+    +'<div class="muted" style="margin-top:6px">The report lists this under “Areas not accessed”.</div></div>';
+}
+function setNoAccess(on){ var a = curArea(); mut(function(){ if (on) a.access = { no_access:true, reason:'', note:'' }; else delete a.access; }); render(); }
+function setAccessReason(v){ var a = curArea(); mut(function(){ a.access = a.access || { no_access:true, note:'' }; a.access.reason = v; }); render(); }
+function setAccessNote(v){ var a = curArea(); mut(function(){ a.access = a.access || { no_access:true, reason:'' }; a.access.note = String(v||'').slice(0,500); }); }
+function hasPending(a){ return !!String(a.pending_text||'').trim(); }
 function areaRow(a, i, n){
   var ni = issueCount(a), ph = (a.photo_ids||[]).length, eq = (a.equipment||[]).length;
-  var sub = (ni?ni+' issue'+(ni>1?'s':''):'no issues')+(ph?' · 📷 '+ph:'')+(eq?' · ⚙ '+eq:'')+(a.pending_text?' · <span style="color:var(--warn)">dictation not processed</span>':'');
+  var sub = (ni?ni+' issue'+(ni>1?'s':''):'no issues')+(ph?' · 📷 '+ph:'')+(eq?' · ⚙ '+eq:'')+(hasPending(a)?' · <span style="color:var(--warn)">dictation not processed</span>':'');
   if (S.reorder) return '<div class="area-row rr" data-aid="'+a.id+'"><button class="dh" aria-label="Drag to reorder '+esc(a.name)+'" title="Drag to reorder">≡</button><span><b>'+esc(a.name)+'</b><div class="muted">'+esc(groupLabel(a.group))+(groupLabel(a.group)?' · ':'')+sub+'</div></span><span class="mv"><button aria-label="Move up" onclick="moveArea(\''+a.id+'\',-1)"'+(i===0?' disabled':'')+'>▲</button><button aria-label="Move down" onclick="moveArea(\''+a.id+'\',1)"'+(i===n-1?' disabled':'')+'>▼</button></span></div>';
-  return '<div class="area-row" data-aid="'+a.id+'" onclick="openArea(\''+a.id+'\')"><span><b>'+esc(a.name)+'</b><div class="muted">'+sub+'</div></span>'+condPill(a.condition)+'</div>';
+  return '<div class="area-row" data-aid="'+a.id+'" onclick="openArea(\''+a.id+'\')"><span><b>'+esc(a.name)+'</b><div class="muted">'+sub+'</div></span>'+areaPill(a)+'</div>';
 }
 function openArea(id){
   var a = findArea(S.rec.doc, id);
@@ -1168,11 +1964,12 @@ function viewArea(){
   var h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button><button class="btn sm" onclick="areaMenu()">⋯ Edit area</button></div>';
   h += '<h1>'+esc(a.name)+'</h1>';
   h += '<div class="seg" id="cond-seg">'+CONDS.map(function(c){ return '<button class="'+(a.condition===c[0]?'sel '+c[2]:'')+'" onclick="setCond(\''+c[0]+'\')">'+c[1]+'</button>'; }).join('')+'</div>';
+  h += accessHtml(a);
   h += '<div class="card"><button class="mic'+(S.listening?' live':'')+'" id="mic-btn" onclick="toggleDictation()">'+(S.listening?'⏹ Stop (listening…)':'🎤 Dictate')+'</button>';
   if (S.dictErr) h += '<div class="banner err" style="margin-top:8px">'+esc(S.dictErr)+'</div>';
   h += '<div class="muted" id="interim" style="min-height:18px;margin-top:6px">'+esc(S.interim)+'</div>';
   h += '<textarea id="pending" placeholder="Speak or type what you see: e.g. “Leak under the kitchen sink, looks like the P-trap, recommend replacing it.”">'+esc(a.pending_text||'')+'</textarea>';
-  h += '<div class="btns"><button class="btn primary" id="struct-btn" onclick="structureNow()"'+(S.structuring?' disabled':'')+'>'+(S.structuring?'Working…':'✨ Turn into issues')+'</button><button class="btn" onclick="clearPending()">Clear</button></div>';
+  h += '<div class="btns"><button class="btn primary" id="struct-btn" onclick="structureNow()"'+(S.structuring?' disabled':'')+'>'+(S.structuring?'Working…':'✨ Turn into issues')+'</button><button class="btn" onclick="clearPending()">Clear</button>'+(hasPending(a)&&issueCount(a)?'<button class="btn go" onclick="handleDictation(\''+a.id+'\')">✓ Already added — mark handled</button>':'')+'</div>';
   h += '<div class="muted" style="margin-top:6px">The AI only tidies what you said and suggests a fix when you didn’t give one. You review every issue before it is added.</div></div>';
   if (S.proposals && S.proposals.areaId===a.id) h += proposalsHtml();
   h += '<h2>Issues in this area ('+issueCount(a)+')</h2>';
@@ -1203,7 +2000,7 @@ function thumbHtml(id, onclick, selected){
   return '<button class="thumb'+(selected?' chk':'')+'" onclick="'+onclick+'" aria-label="photo">'+(src?'<img src="'+esc(src)+'" alt="photo" onerror="this.parentNode.title=\'Photo could not be loaded\';this.style.display=\'none\'">':'')+(st&&st.state!=='done'?'<span class="b">'+(st.state==='error'?'⚠ retry':'⏳')+'</span>':'')+'</button>';
 }
 function issueCard(is){
-  return '<div class="issue '+esc(is.severity)+'" onclick="editIssue(\''+is.id+'\')"><div class="t">'+esc(is.title)+'</div><div class="f"><span class="pill">'+esc(TRADE_LABEL[is.trade]||is.trade)+'</span> <span class="pill">'+esc(SEV_LABEL[is.severity]||is.severity)+'</span>'+(is.issue_type?' <span class="pill type">'+esc(is.issue_type)+'</span>':'')+(is.wo?' <span class="pill new">work order</span>':'')+'</div>'+(is.recommended_fix?'<div class="f">Fix: '+esc(is.recommended_fix)+'</div>':'')+'</div>';
+  return '<div class="issue '+esc(is.severity)+'" onclick="editIssue(\''+is.id+'\')"><div class="t">'+esc(is.title)+'</div><div class="f"><span class="pill">'+esc(TRADE_LABEL[is.trade]||is.trade)+'</span> <span class="pill">'+esc(SEV_LABEL[is.severity]||is.severity)+'</span>'+(is.issue_type?' <span class="pill type">'+esc(is.issue_type)+'</span>':'')+(is.wo?' <span class="pill new">work order</span>':'')+(is.sent?' <span class="pill ok">sent '+esc(sentWhen(is.sent))+'</span>':(is.flag_send?' <span class="pill warn">to send</span>':''))+'</div>'+(is.recommended_fix?'<div class="f">Fix: '+esc(is.recommended_fix)+'</div>':'')+'</div>';
 }
 
 // ---- photos: select, move, remove ----
@@ -1254,13 +2051,14 @@ function removePhotosNow(){
 function purgeOrphanPhotos(ids){
   var used = {}; S.rec.doc.areas.forEach(function(a){ (a.photo_ids||[]).forEach(function(p){ used[p]=1; }); (a.issues||[]).forEach(function(is){ (is.photo_ids||[]).forEach(function(p){ used[p]=1; }); }); (a.equipment||[]).forEach(function(e){ (e.photo_ids||[]).forEach(function(p){ used[p]=1; }); }); });
   var chain = Promise.resolve();
-  ids.forEach(function(id){ if (used[id]) return; chain = chain.then(function(){ return dbDel('photos', id); }).then(function(){ if (blobUrl[id]){ try{ URL.revokeObjectURL(blobUrl[id]); }catch(e){ /* url already released */ } delete blobUrl[id]; } delete photoState[id]; }); });
+  ids.forEach(function(id){ if (used[id]) return; chain = chain.then(function(){ return dbDel('photos', id); }).then(function(){ return dbDel('photos', id+'__o'); }).then(function(){ delete photoState[id+'__o']; if (blobUrl[id]){ try{ URL.revokeObjectURL(blobUrl[id]); }catch(e){ /* url already released */ } delete blobUrl[id]; } delete photoState[id]; }); });
   return chain.then(function(){ setSync(); });
 }
 function viewPhoto(id){
   var a = curArea(); S.vp = id; var list = a.photo_ids||[], i = list.indexOf(id);
   openSheet('<h2>Photo '+(i+1)+' of '+list.length+'</h2><img src="'+esc(photoSrc(id))+'" alt="photo" style="width:100%;border-radius:10px">'
     +'<div class="btns"><button class="btn" onclick="viewPhotoStep(-1)"'+(i<=0?' disabled':'')+'>‹ Previous</button><button class="btn" onclick="viewPhotoStep(1)"'+(i>=list.length-1?' disabled':'')+'>Next ›</button></div>'
+    +'<div class="btns"><button class="btn" onclick="omAttachOne(\''+id+'\')">Attach full-size original…</button></div>'
     +'<div class="btns"><button class="btn primary" onclick="movePhotosSheet([\''+id+'\'])">Move to another area…</button><button class="btn danger" onclick="removePhotosSheet([\''+id+'\'])">Remove</button><button class="btn" onclick="closeSheet()">Close</button></div>');
 }
 function viewPhotoStep(d){ var a = curArea(), list = a.photo_ids||[], i = list.indexOf(S.vp)+d; if (i>=0 && i<list.length) viewPhoto(list[i]); }
@@ -1303,7 +2101,7 @@ function saveEquip(){
   var e = eqEdit, any = equipKeys(e.kind).concat(['notes']).some(function(f){ return String(e[f]||'').trim(); });
   if (!any){ toast('Fill in at least one detail (brand, model, serial…)'); return; }
   var a = curArea(), isNew = e.isNew; delete e.isNew;
-  ['name','brand','model','serial','year','notes','fuel','filter_size','tonnage','capacity'].forEach(function(f){ if (e[f]===undefined) return; e[f] = String(e[f]).trim(); if (!e[f]) delete e[f]; });
+  ['name','brand','model','serial','year','notes','fuel','filter_size','tonnage','capacity','amperage','spaces'].forEach(function(f){ if (e[f]===undefined) return; e[f] = String(e[f]).trim(); if (!e[f]) delete e[f]; });
   mut(function(){ a.equipment = a.equipment||[]; if (isNew) a.equipment.push(e); else for (var i=0;i<a.equipment.length;i++) if (a.equipment[i].id===e.id) a.equipment[i]=e; });
   closeSheet(); render(); toast('Equipment saved');
 }
@@ -1433,8 +2231,10 @@ function renderIssueSheet(){
     +'<label class="fld">Likely cause</label><input value="'+esc(is.likely_cause)+'" oninput="editing.likely_cause=this.value">'
     +'<label class="fld">Recommended fix</label><textarea style="min-height:70px" oninput="editing.recommended_fix=this.value">'+esc(is.recommended_fix)+'</textarea>'
     +'<div class="toggle"><span>Flag for a work order<div class="muted">Just a flag for now — nothing is created</div></span><input type="checkbox"'+(is.wo?' checked':'')+' onchange="editing.wo=this.checked"></div>';
+  h += '<div class="toggle"><span>Send to '+esc(reqName(S.rec.doc))+'<div class="muted">'+(is.sent?'Already sent '+esc(sentWhen(is.sent))+'. Tick to send it again.':'Adds it to the “to send” list on the inspection page. Nothing is sent yet.')+'</div></span><input type="checkbox" aria-label="send to the requester"'+(is.flag_send&&!is.sent?' checked':'')+' onchange="urgentToggleFlag(this.checked)"></div>';
   if ((a.photo_ids||[]).length){ h += '<label class="fld">Photos for this issue (tap to attach)</label><div class="thumbs">'+a.photo_ids.map(function(p){ var on = (is.photo_ids||[]).indexOf(p)>-1; return '<button class="thumb'+(on?' sel':'')+'" onclick="toggleIssuePhoto(\''+p+'\')" aria-label="photo">'+(photoSrc(p)?'<img src="'+esc(photoSrc(p))+'" alt="">':'')+(on?'<span class="b">✓</span>':'')+'</button>'; }).join('')+'</div>'; }
   h += '<div class="btns"><button class="btn primary" onclick="saveIssue()">Save</button><button class="btn" onclick="closeSheet()">Cancel</button>'+(is.isNew?'':'<button class="btn danger" id="ie-del" onclick="deleteIssueStep()">Delete</button>')+'</div>';
+  if (!is.isNew) h += '<div class="btns"><button class="btn block" id="ie-move" onclick="moveIssueSheet()">Move to another area…</button></div><div class="muted">Wrong area? Moving keeps everything on this issue — title, details, cause, fix, severity, trade, flags and its photos.</div>';
   openSheet(h);
 }
 function saveIssue(){
@@ -1443,6 +2243,60 @@ function saveIssue(){
   var oldType = ''; if (!isNew) for (var k=0;k<a.issues.length;k++) if (a.issues[k].id===is.id) oldType = a.issues[k].issue_type||'';
   mut(function(){ if (isNew) a.issues.push(is); else for (var i=0;i<a.issues.length;i++) if (a.issues[i].id===is.id) a.issues[i]=is; if ((!a.condition||a.condition==='not_inspected')) a.condition='fair'; });
   closeSheet(); render(); if (isNew || (is.issue_type && is.issue_type!==oldType)) touchTypes([is]);
+}
+// ---- move an issue to another area (Nov 2 2026, Brett: a Basement issue was really Exterior Rear; "move the issue itself ... and retain all the info") ----
+// Pure: moves the SAME issue object (same id, so the trade roll-up, the report and "send to requester" marks all keep pointing at it) from one area to another.
+// Everything on it travels (nothing is rebuilt from a template). Its photos are added to the new area's photo list and leave the old one unless something that stays
+// behind (another issue or equipment) still uses them. Returns {ok:false,error} and changes nothing when it cannot be done safely.
+function moveIssueInDoc(doc, issue, fromId, toId){
+  var from = findArea(doc, fromId), to = findArea(doc, toId);
+  if (!from || !to || from === to) return { ok:false, error:'Pick a different area.' };
+  if (to.excluded) return { ok:false, error:to.name+' is marked not applicable. Turn it back on first.' };
+  var idx = -1, dup = false;
+  doc.areas.forEach(function(a){ (a.issues||[]).forEach(function(x, i){ if (x.id === issue.id){ if (a === from && idx < 0) idx = i; else dup = true; } }); });
+  if (idx < 0) return { ok:false, error:'That issue is no longer in '+from.name+'.' };
+  if (dup) return { ok:false, error:'This issue exists in more than one area, so it was not moved. Tell Brett.' };
+  if ((to.issues||[]).length >= 60) return { ok:false, error:to.name+' already has the most issues allowed (60).' };
+  var moved = JSON.parse(JSON.stringify(issue)); delete moved.isNew;
+  from.issues.splice(idx, 1);
+  to.issues = to.issues || []; to.issues.push(moved);
+  var pids = moved.photo_ids || [], carried = 0;
+  to.photo_ids = to.photo_ids || [];
+  pids.forEach(function(pid){ if (to.photo_ids.indexOf(pid) < 0){ to.photo_ids.push(pid); carried++; } });
+  var stay = {};
+  (from.issues||[]).forEach(function(x){ (x.photo_ids||[]).forEach(function(pid){ stay[pid] = 1; }); });
+  (from.equipment||[]).forEach(function(e){ (e.photo_ids||[]).forEach(function(pid){ stay[pid] = 1; }); });
+  from.photo_ids = (from.photo_ids||[]).filter(function(pid){ return pids.indexOf(pid) < 0 || stay[pid]; });
+  var conditionSet = false;
+  if (!to.condition || to.condition === 'not_inspected'){ to.condition = 'fair'; conditionSet = true; }   // same as adding an issue there by hand
+  return { ok:true, issue:moved, photos:pids.length, fromName:from.name, toName:to.name, toId:to.id, fromEmpty:!(from.issues||[]).length, fromCondition:from.condition, conditionSet:conditionSet };
+}
+function moveIssueSheet(){
+  var is = editing, a = curArea(), doc = S.rec.doc;
+  if (!is || is.isNew || !a) return;
+  if (!String(is.title||'').trim()){ toast('Give the issue a title first'); return; }
+  var rows = doc.areas.filter(function(x){ return !x.excluded && x.id !== a.id; }).map(function(x){
+    var n = issueCount(x);
+    return '<div class="area-row" onclick="moveIssueTo(\''+x.id+'\')"><span><b>'+esc(x.name)+'</b><div class="muted">'+esc(groupLabel(x.group))+(groupLabel(x.group)?' · ':'')+n+' issue'+(n===1?'':'s')+'</div></span><span class="pill new">Move here</span></div>';
+  }).join('');
+  var np = (is.photo_ids||[]).length;
+  openSheet('<h2>Move this issue to…</h2><div class="muted"><b>'+esc(is.title)+'</b> is in '+esc(a.name)+'. Pick the area it belongs in. It keeps all its details'+(np ? ' and its '+np+' photo'+(np===1?'':'s')+' go with it' : '')+'. Any edits you just made here are kept too.</div><div style="margin-top:6px">'+(rows || '<div class="muted">There is no other area to move it to.</div>')+'</div><div class="btns"><button class="btn" onclick="renderIssueSheet()">Back</button></div>');
+}
+function moveIssueTo(areaId){
+  if (!claim('mvis')) return;
+  var is = editing, a = curArea();
+  if (!is || is.isNew || !a){ release('mvis'); return; }
+  if (!String(is.title||'').trim()){ release('mvis'); toast('Give the issue a title first'); return; }
+  is.title = is.title.trim(); if (is.trade === 'tenant_action') is.tenant_action = true; else delete is.tenant_action;
+  var test = moveIssueInDoc(JSON.parse(JSON.stringify(S.rec.doc)), is, a.id, areaId);   // dry run on a copy: a refusal must change nothing
+  if (!test.ok){ release('mvis'); toast(test.error); return; }
+  var res = null;
+  mut(function(doc){ res = moveIssueInDoc(doc, is, a.id, areaId); });
+  if (!res || !res.ok){ release('mvis'); toast((res && res.error) || 'The issue could not be moved.'); return; }   // cannot happen after the dry run; never silent if it does
+  editing = null; release('mvis');
+  var hint = res.fromEmpty && (res.fromCondition === 'poor' || res.fromCondition === 'fair') ? '<div class="muted" style="margin-top:6px">'+esc(res.fromName)+' now has no issues but is still marked “'+esc((COND_LABEL && COND_LABEL[res.fromCondition]) || res.fromCondition)+'” — change that if it no longer applies.</div>' : '';
+  openSheet('<h2>Moved</h2><p><b>'+esc(res.issue.title)+'</b> is now in <b>'+esc(res.toName)+'</b> with everything recorded on it'+(res.photos ? ' and its '+res.photos+' photo'+(res.photos===1?'':'s') : '')+'.</p>'+hint+'<div class="btns"><button class="btn primary" onclick="closeSheet();openArea(\''+res.toId+'\')">Go to '+esc(res.toName)+'</button><button class="btn" onclick="closeSheet()">Stay in '+esc(res.fromName)+'</button></div>');
+  render();
 }
 
 // ---- brands ----
