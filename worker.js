@@ -112,10 +112,37 @@ function __makeWOStatus() {
 const WOStatus = __makeWOStatus();
 const OPEN_WO_STATUSES = WOStatus.sets.ACTIVE;
 const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
-// BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
-// Portals poll GET /version and refresh themselves onto new code when this changes
-// (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-28.01-fi-premier-repair-contact';
+// BUILD_VERSION: FROZEN BASE LABEL. DO NOT EDIT IT IN A PR (Oct 21 2026). Every PR used to bump this one line, so any two open PRs
+// conflicted and sessions kept re-cutting branches by hand. The version portals actually see is now stamped by Cloudflare at deploy
+// time: GET /version = buildVersion(env) = this base + '+' + deploy time + '.' + Cloudflare's version id (the `version_metadata`
+// binding in wrangler.toml), so EVERY deploy gets a new version automatically and a PR never needs to touch this line.
+// Portals poll GET /version and refresh themselves onto new code when it changes (B-093 auto-refresh).
+// The Branch policy guard fails a PR into main that changes this line (override: put `allow-build-version-edit: true` in the PR body).
+let __unstampedReported = false;
+// buildVersion(env) -> { version, base, stamped, version_id, deployed_at }. Never throws. If the Cloudflare binding is missing the answer
+// says so ('+unstamped', stamped:false) AND files one failure-ledger row per isolate, because an unstamped Worker would otherwise never
+// make open portals refresh (a silent failure).
+function buildVersion(env) {
+  const m = env && env.CF_VERSION_METADATA;
+  if (m && m.id) {
+    const ts = String(m.timestamp || ''), digits = ts.replace(/\D/g, '').slice(0, 12);
+    return { version: BUILD_VERSION + '+' + (digits || 'x') + '.' + String(m.id).slice(0, 8), base: BUILD_VERSION, stamped: true, version_id: String(m.id), deployed_at: ts || null };
+  }
+  return { version: BUILD_VERSION + '+unstamped', base: BUILD_VERSION, stamped: false, version_id: null, deployed_at: null };
+}
+function buildVersionJson(env, ctx) {
+  const v = buildVersion(env);
+  if (!v.stamped && !__unstampedReported) {
+    __unstampedReported = true;
+    const p = reportFailure(env, { system: 'hub', source: 'worker', where: 'build_version_unstamped', severity: 'P2',
+      message: 'The Worker has no CF_VERSION_METADATA binding, so /version never changes on deploy and open portals will not refresh themselves. Check wrangler.toml [version_metadata].' });
+    if (ctx && ctx.waitUntil) ctx.waitUntil(p);
+  }
+  return json(v.stamped ? v : Object.assign({ warning: 'unstamped: no CF_VERSION_METADATA binding; portals will not auto-refresh on deploy' }, v));
+}
+// BUILD_VERSION: FROZEN base label, do not edit it in a PR (explained in the block above buildVersion()).
+// Portals poll GET /version, which Cloudflare stamps on every deploy, and refresh themselves when that changes (B-093).
+const BUILD_VERSION = '2026-10-30.01-delivery-cotenants-keep-yes';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -540,7 +567,7 @@ const _hubWorkerCore = {
         if (path === '/failures/open')          return await failOpenList(env, url);
         if (path === '/gemini-context')          return await geminiContext(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
-        if (path === '/version')                return json({ version: BUILD_VERSION });
+        if (path === '/version')                return buildVersionJson(env, ctx);
         if (path === '/watchdog/door-system')   return await doorWatchdogStatus(env);
         if (path === '/read-meter')             return json(await __meterSnapshotAll(env, url)); // Oct 19 2026: who/what is spending the Sheets read quota (in-memory, zero Sheets reads)
         if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
@@ -1145,6 +1172,7 @@ const _hubWorkerCore = {
         if (path === '/fi/summarize')             return await fiRoute(env, 'summarize', () => fiSummarize(env, body));
         if (path === '/fi/brand/save')            return await fiRoute(env, 'brand-save', () => fiBrandSave(env, body));
         if (path === '/fi/email-report')          return await fiRoute(env, 'email-report', () => fiEmailReport(env, request, body));
+        if (path === '/fi/urgent-send')           return await fiRoute(env, 'urgent-send', () => fiUrgentSend(env, body));
         if (path === '/fi/route')                 return await fiRoute(env, 'route', () => fiRouteNotes(env, body));
         if (path === '/fi/brand/scrape')          return await fiRoute(env, 'brand-scrape', () => fiBrandScrape(env, body));
         if (path === '/fi/read-label')            return await fiRoute(env, 'read-label', () => fiReadLabel(env, body));
@@ -21591,7 +21619,7 @@ async function selftestCallEndpoint(env, name) {
   const u = (p) => new URL('https://selftest.internal' + p);
   switch (name) {
     case 'health': return await health(env);
-    case 'version': return json({ version: BUILD_VERSION });
+    case 'version': return json({ version: buildVersion(env).version });
     case 'config': return await getConfig(env);
     case 'properties': return await getSheet(env, 'Properties');
     case 'units': return await getSheet(env, 'Units');
@@ -23548,6 +23576,32 @@ async function gmailSendEmailWithAttachment(env, { to, subject, html, attachment
   const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
     method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ raw: _utf8B64url(raw) }),
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
+  return { sent: true, message_id: data.id };
+}
+
+// Multi-photo email with an optional Cc (Oct 28 2026, field-inspection urgent items). Staging never sends real mail with attachments:
+// it goes through gmailSendEmail's stub/redirect policy unchanged (recipient overridden, nothing reaches a real requester).
+async function gmailSendEmailMulti(env, { to, cc, subject, html, attachments }) {
+  if (!to) throw new Error('gmailSendEmailMulti: to required');
+  const atts = Array.isArray(attachments) ? attachments : [];
+  if (env.__STAGING__ ?? isStaging(env)) return await gmailSendEmail(env, { to, subject: (subject || '') + (atts.length ? ' [' + atts.length + ' photo(s) not attached on staging]' : ''), html });
+  const accessToken = await gmailAccessToken(env);
+  const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
+  const subjectEncoded = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject || '')))}?=`;
+  const boundary = 'ridgeco_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
+  const head = [`From: Ridge Co <${from}>`, `To: ${to}`].concat(cc ? [`Cc: ${cc}`] : [], [`Subject: ${subjectEncoded}`, 'MIME-Version: 1.0', `Content-Type: multipart/mixed; boundary="${boundary}"`, '', `--${boundary}`, 'Content-Type: text/html; charset="UTF-8"', '', html || '', '']);
+  const parts = head.slice();
+  for (const a of atts) {
+    const safeName = String(a.filename || 'photo.jpg').replace(/[^\w .-]/g, '_').slice(0, 80);
+    parts.push(`--${boundary}`, `Content-Type: ${a.mimeType || 'application/octet-stream'}; name="${safeName}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${safeName}"`, '', String(a.base64Data || '').replace(/(.{76})/g, '$1\r\n'), '');
+  }
+  parts.push(`--${boundary}--`);
+  const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw: _utf8B64url(parts.join('\r\n')) }),
   });
   const data = await resp.json().catch(() => null);
   if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
@@ -26908,7 +26962,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/owner/tenant-roster/preview') return true;
   if (path === '/owner/tenant-roster/apply') return !!(body && body.owner_id) && await isTestRecord(env, 'Owners', body.owner_id);
   // Oct 15 2026 (field inspection): the staging token may only write inspections whose id starts TEST-, brands named TEST- (never default, never a non-TEST brand); structure/summarize write nothing.
-  if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report') return String((body && body.id) || '').startsWith('TEST-');
+  if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report' || path === '/fi/urgent-send') return String((body && body.id) || '').startsWith('TEST-');
   if (path === '/fi/structure' || path === '/fi/summarize' || path === '/fi/route' || path === '/fi/brand/scrape' || path === '/fi/transcribe/json') return true; // AI / read-only: no sheet writes
   if (path === '/fi/reword') return true; // AI only: writes nothing
   if (path === '/admin/fi-premier-repair') { // staging may only repair a TEST- partner's links, to a TEST- inspection
@@ -34766,6 +34820,7 @@ function deliveryTenantText(o) {
   const when = [deliveryWindowHuman(o.window), deliveryDateYY(o.date)].filter(Boolean).join(' ');
   let msg;
   if (o.kind === 'cancel') msg = item.charAt(0).toUpperCase() + item.slice(1) + ' delivery is no longer scheduled. No need to be home.';
+  else if (o.kind === 'fyi') msg = 'Update: ' + item + ' delivery' + (when ? ' now ' + when : ' time changed') + '. Thanks for being there, no need to reply.';   // Oct 30 2026 (Brett): the tenant already said yes, so a better window is news, not a new question: no link, no ask
   else if (o.kind === 'changed') msg = 'Delivery changed: ' + item + (when ? ' now ' + when : '') + '. Can you be there? ' + o.link;
   else msg = 'New ' + item + ' ordered.' + (when ? ' Delivery ' + when + '.' : '') + ' Please let us know if you can be there: ' + o.link;
   return deliveryPlainSms(msg, true);
@@ -34983,42 +35038,64 @@ async function deliveryTenantNotice(env, o) {
   if (variant !== 'cancel' && !date) return { tenant_sms: 'skipped', detail: 'no delivery date yet: the tenant is asked when a later email sets the date', no_date: true };
   const sig = variant === 'cancel' ? 'CANCELLED' : (date || '') + '|' + (win || '');
   if (String(row.Tenant_Notice_Sig || '') === sig && /^(queued|sent|draft)/.test(String(row.Tenant_Notice_Status || ''))) return { tenant_sms: 'skipped', detail: 'tenant already told this date/window', record: false };
-  if (!tenant.Phone) return { tenant_sms: 'skipped', detail: 'tenant has no phone on file' };
+  // Oct 30 2026: everyone active in the unit gets the text (co-tenants), not only the one tenant on the delivery row. Same phone twice = once.
+  const people = [tenant].concat((Array.isArray(o.recipients) ? o.recipients : []).filter(x => x && String(x.ID) !== String(tenant.ID)));
+  const seenPhones = {};
+  const list = people.filter(x => { const ph = normalizePhone(x.Phone); if (!ph) return true; if (seenPhones[ph]) return false; seenPhones[ph] = true; return true; });
+  const multi = list.length > 1;
   try {
     const owners = await fetchTab(env, 'Owners');
     const owner = owners.find(w => String(w.ID) === String(place.property.Owner_ID)) || null;
     let queue = [];
     try { queue = await fetchTab(env, MSG_QUEUE_TAB); } catch (e) { if (!isMissingTabError(e)) throw e; }
-    const mine = r => r.Message_Type === 'delivery_tenant_notice' && woId && String(r.WO_ID) === String(woId);
-    const waiting = queue.filter(r => mine(r) && r.Status === 'pending' && r.Send_After);
-    // A newer text replaces one still waiting for its slot: never two texts for one delivery.
-    if (variant !== 'cancel' || waiting.length) for (const q of waiting) {
-      if (nm.mode === 'draft') break;
-      const ok = await updateMessageQueueRow(env, q.ID, { Status: 'skipped', Gate_Snapshot: variant === 'cancel' ? 'delivery cancelled before this request went out' : 'superseded by a newer delivery notice', Send_After: '' });
-      if (ok === false) return { tenant_sms: 'failed', detail: 'could not retire the older waiting notice (queue row ' + q.ID + '), nothing new queued', warn: true };
-    }
-    if (variant === 'cancel') {
-      if (!queue.some(r => mine(r) && r.Status === 'sent')) return { tenant_sms: 'skipped', detail: waiting.length ? 'the request had not gone out yet: it was withdrawn, tenant not texted' : 'tenant was never asked, nothing to cancel' };
-    }
-    const first = !queue.some(r => r.Status === 'sent' && normalizePhone(r.Recipient_Phone) === normalizePhone(tenant.Phone));
     const item = String(row.Item_Type || '').toLowerCase() || 'appliance';
-    const ctx = { first: tenant.First_Name || 'there', assistant: cfg.ASSISTANT_NAME || 'Riley', owner: (owner && (owner.Company || owner.First_Name)) || 'your property owner', item, street: deliveryStreet(row.Delivery_Address), date, window: win };
     let link = '';
-    if (variant !== 'cancel') link = await deliveryShortLink(env, cfg, o.deliveryId || row.ID);
-    let msg;
-    if (variant === 'request' && cfg.Delivery_Tenant_Notice_Text) {
-      msg = deliveryPlainSms(renderTemplate(cfg.Delivery_Tenant_Notice_Text, { FirstName: ctx.first, AssistantName: ctx.assistant, Owner: ctx.owner, Item: item, Street: ctx.street, Address: row.Delivery_Address || '', When: [deliveryShortDate(date), deliveryWindowHuman(win)].filter(Boolean).join(' '), Link: link }), true);
-      if (link && msg.indexOf(link) < 0) msg += ' ' + link;   // a custom template that forgot {Link} must still carry the answer link
-    } else msg = deliveryTenantText(Object.assign({ kind: variant, link }, ctx));
-    if (first) msg = withTenantStopNote(msg);
-    if (nm.mode === 'draft') return { tenant_sms: 'draft', detail: 'draft saved on the delivery (Tenant_Notice_Draft), not sent', sig, draft: msg };
+    if (variant === 'request' || variant === 'changed') link = await deliveryShortLink(env, cfg, o.deliveryId || row.ID);
     const hold = deliveryNoticeHoldUntil(new Date(), variant === 'cancel' ? (row.Expected_Date || date) : date);
-    const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'delivery_tenant_notice', recipient_type: 'tenant', tenant, property: place.property, owner, message_body: msg, holdUntil: hold ? hold.toISOString() : undefined, allowRepeat: true });   // once-per-event is enforced above (Tenant_Notice_Sig + the waiting-row swap + Event_Claim); the D-16 same-text guard must NOT swallow a real second move that reads exactly like an earlier one (Y, back to X, Y again)
+    const sendOne = async (tn) => {
+      const who = String(tn.First_Name || 'tenant');
+      const tag = (x) => Object.assign({ who }, x);
+      if (!tn.Phone) return tag({ state: 'skipped', detail: 'no phone on file' });
+      const ph = normalizePhone(tn.Phone);
+      const mine = r => r.Message_Type === 'delivery_tenant_notice' && woId && String(r.WO_ID) === String(woId) && normalizePhone(r.Recipient_Phone) === ph;
+      const waiting = queue.filter(r => mine(r) && r.Status === 'pending' && r.Send_After);
+      // A newer text replaces one still waiting for its slot: never two texts for one person for one delivery.
+      if (nm.mode !== 'draft') for (const q of waiting) {
+        const ok = await updateMessageQueueRow(env, q.ID, { Status: 'skipped', Gate_Snapshot: variant === 'cancel' ? 'delivery cancelled before this request went out' : 'superseded by a newer delivery notice', Send_After: '' });
+        if (ok === false) return tag({ state: 'failed', detail: 'could not retire the older waiting notice (queue row ' + q.ID + '), nothing new queued', warn: true });
+      }
+      if (variant === 'cancel' && !queue.some(r => mine(r) && r.Status === 'sent')) return tag({ state: 'skipped', detail: waiting.length ? 'the request had not gone out yet: it was withdrawn, tenant not texted' : 'tenant was never asked, nothing to cancel' });
+      const first = !queue.some(r => r.Status === 'sent' && normalizePhone(r.Recipient_Phone) === ph);
+      const ctx = { first: tn.First_Name || 'there', assistant: cfg.ASSISTANT_NAME || 'Riley', owner: (owner && (owner.Company || owner.First_Name)) || 'your property owner', item, street: deliveryStreet(row.Delivery_Address), date, window: win };
+      let msg;
+      if (variant === 'request' && cfg.Delivery_Tenant_Notice_Text) {
+        msg = deliveryPlainSms(renderTemplate(cfg.Delivery_Tenant_Notice_Text, { FirstName: ctx.first, AssistantName: ctx.assistant, Owner: ctx.owner, Item: item, Street: ctx.street, Address: row.Delivery_Address || '', When: [deliveryShortDate(date), deliveryWindowHuman(win)].filter(Boolean).join(' '), Link: link }), true);
+        if (link && msg.indexOf(link) < 0) msg += ' ' + link;   // a custom template that forgot {Link} must still carry the answer link
+      } else msg = deliveryTenantText(Object.assign({ kind: variant, link }, ctx));
+      if (first) msg = withTenantStopNote(msg);
+      if (nm.mode === 'draft') return tag({ state: 'draft', detail: 'draft saved on the delivery (Tenant_Notice_Draft), not sent', draft: msg });
+      const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'delivery_tenant_notice', recipient_type: 'tenant', tenant: tn, property: place.property, owner, message_body: msg, holdUntil: hold ? hold.toISOString() : undefined, allowRepeat: true });   // once-per-event is enforced above (Tenant_Notice_Sig + the waiting-row swap + Event_Claim); the D-16 same-text guard must NOT swallow a real second move that reads exactly like an earlier one (Y, back to X, Y again)
+      if (r && r.sent) return tag({ state: 'sent', detail: 'sent now (delivery is today)', text: msg });
+      if (r && r.held_for_quiet_hours) return tag({ state: 'queued', detail: 'held until ' + r.send_after, send_after: r.send_after, text: msg });
+      if (r && r.send_ok === false) return tag({ state: 'skipped', detail: 'blocked by the text gate: ' + r.gate_snapshot });
+      return tag({ state: 'failed', detail: 'not sent (' + ((r && (r.gate_snapshot || r.warning)) || 'unknown') + ')', warn: true });
+    };
+    const results = [];
+    for (const tn of list) {
+      try { results.push(await sendOne(tn)); }
+      catch (e) { results.push({ who: String(tn.First_Name || 'tenant'), state: 'failed', detail: String((e && e.message) || e).slice(0, 120), warn: true }); }   // one co-tenant failing must not hide the others' results
+    }
     const nowIso = new Date().toISOString();
-    if (r && r.sent) return { tenant_sms: 'sent', detail: 'sent now (delivery is today)', sig, sent_at: nowIso, text: msg };
-    if (r && r.held_for_quiet_hours) return { tenant_sms: 'queued', detail: 'held until ' + r.send_after, sig, send_after: r.send_after, sent_at: nowIso, text: msg };
-    if (r && r.send_ok === false) return { tenant_sms: 'skipped', detail: 'blocked by the text gate: ' + r.gate_snapshot };
-    return { tenant_sms: 'failed', detail: 'not sent (' + ((r && (r.gate_snapshot || r.warning)) || 'unknown') + ')', warn: true };
+    const detail = results.map(x => (multi ? x.who + ': ' : '') + x.detail).join(' | ');
+    const has = s => results.some(x => x.state === s);
+    const warn = results.some(x => x.warn) || undefined;
+    const withText = results.find(x => x.text);
+    const common = { detail, warn };
+    if (has('queued')) return Object.assign(common, { tenant_sms: 'queued', sig, send_after: (results.find(x => x.send_after) || {}).send_after, sent_at: nowIso, text: withText && withText.text });
+    if (has('sent')) return Object.assign(common, { tenant_sms: 'sent', sig, sent_at: nowIso, text: withText && withText.text });
+    if (has('draft')) return Object.assign(common, { tenant_sms: 'draft', sig, draft: results.filter(x => x.draft).map(x => (multi ? x.who + ': ' : '') + x.draft).join('\n') });
+    if (has('failed')) return Object.assign(common, { tenant_sms: 'failed', warn: true });
+    return { tenant_sms: 'skipped', detail };
   } catch (e) { return { tenant_sms: 'failed', detail: String((e && e.message) || e).slice(0, 160), warn: true }; }
 }
 
@@ -35214,10 +35291,12 @@ function deliveryAuthAlert(env, reason, severity, message) { return deliveryLedg
 // reported (failure ledger P1 + the response's calendar_status + the delivery row), never swallowed. On staging the write is a stub.
 const DELIVERY_CAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
 const DELIVERY_CAL_KEY_PROP = 'ridgecoDeliveryKey';
-function deliveryCalEventBody(cal) {
+function deliveryCalEventBody(cal, patch) {
   const ev = { summary: cal.title, location: cal.location || '', description: cal.description || '', status: 'confirmed', extendedProperties: { private: { [DELIVERY_CAL_KEY_PROP]: cal.key } } };
-  if (cal.all_day) { ev.start = { date: cal.start_iso }; ev.end = { date: cal.end_iso }; }
-  else { ev.start = { dateTime: cal.start_iso, timeZone: 'America/New_York' }; ev.end = { dateTime: cal.end_iso, timeZone: 'America/New_York' }; }
+  // patch=true (updating an event that may already exist in the OTHER shape): Google merges nested objects on PATCH, so a timed update on a
+  // date-only event would carry BOTH date and dateTime and answer 400 "Invalid start time" (the Oct 29 2026 range delivery). Null the other field out.
+  if (cal.all_day) { ev.start = patch ? { date: cal.start_iso, dateTime: null, timeZone: null } : { date: cal.start_iso }; ev.end = patch ? { date: cal.end_iso, dateTime: null, timeZone: null } : { date: cal.end_iso }; }
+  else { ev.start = Object.assign({ dateTime: cal.start_iso, timeZone: 'America/New_York' }, patch ? { date: null } : {}); ev.end = Object.assign({ dateTime: cal.end_iso, timeZone: 'America/New_York' }, patch ? { date: null } : {}); }
   return ev;
 }
 async function deliveryCalFetch(env, sub, method, pathAndQuery, body) {
@@ -35252,12 +35331,12 @@ async function deliveryCalSync(env, cfg, deliveryId, row, cal, dry) {
       for (const id of ids) { try { await deliveryCalFetch(env, sub, 'DELETE', '/events/' + encodeURIComponent(id)); } catch (e) { if (!gone(e)) throw e; } }
       return { status: 'cancelled', event_id: '' };
     }
-    const body = deliveryCalEventBody(cal);
+    const body = deliveryCalEventBody(cal), patchBody = deliveryCalEventBody(cal, true);
     let id = had, how = 'updated';
-    if (id) { try { await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), body); } catch (e) { if (!gone(e)) throw e; id = ''; } }
+    if (id) { try { await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), patchBody); } catch (e) { if (!gone(e)) throw e; id = ''; } }
     if (!id) {
       const found = await find();
-      if (found.length) { id = found[0]; await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), body); }
+      if (found.length) { id = found[0]; await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), patchBody); }
       else { const made = await deliveryCalFetch(env, sub, 'POST', '/events', body); id = String(made.id || ''); how = 'created'; if (!id) throw new Error('Google Calendar did not return an event id'); }
     }
     return { status: how, event_id: id };
@@ -35463,6 +35542,7 @@ async function deliveryEmailIntake(env, body) {
     }
 
     // ── writes ──
+    let keepYes = false;   // Oct 30 2026: a tenant who said yes while the delivery was still all-day keeps that yes when only the window gets set
     let deliveryId, claim = '', lostClaim = false, woInfo = { wo_id: String(prior.Linked_WO_IDs || '').split(',')[0].trim(), created: false };
     const noteLine = 'Email (' + p.kind + ', ' + (mailboxStr || 'mailbox ?') + '): ' + subject.slice(0, 100);
     await ensureDeliveryTab(env);
@@ -35516,7 +35596,11 @@ async function deliveryEmailIntake(env, body) {
         const nl = [noteLine].concat(notes, placeNotes, anomaly ? ['CHECK: ' + anomaly] : []);
         if (dateChanged || winChanged) nl.push('Date/window now ' + (date || '?') + (win ? ' ' + win : '') + ' (was ' + (prior.Expected_Date || '?') + (prior.Expected_Window ? ' ' + prior.Expected_Window : '') + ')');
         // A new date/window makes the tenant's earlier answer out of date: reset it (the new request asks again). A Declined tenant is the on-site contact again.
-        if ((dateChanged || winChanged) && prior.Tenant_RSVP && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+        // Exception (Brett, Oct 30 2026): a Confirmed answer given while the delivery had NO window yet (all day), and the date has not moved, still stands when the window gets set: the tenant gets an update text, not a new question.
+        if ((dateChanged || winChanged) && prior.Tenant_RSVP === 'Confirmed' && !dateChanged && !prior.Expected_Window && win && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+          keepYes = true;
+          nl.push('Tenant answer kept (Confirmed before the window was known): the window is now ' + win + ', tenant gets an update text, not a new question');
+        } else if ((dateChanged || winChanged) && prior.Tenant_RSVP && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
           Object.assign(f, { Tenant_RSVP: '', Tenant_RSVP_At: '', Tenant_RSVP_Note: '' });
           if (prior.Tenant_RSVP === 'Declined' && merged.Tenant_ID) Object.assign(f, { Onsite_Contact: 'tenant', Onsite_Contact_Phone: '' });
           nl.push('Tenant answer reset (was ' + prior.Tenant_RSVP + ') because the date/window changed');
@@ -35581,7 +35665,8 @@ async function deliveryEmailIntake(env, body) {
       const prop = propertyId ? properties.find(x => String(x.ID) === String(propertyId)) : null;
       const tenantObj = tenantId ? tenants.find(t => String(t.ID) === String(tenantId)) : null;
       const rowNow = Object.assign({}, merged, { Expected_Date: date || merged.Expected_Date || '' });
-      tn = await deliveryTenantNotice(env, { cfg, row: rowNow, deliveryId, place: { property: prop, tenant: prop ? tenantObj : null }, woId, date, win, variant: cancelling ? 'cancel' : (merged.Tenant_Notice_Sent_At ? 'changed' : 'request') });
+      const unitMates = (prop && tenantObj && merged.Unit_ID) ? tenantsForDispatch(tenants, null, { Unit_ID: String(merged.Unit_ID), Property_ID: String(propertyId) }).filter(x => String(x.ID) !== String(tenantObj.ID)) : [];   // co-tenants in the same unit
+      tn = await deliveryTenantNotice(env, { cfg, row: rowNow, deliveryId, place: { property: prop, tenant: prop ? tenantObj : null }, recipients: unitMates, woId, date, win, variant: cancelling ? 'cancel' : (merged.Tenant_Notice_Sent_At ? (keepYes ? 'fyi' : 'changed') : 'request') });
       if (tn.warn) warnings.push('tenant notice: ' + tn.detail);
       if (tn.record !== false && tn.tenant_sms !== 'off') {
         const upd = { Tenant_Notice_Status: (tn.tenant_sms + (tn.detail ? ': ' + tn.detail : '')).slice(0, 200) };
@@ -40919,6 +41004,7 @@ function fiScrubDocForReport(doc) {
   if (!doc || typeof doc !== 'object') return doc;
   for (const a of (doc.areas || [])) for (const is of (a.issues || [])) {
     if (!is) continue;
+    delete is.flag_send; delete is.sent;   // 'send to the requester' flags and sent marks are for the phone only (Oct 28 2026), never on the public report
     if (is.ai === true) { for (const k of ['title', 'detail', 'likely_cause', 'recommended_fix']) if (typeof is[k] === 'string') is[k] = fiContractorize(is[k]); }
     else if (is.fix_source === 'suggested' && typeof is.recommended_fix === 'string') is.recommended_fix = fiContractorize(is.recommended_fix);   // catalog / AI-suggested fix text the inspector did not write (older inspections kept the old "Have an electrician" wording)
   }
@@ -41033,7 +41119,10 @@ function fiValidateDoc(doc) {
       else if ((a.issues || []).length > 60) errors.push(`areas[${i}] has too many issues (max 60)`);
       else (a.issues || []).forEach((is, j) => {
         if (!is || typeof is !== 'object' || !is.id || !is.title) errors.push(`areas[${i}].issues[${j}] needs id and title`);
-        else { if (!FI_TRADES.includes(is.trade)) errors.push(`areas[${i}].issues[${j}].trade invalid`); if (!FI_SEVERITIES.includes(is.severity)) errors.push(`areas[${i}].issues[${j}].severity invalid`); }
+        else { if (!FI_TRADES.includes(is.trade)) errors.push(`areas[${i}].issues[${j}].trade invalid`); if (!FI_SEVERITIES.includes(is.severity)) errors.push(`areas[${i}].issues[${j}].severity invalid`);
+          if (is.flag_send !== undefined && typeof is.flag_send !== 'boolean') errors.push(`areas[${i}].issues[${j}].flag_send must be true or false`);
+          if (is.sent !== undefined && (!is.sent || typeof is.sent !== 'object' || Array.isArray(is.sent) || typeof is.sent.at !== 'string' || String(is.sent.at).length > 40 || String(is.sent.to || '').length > 120)) errors.push(`areas[${i}].issues[${j}].sent invalid`);
+        }
       });
     });
   }
@@ -41224,6 +41313,15 @@ async function fiGetInspection(env, url) {
   try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'The saved inspection data could not be read. Do not overwrite it — contact Brett.'); }
   return json({ ok: true, inspection: fiInspHeaderOut(row.o), doc, drive_folder_url: row.o.Drive_Folder_URL || '' });
 }
+// True when the two saved docs differ ONLY in phone-only fields (the 'send to requester' flag / sent mark, and the touch timestamp).
+function fiPublicDocKey(serialized) {
+  try { const d = JSON.parse(serialized); delete d.updated; for (const a of (d.areas || [])) for (const is of (a.issues || [])) { delete is.flag_send; delete is.sent; } return JSON.stringify(d); }
+  catch (e) { return null; }
+}
+function fiOnlyPhoneMarksChanged(prevSerialized, nextSerialized) {
+  const a = fiPublicDocKey(prevSerialized), b = fiPublicDocKey(nextSerialized);
+  return a !== null && b !== null && a === b;
+}
 async function fiSave(env, body) {
   body = body || {};
   const id = String(body.id || '');
@@ -41248,7 +41346,7 @@ async function fiSave(env, body) {
   const hash = await fiSha256(serialized);
   const changed = !row || row.o.Doc_Hash !== hash;
   const wasPublished = !!row && row.o.Status === 'published';
-  const unpublish = wasPublished && changed;
+  const unpublish = wasPublished && changed && !fiOnlyPhoneMarksChanged(fiJoinRow(row.o), serialized);   // marking an item 'sent to the requester' (phone-only) must not hide a published report
   const now = new Date().toISOString();
   const newRev = (row ? Number(row.o.Rev) || 0 : 0) + 1;
   const chunks = fiChunk(serialized);
@@ -41474,6 +41572,161 @@ async function fiEmailReport(env, request, body) {
   const lt = await fiReadFresh(env, 'FI_Email_Log');
   await fiWriteRow(env, 'FI_Email_Log', lt.headers, { ID: 'em_' + inspRandToken(9), Inspection_ID: id, To_Email: to, Subject: mail.subject, Result: res && res.staged ? 'staged' : 'sent', Sent_At: new Date().toISOString() }, 0);
   return json({ ok: true, sent: !(res && res.staged), staged: !!(res && res.staged), to, subject: mail.subject });
+}
+// ── Urgent items to the requester (Oct 28 2026, Brett) ───────────────────────────────────────────────
+// Brett flags report items (or types a quick list of urgent ones on the phone) and this emails the requester on the linked booking
+// ahead of the report. Preview-first like the report email. The server takes the ITEMS from the saved inspection (never from the
+// request), so what is emailed is exactly what is in the report. Photos are attached from Drive. An optional text goes out ONLY
+// 9am-4pm ET (otherwise email only, nothing is queued). A client send_key makes a retry safe: the same key never sends twice.
+const FI_URGENT_MAX_ITEMS = 20, FI_URGENT_MAX_PHOTOS = 6, FI_URGENT_TEXT_FROM_H = 9, FI_URGENT_TEXT_TO_H = 16;
+const FI_URGENT_SEV_LABEL = { urgent: 'Urgent', high: 'High', medium: 'Medium', low: 'Low', info: 'Note' };
+function fiUrgentTextWindow(ms) {
+  const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' }).format(new Date(ms)));
+  return { open: h >= FI_URGENT_TEXT_FROM_H && h < FI_URGENT_TEXT_TO_H, hour: h };
+}
+function fiUrgentCollect(doc, ids) {
+  const items = [], pos = new Map(ids.map((x, i) => [x, i]));
+  for (const a of (doc.areas || [])) {
+    if (a.excluded) continue;
+    for (const is of (a.issues || [])) if (pos.has(is.id)) items.push({ id: is.id, area: String(a.name || ''), title: String(is.title || ''), detail: String(is.detail || ''), severity: is.severity, photo_ids: (is.photo_ids || []).map(String) });
+  }
+  items.sort((x, y) => pos.get(x.id) - pos.get(y.id));
+  const have = new Set(items.map(i => i.id));
+  return { items, missing: ids.filter(i => !have.has(i)) };
+}
+function fiUrgentFirstName(name) { const w = String(name || '').trim().split(/\s+/)[0] || ''; return /^[A-Za-z][A-Za-z'.-]{0,30}$/.test(w) ? w : ''; }
+function fiUrgentAddress(doc) { const p = doc.property || {}; return String(p.address || '').trim() + (p.unit_label ? ' #' + String(p.unit_label).replace(/^#/, '') : ''); }
+// "Photo 2, 3" under an item so the requester can tell which attachment belongs to which item (only photos that are actually attached).
+function fiUrgentPhotoLine(item, photoNums) {
+  const ns = (item.photo_ids || []).map(p => photoNums && photoNums.get(p)).filter(Boolean);
+  return ns.length ? `<div style="margin-top:4px;color:#5b6573;font-size:13px">Photo${ns.length === 1 ? '' : 's'} ${ns.join(', ')} attached</div>` : '';
+}
+function fiBuildUrgentEmail(doc, items, note, who, photoCount, omitted, photoNums) {
+  const addr = fiUrgentAddress(doc), n = items.length;
+  const subject = `${items.some(i => i.severity === 'urgent') ? 'Urgent: ' : ''}${n} item${n === 1 ? '' : 's'} at ${addr} - inspection update`;
+  const rows = items.map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid #e5e9f0"><div style="font-weight:700">${fiHtmlEsc(i.title)}</div><div style="color:#5b6573;font-size:13px">${fiHtmlEsc(i.area)} &middot; ${fiHtmlEsc(FI_URGENT_SEV_LABEL[i.severity] || '')}</div>${i.detail ? `<div style="margin-top:4px">${fiHtmlEsc(i.detail)}</div>` : ''}${fiUrgentPhotoLine(i, photoNums)}</td></tr>`).join('');
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1c2430"><div style="background:#b91c1c;color:#fff;padding:14px 20px;font-size:17px;font-weight:700">Inspection update: ${fiHtmlEsc(addr)}</div><div style="padding:18px 20px;line-height:1.5">`
+    + `<p style="margin:0 0 12px">Hi ${fiHtmlEsc(who || 'there')},</p>`
+    + `<p style="margin:0 0 12px">I found ${n === 1 ? 'an item' : n + ' items'} at this property that need${n === 1 ? 's' : ''} your attention before the full inspection report is ready.</p>`
+    + (note ? `<p style="margin:0 0 12px">${fiHtmlEsc(note).replace(/\n/g, '<br>')}</p>` : '')
+    + `<table style="width:100%;border-collapse:collapse;margin:8px 0 14px">${rows}</table>`
+    + (photoCount ? `<p style="margin:0 0 12px">${photoCount} photo${photoCount === 1 ? ' is' : 's are'} attached.${omitted ? ` ${omitted} more will be in the full report.` : ''}</p>` : '')
+    + `<p style="margin:0">The full report will follow. Reply here with any questions.</p><p style="margin:14px 0 0">Brett<br>Ridge Co</p></div></div>`;
+  return { subject, html };
+}
+function fiUrgentSmsBody(doc, items) {
+  const p = doc.property || {}, street = String(p.address || '').split(',')[0].trim() + (p.unit_label ? ' #' + String(p.unit_label).replace(/^#/, '') : '');   // short on purpose: street only, no city/zip
+  const n = items.length, first = String(items[0].title).replace(/[^\x20-\x7e]/g, '').slice(0, 70);
+  return `Ridge Co: ${n === 1 ? 'urgent inspection item' : n + ' urgent inspection items'} at ${street.replace(/[^\x20-\x7e]/g, '')}: ${first}${n > 1 ? ' (+' + (n - 1) + ' more)' : ''}. Details sent to your email.`;
+}
+async function fiUrgentSend(env, body) {
+  body = body || {};
+  const id = String(body.id || '');
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  const rawIds = Array.from(new Set((Array.isArray(body.issue_ids) ? body.issue_ids : []).map(String)));
+  if (rawIds.some(x => !/^[A-Za-z0-9_-]{3,64}$/.test(x))) return fiErr(400, 'bad_items', 'One of the items has an invalid id. Reload the page and try again.');
+  const ids = rawIds;
+  if (!ids.length) return fiErr(400, 'no_items', 'Choose at least one item to send.');
+  if (ids.length > FI_URGENT_MAX_ITEMS) return fiErr(400, 'too_many', `Send at most ${FI_URGENT_MAX_ITEMS} items at a time.`);
+  const preview = body.preview !== false, alsoText = body.also_text === true;
+  const sendKey = String(body.send_key || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
+  if (!preview && sendKey.length < 8) return fiErr(400, 'no_send_key', 'Reload the page and try again (the send could not be made safe against doubles).');
+  const note = fiStr(body.note, 600).trim();
+  await fiEnsureTabs(env);
+  const { row } = await fiFindInspection(env, id);
+  if (!row) return fiErr(404, 'not_found', 'Inspection not found on the server.');
+  if (Number(body.rev) !== Number(row.o.Rev)) return fiErr(409, 'not_saved', 'This inspection has changes that have not finished saving. Wait for "Saved to server" and try again.');
+  let doc;
+  try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'The saved inspection could not be read.'); }
+  const { items, missing } = fiUrgentCollect(doc, ids);
+  if (missing.length) return fiErr(409, 'item_missing', 'Some of those items are not in the saved inspection yet or were removed. Wait for "Saved to server" and try again.');
+  const contact = (doc.booking && doc.booking.contact) || {};
+  const emailOk = e => /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(e);
+  const to = emailOk(String(contact.email || '').trim()) ? String(contact.email).trim() : (emailOk(String(body.to || '').trim()) ? String(body.to).trim() : '');
+  if (!to) return fiErr(400, 'no_recipient', 'This inspection has no booking contact with an email. Type the email address to send to.', { need_to: true });
+  const phone = normalizePhone(String(contact.phone || '')) || '';
+  const who = fiUrgentFirstName(contact.name);
+  // photos: from the chosen items, in order, capped; each must be fully uploaded
+  const pids = []; for (const it of items) for (const p of it.photo_ids) if (!pids.includes(p)) pids.push(p);
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const prow = new Map(pt.rows.filter(r => r.o.Inspection_ID === id && r.o.Active !== 'FALSE').map(r => [r.o.ID, r.o]));
+  const notUp = pids.filter(p => !prow.has(p));
+  if (notUp.length) return fiErr(409, 'photos_missing', `${notUp.length} photo${notUp.length === 1 ? ' has' : 's have'} not finished uploading. Wait a moment and try again.`);
+  const sendPids = pids.slice(0, FI_URGENT_MAX_PHOTOS), omitted = pids.length - sendPids.length;
+  const photoNums = new Map(sendPids.map((p, i) => [p, i + 1]));
+  const mail = fiBuildUrgentEmail(doc, items, note, who, sendPids.length, omitted, photoNums);
+  const cc = (env.FI_URGENT_CC || 'brett@bmoremanagement.com');
+  const ccList = String(cc).toLowerCase() === to.toLowerCase() ? '' : cc;
+  const win = fiUrgentTextWindow(Date.now());
+  const textInfo = { available: !!phone && win.open, phone_on_file: !!phone, window_open: win.open, window: '9am-4pm ET' };
+  const smsBody = fiUrgentSmsBody(doc, items);
+  if (preview) return json({ ok: true, preview: true, to, cc: ccList, subject: mail.subject, html: mail.html, photo_count: sendPids.length, photos_omitted: omitted, text: Object.assign({ body: smsBody }, textInfo) });
+  // idempotency + in-progress guard: one FI_Email_Log row per send_key, written BEFORE anything is sent
+  // The log id binds the key to WHAT is being sent (the sorted item ids): the same key with different items is a different send, never "already sent".
+  let hh = 2166136261; for (const ch of ids.slice().sort().join(',')) { hh ^= ch.charCodeAt(0); hh = Math.imul(hh, 16777619) >>> 0; }
+  const logId = 'ug_' + sendKey + '_' + hh.toString(16).padStart(8, '0');
+  const nonce = Math.random().toString(36).slice(2, 10);
+  const lt = await fiReadFresh(env, 'FI_Email_Log');
+  const prior = lt.rows.find(r => r.o.ID === logId);
+  const nowIso = () => new Date().toISOString();
+  if (prior && /^sent/.test(prior.o.Result)) return json({ ok: true, already_sent: true, to, result: prior.o.Result, sent_at: prior.o.Sent_At, text: { requested: alsoText, sent: /text:sent|text:staged/.test(prior.o.Result) } });
+  if (prior && /^sending/.test(prior.o.Result)) {
+    const age = Date.now() - Date.parse(prior.o.Sent_At || 0);
+    return fiErr(409, age < 120000 ? 'in_progress' : 'unknown_state', age < 120000 ? 'This send is still being processed. Wait a moment, then check before sending again.' : 'An earlier attempt of this send did not finish, so it may or may not have gone out. Check your inbox (you are copied on every one) before sending again.');
+  }
+  const logRow = (result) => ({ ID: logId, Inspection_ID: id, To_Email: to, Subject: mail.subject, Result: result, Sent_At: nowIso() });
+  await fiWriteRow(env, 'FI_Email_Log', lt.headers, logRow('sending:' + nonce), prior ? prior.rowNum : 0);
+  // claim check: two requests with the same key can both pass the read above. Re-read: only the FIRST row with this id may send; a loser steps aside and says so.
+  const claim = await fiReadFresh(env, 'FI_Email_Log');
+  const mine = claim.rows.filter(r => r.o.ID === logId);
+  if (!mine.length || mine[0].o.Result !== 'sending:' + nonce) {
+    const own = mine.find(r => r.o.Result === 'sending:' + nonce);
+    if (own) { try { await fiWriteRow(env, 'FI_Email_Log', claim.headers, logRow('duplicate-blocked'), own.rowNum); } catch (e2) { console.error('fi urgent log failed:', e2 && e2.message); } }
+    return fiErr(409, 'in_progress', 'The same send is already being processed. Wait a moment, then check before sending again.');
+  }
+  const cur = async () => { const t = await fiReadFresh(env, 'FI_Email_Log'); const r = t.rows.find(x => x.o.ID === logId); return { headers: t.headers, rowNum: r ? r.rowNum : 0 }; };
+  const finish = async (result) => { const c = await cur(); if (!c.rowNum) throw new Error('FI: the send log row for this send went missing'); await fiWriteRow(env, 'FI_Email_Log', c.headers, logRow(result), c.rowNum); };
+  // fetch photo bytes
+  const attachments = [];
+  try {
+    const token = await getAccessToken(env);
+    for (const p of sendPids) {
+      const ph = prow.get(p);
+      const dr = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(ph.Drive_File_ID)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!dr.ok) throw new Error('could not read a photo from Drive (HTTP ' + dr.status + ')');
+      attachments.push({ filename: `photo-${attachments.length + 1}.${/png/i.test(ph.Mime || '') ? 'png' : (/webp/i.test(ph.Mime || '') ? 'webp' : 'jpg')}`, mimeType: ph.Mime || 'image/jpeg', base64Data: bytesToB64(await dr.arrayBuffer()) });
+    }
+  } catch (e) {
+    try { await finish('failed: ' + String((e && e.message) || e).slice(0, 120)); } catch (e2) { console.error('fi urgent log failed:', e2 && e2.message); }
+    return fiErr(502, 'photo_read_failed', 'Nothing was sent. A photo could not be read: ' + String((e && e.message) || e).slice(0, 120) + '. Try again.');
+  }
+  let mres;
+  try { mres = await gmailSendEmailMulti(env, { to, cc: ccList, subject: mail.subject, html: mail.html, attachments }); }
+  catch (e) {
+    try { await finish('failed: ' + String((e && e.message) || e).slice(0, 120)); } catch (e2) { console.error('fi urgent log failed:', e2 && e2.message); }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_urgent_send_error', Skill_Or_Endpoint: '/fi/urgent-send', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (e3) { /* silent-ok: telemetry is best-effort, the caller already gets the error */ }
+    return fiErr(502, 'send_failed', 'The email was NOT sent: ' + String((e && e.message) || e).slice(0, 140));
+  }
+  const staged = !!(mres && mres.staged);
+  // optional text, only inside the window, after the email is safely out
+  const text = { requested: alsoText, sent: false, staged: false, reason: '' };
+  if (alsoText) {
+    if (!win.open) text.reason = 'Texts only go 9am-4pm ET, so this went by email only.';
+    else if (!phone) text.reason = 'There is no phone number on the booking, so this went by email only.';
+    else {
+      try {
+        const r = await sendSMS(env, phone, smsBody, { context: { message_type: 'fi_urgent', recipient_type: 'requester' } });
+        if (r && r.staged) { text.sent = true; text.staged = true; }
+        else if (r && r.sid) text.sent = true;
+        else text.reason = 'The text was not sent' + (r && (r.reason || r.error) ? ': ' + String(r.reason || r.error).slice(0, 120) : '') + '. The email did go out.';
+      } catch (e) { text.reason = 'The text failed (' + String((e && e.message) || e).slice(0, 100) + '). The email did go out.'; }
+      if (!text.sent) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_urgent_text_failed', Skill_Or_Endpoint: '/fi/urgent-send', Success: 'FALSE', Notes: text.reason.slice(0, 200) }); } catch (e3) { /* silent-ok: telemetry is best-effort, the caller sees text.reason */ } }
+    }
+  }
+  const result = (staged ? 'sent-staged' : 'sent') + (alsoText ? (text.sent ? ' text:' + (text.staged ? 'staged' : 'sent') : ' text:not-sent') : '');
+  let logged = true;
+  try { await finish(result); } catch (e) { logged = false; try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_urgent_log_error', Skill_Or_Endpoint: '/fi/urgent-send', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (e3) { /* silent-ok: the send itself succeeded and the caller is told logged:false */ } }
+  return json({ ok: true, sent: !staged, staged, to, cc: ccList, subject: mail.subject, photo_count: attachments.length, photos_omitted: omitted, sent_at: nowIso(), logged, text });
 }
 // ═══ Part 2 (Oct 15 2026, after field use): equipment info, brand capture from a website, voice-file transcription + routing, label reading ═══
 // Equipment kinds the phone offers. Keep field lists in sync with field-inspect.html (a unit test compares them).
