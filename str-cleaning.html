@@ -403,7 +403,7 @@ function renderAlerts(){
 }
 
 /* ---------- turnovers ---------- */
-var ALERT_KIND = { uncovered:'Turnover not covered', cancel:'A cleaner cancelled', mark:'Availability change', event:'Event', pending:'Pending date (not booked yet)' };
+var ALERT_KIND = { uncovered:'Turnover not covered', cancel:'A cleaner cancelled', mark:'Availability change', event:'Event', pending:'Pending date (not booked yet)', calendar:'Cleaning calendar blocked' };
 var OFFER_WORDS = { queued:'text being sent', pending:'waiting for a reply', accepted:'said yes', declined:'said no', expired:'no reply', superseded:'replaced by a newer ask', failed:'text did not go through', cancelled:'cancelled' };
 function statusPill(t){
   var pend = (t.offers||[]).filter(function(o){ return o.status === 'pending' || o.status === 'queued'; })[0];
@@ -578,6 +578,9 @@ function renderSwitches(){
     h += '<div class="swrow"><div class="swhead"><b>' + esc(x.title) + '</b><button class="sw' + (on ? ' on' : '') + '" role="switch" aria-checked="' + on + '" aria-label="' + esc(x.title) + '" data-act="switch" data-k="' + x.k + '">' + (on ? 'ON' : 'OFF') + '</button></div>'
       + '<p class="say">' + esc(on ? x.on(s) : x.off(s)) + '</p><p class="say" style="margin-top:2px">Tap the switch to turn it ' + (on ? 'off' : 'on') + '. You will be asked to confirm first.</p></div>';
   });
+  h += '<div class="swrow"><b>Cleaning calendar sign-in</b><p class="say">' + esc(s.cal_as ? 'ACTING AS ' + s.cal_as + ' (Google domain-wide delegation). Nothing has to be given edit access to the calendar.' : "Using the Hub's own Google login, which can read the cleaning calendar but cannot change it (your Google Workspace does not allow giving it edit access). Turn on \"act as Brett\" below, then switch \"Cleaning calendar\" ON.") + '</p>'
+    + '<button class="btn sm" data-act="cal-as">' + (s.cal_as ? 'Change who the Hub acts as…' : 'Turn on "act as Brett"…') + '</button> <button class="btn sm primary" data-act="cal-check">Check calendar access</button> <button class="btn sm" data-act="cal-check-write">Check and test a write</button>'
+    + '<p class="say">"Check" signs in and reads the calendar (changes nothing). "Check and test a write" also adds one 1-minute test event and deletes it straight away.</p><div class="out" id="out-cal"></div></div>';
   h += '<div class="swrow"><b>Tuning numbers</b><div class="nums">' + NUMS.map(function(n){ return '<div><span>' + esc(n.label) + '</span><b>' + esc(s[n.f]) + '</b></div>'; }).join('') + '</div>'
     + '<button class="btn sm" data-act="editnums">Edit numbers</button><p class="say">Opens a form. Nothing is saved until you press Save on it.</p></div>';
   $('sw-body').innerHTML = h;
@@ -599,6 +602,32 @@ function openSwitch(key){
       });
     }
   });
+}
+function openCalAs(){
+  var s = S.settings || {}, cur = s.cal_as || '';
+  openAction({
+    title: cur ? 'Change who the Hub acts as' : 'Turn on "act as Brett"',
+    say: 'The Hub signs in to Google as this person to change the cleaning calendar, so nothing has to be given edit access. It checks with Google first and does NOT save this if Google says no. A one-time Google admin step is needed before it works (the message tells you exactly what). Leave it blank to go back to the old login.',
+    body: '<label class="fld" for="cal-as-in">Email of the calendar owner</label><input type="email" id="cal-as-in" value="' + esc(cur || 'brett@bmoremanagement.com') + '" autocapitalize="off" autocomplete="off">',
+    go: 'Check with Google, then save',
+    validate: function(){ var v = $('cal-as-in').value.trim(); if(v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return 'That does not look like an email address.'; return v === cur ? 'Nothing has changed yet.' : ''; },
+    run: function(){
+      var v = $('cal-as-in').value.trim();
+      return api('POST', '/str/admin/config', { values: { STR_CAL_IMPERSONATE: v } }).then(function(r){
+        var got = r.settings ? (r.settings.cal_as || '') : v;
+        if(got !== v) throw mkErr('The server answered, but the setting still shows "' + got + '". It did not change.');
+        return { tone: 'ok', head: v ? 'The Hub will now act as ' + v + ' on the cleaning calendar.' : "Back to the Hub's own Google login." };
+      });
+    }
+  });
+}
+function renderCalCheck(r){
+  var ok = !!r.passed, head = ok ? (r.stubbed ? 'Not really tested: this is the test server.' : (r.wrote ? 'Passed: the Hub can read and change the cleaning calendar.' : 'Passed: the Hub can sign in and read the cleaning calendar.')) : 'Failed: ' + (r.summary || 'see the steps below.');
+  var h = '<div class="msg ' + (ok ? (r.stubbed ? 'warn' : 'ok') : 'err') + '" role="' + (ok ? 'status' : 'alert') + '"><b>' + esc(head) + '</b></div><ul>';
+  (r.steps || []).forEach(function(x){ h += '<li>' + (x.ok ? 'OK: ' : 'PROBLEM: ') + '<b>' + esc(x.step) + '</b>. ' + esc(x.detail) + (x.fix ? ' <i>' + esc(x.fix) + '</i>' : '') + '</li>'; });
+  h += '</ul>';
+  if(ok && !r.wrote && !r.stubbed) h += '<div class="msg warn"><b>Reading is not the same as changing.</b>' + (r.as ? 'To prove the Hub can also change the calendar, press "Check and test a write".' : 'The Hub\'s own login can read the calendar but cannot change it. Turn on "act as Brett" above.') + '</div>';
+  return h;
 }
 function openNums(){
   var s = S.settings || {};
@@ -1198,6 +1227,8 @@ document.addEventListener('click', function(ev){
   else if(a === 'addcleaner') openCleanerForm(null);
   else if(a === 'switch') openSwitch(el.getAttribute('data-k'));
   else if(a === 'editnums') openNums();
+  else if(a === 'cal-as') openCalAs();
+  else if(a === 'cal-check' || a === 'cal-check-write') toolRun(el, 'out-cal', 'Signing in to Google and reading the calendar… this can take a few seconds.', function(){ return api('POST', '/str/admin/calendar-check', { write: a === 'cal-check-write' }).then(renderCalCheck); });
   else if(a === 'run-dry') toolRun(el, 'out-run', 'Reading your bookings and calendar… this can take a few seconds.', function(){ return api('POST', '/str/admin/run', { dry: true }, { allowFail: true }).then(renderRun); });
   else if(a === 'preview-msgs') previewMsgs(el);
   else if(a === 'digest-dry') digestDry(el);

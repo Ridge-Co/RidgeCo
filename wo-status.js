@@ -25,10 +25,20 @@ function __makeWOStatus() {
   // Designed in HUB_UX §4, not built. Listed so the two groups that already mention them keep working.
   var RESERVED = ['Pending Payment', 'Paid by Customer'];
 
+  // Oct 23 2026 (Ops_Build_Queue #175): 'Estimate Requested' WOs (made by /scope/to-wo, waiting on a vendor
+  // estimate) were in NO group, so they vanished from owner lists, the admin Open filter and property open
+  // counts. OPEN_WORK is the lists-and-counts version of FIELD_OPEN. FIELD_OPEN itself is unchanged ON PURPOSE:
+  // it also drives behaviour that must NOT fire on an estimate request (a vendor bill auto-completing the job,
+  // the duplicate-WO guard, 'still active' checks, same-area bundling, move-in WO linking). ACTIVE is unchanged
+  // too, so tenant lists, the vendor portal and receipt matching do not start showing estimate requests.
+  var OPEN_WORK = ['New', 'Estimate Requested', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];
+
   var sets = {
     // --- the two core groups (HUB_UX isOpen / isActive) ---
-    FIELD_OPEN: FIELD,                                                    // work not finished yet
+    FIELD_OPEN: FIELD,                                                    // work not finished yet (field work only; NOT Estimate Requested)
+    OPEN_WORK: OPEN_WORK,                                                 // FIELD_OPEN + Estimate Requested: admin property counts, aging badge
     ACTIVE: FIELD.concat(['Complete', 'Pending Invoice']),                // still on a portal / dashboard open list
+    ACTIVE_OWNER: OPEN_WORK.concat(['Complete', 'Pending Invoice']),      // ACTIVE + Estimate Requested: the owner portal open list only
     // --- what a vendor may set / what the admin picker offers ---
     VENDOR_SETTABLE: ['Accepted', 'In Progress', 'On Hold', 'Complete'],  // vendor portal, share links
     VENDOR_STARTED: ['Accepted', 'In Progress', 'On Hold'],               // vendor has taken or begun the job
@@ -54,7 +64,7 @@ function __makeWOStatus() {
     STALE_ACTIVE: ['New', 'Assigned', 'Accepted', 'In Progress'],         // can go stale (On Hold is waiting on purpose)
     // --- command-center dashboard counts ---
     DASH_NOT_OPEN: ['Complete', 'Paid', 'Pending Invoice', 'Invoiced', 'Pending Payment', 'Paid by Customer', 'Cancelled', 'Canceled', 'Closed', 'Void'],
-    DASH_OPEN_LEGACY: ['New', 'Assigned', 'Accepted', 'Scheduled', 'In Progress', 'On Hold'],
+    DASH_OPEN_LEGACY: ['New', 'Estimate Requested', 'Assigned', 'Accepted', 'Scheduled', 'In Progress', 'On Hold'],   // admin WO list 'Open' filter
     // --- what a tenant sees ---
     TENANT_OPEN: ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold', 'Pending Invoice'],
     TENANT_TIMELINE: ['New', 'Assigned', 'Accepted', 'In Progress', 'Complete'],

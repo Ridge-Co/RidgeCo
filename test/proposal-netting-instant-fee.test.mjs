@@ -162,7 +162,7 @@ t('owner complete/on-hold texts use property + unit, not bare property', !/at \$
 t('admin complete text names the job + address', /woJobLabel\(wo\)\} at \$\{address\}\. Pending invoice/.test(us));
 t('tenant accepted text has the job description', /accepted your \$\{woJobLabel\(wo\)\}/.test(us));
 const sched = fn('scheduleWO');
-t('owner scheduled text has property + unit', /propUnitText\(property, unit\)\} — is scheduled/.test(sched));
+t('owner scheduled text has property + unit', /propUnitText\(property, unit\)\} is scheduled/.test(sched));
 const refresh = fn('refreshUneditedTemplates');
 t('template refresh only touches unedited (system_default) rows, verified writes', /Updated_By \|\| ''\) !== 'system_default'\) continue/.test(refresh) && /updateRowVerified/.test(refresh) && /logTelemetry/.test(refresh));
 t('manual vendor-paid text endpoint is routed', /\/qb\/notify-vendor-paid'\)\s+return await qbNotifyVendorPaid/.test(src));

@@ -211,6 +211,7 @@ async function load(){
   let rev=null,q=null;
   try{ rev=await getJSON('/ops-review-log?limit=1'); }catch(e){ rev=null; toast('Couldn’t load this week’s review — '+h(e.message)); }
   try{ q=await getJSON('/ops-queue?all=1'); }catch(e){ q=null; document.getElementById('body').innerHTML='<div class="card"><b>Couldn’t load the queue</b><div class="sub">'+h(e.message)+'</div><div class="ctrls"><button class="mini" onclick="load()">Try again</button></div></div>'; return; }
+  if(q&&q.truncated) toast('The queue list is cut off at 400 rows, so the oldest rows are not shown here.');
   render(rev,q);
   maybeSync(q);
 }

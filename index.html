@@ -154,6 +154,7 @@ window.addEventListener('pageshow', function(e){
   .wo-right { display: flex; align-items: center; gap: 10px; }
   .badge { padding: 3px 8px; border-radius: 20px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: bold; }
   .badge-new { background: #e8f0fb; color: var(--info); }
+  .badge-estimaterequested { background: #e8f0fb; color: var(--info); }
   .badge-assigned { background: #fdf2e2; color: var(--warn); }
   .badge-accepted { background: #eaf6ee; color: var(--accent2); }
   .badge-scheduled { background: #eaf6ee; color: var(--accent2); }
@@ -491,6 +492,7 @@ window.addEventListener('pageshow', function(e){
       <button class="btn secondary" onclick="window.open('vendor-setup.html','_blank')" title="Opens a full page with a contact-card upload — same link you can send to a new vendor">+ Add Vendor (full page / shareable link)</button>
     </div>
     <div id="vendors-pending-section"></div>
+    <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="vendor-filter-stuck" onchange="renderVendorsPage()"> Only show vendors sent a link+PIN who never logged in (follow-ups)</label>
     <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="vendor-filter-unwelcomed" onchange="renderVendorsPage()"> Only show vendors who haven't received a welcome message</label>
     <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="vendor-filter-inactive" onchange="renderVendorsPage()"> Show inactive (deactivated) vendors instead of active ones</label>
     <div id="vendors-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
@@ -516,6 +518,7 @@ window.addEventListener('pageshow', function(e){
       </select>
       <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px"><input type="checkbox" id="tenant-filter-owner-exclude" onchange="renderTenantsPage()"> Exclude this owner instead of showing only them</label>
     </div>
+    <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="tenant-filter-stuck" onchange="renderTenantsPage()"> Only show tenants sent a link+PIN who never logged in (follow-ups)</label>
     <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="tenant-filter-unwelcomed" onchange="renderTenantsPage()"> Only show tenants who haven't received a welcome message</label>
     <div id="tenants-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
@@ -2433,7 +2436,7 @@ function woCard(w) {
   var addr = prop ? prop.Address : (w.Property_ID||'—');
   var sc = 'badge-'+(w.Status||'new').toLowerCase().replace(/\s+/g,'');
   // Aging calculation
-  var OPEN_WO = WOStatus.sets.FIELD_OPEN;
+  var OPEN_WO = WOStatus.sets.OPEN_WORK;
   var daysOpen = w.Created_Date ? Math.floor((Date.now()-new Date(w.Created_Date))/(86400000)) : 0;
   var agingBadge = '';
   if (OPEN_WO.includes(w.Status)) {
@@ -2610,7 +2613,7 @@ function renderWOPage() {
   });
 
   var PRI = {urgent:0,high:1,normal:2,low:3};
-  var STA = {'New':0,'Assigned':1,'Accepted':2,'In Progress':3,'On Hold':4,'Complete':5,'Pending Invoice':6,'Invoiced':7,'Paid':8,'Declined':9,'Cancelled':10};
+  var STA = {'New':0,'Estimate Requested':0.5,'Assigned':1,'Accepted':2,'In Progress':3,'On Hold':4,'Complete':5,'Pending Invoice':6,'Invoiced':7,'Paid':8,'Declined':9,'Cancelled':10};
   wos.sort(function(a,b){
     if (sort==='date-asc') return new Date(a.Created_Date)-new Date(b.Created_Date);
     if (sort==='priority') { var d=(PRI[(a.Priority||'normal').toLowerCase()]??2)-(PRI[(b.Priority||'normal').toLowerCase()]??2); return d!==0?d:new Date(b.Created_Date)-new Date(a.Created_Date); }
@@ -2664,6 +2667,20 @@ function maybeOpenWOFromURL() {
     var wid = qs.get('wo');
     if (wid && typeof openWODetail === 'function') openWODetail(wid);
   } catch (e) {}
+}
+
+// WO detail -> "Create delivery": opens deliveries.html with the WO (and its property/unit) pre-linked.
+// deliveries.html already reads ?wo_id= / ?property_id= / ?unit_id= (its PREFILL deep link).
+function deliveryCreateUrl(wo) {
+  var q = ['wo_id=' + encodeURIComponent(wo.ID || '')];
+  if (wo.Property_ID) q.push('property_id=' + encodeURIComponent(wo.Property_ID));
+  if (wo.Unit_ID) q.push('unit_id=' + encodeURIComponent(wo.Unit_ID));
+  return 'deliveries.html?' + q.join('&');
+}
+function openCreateDelivery(wo) {
+  var url = deliveryCreateUrl(wo);
+  var w = window.open(url, '_blank');
+  if (!w) { window.location.href = url; } // popup blocked: navigate instead of doing nothing
 }
 
 function openWODetail(woId) {
@@ -3073,6 +3090,7 @@ function openWODetail(woId) {
   actions.appendChild(qsDiv);
   addBtn(wo.Vendor_ID ? '🔄 Change Vendor' : 'Assign Vendor', wo.Vendor_ID ? 'secondary' : '', function(){openAssignModal(woId);});
   addBtn('📤 Send to Vendor','secondary',function(){openShareWO(woId);});
+  addBtn('🚚 Create delivery','secondary',function(){openCreateDelivery(wo);});
   if (wo.Vendor_ID) {
     addBtn('📷 Request Photos','secondary',function(){requestFromVendor(woId,wo.Vendor_ID,'photos');});
     addBtn('🧾 Request Invoice','secondary',function(){requestFromVendor(woId,wo.Vendor_ID,'invoice');});
@@ -4450,7 +4468,7 @@ function renderPropertiesPage() {
     return;
   }
 
-  var OPEN_STATUSES = WOStatus.sets.FIELD_OPEN;
+  var OPEN_STATUSES = WOStatus.sets.OPEN_WORK;
 
   el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+props.length+' propert'+(props.length===1?'y':'ies')+'</div>' +
     props.map(function(p) {
@@ -4783,8 +4801,76 @@ function rejectVendorRequest(id){
     toast('Vendor request rejected','success'); loadAll();
   }).catch(function(e){toast('Error: '+e.message,'error');});
 }
+// ── Portal access tracking (Oct 22 2026, Brett) ─────────────────────────────────────────────────────────
+// One GET /portal-access gives every person's welcome / link+PIN / login state. The colours follow the Worker's own
+// thresholds (Config PORTAL_FOLLOWUP_AMBER_DAYS / PORTAL_FOLLOWUP_RED_DAYS, default 14 / 30 days), so the Hub never re-derives them.
+var _paLoading = false;
+function loadPortalAccess(force) {
+  if (_paLoading) return;
+  if (!force && (state.portalAccess || state.portalAccessError)) return;
+  _paLoading = true;
+  api('GET', '/portal-access').then(function(res) {
+    _paLoading = false;
+    if (!res || res.ok !== true) { state.portalAccessError = (res && res.error) || 'Could not load login tracking'; }
+    else {
+      state.portalAccessError = ''; state.portalAccess = {}; state.portalAccessList = res;
+      safeArray(res.people).forEach(function(p) { state.portalAccess[p.type + '|' + p.id] = p; });
+    }
+    paRerender();
+  }).catch(function(e) { _paLoading = false; state.portalAccessError = 'Could not load login tracking: ' + e.message; paRerender(); });
+}
+function paRerender() {
+  try { renderVendorsPage(); renderTenantsPage(); renderOwnersPage(); }
+  catch (e) { console.error('portal access re-render failed', e); toast('Login tracking loaded but the page could not redraw: ' + e.message, 'error'); }
+}
+function paNeedsFollowUp(type, id) {
+  var p = state.portalAccess && state.portalAccess[type + '|' + id];
+  return !!(p && (p.level === 'amber' || p.level === 'red'));
+}
+function paBadge(type, id, withWelcome) {
+  if (state.portalAccessError) return '<span style="color:var(--danger);font-size:11px" title="' + esc(state.portalAccessError) + '">⚠ tracking unavailable</span>';
+  if (!state.portalAccess) return '<span style="color:var(--muted);font-size:11px">…</span>';
+  var p = state.portalAccess[type + '|' + id];
+  if (!p) return '<span style="color:var(--muted);font-size:11px">—</span>';
+  var d10 = function(s) { return s ? esc(String(s).slice(0, 10)) : ''; };
+  var line;
+  if (p.logged_in) {
+    line = p.state === 'logged_in'
+      ? '<span style="color:var(--accent2)" title="First login ' + d10(p.first_login) + ', last ' + d10(p.last_login) + '">✅ in ' + p.login_count + '× · last ' + d10(p.last_login) + '</span>'
+      : '<span style="color:var(--accent2)" title="Has used the portal before login tracking began (' + esc(p.login_evidence) + ')">✅ used before</span>';
+  } else if (!p.pin_sent) {
+    line = '<span style="color:var(--muted)">📵 link+PIN not sent</span>';
+  } else {
+    var col = p.level === 'red' ? 'var(--danger)' : p.level === 'amber' ? 'var(--warn)' : 'var(--muted)';
+    var ic = p.level === 'red' ? '🔴' : p.level === 'amber' ? '🟠' : '📱';
+    var unv = p.pin_verified ? '' : ' <span style="opacity:.75" title="Taken from the old text log, which was written even when a text may not have gone out. Not confirmed.">(unconfirmed)</span>';
+    line = '<span style="color:' + col + '" title="Link+PIN sent ' + d10(p.pin_sent_date) + ' — never logged in">' + ic + ' sent ' + p.days_since_pin + 'd ago, not in yet' + unv + '</span>';
+  }
+  if (withWelcome) {
+    line = '<span style="color:' + (p.welcome_sent ? 'var(--accent2)' : 'var(--muted)') + '" title="' + esc(p.welcome_date || '') + '">' + (p.welcome_sent ? '👋 welcomed' + (p.welcome_date ? ' ' + d10(p.welcome_date) : '') : '👋 not welcomed') + '</span><br>' + line;
+  }
+  return '<span style="font-size:11px">' + line + '</span>';
+}
+function paSummary(types) {
+  if (state.portalAccessError) return '<div style="color:var(--danger);font-size:12px;margin-bottom:8px">⚠ ' + esc(state.portalAccessError) + ' <a href="#" onclick="state.portalAccessError=\'\';loadPortalAccess(true);return false">Retry</a></div>';
+  if (!state.portalAccessList) return '';
+  var th = state.portalAccessList.thresholds || {};
+  var ppl = safeArray(state.portalAccessList.people).filter(function(p) { return types.indexOf(p.type) >= 0; });
+  var n = function(f) { return ppl.filter(f).length; };
+  var stuck = ppl.filter(function(p) { return p.level === 'amber' || p.level === 'red'; }).sort(function(a, b) { return b.days_since_pin - a.days_since_pin; });
+  var h = '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;margin-bottom:10px;font-size:12px;line-height:1.6">' +
+    '<b>Login tracking</b> · ✅ ' + n(function(p) { return p.logged_in; }) + ' logged in · 📱 ' + n(function(p) { return p.level === 'waiting'; }) + ' waiting · ' +
+    '<span style="color:var(--warn)">🟠 ' + n(function(p) { return p.level === 'amber'; }) + ' (' + (th.amberDays || 14) + 'd+)</span> · ' +
+    '<span style="color:var(--danger)">🔴 ' + n(function(p) { return p.level === 'red'; }) + ' (' + (th.redDays || 30) + 'd+)</span> · ' +
+    '📵 ' + n(function(p) { return p.state === 'pin_not_sent'; }) + ' link+PIN not sent';
+  if (stuck.length) {
+    h += '<div style="margin-top:4px;color:var(--muted)">Follow up: ' + stuck.slice(0, 10).map(function(p) { return esc(p.name || p.company || p.id) + ' (' + p.days_since_pin + 'd)'; }).join(', ') + (stuck.length > 10 ? ' … +' + (stuck.length - 10) + ' more' : '') + '</div>';
+  }
+  return h + '</div>';
+}
 function renderVendorsPage() {
   renderVendorsPendingSection();
+  loadPortalAccess();
   var el = document.getElementById('vendors-list');
   var onlyUnwelcomed = !!((document.getElementById('vendor-filter-unwelcomed')||{}).checked);
   var showInactive = !!((document.getElementById('vendor-filter-inactive')||{}).checked);
@@ -4793,10 +4879,12 @@ function renderVendorsPage() {
     return showInactive ? v.Active==='FALSE' : v.Active!=='FALSE';
   });
   if (!showInactive && onlyUnwelcomed) vendors = vendors.filter(function(v){ return v.Welcome_Sent !== 'TRUE'; });
-  if (!vendors.length) { el.innerHTML='<div class="loading">'+(showInactive?'No inactive vendors.':(onlyUnwelcomed?'Everyone has been welcomed.':'No vendors yet'))+'</div>'; return; }
-  el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+  var onlyStuckV = !!((document.getElementById('vendor-filter-stuck')||{}).checked);
+  if (!showInactive && onlyStuckV) vendors = vendors.filter(function(v){ return paNeedsFollowUp('vendor', v.ID); });
+  if (!vendors.length) { el.innerHTML=paSummary(['vendor'])+'<div class="loading">'+(showInactive?'No inactive vendors.':(onlyStuckV?'No vendors need a login follow-up.':(onlyUnwelcomed?'Everyone has been welcomed.':'No vendors yet')))+'</div>'; return; }
+  el.innerHTML = paSummary(['vendor']) + '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'vendors-action-bar\')"></th>' +
-    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th>Welcome</th><th title="Paid by QuickBooks Instant Payment — the fee (1%, $10 min, $100 max) comes off their bill as its own line">Instant pay</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th title="Can submit a bill with no Work Order (e.g. tenant treats, small extras)">No-WO Bill</th><th title="Can create their own &quot;One-Off Job&quot; Work Order, auto-assigned to themselves">One-Off Job</th><th></th></tr></thead><tbody>' +
+    '<th>Name</th><th>Trades</th><th>Rate/hr</th><th>Phone</th><th>Markets</th><th>Open Jobs</th><th>PIN</th><th>Welcome</th><th>Link+PIN / login</th><th title="Paid by QuickBooks Instant Payment — the fee (1%, $10 min, $100 max) comes off their bill as its own line">Instant pay</th><th title="Tick if this vendor is you or an employee — no QuickBooks bill is raised, and the job stays off vendor reconciliation">In-house</th><th title="Can submit a bill with no Work Order (e.g. tenant treats, small extras)">No-WO Bill</th><th title="Can create their own &quot;One-Off Job&quot; Work Order, auto-assigned to themselves">One-Off Job</th><th></th></tr></thead><tbody>' +
     vendors.map(function(v){
       var open = state.workorders.filter(function(w){return w.Vendor_ID===v.ID&&!WOStatus.sets.COMPLETE_INVOICED_PAID.includes(w.Status);}).length;
       var canSend = !!(v.PIN && v.Phone);
@@ -4815,6 +4903,7 @@ function renderVendorsPage() {
         '<td>'+(open>0?'<span style="color:var(--warn)">'+open+'</span>':'0')+'</td>' +
         '<td style="color:'+(v.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(v.PIN||'—')+'</td>' +
         '<td>'+welcomeBadge+'</td>' +
+        '<td>'+paBadge('vendor', v.ID)+'</td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.Instant_Pay||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInstantPay(\''+v.ID+'\',this.checked)" title="Paid by QuickBooks Instant Payment — the fee comes off their bill as its own line" style="width:16px;height:16px;cursor:pointer"> <a href="javascript:void(0)" onclick="openFeeCreditModal(\''+v.ID+'\',\''+esc(nm).replace(/'/g,'&#39;')+'\')" title="Credit owed back to this vendor for instant-pay fees that were deducted but never charged" style="font-size:11px;color:var(--info);white-space:nowrap">💳 credit</a></td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.In_House||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorInHouse(\''+v.ID+'\',this.checked)" title="No QuickBooks bill is raised; kept off vendor reconciliation" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Bill_No_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanBillNoWO(\''+v.ID+'\',this.checked)" title="Can submit a standalone bill with no Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
@@ -5012,6 +5101,9 @@ function renderTenantsPage() {
   var onlyUnwelcomed = !!((document.getElementById('tenant-filter-unwelcomed')||{}).checked);
   var allTenants = safeArray(state.tenants).filter(function(t){return t.Active!=='FALSE';});
   if (onlyUnwelcomed) allTenants = allTenants.filter(function(t){ return t.Welcome_Sent !== 'TRUE'; });
+  loadPortalAccess();
+  var onlyStuckT = !!((document.getElementById('tenant-filter-stuck')||{}).checked);
+  if (onlyStuckT) allTenants = allTenants.filter(function(t){ return paNeedsFollowUp('tenant', t.ID); });
   if (ownerFilter) {
     allTenants = allTenants.filter(function(t){
       var unit = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
@@ -5033,11 +5125,11 @@ function renderTenantsPage() {
            (prop&&(prop.City||'').toLowerCase().includes(search));
   }) : allTenants;
 
-  if (!tenants.length) { el.innerHTML='<div class="loading">'+(onlyUnwelcomed?'Everyone has been welcomed.':'No tenants match "'+esc(search)+'" — try name, address, phone, or unit')+'</div>'; return; }
-  el.innerHTML = '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+tenants.length+' of '+allTenants.length+' tenant'+(allTenants.length!==1?'s':'')+(search?' matching "'+esc(search)+'"':'')+'</div>' +
+  if (!tenants.length) { el.innerHTML=paSummary(['tenant'])+'<div class="loading">'+(onlyStuckT?'No tenants need a login follow-up.':onlyUnwelcomed?'Everyone has been welcomed.':'No tenants match "'+esc(search)+'" — try name, address, phone, or unit')+'</div>'; return; }
+  el.innerHTML = paSummary(['tenant']) + '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">'+tenants.length+' of '+allTenants.length+' tenant'+(allTenants.length!==1?'s':'')+(search?' matching "'+esc(search)+'"':'')+'</div>' +
     '<div class="table-wrap"><table class="data-table"><thead><tr>' +
     '<th style="width:28px"><input type="checkbox" title="Select all" onchange="selectAllPinChecks(this,\'tenants-action-bar\')"></th>' +
-    '<th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>Move-In</th><th>PIN</th><th>Welcome</th><th></th></tr></thead><tbody>' +
+    '<th>Name</th><th>Phone</th><th>Unit</th><th>Property</th><th>Move-In</th><th>PIN</th><th>Welcome</th><th>Link+PIN / login</th><th></th></tr></thead><tbody>' +
     tenants.map(function(t){
       var unit = safeArray(state.units).find(function(u){return u.ID===t.Unit_ID;});
       var propId = t.Property_ID || (unit&&unit.Property_ID) || '';
@@ -5061,6 +5153,7 @@ function renderTenantsPage() {
         '<td>'+moveIn+'</td>' +
         '<td style="'+pinColor+';font-weight:bold;letter-spacing:0.1em">'+(t.PIN||'—')+'</td>' +
         '<td>'+welcomeBadge+'</td>' +
+        '<td>'+paBadge('tenant', t.ID)+'</td>' +
         '<td style="display:flex;gap:4px">' +
         '<button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
         '<button class="btn small secondary" onclick="openScheduleMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')">📅</button>' +
@@ -6374,8 +6467,9 @@ function confirmSendPin() {
   api('POST', '/send-pin', { type: _currentPinSend.type, id: _currentPinSend.id }).then(function(res) {
     btn.textContent = 'SEND SMS';
     if (res.success) {
-      document.getElementById('send-pin-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">✓ Sent to ' + (res.name||'') + ' at ' + (res.sent_to||'') + '</div>';
-      setTimeout(function(){ closeModal('modal-send-pin'); }, 1800);
+      document.getElementById('send-pin-msg').innerHTML = (res.staged ? '<div style="color:var(--warn);font-size:12px;margin-top:6px">🧪 Test environment: nothing was really texted.</div>' : '<div style="color:var(--accent2);font-size:12px;margin-top:6px">✓ Sent to ' + (res.name||'') + ' at ' + (res.sent_to||'') + '</div>') + (res.warning ? '<div style="color:var(--warn);font-size:12px;margin-top:6px">⚠ ' + esc(res.warning) + '</div>' : '');
+      loadPortalAccess(true);
+      setTimeout(function(){ closeModal('modal-send-pin'); }, res.warning ? 6000 : 1800);
     } else {
       btn.disabled = false;
       document.getElementById('send-pin-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">⚠ ' + (res.error||'Error') + '</div>';
@@ -6553,9 +6647,12 @@ function confirmSendWelcome() {
   document.getElementById('send-welcome-msg').innerHTML = '';
   api('POST', '/welcome/send', { type: _currentWelcomeSend.type, id: _currentWelcomeSend.id, message: text }).then(function(res) {
     btn.textContent = 'SEND SMS';
-    if (res.success) {
+    if (res.success && res.warning) {
+      document.getElementById('send-welcome-msg').innerHTML = '<div style="color:var(--warn);font-size:12px;margin-top:6px">⚠ ' + esc(res.warning) + '</div>';
+      setTimeout(function(){ closeModal('modal-send-welcome'); loadAll(); loadPortalAccess(true); }, 6000);
+    } else if (res.success) {
       document.getElementById('send-welcome-msg').innerHTML = '<div style="color:var(--accent2);font-size:12px;margin-top:6px">✓ Sent to ' + (res.name||'') + ' at ' + (res.sent_to||'') + '</div>';
-      setTimeout(function(){ closeModal('modal-send-welcome'); loadAll(); }, 1800);
+      setTimeout(function(){ closeModal('modal-send-welcome'); loadAll(); loadPortalAccess(true); }, 1800);
     } else {
       btn.disabled = false;
       document.getElementById('send-welcome-msg').innerHTML = '<div style="color:var(--danger);font-size:12px;margin-top:6px">⚠ ' + (res.error||'Error') + '</div>';
@@ -6905,7 +7002,7 @@ function renderOwnersPage() {
     var canSend = !!(o.PIN && o.Phone);
     var nm = (o.First_Name+' '+(o.Last_Name||'')).trim();
     var badge = isInactive ? ' <span style="background:var(--danger);color:#fff;font-size:9px;padding:1px 6px;border-radius:3px;letter-spacing:.05em;font-weight:bold;vertical-align:middle">INACTIVE</span>' : '';
-    var display = nm + badge + (o.Company ? '<br><span style="color:var(--muted);font-size:11px">'+o.Company+'</span>' : '');
+    var display = nm + badge + (o.Company ? '<br><span style="color:var(--muted);font-size:11px">'+o.Company+'</span>' : '') + (isInactive ? '' : '<br>' + paBadge('owner', o.ID, true));
     return '<tr'+(isInactive?' style="opacity:0.65"':'')+'>' +
       '<td><input type="checkbox" class="pin-check" data-id="'+o.ID+'" data-type="owner" data-haspin="'+(o.PIN?'1':'0')+'" data-name="'+nm+'" data-phone="'+(o.Phone||'')+'" onchange="updatePinActionBar(\'owners-action-bar\')"></td>' +
       '<td>'+display+'</td>' +
@@ -6919,11 +7016,13 @@ function renderOwnersPage() {
       '<button class="btn small secondary" onclick="goToQBMapping(\''+esc((nm || o.Company || '').replace(/\'/g,''))+'\')" title="View/link this owner\'s properties and units to QuickBooks">🔗</button>' +
       '<button class="btn small" onclick="addOwnerContact(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="A second person at this company who needs their own login">+ Contact</button>' +
       '<button class="btn small" style="background:'+(canSend?'var(--info)':'var(--border)')+';color:#fff;opacity:'+(canSend?'1':'0.4')+';cursor:'+(canSend?'pointer':'default')+'" '+(canSend?'onclick="previewSendPin(\'owner\',\''+o.ID+'\',\''+nm+'\',\''+o.Phone+'\')"':'')+' title="'+(canSend?'Send PIN via SMS':'Set phone + PIN first')+'">📱</button>' +
+      (o.Phone ? '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="previewSendWelcome(\'owner\',\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\',\''+esc(o.Phone||'')+'\')" title="Send Welcome">👋</button>' : '') +
       '<button class="btn small secondary" onclick="openSendMessageModal(\'owner\',\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="Send a one-off message">✉️</button>' +
       '</td></tr>';
   }
 
-  var html = '<div style="margin-bottom:8px;color:var(--muted);font-size:11.5px;line-height:1.5">' +
+  loadPortalAccess();
+  var html = paSummary(['owner', 'owner_user']) + '<div style="margin-bottom:8px;color:var(--muted);font-size:11.5px;line-height:1.5">' +
     'Several people at one company belong on <b>one</b> owner record — use <b>+ Contact</b> to give each their own login. ' +
     'A second owner row splits the properties and only one of them can hold the QuickBooks link.</div>';
 
@@ -9558,15 +9657,21 @@ function invComposeMemo(billId, timeEntries, billObj, wo) {
   var parts = [];
   var billDesc = enOnly((billObj && billObj.Invoice_Description) || '').trim();   // customer-facing memo = English half of any [ES]/[EN] text
   if (billDesc) parts.push(billDesc);
+  // Mirrors worker.js laborEntryText (Oct 23 2026): only an entry's own Invoice_Description is ever used (private Notes
+  // are copied into it by the opt-in "Use notes as invoice descriptions" button, never automatically). Brett's own
+  // hours show a date only when a work date (Start_DateTime) was recorded; vendor entries keep the old rule.
+  function entryText(e) {
+    var inv = enOnly(e.Invoice_Description || '').trim();
+    if (!inv) return '';
+    var isHub = String(e.Role || '').toLowerCase() === 'hub';
+    var d = (isHub ? (e.Start_DateTime || '') : (e.Start_DateTime || e.Created_Date || '')).split('T')[0];
+    return d ? (d + ' — ' + inv) : inv;
+  }
   safeArray(timeEntries).filter(function(e) {
-    return e && e.Active !== 'FALSE' && String(e.Billed_Bill_ID || '') === billIdStr && String(e.Invoice_Description || '').trim();
+    return e && e.Active !== 'FALSE' && String(e.Billed_Bill_ID || '') === billIdStr && entryText(e);
   }).sort(function(a, b) {
     return new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0);
-  }).forEach(function(e) {
-    var d = (e.Start_DateTime || e.Created_Date || '').split('T')[0];
-    var desc = enOnly(e.Invoice_Description || '').trim();
-    parts.push(d ? (d + ' — ' + desc) : desc);
-  });
+  }).forEach(function(e) { parts.push(entryText(e)); });
   if (parts.length) return parts.join('; ');
   return (wo && (wo.Invoice_Memo || wo.Description)) || '';
 }
@@ -10207,6 +10312,9 @@ function renderHubEstimateView(woId, estimates, holder) {
 
     var current = estimates[estimates.length - 1];
     var isApproved = current.Status === 'Approved';
+    // Oct 26 2026: an estimate already pushed into a signed proposal reads 'Converted', and the deposit panel used to disappear with it. A vendor deposit
+    // can be added at any time after the fact, so the panel shows for Approved OR Converted estimates.
+    var isConverted = current.Status === 'Converted';
     // Vendor text is shown exactly as written; when the worker stored an English copy (desc_en /
     // Change_Reason_EN — Sep 28 2026) it is shown beneath, only when it differs.
     var rows = current.Line_Items.map(function(li) {
@@ -10223,9 +10331,9 @@ function renderHubEstimateView(woId, estimates, holder) {
         'v' + e.Version + ' — $' + parseFloat(e.Subtotal).toFixed(2) + (e.Change_Reason ? ' — ' + esc(e.Change_Reason) + (e.Change_Reason_EN ? ' (English: ' + esc(e.Change_Reason_EN) + ')' : '') : '') + ' — ' + esc(e.Created_By || '') + '</div>';
     }).join('') : '';
 
-    var approvalBlock = isApproved
+    var approvalBlock = (isApproved || isConverted)
       ? '<div style="margin-top:10px;background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:8px 10px">' +
-        '<span style="color:var(--accent2);font-weight:bold;font-size:11px">✓ APPROVED</span>' +
+        '<span style="color:var(--accent2);font-weight:bold;font-size:11px">' + (isConverted ? '✓ APPROVED — IN A PROPOSAL' : '✓ APPROVED') + '</span>' +
         (current.Approved_By ? '<span style="color:var(--muted);font-size:10px;margin-left:6px">by ' + esc(current.Approved_By) + (current.Approval_Note ? ' — ' + esc(current.Approval_Note) : '') + '</span>' : '') +
         '</div>' + renderDepositPanel(woId)
       : '<div style="margin-top:10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px">' +
@@ -10436,12 +10544,18 @@ function approveEstimateUI(woId) {
 function renderDepositPanel(woId) {
   var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
   var amt = wo ? parseFloat(wo.Deposit_Amount || 0) : 0;
+  if (wo && amt > 0 && wo.Deposit_Applied === 'TRUE') {
+    return '<div style="margin-top:8px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px">' +
+      '<div style="font-size:11px;color:var(--accent2);font-weight:bold">✓ DEPOSIT TAKEN OFF THE FINAL BILL — $' + amt.toFixed(2) + '</div>' +
+      '<div style="font-size:10.5px;color:var(--muted);margin-top:2px">Paid via QuickBooks bill ' + esc(wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID || '') +
+      (wo.Deposit_Applied_Bill ? ', deducted on vendor bill ' + esc(wo.Deposit_Applied_Bill) : '') + '.</div></div>';
+  }
   if (wo && amt > 0 && wo.Deposit_Applied !== 'TRUE') {
     return '<div style="margin-top:8px;background:var(--surface);border:1px solid var(--warn);border-radius:6px;padding:10px">' +
       '<div style="font-size:11px;color:var(--warn);font-weight:bold">💰 DEPOSIT RECORDED — $' + amt.toFixed(2) + '</div>' +
       '<div style="font-size:10.5px;color:var(--muted);margin-top:2px">Approved ' + esc(wo.Deposit_Approved_Date || '') + (wo.Deposit_Notes ? ' — ' + esc(wo.Deposit_Notes) : '') + '. ' +
       (wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID
-        ? 'QuickBooks bill <b>' + esc(wo.Deposit_QB_Bill_Number || ('#' + wo.Deposit_QB_Bill_ID)) + '</b> is open and waiting — pay it yourself via QuickBooks Instant Pay.'
+        ? 'QuickBooks bill <b>' + esc(wo.Deposit_QB_Bill_Number || ('#' + wo.Deposit_QB_Bill_ID)) + '</b> is open and waiting — pay it yourself via QuickBooks Instant Pay' + (parseFloat(wo.Deposit_Fee || 0) > 0 ? ' (send $' + (amt - parseFloat(wo.Deposit_Fee)).toFixed(2) + ' after the $' + parseFloat(wo.Deposit_Fee).toFixed(2) + ' instant-pay fee)' : '') + '. It comes off this vendor\'s final bill automatically.'
         : '<span style="color:var(--danger)">No QuickBooks bill id on file — check QuickBooks directly before assuming there\'s something to pay.</span>') +
       '</div>' +
       '<button class="btn small secondary" style="margin-top:6px" onclick="depositClearUI(\'' + woId + '\')">Clear (entered in error — also deletes the QB bill if still unpaid)</button>' +
@@ -10454,8 +10568,8 @@ function renderDepositPanel(woId) {
     '<input type="text" placeholder="Note (optional)" id="dep-note-' + woId + '" style="flex:1;min-width:120px;font-size:13px;padding:7px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text)">' +
     '<button class="btn small" style="background:var(--warn);color:#fff" onclick="depositApproveUI(\'' + woId + '\')">Approve deposit &amp; create QB bill</button>' +
     '</div>' +
-    '<div style="font-size:10.5px;color:var(--muted);margin-top:6px">Creates an OPEN QuickBooks bill for this vendor (no customer invoice) — pay it yourself via QuickBooks Instant Pay. ' +
-    'The final bill\'s Review card will show the net amount owed so the vendor isn\'t paid the deposit twice.</div>' +
+    '<div style="font-size:10.5px;color:var(--muted);margin-top:6px">Creates an OPEN QuickBooks bill for this vendor (no customer invoice, no Vendor Bills entry) — pay it yourself via QuickBooks Instant Pay. ' +
+    'It can never be more than the vendor\'s estimate, carries the instant-pay fee when the vendor has it on, and comes off their final bill automatically as its own line, so they are never paid it twice. You will see exactly what it does before anything is created.</div>' +
     '</div>';
 }
 
@@ -10465,14 +10579,24 @@ function depositApproveUI(woId) {
   var amt = el ? parseFloat(el.value) : NaN;
   if (!Number.isFinite(amt) || amt <= 0) { toast('Enter a deposit amount', 'error'); return; }
   var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); });
-  api('POST', '/wo/deposit-approve', { wo_id: woId, vendor_id: wo ? wo.Vendor_ID : '', amount: amt, notes: noteEl ? noteEl.value.trim() : '' }, 20000)
-    .then(function(res) {
-      if (!res.success) { toast(res.error || 'Failed to record deposit', 'error'); return; }
-      toast('Deposit recorded — $' + amt.toFixed(2) + ' — QuickBooks bill ' + (res.qb_bill_number || res.qb_bill_id), 'success');
-      return api('GET', '/workorders?include_voided=1');
+  var req = { wo_id: woId, vendor_id: wo ? wo.Vendor_ID : '', amount: amt, notes: noteEl ? noteEl.value.trim() : '' };
+  // Preview first (touches nothing): the cap check and the fee line are decided by the server, and Brett sees the real numbers before any QuickBooks bill exists.
+  api('POST', '/wo/deposit-approve', Object.assign({ preview_only: true }, req), 20000)
+    .then(function(pv) {
+      if (!pv || !pv.success) { toast((pv && pv.error) || 'Could not check the deposit', 'error'); return null; }
+      var msg = 'Create a QuickBooks bill for ' + pv.vendor + ' — $' + parseFloat(pv.amount).toFixed(2) +
+        (parseFloat(pv.fee) > 0 ? ', less the $' + parseFloat(pv.fee).toFixed(2) + ' instant-pay fee = $' + parseFloat(pv.send_amount).toFixed(2) + ' for you to send' : '') + '?\n\n' +
+        (pv.estimate_subtotal ? 'Their estimate is $' + parseFloat(pv.estimate_subtotal).toFixed(2) + '. ' : '') +
+        'It is only a bill — nothing is paid until you pay it in QuickBooks, and no Vendor Bills entry is made. The same amount comes off their final bill automatically.' +
+        (safeArray(pv.warnings).length ? '\n\n' + pv.warnings.join('\n') : '');
+      if (!confirm(msg)) return null;
+      return api('POST', '/wo/deposit-approve', req, 20000).then(function(res) {
+        if (!res.success) { toast(res.error || 'Failed to record deposit', 'error'); return null; }
+        toast('Deposit recorded — $' + amt.toFixed(2) + ' — QuickBooks bill ' + (res.qb_bill_number || res.qb_bill_id), 'success');
+        return api('GET', '/workorders?include_voided=1');
+      });
     }).then(function(wos) {
-      if (Array.isArray(wos)) state.workorders = wos;
-      refreshHubEstimateView(woId);
+      if (Array.isArray(wos)) { state.workorders = wos; refreshHubEstimateView(woId); }
     }).catch(function(e) { toast(e.message, 'error'); });
 }
 
@@ -10870,18 +10994,31 @@ function renderHubTimeSection(woId, entries, holder) {
         ? '<span style="background:#eaf6ee;color:#166534;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">BILLABLE</span>'
         : '');
     var dateStr = e.Start_DateTime ? esc(e.Start_DateTime.split('T')[0]) : (e.Created_Date||'').split('T')[0];
+    var useNoteBtn = hubNoteUsable(e)
+      ? '<div style="margin-top:3px"><button onclick="hubUseNotes(\''+esc(String(woId))+'\',[\''+esc(String(e.ID))+'\'],this)" style="background:none;border:1px solid var(--accent);color:var(--accent);border-radius:4px;font-size:10px;padding:1px 6px;cursor:pointer">Use this note as the invoice description</button></div>'
+      : '';
     return '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)20;font-size:11px">' +
       '<div style="flex:1">' +
         '<span style="color:'+(isHub?'var(--accent)':'var(--info)')+';font-weight:bold">'+label+'</span>' +
         ' <span style="color:var(--muted)">'+type+'</span>'+billBadge +
         (invDesc ? '<div style="color:var(--text);margin-top:2px">📝 '+invDesc+'</div>' : '') +
         (note ? '<div style="color:var(--muted);margin-top:2px;font-style:italic">'+note+'</div>' : '') +
+        useNoteBtn +
       '</div>' +
       '<span style="font-weight:bold;color:var(--text);white-space:nowrap">'+dur+'</span>' +
       '<span style="color:var(--muted);font-size:10px;white-space:nowrap">'+dateStr+'</span>' +
       '<button onclick="deleteTimeEntry(\''+e.ID+'\',\''+woId+'\')" style="background:none;border:none;color:var(--danger);cursor:pointer;font-size:13px;padding:0 2px" title="Delete">✕</button>' +
     '</div>';
   }).join('');
+
+  var usableNotes = hubEntries.filter(hubNoteUsable);
+  var useNotesBanner = usableNotes.length
+    ? '<div style="background:#fff7e6;border:1px solid #f0c36d;border-radius:6px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:#7a4b00">' +
+        '<b>' + usableNotes.length + ' billable ' + (usableNotes.length === 1 ? 'entry has' : 'entries have') + ' a private note but no invoice description</b>, so the owner would not see ' + (usableNotes.length === 1 ? 'it' : 'them') + ' on the invoice. ' +
+        '<button onclick="hubUseNotes(\''+esc(String(woId))+'\',null,this)" style="margin-left:6px;background:var(--accent);color:#fff;border:none;border-radius:4px;font-size:11px;padding:3px 8px;cursor:pointer">Use notes as invoice descriptions</button>' +
+        '<div style="margin-top:4px;color:#8a6a2f">Copies each note over word for word. Nothing is copied until you tap.</div>' +
+      '</div>'
+    : '';
 
   holder.innerHTML =
     '<div style="margin-top:16px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px">' +
@@ -10892,6 +11029,7 @@ function renderHubTimeSection(woId, entries, holder) {
           (vendorTotal ? '<span>Vendor: <b style="color:var(--info)">'+minToStr(vendorTotal)+'</b></span>' : '') +
         '</div>' +
       '</div>' +
+      useNotesBanner +
       (entries.length ? entryRows : '<div style="color:var(--muted);font-size:11px;margin-bottom:8px">No time logged yet.</div>') +
       '<div id="time-next-' + esc(String(woId)) + '"></div>' +
       buildHubTimeForm(woId) +
@@ -11016,6 +11154,13 @@ function submitHubTimeEntry(woId) {
   var bill   = (document.getElementById('ht-bill-'+woId)||{}).checked;
   var msgEl  = document.getElementById('ht-msg-'+woId);
 
+  // Oct 23 2026 (invoice 1767): billable time with no customer-facing description is how an owner ends up with an invoice
+  // that just says "Billable hours". Stop it here, at entry, instead of discovering it after the invoice has gone out.
+  if (bill && !String(invDesc || '').trim()) {
+    if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">Billable time needs an Invoice Description — it is what the owner reads on the invoice. Say what was done.</span>';
+    return;
+  }
+
   // Determine duration source
   var durMinRaw = null;
   var startDT = null, endDT = null;
@@ -11055,6 +11200,42 @@ function submitHubTimeEntry(woId) {
       if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+(res.error||'Error')+'</span>';
     }
   }).catch(function(e) { if (msgEl) msgEl.innerHTML = '<span style="color:var(--danger);font-size:11px">'+esc(e.message)+'</span>'; });
+}
+
+// Brett's own billable hours that have a private note but no invoice description (what the opt-in button can copy).
+function hubNoteUsable(e) {
+  return !!e && e.Active !== 'FALSE' && String(e.Role || '').toLowerCase() === 'hub'
+    && String(e.Billable).toUpperCase() === 'TRUE'
+    && !String(e.Invoice_Description || '').trim() && !!String(e.Notes || '').trim();
+}
+
+// Opt-in (Oct 23 2026): copy private Notes into Invoice Description for one entry (ids = [id]) or
+// every eligible entry on the job (ids = null). The server reads each write back; every failure is shown.
+function hubUseNotes(woId, ids, btn) {
+  var label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Copying…'; }
+  api('POST', '/time-entry/use-notes', { wo_id: woId, ids: ids || undefined }).then(function(res) {
+    var done = (res && res.updated && res.updated.length) || 0;
+    var errs = (res && res.errors) || [];
+    if (res && res.warnings && res.warnings.length) toast('Copied, but: ' + res.warnings.join(' | '), 'error');
+    if (!res || res.ok === false || errs.length || res.error) {
+      var why = errs.length ? errs.map(function(x){ return (x.id ? 'entry ' + x.id + ': ' : '') + x.error; }).join(' | ') : ((res && res.error) || 'no answer from the server');
+      toast('Copied ' + done + ' note' + (done === 1 ? '' : 's') + ', but it did not finish: ' + why, 'error');
+      if (btn) { btn.disabled = false; btn.textContent = label; }
+    } else if (!done) {
+      toast((res && res.message) || 'Nothing to copy.', 'info');
+    } else {
+      toast('Copied ' + done + ' note' + (done === 1 ? '' : 's') + ' into the invoice description' + (done === 1 ? '' : 's'), 'success');
+    }
+    return api('GET', '/time-entries?wo_id=' + woId).then(function(entries) {
+      var holder = document.getElementById('time-track-' + woId);
+      if (holder) renderHubTimeSection(woId, Array.isArray(entries) ? entries : [], holder);
+      invRefreshTimeForWO(woId);
+    });
+  }).catch(function(e) {
+    toast('Could not copy the notes: ' + ((e && e.message) || e), 'error');
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+  });
 }
 
 function deleteTimeEntry(entryId, woId) {
@@ -12052,15 +12233,23 @@ function renderIRCard(b, i) {
   // that's the one number this whole feature exists to keep him from double-paying.
   var depositHtml = '';
   var depAmt = wo ? parseFloat(wo.Deposit_Amount || 0) : 0;
-  if (wo && depAmt > 0 && wo.Deposit_Applied !== 'TRUE') {
+  // The deposit only comes off automatically for the vendor it was paid to, and only when a QuickBooks bill is on file.
+  var depCovers = wo && String(wo.Deposit_QB_Bill_ID || '').trim() && (!String(wo.Deposit_Vendor_ID || '').trim() || String(wo.Deposit_Vendor_ID) === String(b.Vendor_ID || ''));
+  if (wo && depAmt > 0 && wo.Deposit_Applied !== 'TRUE' && !depCovers) {
+    depositHtml =
+      '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--warn);line-height:1.6">' +
+        '⚠ This work order has a $' + depAmt.toFixed(2) + ' vendor deposit that will <b>NOT</b> be taken off this bill automatically (' +
+        (String(wo.Deposit_QB_Bill_ID || '').trim() ? 'it was paid to a different vendor' : 'no QuickBooks bill is on file for it') + '). Check the work order before paying.' +
+      '</div>';
+  }
+  if (wo && depAmt > 0 && wo.Deposit_Applied !== 'TRUE' && depCovers) {
     var netOwed = Math.max(0, vendorTotal - depAmt);
     depositHtml =
       '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:6px;padding:10px 12px;margin-bottom:12px;font-size:11.5px;color:var(--warn);line-height:1.6">' +
         '💰 <b>$' + depAmt.toFixed(2) + ' deposit already paid</b> to this vendor on ' + esc(wo.Deposit_Approved_Date || '?') +
         (wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID ? ' (QuickBooks bill ' + esc(wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID) + ')' : '') +
         (wo.Deposit_Notes ? ' — "' + esc(wo.Deposit_Notes) + '"' : '') + '. ' +
-        'This bill\'s raw total is $' + vendorTotal.toFixed(2) + ' — the net amount still owed is <b>$' + netOwed.toFixed(2) + '</b> unless you\'re adjusting for overages. ' +
-        'Enter the netted number as the vendor cost below, not the raw total.' +
+        'This bill\'s raw total is $' + vendorTotal.toFixed(2) + '. <b>Do not type a netted number</b> — when this bill is sent to QuickBooks the deposit comes off automatically as its own line (expected vendor payable before the instant-pay fee: <b>$' + netOwed.toFixed(2) + '</b>). Typing the net here would deduct it twice.' +
       '</div>';
   }
 

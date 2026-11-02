@@ -12,53 +12,95 @@
     --accent:#1d4ed8; --accent2:#1a7f4b; --danger:#c0392b; --warn:#b8860b; --chip:#eef2f7;
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px}
-  header{position:sticky;top:0;background:var(--surface);border-bottom:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;justify-content:space-between;z-index:10}
+  html{overflow-x:hidden}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px;overflow-x:hidden}
+  header{position:sticky;top:0;background:var(--surface);border-bottom:1px solid var(--border);padding:8px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;z-index:10}
+  header .hl{min-width:0}
   header h1{font-size:18px;margin:0}
-  header .ver{font-size:11px;color:var(--muted)}
-  main{padding:14px 14px 90px;max-width:720px;margin:0 auto}
+  header .sub{font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  header .ver{margin-left:6px}
+  main{padding:10px 14px 90px;max-width:720px;margin:0 auto}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
   .muted{color:var(--muted);font-size:13px}
-  .btn{padding:9px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font-size:13px;font-weight:600;cursor:pointer}
+  .btn{padding:9px 12px;min-height:44px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
   .btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
   .btn.go{background:var(--accent2);color:#fff;border-color:var(--accent2)}
   .btn.danger{background:var(--danger);color:#fff;border-color:var(--danger)}
-  .btn.small{padding:6px 10px;font-size:12px}
+  .btn.small{padding:6px 12px;font-size:12px}
   .btn:active{opacity:.85}
+  .btn:disabled{opacity:.5;cursor:default}
   .btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
-  .tabs{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+  .btn .n{font-weight:500;opacity:.8;margin-left:3px}
+  .tabs{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
   .status-line{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:13px}
   .pill{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;background:var(--chip);color:var(--muted)}
   .pill.on{background:#e7f6ec;color:var(--accent2)}
   .pill.off{background:#fbeaea;color:var(--danger)}
   .pill.test{background:#fdf3e0;color:var(--warn)}
-  .group-header{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin:16px 0 6px}
-  .row-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;display:flex;gap:10px;align-items:flex-start}
-  .row-card input[type=checkbox]{width:20px;height:20px;flex:none;margin-top:2px;display:none}
-  .row-card.bulk input[type=checkbox]{display:block}
+  /* Search + filter bar (Oct 21 2026): sticky under the header, everything client-side (no request while typing) */
+  .searchbar{position:sticky;top:var(--hdr-h,60px);z-index:9;background:var(--bg);padding:8px 14px 6px;border-bottom:1px solid var(--border)}
+  .searchbar .in{max-width:720px;margin:0 auto}
+  .srow{display:flex;gap:8px;align-items:stretch}
+  .sbox{position:relative;flex:1;min-width:0}
+  .sbox input{padding-right:46px;min-height:44px}
+  input[type=search]::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none}
+  .xbtn{position:absolute;right:0;top:0;width:44px;height:44px;border:0;background:none;color:var(--muted);font-size:18px;cursor:pointer}
+  .fbtn{flex:none;white-space:nowrap}
+  .cnt{display:inline-block;min-width:18px;padding:0 5px;margin-left:5px;border-radius:9px;background:var(--accent);color:#fff;font-size:11px;line-height:18px;text-align:center}
+  .btn.active .cnt{background:#fff;color:var(--accent)}
+  .resline{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:30px;font-size:12px;color:var(--muted);flex-wrap:wrap}
+  .linkbtn{border:0;background:none;color:var(--accent);font-size:13px;font-weight:700;min-height:44px;padding:0 6px;cursor:pointer;font-family:inherit}
+  .fpanel{margin-bottom:12px}
+  .fgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .fgrid .full{grid-column:1 / -1}
+  .fgrid label.fl{display:block;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+  .fgrid > div{min-width:0}
+  .fgrid select,.fgrid input{min-height:44px}
+  .fhead{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;font-size:13px;font-weight:700}
+  .seg{display:flex;gap:6px;flex-wrap:wrap}
+  .bulkbar{margin-bottom:10px}
+  .bb-row{display:flex;gap:8px;flex-wrap:wrap}
+  .confirm{margin-top:10px;padding:10px;border-radius:10px;background:#fdf3e0;border:1px solid #ecd9a8;font-size:13px;line-height:1.5}
+  .confirm .btn{margin:6px 6px 0 0}
+  .banner{border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;line-height:1.5}
+  .banner.err{background:#fff4f4;border:1px solid #e9b4ac;color:#8a1f11}
+  .banner.warn{background:#fdf3e0;border:1px solid #ecd9a8;color:#7a5b00}
+  .banner .btn{margin-top:6px}
+  .group-header{display:flex;align-items:center;gap:8px;width:100%;min-height:44px;margin:10px 0 4px;padding:6px 4px;border:0;background:none;text-align:left;font-family:inherit;font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);cursor:pointer}
+  .group-header .chev{flex:none;width:14px;font-size:12px}
+  .group-header .gl{flex:1;min-width:0;word-break:break-word}
+  .group-header .gc{flex:none;font-weight:600}
+  .group-header .gp{flex:none;background:#fdf3e0;color:var(--warn);border-radius:8px;padding:1px 7px;font-size:10px;letter-spacing:0;text-transform:none}
+  .row-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;display:flex;gap:6px;align-items:flex-start}
+  .ck{display:none;flex:none;width:44px;height:44px;margin:-10px 0 -10px -10px;align-items:center;justify-content:center;cursor:pointer}
+  .ck input{width:22px;height:22px;margin:0}
+  .row-card.bulk .ck{display:flex}
   .row-body{flex:1;min-width:0}
   .row-top{display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap}
-  .row-name{font-weight:700;font-size:14px}
-  .row-type{font-size:11px;color:var(--muted)}
+  .row-name{font-weight:700;font-size:14px;word-break:break-word}
+  .row-type{font-size:11px;color:var(--muted);word-break:break-word}
+  .row-addr{font-size:11px;color:var(--muted);word-break:break-word}
   .row-msg{font-size:13px;line-height:1.5;margin:6px 0;white-space:pre-wrap;word-break:break-word;color:var(--text)}
-  .row-meta{font-size:11px;color:var(--muted);margin-top:4px}
+  .row-meta{font-size:11px;color:var(--muted);margin-top:4px;word-break:break-word}
   .row-gate{font-size:11px;color:var(--warn);margin-top:4px}
   /* English view (Oct 13 2026): what a Spanish text says, so the review screen is readable */
   .row-en{font-size:13px;line-height:1.5;margin:4px 0 6px;padding:6px 9px;background:#eef6ff;border-left:3px solid #1d4ed8;border-radius:4px;white-space:pre-wrap;word-break:break-word}
   .row-en.err{background:#fff4f4;border-left-color:#c0392b;color:#8a1f11}
   .row-es-tag{display:inline-block;font-size:10px;font-weight:700;background:#fff3cd;color:#7a5b00;border-radius:8px;padding:1px 7px;margin-left:6px;vertical-align:middle}
-  .row-actions{display:flex;gap:6px;margin-top:8px}
+  .row-actions{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
   .badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700;letter-spacing:.03em}
   .badge.pending{background:#fdf3e0;color:var(--warn)}
   .badge.sent{background:#e7f6ec;color:var(--accent2)}
   .badge.failed{background:#fbeaea;color:var(--danger)}
-  .badge.skipped{background:var(--chip);color:var(--muted)}
+  .badge.skipped,.badge.unknown{background:var(--chip);color:var(--muted)}
+  .more{width:100%;margin:2px 0 10px}
   .batch-bar{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--border);padding:10px 14px;display:flex;gap:8px;align-items:center;justify-content:space-between;z-index:20}
-  .empty{text-align:center;color:var(--muted);padding:40px 0;font-size:14px}
+  .batch-bar > div{display:flex;gap:8px;flex:none}
+  .empty{text-align:center;color:var(--muted);padding:34px 8px;font-size:14px;line-height:1.5}
   #login{max-width:360px;margin:70px auto;padding:20px;text-align:center}
-  input,select{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:var(--surface);color:var(--text)}
-  .hide{display:none}
-  .toast{position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;opacity:0;transition:opacity .2s}
+  input,select{width:100%;padding:12px;border:1px solid var(--border);border-radius:10px;font-size:16px;background:var(--surface);color:var(--text);font-family:inherit}
+  .hide{display:none !important}
+  .toast{position:fixed;bottom:70px;left:50%;transform:translateX(-50%);max-width:92vw;background:#1c2430;color:#fff;padding:11px 16px;border-radius:10px;font-size:14px;z-index:99;opacity:0;transition:opacity .2s;pointer-events:none}
   .toast.show{opacity:1}
 </style>
 <style id="mobile-input-font">
@@ -83,30 +125,93 @@
 </div>
 
 <div id="app" class="hide">
-  <header>
-    <h1>📱 Message Queue</h1>
-    <span class="ver" id="ver"></span>
+  <header id="hdr">
+    <div class="hl">
+      <h1>📱 Message Queue</h1>
+      <div class="sub"><span id="loaded">Not loaded yet</span><span class="ver" id="ver"></span></div>
+    </div>
+    <button class="btn" id="refresh-btn" onclick="refreshList()">↻ Refresh</button>
   </header>
+
+  <div class="searchbar" id="searchbar">
+    <div class="in">
+      <div class="srow">
+        <div class="sbox">
+          <input id="q" type="search" placeholder="Search messages…" title="Matches name, phone digits, address, message text, WO number, type" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search messages" oninput="onSearchInput()" onkeydown="onSearchKey(event)">
+          <button class="xbtn hide" id="q-clear" aria-label="Clear search" onclick="clearSearch()">✕</button>
+        </div>
+        <button class="btn fbtn" id="filters-btn" aria-expanded="false" onclick="toggleFilters()">Filter &amp; sort<span class="cnt hide" id="fcount">0</span></button>
+      </div>
+      <div class="resline">
+        <span id="result-count">Loading…</span>
+        <button class="linkbtn hide" id="clear-filters" onclick="clearFilters()">Clear filters</button>
+      </div>
+    </div>
+  </div>
+
   <main>
-    <div class="card">
+    <div id="banner"></div>
+
+    <div class="card" style="padding:8px 12px;margin-bottom:8px">
       <div class="status-line" id="status-line">Loading status…</div>
     </div>
 
     <div class="tabs" id="status-tabs">
-      <button class="btn small active" data-status="pending" onclick="switchTab('pending')">Pending</button>
-      <button class="btn small" data-status="sent" onclick="switchTab('sent')">Sent</button>
-      <button class="btn small" data-status="skipped" onclick="switchTab('skipped')">Skipped</button>
-      <button class="btn small" data-status="failed" onclick="switchTab('failed')">Failed</button>
-      <button class="btn small" data-status="" onclick="switchTab('')">All</button>
+      <button class="btn small active" id="chip-pending" onclick="switchTab('pending')">Pending<span class="n" id="n-pending"></span></button>
+      <button class="btn small" id="chip-sent" onclick="switchTab('sent')">Sent<span class="n" id="n-sent"></span></button>
+      <button class="btn small" id="chip-skipped" onclick="switchTab('skipped')">Skipped<span class="n" id="n-skipped"></span></button>
+      <button class="btn small" id="chip-failed" onclick="switchTab('failed')">Failed<span class="n" id="n-failed"></span></button>
+      <button class="btn small" id="chip-all" onclick="switchTab('')">All<span class="n" id="n-all"></span></button>
       <button class="btn small" id="bulk-toggle-btn" style="margin-left:auto" onclick="toggleBulkMode()">☑ Select multiple</button>
     </div>
 
-    <div id="list"></div>
+    <div class="card fpanel hide" id="filters-panel">
+      <div class="fhead"><span>Filters <span class="muted" id="fpanel-count"></span></span><button class="btn small" id="clear-filters-top" onclick="clearFilters()">Clear filters</button></div>
+      <div class="fgrid">
+        <div class="full"><label class="fl" for="f-sort">Sort</label>
+          <select id="f-sort" onchange="setSort(this.value)">
+            <option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="recipient">Recipient A-Z</option><option value="property">Property A-Z</option><option value="status">Status</option>
+          </select>
+        </div>
+        <div class="full"><label class="fl" for="f-group">Group by</label>
+          <select id="f-group" onchange="setGroup(this.value)">
+            <option value="prop">Property / recipient</option><option value="age">Age</option><option value="recipient">Recipient</option><option value="none">None (flat)</option>
+          </select>
+        </div>
+        <div class="full"><label class="fl">Who</label>
+          <div class="seg">
+            <button class="btn small active" id="rt-all" onclick="setRType('')">All</button>
+            <button class="btn small" id="rt-tenant" onclick="setRType('tenant')">Tenant</button>
+            <button class="btn small" id="rt-vendor" onclick="setRType('vendor')">Vendor</button>
+            <button class="btn small" id="rt-owner" onclick="setRType('owner')">Owner</button>
+          </div>
+        </div>
+        <div class="full"><label class="fl" for="f-mtype">Message type</label><select id="f-mtype" onchange="setMType(this.value)"><option value="">All types</option></select></div>
+        <div class="full"><label class="fl" for="f-prop">Property</label><select id="f-prop" onchange="setProp(this.value)"><option value="">All properties</option></select></div>
+        <div class="full"><label class="fl" for="f-date">Date</label>
+          <select id="f-date" onchange="setPreset(this.value)">
+            <option value="">All time</option><option value="today">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="custom">Custom range</option>
+          </select>
+        </div>
+        <div><label class="fl" for="f-from">From</label><input id="f-from" type="date" onchange="setRange()"></div>
+        <div><label class="fl" for="f-to">To</label><input id="f-to" type="date" onchange="setRange()"></div>
+      </div>
+    </div>
+
+    <div class="card bulkbar hide" id="bulkbar">
+      <div class="bb-row">
+        <button class="btn" id="selall-btn" onclick="askSelectAll()">Select all shown</button>
+        <button class="btn" onclick="clearSelection()">Clear selection</button>
+      </div>
+      <div class="confirm hide" id="selall-confirm"></div>
+    </div>
+
+    <div id="list"><div class="empty">Loading…</div></div>
   </main>
 
   <div class="batch-bar hide" id="batch-bar">
     <span class="muted" id="batch-count">0 selected</span>
-    <div style="display:flex;gap:8px">
+    <div>
       <button class="btn" onclick="skipSelected()">Skip selected</button>
       <button class="btn go" onclick="releaseSelected()">Send selected</button>
     </div>
@@ -118,11 +223,46 @@
 <script>
 var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
 var SECRET_KEY = 'mh_auth';
+var PREF_KEY = 'mq_prefs_v1';          // cosmetic view preferences only (sort, group-by, status chip, collapsed groups)
 var AUTH_TOKEN = '';
-var rows = [];
-var curStatus = 'pending';
+var TZ = 'America/New_York';
+var PAGE_SIZE = 50;                    // rows drawn per open group before "Show more"
+var all = [];                          // every active Message_Queue row, loaded ONCE per load (never per click)
+var byId = {};
+var loading = false, loadOk = false, loadErr = '', loadSeq = 0, lastLoaded = 0, badRows = 0;
 var bulkMode = false;
-var selected = {};
+var selected = {};                     // by row id; survives filter / search / group changes
+var selAllConfirm = false;
+var actionBusy = false;
+var prefsOk = true;
+var prefs = { sort: 'newest', group: 'prop', status: 'pending', ov: {} };
+var F = { q: '', tokens: [], rtype: '', mtype: '', prop: '', preset: '', from: '', to: '' };
+var ovSearch = {};                     // group open/closed taps made while a search/filter is active (in memory only)
+var shownN = {};                       // "Show more" counters per group (in memory only)
+var curGroups = [], lastView = null, renderedRows = [];
+var translateBudget = 45;              // English-view lookups allowed per list load (same cap as before)
+var searchTimer = null;
+var SORTS = ['newest', 'oldest', 'recipient', 'property', 'status'];
+var GROUPS = ['prop', 'age', 'recipient', 'none'];
+var STATUSES = ['pending', 'sent', 'skipped', 'failed'];
+var AGE_GROUPS = [
+  { k: 'age0', label: 'Last 10 days' },
+  { k: 'age1', label: '11–30 days' },
+  { k: 'age2', label: '31–60 days' },
+  { k: 'age3', label: '61–90 days' },
+  { k: 'age4', label: 'Older than 90 days' }
+];
+
+function el(id){ return document.getElementById(id); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function toast(m, ms){ var t=el('toast'); t.textContent=m; t.className='toast show'; setTimeout(function(){t.className='toast';}, ms || 2400); }
+// Anything that fails goes to the shared failure reporter (Needs Attention page); the console is the last resort.
+function reportFail(where, msg){
+  try {
+    if (typeof window !== 'undefined' && typeof window.hubReportFailure === 'function') window.hubReportFailure('message-queue ' + where, msg);
+    else console.error('[message-queue] ' + where + ': ' + msg);
+  } catch (e) { console.error('[message-queue] could not report ' + where, e); }
+}
 
 function api(method, path, body){
   var opts = { method:method, headers:{'Content-Type':'application/json','X-Auth-Token':AUTH_TOKEN} };
@@ -131,65 +271,496 @@ function api(method, path, body){
     return res.json().then(function(data){
       if (data && data.error === 'Unauthorized') throw new Error('Unauthorized');
       return data;
-    });
+    }, function(){ throw new Error('The Hub answered HTTP ' + res.status + ' with something unreadable'); });
   });
 }
-function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function toast(m){ var t=document.getElementById('toast'); t.textContent=m; t.className='toast show'; setTimeout(function(){t.className='toast';},2400); }
+
+// ── Stored values (storage can be blocked: private window, cleared site data, Chromebook policy) ─────────
+function getStoredAuth(){
+  try { return localStorage.getItem(SECRET_KEY) || ''; }
+  catch (e) { prefsOk = false; return ''; }          // no stored code: the normal login box is shown
+}
+function loadPrefs(){
+  try {
+    var raw = localStorage.getItem(PREF_KEY); if (!raw) return;
+    var p = JSON.parse(raw); if (!p || typeof p !== 'object') return;
+    if (SORTS.indexOf(p.sort) >= 0) prefs.sort = p.sort;
+    if (GROUPS.indexOf(p.group) >= 0) prefs.group = p.group;
+    if (p.status === '' || STATUSES.indexOf(p.status) >= 0) prefs.status = p.status;
+    if (p.ov && typeof p.ov === 'object') { Object.keys(p.ov).forEach(function(k){ prefs.ov[k] = !!p.ov[k]; }); }
+  } catch (e) { prefsOk = false; }                    // cosmetic preference only: fall back to the defaults
+}
+function savePrefs(){
+  try {
+    var keys = Object.keys(prefs.ov);
+    if (keys.length > 300) { keys.slice(0, keys.length - 300).forEach(function(k){ delete prefs.ov[k]; }); }
+    localStorage.setItem(PREF_KEY, JSON.stringify(prefs));
+  } catch (e) { prefsOk = false; }                    // cosmetic preference only: the page keeps working unsaved
+}
 
 // ── Login (shares the Hub's stored code) ─────────────────────
+// The first list request doubles as the access-code check, so a page load costs ONE read of the queue tab, not two.
+function showLoginError(msg){ var e = el('login-error'); e.textContent = msg; e.classList.remove('hide'); }
+function probe(){
+  return api('GET','/message-queue').then(function(r){
+    if (r && !Array.isArray(r) && r.error) throw new Error(r.error);
+    return r;
+  });
+}
 function doLogin(){
-  var v=document.getElementById('login-input').value.trim(); AUTH_TOKEN=v;
-  api('GET','/message-queue').then(function(r){ if(r&&r.error) throw new Error(r.error); localStorage.setItem(SECRET_KEY,v); enterApp(); })
-    .catch(function(){ AUTH_TOKEN=''; document.getElementById('login-error').classList.remove('hide'); });
+  var v = el('login-input').value.trim(); AUTH_TOKEN = v;
+  probe().then(function(r){
+    try { localStorage.setItem(SECRET_KEY, v); } catch (e) { toast('Signed in, but this browser would not remember the code.', 5000); }
+    enterApp(r, null);
+  }, function(err){
+    AUTH_TOKEN = '';
+    var m = err && err.message || 'error';
+    if (m === 'Unauthorized') showLoginError('Not recognized — try again.');
+    else { showLoginError('Could not check the code: ' + m); reportFail('login check', m); }
+  });
 }
-document.getElementById('login-input').addEventListener('keydown',function(e){ if(e.key==='Enter') doLogin(); });
-(function(){
-  var stored=localStorage.getItem(SECRET_KEY);
-  if(stored){ AUTH_TOKEN=stored; api('GET','/message-queue').then(function(r){ if(r&&r.error) throw new Error(r.error); enterApp(); }).catch(function(){ AUTH_TOKEN=''; }); }
-})();
-function enterApp(){
-  document.getElementById('login').style.display='none';
-  document.getElementById('app').classList.remove('hide');
-  api('GET','/version').then(function(d){ document.getElementById('ver').textContent=d.version||''; }).catch(function(){});
-  loadStatus(); loadList();
+function bootApp(){
+  loadPrefs();
+  el('login-input').addEventListener('keydown', function(e){ if (e.key === 'Enter') doLogin(); });
+  var stored = getStoredAuth();
+  if (!stored) return;
+  AUTH_TOKEN = stored;
+  probe().then(function(r){
+    enterApp(r, null);
+  }, function(err){
+    var m = err && err.message || 'error';
+    if (m === 'Unauthorized') { AUTH_TOKEN = ''; showLoginError('Your saved access code was not accepted — enter it again.'); }
+    else { enterApp(null, m); }                        // the code is probably fine: open the page with a visible error + Retry
+  });
 }
+function enterApp(list, err){
+  el('login').style.display = 'none';
+  el('app').classList.remove('hide');
+  syncHeaderHeight();
+  syncControls();
+  api('GET','/version').then(function(d){ el('ver').textContent = (d && d.version) ? ('· ' + d.version) : ''; })
+    .catch(function(e){ el('ver').textContent = '· version unavailable'; reportFail('version', e && e.message || 'error'); });
+  loadStatus();
+  if (err) listFailed(err); else applyList(list);
+}
+function syncHeaderHeight(){
+  var h = el('hdr');
+  if (h && h.offsetHeight && document.documentElement && document.documentElement.style) document.documentElement.style.setProperty('--hdr-h', h.offsetHeight + 'px');
+}
+if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('resize', syncHeaderHeight);
 
 // ── Global/Test Mode status strip ─────────────────────────────
 function loadStatus(){
   api('GET','/health').then(function(h){
     var t = (h && h.twilio) || {};
-    var el = document.getElementById('status-line');
+    var box = el('status-line');
     var parts = [];
     parts.push('<span class="pill ' + (t.twilio_enabled ? 'on' : 'off') + '">Global: ' + (t.twilio_enabled ? 'ON — sending live' : 'OFF — nothing sends') + '</span>');
     parts.push('<span class="pill ' + (t.test_mode ? 'test' : 'on') + '">Test Mode: ' + (t.test_mode ? 'ON — redirects to your phone' : 'OFF — real recipients') + '</span>');
     var credsOk = t.sid_set && t.api_key_sid_set && t.api_key_secret_set && t.from_set;
     if (!credsOk) parts.push('<span class="pill off">⚠ Twilio credentials incomplete</span>');
-    el.innerHTML = parts.join(' ');
-  }).catch(function(){ document.getElementById('status-line').textContent = 'Could not load status.'; });
+    box.innerHTML = parts.join(' ');
+  }).catch(function(e){ el('status-line').textContent = 'Could not load status.'; reportFail('status strip', e && e.message || 'error'); });
 }
 
-// ── List ────────────────────────────────────────────────────
-function switchTab(status){
-  curStatus = status; selected = {};
-  document.querySelectorAll('#status-tabs .btn[data-status]').forEach(function(b){
-    b.classList.toggle('active', b.getAttribute('data-status') === status);
+// ── Dates (everything is shown and bucketed in America/New_York) ──────────────
+var tzDay = null, tzFull = null, tzTime = null, tzOk = true;
+function parseMs(v){ if (v == null || v === '') return NaN; return Date.parse(String(v)); }
+function tzFail(e){ if (tzOk) { tzOk = false; reportFail('timezone', e && e.message || 'Intl timezone unavailable'); } }
+function partsOf(fmt, ms){ var o = {}; fmt.formatToParts(new Date(ms)).forEach(function(p){ o[p.type] = p.value; }); return o; }
+function nyDayNum(ms){                                   // calendar day in New York as a whole number
+  try {
+    if (!tzDay) tzDay = new Intl.DateTimeFormat('en-US', { timeZone: TZ, year: 'numeric', month: 'numeric', day: 'numeric' });
+    var p = partsOf(tzDay, ms);
+    return Date.UTC(+p.year, +p.month - 1, +p.day) / 86400000;
+  } catch (e) { tzFail(e); return Math.floor((ms - 5 * 3600000) / 86400000); }
+}
+function todayNum(){ return nyDayNum(Date.now()); }
+function fmtET(ms){                                      // "Wed Oct 14, 2:35 PM ET"  (year added when not this year)
+  try {
+    if (!tzFull) tzFull = new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+    var p = partsOf(tzFull, ms), thisYear = partsOf(tzFull, Date.now()).year;
+    return p.weekday + ' ' + p.month + ' ' + p.day + (p.year !== thisYear ? (', ' + p.year) : '') + ', ' + p.hour + ':' + p.minute + ' ' + p.dayPeriod + ' ET';
+  } catch (e) { tzFail(e); return new Date(ms).toISOString(); }
+}
+function fmtTimeET(ms){
+  try {
+    if (!tzTime) tzTime = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit', hour12: true });
+    var p = partsOf(tzTime, ms); return p.hour + ':' + p.minute + ' ' + p.dayPeriod;
+  } catch (e) { tzFail(e); return new Date(ms).toISOString(); }
+}
+function dateLabel(raw){
+  var ms = parseMs(raw);
+  if (ms === ms) return esc(fmtET(ms));
+  return raw ? esc(raw) : '(date unknown)';
+}
+function ageBucket(age){                                  // age in whole New York days; unknown date = oldest group
+  if (!(age === age) || age === Infinity) return 4;
+  if (age <= 10) return 0;
+  if (age <= 30) return 1;
+  if (age <= 60) return 2;
+  if (age <= 90) return 3;
+  return 4;
+}
+
+// ── Prepare rows once per load (search text, date, status) ───────────────────
+function digitsOf(s){ return String(s == null ? '' : s).replace(/\D/g, ''); }
+function prepare(r){
+  var st = String(r.Status == null ? '' : r.Status).trim().toLowerCase();
+  r._st = st;                                             // '' or an unknown word still shows under "All"
+  var created = parseMs(r.Created_Date), sent = parseMs(r.Sent_Date);
+  r._t = (st === 'sent' && sent === sent) ? sent : created; // the message date: Sent_Date for sent rows, else Created_Date
+  r._day = r._t === r._t ? nyDayNum(r._t) : NaN;
+  var wo = String(r.WO_ID == null ? '' : r.WO_ID).trim().replace(/^wo-?/i, '');
+  r._pk = r.Property_Address ? String(r.Property_Address) : 'No property';
+  r._mt = r.Message_Type ? String(r.Message_Type) : '(none)';
+  r._p = digitsOf(r.Recipient_Phone) + ' ' + digitsOf(r.Delivered_To);
+  r._s = [r.Recipient_Name, r.Recipient_Phone, r.Property_Address, r.Message_Body, r.Original_Body, r.Message_Type,
+    String(r.Message_Type || '').replace(/_/g, ' '), r.Recipient_Type, r.Delivered_To,
+    wo ? ('wo-' + wo + ' wo' + wo + ' ' + wo) : ''].join(' ').toLowerCase();
+  return r;
+}
+function matchTokens(r, tokens){
+  var en = english[r.ID] && english[r.ID].english ? String(english[r.ID].english).toLowerCase() : '';
+  for (var i = 0; i < tokens.length; i++) {
+    var t = tokens[i];
+    if (r._s.indexOf(t) >= 0) continue;
+    if (en && en.indexOf(t) >= 0) continue;
+    var d = t.replace(/\D/g, '');                         // "(443)961" or "443-961" still finds +1443961…
+    if (d.length >= 3 && /^[\d\s()+.\-]+$/.test(t) && r._p.indexOf(d) >= 0) continue;
+    return false;
+  }
+  return true;
+}
+
+// ── Filter + sort + group (all in the page, no requests) ─────────────────────
+function dayFromInput(v){ var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v || '')); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) / 86400000 : NaN; }
+function dateCtx(){
+  var c = { today: todayNum(), max: null, from: NaN, to: NaN, active: false };
+  if (F.preset === 'today') { c.max = 0; c.active = true; }
+  else if (F.preset === '7' || F.preset === '30' || F.preset === '90') { c.max = +F.preset; c.active = true; }
+  else if (F.preset === 'custom') {
+    c.from = dayFromInput(F.from); c.to = dayFromInput(F.to);
+    c.active = (c.from === c.from) || (c.to === c.to);
+  }
+  return c;
+}
+function passBase(r, c){
+  if (F.rtype && String(r.Recipient_Type || '').toLowerCase() !== F.rtype) return false;
+  if (F.mtype && r._mt !== F.mtype) return false;
+  if (F.prop && r._pk !== F.prop) return false;
+  if (c.active) {
+    if (!(r._day === r._day)) return false;               // no date at all: cannot be inside a date range
+    var age = c.today - r._day;
+    if (c.max !== null && age > c.max) return false;
+    if (c.from === c.from && r._day < c.from) return false;
+    if (c.to === c.to && r._day > c.to) return false;
+  }
+  if (F.tokens.length && !matchTokens(r, F.tokens)) return false;
+  return true;
+}
+function statusRank(s){ return s === 'pending' ? 0 : s === 'failed' ? 1 : s === 'sent' ? 2 : s === 'skipped' ? 3 : 9; }
+function tOf(r){ return r._t === r._t ? r._t : -Infinity; }   // a row with no date counts as the oldest
+function idNum(r){ var n = parseInt(r.ID, 10); return n === n ? n : 0; }
+function newestCmp(a, b){ var x = tOf(a), y = tOf(b); if (x !== y) return x < y ? 1 : -1; return idNum(b) - idNum(a); }
+function nameOf(r){ return String(r.Recipient_Name || '').trim(); }
+function strCmp(a, b){ a = a.toLowerCase(); b = b.toLowerCase(); return a < b ? -1 : a > b ? 1 : 0; }
+function sortRows(rows){
+  var s = prefs.sort, cmp;
+  if (s === 'oldest') cmp = function(a, b){ return -newestCmp(a, b); };
+  else if (s === 'recipient') cmp = function(a, b){ var x = nameOf(a), y = nameOf(b); if (!x !== !y) return x ? -1 : 1; return strCmp(x, y) || newestCmp(a, b); };
+  else if (s === 'property') cmp = function(a, b){ var x = a.Property_Address || '', y = b.Property_Address || ''; if (!x !== !y) return x ? -1 : 1; return strCmp(x, y) || newestCmp(a, b); };
+  else if (s === 'status') cmp = function(a, b){ return statusRank(a._st) - statusRank(b._st) || newestCmp(a, b); };
+  else cmp = newestCmp;
+  return rows.slice().sort(cmp);
+}
+function compute(){
+  var c = dateCtx(), base = [], counts = { pending: 0, sent: 0, skipped: 0, failed: 0, all: 0 }, undated = 0;
+  for (var i = 0; i < all.length; i++) {
+    var r = all[i];
+    if (!passBase(r, c)) { if (c.active && !(r._day === r._day)) undated++; continue; }
+    base.push(r); counts.all++;
+    if (STATUSES.indexOf(r._st) >= 0) counts[r._st]++;
+  }
+  var shown = prefs.status ? base.filter(function(r){ return r._st === prefs.status; }) : base;
+  return { base: base, counts: counts, shown: sortRows(shown), undated: undated, today: c.today };
+}
+function groupKey(r){
+  if (r.Recipient_Type === 'vendor') return 'Vendor · ' + (r.Recipient_Name || 'Unknown');
+  return (r.Property_Address || 'No property') + (r.Recipient_Name ? (' — ' + r.Recipient_Name) : '');
+}
+function buildGroups(v){
+  var mode = prefs.group, groups = [], map = {};
+  if (!v.shown.length) return groups;
+  if (mode === 'none') return [{ k: 'all', label: '', rows: v.shown, flat: true }];
+  if (mode === 'age') {
+    AGE_GROUPS.forEach(function(a, i){ var g = { k: a.k, label: a.label, rows: [], idx: i }; map[a.k] = g; groups.push(g); });
+    v.shown.forEach(function(r){ map[AGE_GROUPS[ageBucket(r._day === r._day ? v.today - r._day : Infinity)].k].rows.push(r); });
+    return groups.filter(function(g){ return g.rows.length; });
+  }
+  v.shown.forEach(function(r){
+    var k, label;
+    if (mode === 'recipient') { var nm = nameOf(r) || '(no name on file)'; k = nm.toLowerCase() + '|' + digitsOf(r.Recipient_Phone); label = nm + (r.Recipient_Phone ? ' · ' + r.Recipient_Phone : ''); }
+    else { k = label = groupKey(r); }
+    if (!map[k]) { map[k] = { k: k, label: label, rows: [] }; groups.push(map[k]); }
+    map[k].rows.push(r);
   });
+  return groups;
+}
+function narrowing(){ return !!(F.tokens.length || F.rtype || F.mtype || F.prop || dateCtx().active); }
+function okeyOf(g){ return prefs.group + '|' + g.k; }
+function resolveOpen(groups){
+  var nar = narrowing(), budget = nar ? 200 : 80, used = 0, stop = false;
+  groups.forEach(function(g, i){
+    var ov = nar ? ovSearch[okeyOf(g)] : prefs.ov[okeyOf(g)];
+    var n = Math.min(g.rows.length, PAGE_SIZE);
+    if (ov !== undefined) { g.open = !!ov; if (g.open) used += n; return; }
+    var def;
+    if (g.flat) def = true;
+    else if (prefs.group === 'age' && !nar) def = (g.idx === 0);          // last 10 days open, older buckets collapsed
+    else { def = !stop && (i === 0 || used + n <= budget); if (!def) stop = true; }
+    g.open = def; if (def) used += n;
+  });
+}
+function activeFilterCount(){
+  return (F.tokens.length ? 1 : 0) + (F.rtype ? 1 : 0) + (F.mtype ? 1 : 0) + (F.prop ? 1 : 0) + (dateCtx().active ? 1 : 0);
+}
+
+// ── Render ──────────────────────────────────────────────────
+function setText(id, t){ el(id).textContent = t; }
+function setCls(id, c){ el(id).className = c; }
+function render(){ renderList(); autoTranslate(); }
+function renderList(){
+  var v = compute(); lastView = v;
+  curGroups = buildGroups(v); resolveOpen(curGroups);
+  var box = el('list'), html = '';
+  renderedRows = [];
+  if (!all.length) {
+    box.innerHTML = loadOk ? '<div class="empty">Nothing here.</div>' : (loading ? '<div class="empty">Loading…</div>' : '');
+  } else if (!v.shown.length) {
+    box.innerHTML = emptyHtml(v);
+  } else {
+    curGroups.forEach(function(g, gi){
+      var okey = okeyOf(g);
+      if (!g.flat) {
+        var pend = 0; g.rows.forEach(function(r){ if (r._st === 'pending') pend++; });
+        html += '<button class="group-header" aria-expanded="' + (g.open ? 'true' : 'false') + '" onclick="toggleGroup(' + gi + ')">' +
+          '<span class="chev">' + (g.open ? '▾' : '▸') + '</span><span class="gl">' + esc(g.label) + '</span>' +
+          (pend && prefs.status !== 'pending' ? '<span class="gp">' + pend + ' pending</span>' : '') +
+          '<span class="gc">(' + g.rows.length + ')</span></button>';
+      }
+      if (!g.open) return;
+      var lim = shownN[okey] || PAGE_SIZE, n = Math.min(g.rows.length, lim);
+      for (var j = 0; j < n; j++) { html += rowHtml(g.rows[j]); renderedRows.push(g.rows[j]); }
+      if (g.rows.length > n) html += '<button class="btn more" onclick="showMore(' + gi + ')">Show ' + Math.min(PAGE_SIZE, g.rows.length - n) + ' more (' + (g.rows.length - n) + ' not shown yet)</button>';
+    });
+    box.innerHTML = html;
+  }
+  updateChrome(v);
   updateBatchBar();
-  loadList();
+  renderConfirm();
 }
+function emptyHtml(v){
+  var others = [];
+  STATUSES.forEach(function(s){ if (s !== prefs.status && v.counts[s]) others.push(v.counts[s] + ' ' + s); });
+  var txt = '<div class="empty">';
+  if (activeFilterCount()) {
+    txt += 'No ' + (prefs.status ? esc(prefs.status) + ' ' : '') + 'messages match these filters.';
+    if (prefs.status && v.base.length) txt += '<br>' + esc(others.join(', ') || (v.base.length + ' with another status')) + ' match — tap <b>All</b> to see them.';
+    txt += '<br><button class="btn" style="margin-top:10px" onclick="clearFilters()">Clear filters</button>';
+  } else {
+    txt += 'No ' + (prefs.status ? esc(prefs.status) + ' ' : '') + 'messages.';
+    if (prefs.status && v.base.length) txt += '<br>' + esc(others.join(', ') || (v.base.length + ' with another status')) + ' — tap <b>All</b> to see them.';
+  }
+  return txt + '</div>';
+}
+function updateChrome(v){
+  var ready = all.length > 0 || loadOk;
+  setText('n-pending', ready ? ' ' + v.counts.pending : ''); setText('n-sent', ready ? ' ' + v.counts.sent : '');
+  setText('n-skipped', ready ? ' ' + v.counts.skipped : ''); setText('n-failed', ready ? ' ' + v.counts.failed : '');
+  setText('n-all', ready ? ' ' + v.counts.all : '');
+  [['pending','chip-pending'],['sent','chip-sent'],['skipped','chip-skipped'],['failed','chip-failed'],['','chip-all']].forEach(function(p){
+    setCls(p[1], 'btn small' + (prefs.status === p[0] ? ' active' : ''));
+  });
+  [['','rt-all'],['tenant','rt-tenant'],['vendor','rt-vendor'],['owner','rt-owner']].forEach(function(p){
+    setCls(p[1], 'btn small' + (F.rtype === p[0] ? ' active' : ''));
+  });
+  var n = activeFilterCount();
+  setText('result-count', ready ? (v.shown.length + ' of ' + all.length + ' message' + (all.length === 1 ? '' : 's') +
+    (v.undated ? ' · ' + v.undated + ' with no date hidden by the date filter' : '')) : (loading ? 'Loading…' : ''));
+  el('fcount').textContent = String(n); el('fcount').classList.toggle('hide', !n);
+  el('clear-filters').classList.toggle('hide', !n);
+  setText('fpanel-count', n ? '· ' + n + ' active' : '');
+  el('clear-filters-top').disabled = !n;
+  el('q-clear').classList.toggle('hide', !(el('q').value));
+  var bm = el('bulk-toggle-btn'); bm.textContent = bulkMode ? '✕ Cancel select' : '☑ Select multiple'; bm.className = 'btn small' + (bulkMode ? ' active' : '');
+  el('bulkbar').classList.toggle('hide', !bulkMode);
+  renderBanner();
+  setLoadedUi();
+}
+function renderBanner(){
+  var h = '';
+  if (loadErr) {
+    h += '<div class="banner err" role="alert">⚠ <b>Could not load the message list.</b> ' + esc(loadErr) +
+      (all.length ? '<br>The list below is from ' + esc(fmtTimeET(lastLoaded)) + ' and may be out of date.' : '') +
+      '<br><button class="btn small" onclick="refreshList()">Retry</button></div>';
+  }
+  if (badRows) h += '<div class="banner warn" role="alert">⚠ ' + badRows + ' entr' + (badRows === 1 ? 'y' : 'ies') + ' in the list could not be read and ' + (badRows === 1 ? 'was' : 'were') + ' left out. This has been reported.</div>';
+  el('banner').innerHTML = h;
+}
+function setLoadedUi(){
+  el('loaded').textContent = loading ? 'Loading…' : (lastLoaded ? 'Last loaded ' + fmtTimeET(lastLoaded) : 'Not loaded yet');
+  var b = el('refresh-btn'); b.disabled = loading; b.textContent = loading ? 'Loading…' : '↻ Refresh';
+}
+function syncControls(){
+  el('f-sort').value = prefs.sort; el('f-group').value = prefs.group;
+  el('f-date').value = F.preset; el('f-from').value = F.from; el('f-to').value = F.to;
+}
+function rowHtml(r){
+  var st = r._st || '';
+  var badgeCls = STATUSES.indexOf(st) >= 0 ? st : 'unknown';
+  var canAct = st === 'pending' && r.ID;
+  var checked = selected[r.ID] ? ' checked' : '';
+  var idA = esc(r.ID);
+  var showEn = '';
+  if (r.Recipient_Type === 'vendor' && !String(r.Original_Body || '').trim() && !english[r.ID]) {
+    showEn = '<div class="row-meta"><button class="btn small" data-id="' + idA + '" onclick="retryEnglish(this.dataset.id)">Show English</button></div>';
+  }
+  return '<div class="row-card' + (bulkMode ? ' bulk' : '') + '">' +
+    (canAct ? '<label class="ck"><input type="checkbox"' + checked + ' data-id="' + idA + '" onchange="toggleSelect(this.dataset.id, this.checked)" aria-label="Select this message"></label>' : '') +
+    '<div class="row-body">' +
+    '<div class="row-top">' +
+    '<span class="row-name">' + esc(r.Recipient_Name || '(no name on file)') + '</span>' +
+    '<span class="badge ' + badgeCls + '">' + esc(r.Status || 'unknown') + '</span>' +
+    '</div>' +
+    '<div class="row-type">' + esc(r.Message_Type || '') + (r.WO_ID ? ' · WO-' + esc(String(r.WO_ID).replace(/^wo-?/i, '')) : '') + ' · ' + esc(r.Recipient_Phone || '') + '</div>' +
+    (r.Property_Address && prefs.group !== 'prop' ? '<div class="row-addr">' + esc(r.Property_Address) + '</div>' : '') +
+    '<div class="row-msg">' + esc(r.Message_Body || '') + (r.Translated_To ? '<span class="row-es-tag">sent in Spanish</span>' : '') + '</div>' +
+    englishHtml(r) + showEn +
+    (r.Status === 'pending' && r.Gate_Snapshot ? '<div class="row-gate">Not sent — ' + esc(r.Gate_Snapshot) + '</div>' : '') +
+    (r.Status === 'sent' ? '<div class="row-meta">Sent ' + dateLabel(r.Sent_Date) + ' → ' + esc(r.Delivered_To || '') + '</div>' : '') +
+    '<div class="row-meta" title="' + esc(r.Created_Date || '') + '">Queued ' + dateLabel(r.Created_Date) + '</div>' +
+    (!bulkMode && canAct ? '<div class="row-actions">' +
+      '<button class="btn small go" data-id="' + idA + '" onclick="releaseOne(this.dataset.id)">Send</button>' +
+      '<button class="btn small" data-id="' + idA + '" onclick="skipOne(this.dataset.id)">Skip</button>' +
+      '</div>' : '') +
+    '</div></div>';
+}
+
+// ── Load (ONE request per load; filters/tabs/search/sort/group never touch the network) ──────────────
 function loadList(){
-  var q = curStatus ? ('?status=' + encodeURIComponent(curStatus)) : '';
-  api('GET','/message-queue' + q).then(function(list){
-    rows = Array.isArray(list) ? list : [];
-    render();
-    fetchEnglish();
-  }).catch(function(){ document.getElementById('list').innerHTML = '<div class="empty">Could not load — check connection.</div>'; });
+  var seq = ++loadSeq;
+  loading = true; setLoadedUi();
+  if (!all.length) renderList();
+  return api('GET','/message-queue').then(function(list){
+    if (seq !== loadSeq) return;
+    applyList(list);
+  }).catch(function(err){
+    if (seq !== loadSeq) return;
+    listFailed(err && err.message || 'error');
+  });
 }
+function refreshList(){ if (loading) return; loadList(); }
+function listFailed(msg){
+  loading = false; loadErr = String(msg || 'unknown error');
+  if (loadErr === 'Unauthorized') {                       // the saved access code no longer works: go back to the login box
+    AUTH_TOKEN = ''; el('app').classList.add('hide'); el('login').style.display = ''; showLoginError('Your access code was not accepted — enter it again.');
+    return;
+  }
+  reportFail('list load', loadErr);
+  renderList();
+}
+function applyList(list){
+  if (!Array.isArray(list)) {
+    var m = list && list.error ? String(list.error) : 'The Hub answered with something that is not a message list.';
+    listFailed(m); return;
+  }
+  var good = [], bad = 0;
+  list.forEach(function(r){ if (r && typeof r === 'object' && !Array.isArray(r)) good.push(prepare(r)); else bad++; });
+  if (bad) reportFail('list rows', bad + ' entr' + (bad === 1 ? 'y' : 'ies') + ' in the message list could not be read');
+  all = good; badRows = bad;
+  byId = {}; all.forEach(function(r){ if (r.ID) byId[r.ID] = r; });
+  Object.keys(selected).forEach(function(id){ if (!byId[id] || byId[id]._st !== 'pending') delete selected[id]; });
+  loading = false; loadOk = true; loadErr = ''; lastLoaded = Date.now();
+  translateBudget = 45; shownN = {};
+  buildDropdowns();
+  render();
+}
+function fillSelect(id, opts, cur){
+  var h = '';
+  opts.forEach(function(o){ h += '<option value="' + esc(o.v) + '">' + esc(o.l) + '</option>'; });
+  var s = el(id); s.innerHTML = h; s.value = cur;
+}
+function buildDropdowns(){
+  var mt = {}, pr = {};
+  all.forEach(function(r){ mt[r._mt] = true; pr[r._pk] = true; });
+  if (F.mtype) mt[F.mtype] = true;
+  if (F.prop) pr[F.prop] = true;
+  var mopts = [{ v: '', l: 'All types' }].concat(Object.keys(mt).sort(strCmp).map(function(k){ return { v: k, l: k.replace(/_/g, ' ') }; }));
+  var popts = [{ v: '', l: 'All properties' }].concat(Object.keys(pr).filter(function(k){ return k !== 'No property'; }).sort(strCmp).map(function(k){ return { v: k, l: k }; }));
+  if (pr['No property']) popts.push({ v: 'No property', l: 'No property' });
+  fillSelect('f-mtype', mopts, F.mtype); fillSelect('f-prop', popts, F.prop);
+}
+
+// ── Controls ────────────────────────────────────────────────
+function resetView(){ ovSearch = {}; shownN = {}; selAllConfirm = false; }
+function onFilterChange(){ resetView(); render(); }
+function switchTab(status){ prefs.status = status; savePrefs(); resetView(); render(); }
+function setSort(v){ if (SORTS.indexOf(v) < 0) return; prefs.sort = v; savePrefs(); resetView(); render(); }
+function setGroup(v){ if (GROUPS.indexOf(v) < 0) return; prefs.group = v; savePrefs(); resetView(); render(); }
+function setRType(v){ F.rtype = v; onFilterChange(); }
+function setMType(v){ F.mtype = v; onFilterChange(); }
+function setProp(v){ F.prop = v; onFilterChange(); }
+function setPreset(v){ F.preset = v; if (v !== 'custom') { F.from = ''; F.to = ''; el('f-from').value = ''; el('f-to').value = ''; } onFilterChange(); }
+function setRange(){
+  F.from = el('f-from').value; F.to = el('f-to').value;
+  F.preset = (F.from || F.to) ? 'custom' : ''; el('f-date').value = F.preset;
+  onFilterChange();
+}
+function toggleFilters(){
+  var p = el('filters-panel'); var open = p.classList.contains('hide');
+  p.classList.toggle('hide', !open); el('filters-btn').setAttribute('aria-expanded', open ? 'true' : 'false');
+  el('filters-btn').className = 'btn fbtn' + (open ? ' active' : '');
+}
+function clearFilters(){
+  F.q = ''; F.tokens = []; F.rtype = ''; F.mtype = ''; F.prop = ''; F.preset = ''; F.from = ''; F.to = '';
+  el('q').value = ''; el('f-mtype').value = ''; el('f-prop').value = ''; syncControls();
+  onFilterChange();
+}
+function applySearch(v){
+  F.q = String(v || '').trim().toLowerCase();
+  F.tokens = F.q ? F.q.split(/\s+/) : [];
+  onFilterChange();
+}
+function onSearchInput(){
+  var v = el('q').value;
+  el('q-clear').classList.toggle('hide', !v);
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(function(){ searchTimer = null; applySearch(el('q').value); }, 150);
+}
+function onSearchKey(e){ if (e && e.key === 'Escape') clearSearch(); }
+function clearSearch(){
+  if (searchTimer) { clearTimeout(searchTimer); searchTimer = null; }
+  el('q').value = ''; applySearch('');
+  if (el('q').focus) el('q').focus();
+}
+function toggleGroup(i){
+  var g = curGroups[i]; if (!g) return;
+  var k = okeyOf(g);
+  if (narrowing()) ovSearch[k] = !g.open; else { prefs.ov[k] = !g.open; savePrefs(); }
+  render();
+}
+function showMore(i){
+  var g = curGroups[i]; if (!g) return;
+  var k = okeyOf(g); shownN[k] = (shownN[k] || PAGE_SIZE) + PAGE_SIZE; render();
+}
+
 // ── English view: show what a Spanish vendor text says (Oct 13 2026) ─────────────────────
 // Rows that carry the English original (Original_Body) show it straight away. Older vendor rows
 // without one are sent to the Hub to translate (the Hub only translates text that reads as Spanish).
 // A translation that can't be produced shows a visible warning + Retry — never a blank.
+// Oct 21 2026: only rows that are actually drawn (open groups) are looked up, capped at 45 per list load;
+// a vendor row past the cap shows a "Show English" button instead of being silently skipped.
 var english = {};
 function englishHtml(r){
   var saved = String(r.Original_Body || '').trim();
@@ -200,9 +771,16 @@ function englishHtml(r){
   if (e && e.loading) return '<div class="row-en">Translating to English…</div>';
   return '';
 }
+function autoTranslate(){
+  if (translateBudget <= 0) return;
+  var need = renderedRows.filter(function(r){ return r.Recipient_Type === 'vendor' && !String(r.Original_Body || '').trim() && !english[r.ID]; }).map(function(r){ return r.ID; });
+  need = need.slice(0, translateBudget);
+  if (!need.length) return;
+  translateBudget -= need.length;
+  fetchEnglish(need);
+}
 function fetchEnglish(ids){
-  var need = ids || rows.filter(function(r){ return r.Recipient_Type === 'vendor' && !String(r.Original_Body || '').trim() && !english[r.ID]; }).map(function(r){ return r.ID; });
-  need = need.slice(0, 45);
+  var need = (ids || []).slice(0, 45);
   for (var i = 0; i < need.length; i += 15) (function(chunk){
     chunk.forEach(function(id){ english[id] = { loading: true }; });
     api('POST','/message-queue/translate',{ ids: chunk }).then(function(r){
@@ -210,101 +788,95 @@ function fetchEnglish(ids){
       r.results.forEach(function(x){ english[x.id] = x.english ? { english: x.english } : x.error ? { error: x.error } : { skipped: true }; });
       // A row the Hub didn't answer for must not sit on "Translating…" forever (silent stall).
       chunk.forEach(function(id){ if (english[id] && english[id].loading) english[id] = { error: 'the Hub returned no answer for this message' }; });
-      render();
+      renderList();
     }).catch(function(err){
       chunk.forEach(function(id){ english[id] = { error: 'could not reach the Hub (' + (err && err.message || 'error') + ')' }; });
-      render();
+      reportFail('english view', err && err.message || 'error');
+      renderList();
     });
   })(need.slice(i, i + 15));
-  if (need.length) render();
+  if (need.length) renderList();
 }
 function retryEnglish(id){ delete english[id]; fetchEnglish([id]); }
-function groupKey(r){
-  if (r.Recipient_Type === 'vendor') return 'Vendor · ' + (r.Recipient_Name || 'Unknown');
-  return (r.Property_Address || 'No property') + (r.Recipient_Name ? (' — ' + r.Recipient_Name) : '');
-}
-function render(){
-  var el = document.getElementById('list');
-  if (!rows.length) { el.innerHTML = '<div class="empty">Nothing here.</div>'; return; }
-  // Sort newest first, then group by property/recipient so Brett can spot a bad batch at a glance.
-  var sorted = rows.slice().sort(function(a,b){ return (b.Created_Date||'').localeCompare(a.Created_Date||''); });
-  var groups = {}, order = [];
-  sorted.forEach(function(r){
-    var k = groupKey(r);
-    if (!groups[k]) { groups[k] = []; order.push(k); }
-    groups[k].push(r);
-  });
-  var html = '';
-  order.forEach(function(k){
-    html += '<div class="group-header">' + esc(k) + ' (' + groups[k].length + ')</div>';
-    groups[k].forEach(function(r){ html += rowHtml(r); });
-  });
-  el.innerHTML = html;
-}
-function rowHtml(r){
-  var st = (r.Status || 'pending').toLowerCase();
-  var checked = selected[r.ID] ? 'checked' : '';
-  return '<div class="row-card' + (bulkMode ? ' bulk' : '') + '">' +
-    '<input type="checkbox" ' + checked + ' onchange="toggleSelect(\'' + r.ID + '\', this.checked)">' +
-    '<div class="row-body">' +
-    '<div class="row-top">' +
-    '<span class="row-name">' + esc(r.Recipient_Name || '(no name on file)') + '</span>' +
-    '<span class="badge ' + st + '">' + esc(r.Status || 'pending') + '</span>' +
-    '</div>' +
-    '<div class="row-type">' + esc(r.Message_Type || '') + (r.WO_ID ? ' · WO-' + esc(r.WO_ID) : '') + ' · ' + esc(r.Recipient_Phone || '') + '</div>' +
-    '<div class="row-msg">' + esc(r.Message_Body || '') + (r.Translated_To ? '<span class="row-es-tag">sent in Spanish</span>' : '') + '</div>' +
-    englishHtml(r) +
-    (r.Status === 'pending' && r.Gate_Snapshot ? '<div class="row-gate">Not sent — ' + esc(r.Gate_Snapshot) + '</div>' : '') +
-    (r.Status === 'sent' ? '<div class="row-meta">Sent ' + esc(r.Sent_Date || '') + ' → ' + esc(r.Delivered_To || '') + '</div>' : '') +
-    '<div class="row-meta">Queued ' + esc(r.Created_Date || '') + '</div>' +
-    (!bulkMode && r.Status === 'pending' ? '<div class="row-actions">' +
-      '<button class="btn small go" onclick="releaseOne(\'' + r.ID + '\')">Send</button>' +
-      '<button class="btn small" onclick="skipOne(\'' + r.ID + '\')">Skip</button>' +
-      '</div>' : '') +
-    '</div></div>';
-}
 
-// ── Bulk select ────────────────────────────────────────────
+// ── Bulk select (by id; survives filter/search/group changes) ───────────────────
 function toggleBulkMode(){
-  bulkMode = !bulkMode; selected = {};
-  document.getElementById('bulk-toggle-btn').textContent = bulkMode ? '✕ Cancel select' : '☑ Select multiple';
-  document.getElementById('bulk-toggle-btn').classList.toggle('active', bulkMode);
-  updateBatchBar(); render();
+  bulkMode = !bulkMode; selected = {}; selAllConfirm = false;
+  render();
 }
 function toggleSelect(id, checked){
   if (checked) selected[id] = true; else delete selected[id];
   updateBatchBar();
 }
-function updateBatchBar(){
-  var n = Object.keys(selected).length;
-  document.getElementById('batch-bar').classList.toggle('hide', !bulkMode || n === 0);
-  document.getElementById('batch-count').textContent = n + ' selected';
+// What a Send/Skip would touch: selected ids that still exist, are still pending AND are inside the current filter result.
+function sendableIds(){
+  var shown = {}; if (lastView) lastView.shown.forEach(function(r){ shown[r.ID] = true; });
+  return Object.keys(selected).filter(function(id){ return byId[id] && byId[id]._st === 'pending' && shown[id]; });
 }
+function selectedExistingCount(){ return Object.keys(selected).filter(function(id){ return byId[id] && byId[id]._st === 'pending'; }).length; }
+function updateBatchBar(){
+  var send = sendableIds().length, total = selectedExistingCount(), hidden = total - send;
+  el('batch-bar').classList.toggle('hide', !bulkMode || total === 0);
+  el('batch-count').textContent = send + ' selected' + (hidden > 0 ? ' · ' + hidden + ' more hidden by filters (not included)' : '');
+}
+function shownPendingIds(){ return renderedRows.filter(function(r){ return r._st === 'pending' && r.ID; }).map(function(r){ return r.ID; }); }
+function askSelectAll(){
+  if (!shownPendingIds().length) { toast('No pending messages are shown right now.'); return; }
+  selAllConfirm = true; renderConfirm();
+}
+function renderConfirm(){
+  var box = el('selall-confirm'), n = shownPendingIds().length;
+  if (!bulkMode || !n) selAllConfirm = false;
+  if (!selAllConfirm) { box.classList.add('hide'); box.innerHTML = ''; return; }
+  box.classList.remove('hide');
+  box.innerHTML = 'Select all <b>' + n + '</b> pending message' + (n === 1 ? '' : 's') + ' shown on screen? Messages in closed groups or past “Show more” are not included.<br>' +
+    '<button class="btn go" onclick="confirmSelectAll()">Yes, select ' + n + '</button><button class="btn" onclick="cancelSelectAll()">Cancel</button>';
+}
+function confirmSelectAll(){
+  shownPendingIds().forEach(function(id){ selected[id] = true; });
+  selAllConfirm = false; render();
+}
+function cancelSelectAll(){ selAllConfirm = false; renderConfirm(); }
+function clearSelection(){ selected = {}; selAllConfirm = false; render(); }
 
 // ── Actions ────────────────────────────────────────────────
 function releaseOne(id){ releaseIds([id]); }
 function skipOne(id){ skipIds([id]); }
-function releaseSelected(){ releaseIds(Object.keys(selected)); }
-function skipSelected(){ skipIds(Object.keys(selected)); }
+function releaseSelected(){ releaseIds(sendableIds()); }
+function skipSelected(){ skipIds(sendableIds()); }
+function pendingOnly(ids){ return ids.filter(function(id){ return byId[id] && byId[id]._st === 'pending'; }); }
 
 function releaseIds(ids){
-  if (!ids.length) return;
+  ids = pendingOnly(ids);
+  if (!ids.length) { toast('Nothing to send — those messages are no longer pending.'); return; }
+  if (actionBusy) { toast('Still working on the last tap — one moment.'); return; }
+  actionBusy = true;
   api('POST','/message-queue/release',{ids:ids}).then(function(r){
-    if (r && r.error) { toast('Error: ' + r.error); return; }
-    var sentCount = (r.results||[]).filter(function(x){return x.sent;}).length;
-    var heldCount = (r.results||[]).length - sentCount;
-    toast(sentCount + ' sent' + (heldCount ? ', ' + heldCount + ' still gated off' : ''));
-    selected = {}; updateBatchBar(); loadList();
-  }).catch(function(e){ toast('Error: ' + (e && e.message || 'send failed')); });
+    actionBusy = false;
+    if (!r || r.error) { toast('Error: ' + ((r && r.error) || 'no answer from the Hub'), 6000); reportFail('send', (r && r.error) || 'no answer'); return; }
+    var results = r.results || [];
+    var sentCount = results.filter(function(x){return x.sent;}).length;
+    var errs = results.filter(function(x){return x.error;});
+    var heldCount = results.length - sentCount - errs.length;
+    toast(sentCount + ' sent' + (heldCount ? ', ' + heldCount + ' still gated off' : '') + (errs.length ? ', ' + errs.length + ' error' + (errs.length === 1 ? '' : 's') + ': ' + errs[0].error : ''), errs.length ? 7000 : 2400);
+    if (errs.length) reportFail('send', errs.length + ' message(s) could not be released: ' + errs[0].error);
+    ids.forEach(function(id){ delete selected[id]; }); loadList();
+  }).catch(function(e){ actionBusy = false; toast('Error: ' + (e && e.message || 'send failed'), 6000); reportFail('send', e && e.message || 'send failed'); });
 }
 function skipIds(ids){
-  if (!ids.length) return;
+  ids = pendingOnly(ids);
+  if (!ids.length) { toast('Nothing to skip — those messages are no longer pending.'); return; }
+  if (actionBusy) { toast('Still working on the last tap — one moment.'); return; }
+  actionBusy = true;
   api('POST','/message-queue/skip',{ids:ids}).then(function(r){
-    if (r && r.error) { toast('Error: ' + r.error); return; }
+    actionBusy = false;
+    if (!r || r.error) { toast('Error: ' + ((r && r.error) || 'no answer from the Hub'), 6000); reportFail('skip', (r && r.error) || 'no answer'); return; }
     toast(ids.length + ' skipped');
-    selected = {}; updateBatchBar(); loadList();
-  }).catch(function(e){ toast('Error: ' + (e && e.message || 'skip failed')); });
+    ids.forEach(function(id){ delete selected[id]; }); loadList();
+  }).catch(function(e){ actionBusy = false; toast('Error: ' + (e && e.message || 'skip failed'), 6000); reportFail('skip', e && e.message || 'skip failed'); });
 }
+
+bootApp();
 </script>
 </body>
 </html>

@@ -1,0 +1,30 @@
+# Unit tests (D-16 follow-up, Oct 23 2026). The whole suite - node --check worker.js, then every test/*.test.mjs - on every pull request into
+# main or staging and on every push to main. Findings: the repo had NO workflow that ran the suite (the Outside Review job is advisory and only
+# comments), so "all tests pass" had no CI proof. This job FAILS the check when anything is red; nothing is skipped or marked allowed-to-fail.
+# No schedule and no cron: it only runs when code changes.
+name: Unit tests
+on:
+  pull_request:
+    branches: [main, staging]
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+concurrency:
+  group: unit-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Syntax check
+        run: node --check worker.js
+      - name: Run every test file
+        run: node --test test/*.test.mjs

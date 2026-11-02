@@ -49,6 +49,9 @@
   .li .fields{display:grid;grid-template-columns:120px 110px 1fr;gap:6px;}
   .li .fields .full{grid-column:1/-1;}
   .li .fields input{width:100%;}
+  /* Oct 27 2026 (Brett): Description + Note are multi-line text areas that grow to fit what is typed, not one cramped line. */
+  .li .fields textarea{width:100%;box-sizing:border-box;line-height:1.45;resize:vertical;overflow:hidden;min-height:72px;}
+  .li .fields textarea.f-note{min-height:48px;}
   .li .fields label{display:block;font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px;}
   .li .del{grid-column:2;justify-self:end;}
   .li.addon{border-color:#166534;background:#f0f8f2;}
@@ -277,7 +280,7 @@
   <!-- 7. PROPOSAL -->
   <div class="section" id="sec-proposal">
     <div class="section-title">7 · Payment schedule &amp; customer proposal</div>
-    <div class="sub" style="margin-bottom:6px;">Set this before generating the proposal — the schedule below is what gets printed into the payment terms and signed. Change any % and the other milestones rebalance automatically so the total stays 100% (type a different number in them if you want another split).</div>
+    <div class="sub" style="margin-bottom:6px;">Set this before generating the proposal — the schedule below is what gets printed into the payment terms and signed. Type a % and the NEXT milestone down absorbs the difference, so the total stays 100%. A number you typed stays put (the Deposit never moves unless you change it yourself); only milestones you haven't touched take up the slack.</div>
     <div class="row" style="gap:6px;flex-wrap:wrap;">
       <button class="btn small" onclick="applySchedulePreset('third')">1/3 (default)</button>
       <button class="btn small secondary" onclick="applySchedulePreset('quarter')">1/4</button>
@@ -354,8 +357,21 @@ function applySchedulePreset(which){
   else if(which==='custom' && !scheduleState.milestones.length) scheduleState.milestones=scheduleDefault();
   renderSchedule();
 }
-function addScheduleRow(){ scheduleState.milestones.push({label:'Milestone', percent:0, trigger:'manual', vendor_paid:true, calc_mode:'percent', flat_customer_amount:null}); renderSchedule(); }
-function removeScheduleRow(i){ scheduleState.milestones.splice(i,1); renderSchedule(); }
+// Adding a milestone (Oct 27 2026): starts at 0% so NOTHING already set moves; it goes in just before the
+// Completion/Final row (not after it) so Final stays last.
+function addScheduleRow(){
+  var ms=scheduleState.milestones, row={label:'Milestone', percent:0, trigger:'manual', vendor_paid:true, calc_mode:'percent', flat_customer_amount:null};
+  if(ms.length>1 && ms[ms.length-1].trigger==='completion') ms.splice(ms.length-1,0,row); else ms.push(row);
+  scheduleState.note=''; renderSchedule();
+}
+// Removing a milestone hands its % to the next milestone down (the one that takes its place), so the
+// total stays 100% without touching anything else.
+function removeScheduleRow(i){
+  var ms=scheduleState.milestones, gone=+ms[i].percent||0;
+  ms.splice(i,1); scheduleState.note='';
+  if(ms.length){ var t=ms[Math.min(i,ms.length-1)]; t.percent=Math.round(((+t.percent||0)+gone)*100)/100; }
+  renderSchedule();
+}
 // Per-milestone vendor-pay + calc mode (Sep 28 2026, WO→Scope conversion, FEATURE_LOG rule 199).
 // vendor_paid (default true): unchecked = nothing is billed to the vendor for THIS milestone; its
 // vendor share rolls forward onto the next vendor-paid milestone (or the last one if none), never
@@ -378,24 +394,42 @@ function updateScheduleField(i,field,val){
   else m[field] = val;
   renderScheduleTotal();
 }
-// Auto-rebalance (Oct 13 2026, Brett: "when I change the payment schedule, the other milestones did not
-// recalculate"): after editing one milestone's %, the OTHER milestones share what is left of 100%,
-// in proportion to what they had (equal shares if they were all 0). The row you typed is never touched.
-// Updates the other rows' boxes in place so the field you are typing in keeps focus.
+// Cascade (Oct 27 2026, Brett: "the moment I added a milestone it became impossible to keep the deposit the
+// same or the final ... hold the first at the listed amount unless I change it, then add the next amount to
+// the next part ... force 100% as a cascade, not whack-a-mole"). Replaces the Oct 13 proportional rebalance,
+// which rescaled EVERY other row on every keystroke.
+// Rules: a % you type is "locked" (m.locked) and never moves again on its own; the first row is held from the start. Other untouched rows are the only
+// ones that take up slack, nearest row BELOW the edited one first, then (if there is none) the nearest row
+// above. If every row is locked, the neighbour below (or above, for the last row) is unlocked and absorbs
+// it so the total is always forced to 100%. Computed from the locked total, not from running deltas, so
+// typing "5" -> "50" -> "500" -> back to "50" always lands on the same answer.
 function rebalanceSchedule(editedIdx){
-  var ms=scheduleState.milestones;
-  var others=[]; ms.forEach(function(m,j){ if(j!==editedIdx) others.push(j); });
-  if(!others.length) return;
-  var remaining=Math.max(0, 100-(+ms[editedIdx].percent||0));
-  var sumOthers=others.reduce(function(s,j){ return s+(+ms[j].percent||0); },0);
-  var running=0;
-  others.forEach(function(j,k){
-    var v;
-    if(k===others.length-1) v=Math.round((remaining-running)*100)/100;           // last other row absorbs rounding
-    else v=Math.round((sumOthers>0 ? remaining*(+ms[j].percent||0)/sumOthers : remaining/others.length)*100)/100;
-    if(v<0) v=0;
-    ms[j].percent=v; running+=v;
-  });
+  var ms=scheduleState.milestones; if(!ms[editedIdx]) return;
+  var r2=function(x){ return Math.round(x*100)/100; };
+  scheduleState.note='';
+  ms[editedIdx].locked=true;
+  // The first row (the Deposit) counts as held at its listed amount from the start, until you change it.
+  var held=function(j){ return ms[j].locked===true || (j===0 && ms[j].locked!==false); };
+  var free=[]; ms.forEach(function(m,j){ if(!held(j)) free.push(j); });
+  if(!free.length){
+    var plug = editedIdx<ms.length-1 ? editedIdx+1 : editedIdx-1;
+    if(plug<0) return;                                   // single milestone: nothing to balance against
+    ms[plug].locked=false; free=[plug];
+    scheduleState.note=' · "'+(ms[plug].label||'Milestone')+'" adjusted to keep 100% (every other row was already set)';
+  }
+  var lockedSum=0; ms.forEach(function(m,j){ if(held(j)) lockedSum+=(+m.percent||0); });
+  var target=Math.max(0, r2(100-lockedSum));
+  var cur=r2(free.reduce(function(s,j){ return s+(+ms[j].percent||0); },0));
+  var D=r2(target-cur);
+  var order=free.filter(function(j){ return j>editedIdx; }).concat(free.filter(function(j){ return j<editedIdx; }).reverse());
+  if(D>0) ms[order[0]].percent=r2((+ms[order[0]].percent||0)+D);
+  else if(D<0){
+    var need=-D;
+    for(var k=0;k<order.length && need>0.0001;k++){
+      var j=order[k], have=+ms[j].percent||0, take=Math.min(need,have);
+      ms[j].percent=r2(have-take); need=r2(need-take);
+    }
+  }
   var host=document.getElementById('schedule-rows');
   var boxes=(host&&host.querySelectorAll)?host.querySelectorAll('input[data-pct]'):[];
   for(var b=0;b<boxes.length;b++){ if(b!==editedIdx && ms[b]) boxes[b].value=ms[b].percent; }
@@ -436,6 +470,7 @@ function renderScheduleTotal(){
   var cls = 'info';
   if(Math.abs(total-100)>0.1){ msg+=' — must equal 100% to save'; cls='err'; }
   else if(upfront > scheduleState.maxUpfrontPct+0.001){ msg += ' · ⚠ '+upfront.toFixed(2)+'% upfront is above the '+scheduleState.maxUpfrontPct+'% MD deposit cap — not blocked, your call, but confirm before sending'; cls='warn'; }
+  if(scheduleState.note && cls!=='err') msg += scheduleState.note;
   setStatus('schedule-total', msg, cls);
 }
 async function saveSchedule(){
@@ -920,13 +955,18 @@ function renderItems(){
         '<div><label>Area</label><input class="f-area" value="'+esc(it.area)+'"></div>'+
         '<div><label>Trade</label><input class="f-trade" value="'+esc(it.trade)+'"></div>'+
         '<div><label>Qty</label><input class="f-qty" value="'+esc(it.qty)+'"></div>'+
-        '<div class="full"><label>Description</label><input class="f-desc" value="'+esc(it.description)+'"></div>'+
-        '<div class="full"><label>Note — private; never shown to the customer (like vendor cost above)</label><input class="f-note" value="'+esc(it.note)+'"></div>'+
+        '<div class="full"><label>Description</label><textarea class="f-desc" rows="'+rowsFor(it.description,4)+'" oninput="autoGrow(this)">\n'+esc(it.description)+'</textarea></div>'+
+        '<div class="full"><label>Note — private; never shown to the customer (like vendor cost above)</label><textarea class="f-note" rows="'+rowsFor(it.note,2)+'" oninput="autoGrow(this)">\n'+esc(it.note)+'</textarea></div>'+
         '<div class="full">'+variantsBlock(it)+'</div>'+
         '<button class="btn small danger del" onclick="removeItem(this)">Remove item</button>'+
       '</div></div>';
   }).join('');
+  wrap.querySelectorAll('textarea.f-desc,textarea.f-note').forEach(autoGrow);
 }
+// Oct 27 2026: size a multi-line field to its content. rowsFor() is the starting guess (works even while the
+// section is hidden and scrollHeight is 0); autoGrow() then fits it exactly once it is visible and on every keystroke.
+function rowsFor(txt,min){ var n=String(txt||'').split('\n').reduce(function(a,l){ return a+Math.max(1,Math.ceil(l.length/85)); },0); return Math.min(16,Math.max(min,n)); }
+function autoGrow(t){ if(!t) return; t.style.height='auto'; var h=t.scrollHeight; t.style.height=h>0?(h+2)+'px':''; }
 function addVariant(btn){
   var wrap=btn.closest('.variants'); var rows=wrap.querySelector('.variant-rows');
   var existing=rows.querySelectorAll('.vrow');
@@ -1222,7 +1262,7 @@ function renderCustomerPreview(items, schedule){
   };
   var itemHtml=function(it,plus){
     var vs=it.variants||[];
-    var h='<div class="pv-item"><b>'+esc(it.description||'')+'</b>';
+    var h='<div class="pv-item"><b style="white-space:pre-line;">'+esc(it.description||'')+'</b>';
     if(vs.length>1){ h+='<div style="font-size:11px;color:var(--muted);">Customer picks ONE:</div>'+vs.map(function(v){ return '<div class="pv-opt"><span>○ '+esc(v.label||'Option')+'</span><span>'+(plus?'+':'')+money(v.price)+'</span></div>'; }).join(''); }
     else if(vs[0]){ h+='<div class="pv-opt"><span></span><span>'+(plus?'+':'')+money(vs[0].price)+'</span></div>'; }
     return h+'</div>';

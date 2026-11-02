@@ -43,10 +43,20 @@ function __makeWOStatus() {
   // Designed in HUB_UX §4, not built. Listed so the two groups that already mention them keep working.
   var RESERVED = ['Pending Payment', 'Paid by Customer'];
 
+  // Oct 23 2026 (Ops_Build_Queue #175): 'Estimate Requested' WOs (made by /scope/to-wo, waiting on a vendor
+  // estimate) were in NO group, so they vanished from owner lists, the admin Open filter and property open
+  // counts. OPEN_WORK is the lists-and-counts version of FIELD_OPEN. FIELD_OPEN itself is unchanged ON PURPOSE:
+  // it also drives behaviour that must NOT fire on an estimate request (a vendor bill auto-completing the job,
+  // the duplicate-WO guard, 'still active' checks, same-area bundling, move-in WO linking). ACTIVE is unchanged
+  // too, so tenant lists, the vendor portal and receipt matching do not start showing estimate requests.
+  var OPEN_WORK = ['New', 'Estimate Requested', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];
+
   var sets = {
     // --- the two core groups (HUB_UX isOpen / isActive) ---
-    FIELD_OPEN: FIELD,                                                    // work not finished yet
+    FIELD_OPEN: FIELD,                                                    // work not finished yet (field work only; NOT Estimate Requested)
+    OPEN_WORK: OPEN_WORK,                                                 // FIELD_OPEN + Estimate Requested: admin property counts, aging badge
     ACTIVE: FIELD.concat(['Complete', 'Pending Invoice']),                // still on a portal / dashboard open list
+    ACTIVE_OWNER: OPEN_WORK.concat(['Complete', 'Pending Invoice']),      // ACTIVE + Estimate Requested: the owner portal open list only
     // --- what a vendor may set / what the admin picker offers ---
     VENDOR_SETTABLE: ['Accepted', 'In Progress', 'On Hold', 'Complete'],  // vendor portal, share links
     VENDOR_STARTED: ['Accepted', 'In Progress', 'On Hold'],               // vendor has taken or begun the job
@@ -72,7 +82,7 @@ function __makeWOStatus() {
     STALE_ACTIVE: ['New', 'Assigned', 'Accepted', 'In Progress'],         // can go stale (On Hold is waiting on purpose)
     // --- command-center dashboard counts ---
     DASH_NOT_OPEN: ['Complete', 'Paid', 'Pending Invoice', 'Invoiced', 'Pending Payment', 'Paid by Customer', 'Cancelled', 'Canceled', 'Closed', 'Void'],
-    DASH_OPEN_LEGACY: ['New', 'Assigned', 'Accepted', 'Scheduled', 'In Progress', 'On Hold'],
+    DASH_OPEN_LEGACY: ['New', 'Estimate Requested', 'Assigned', 'Accepted', 'Scheduled', 'In Progress', 'On Hold'],   // admin WO list 'Open' filter
     // --- what a tenant sees ---
     TENANT_OPEN: ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold', 'Pending Invoice'],
     TENANT_TIMELINE: ['New', 'Assigned', 'Accepted', 'In Progress', 'Complete'],
@@ -183,6 +193,8 @@ const _hubWorkerCore = {
     const path = url.pathname;
     env = __meterReqEnv(env, request, path);   // Oct 19 2026: child env carrying this request's label for the read meter
     env.__STAGING__ = isStaging(env, url);
+    env.__SELF_ORIGIN__ = url.origin;   // the host this request came in on (used to build tenant short links on the right Worker: prod or staging)
+    if (request.method === 'GET' && path.startsWith('/r/') && path.length > 3 && path.indexOf('/', 3) < 0) return await deliveryShortRedirect(env, path.slice(3), request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown');   // PUBLIC tenant short link (stateless, signed); see deliveryShortRedirect
     // Staging talks to the Intuit SANDBOX, where production's hardcoded QB_TRADE_MAP ids do not exist.
     // On staging, re-point the map at the sandbox's own items/accounts (created by /qb/setup-trades).
     // Throttled, never throws, never runs on production.
@@ -193,6 +205,7 @@ const _hubWorkerCore = {
     // (Aug 20, 2026) to tell "Brett/admin creating a WO from the Hub" (always allowed) apart
     // from "a tenant creating their own WO via submit.html" (gated).
     let callerRole = null;
+    let _idEmail = '';   // set when POST /intake/delivery-email was signed in with a verified Google identity token
     // The verified session's own id (Tenant.ID / Owner.ID / Vendor.ID, matching whichever
     // role was issued) — set alongside callerRole below. Session-identity hardening (Sep 16
     // 2026, TENANT_WO_SETTINGS_UI_AND_HARDENING_BUILD_BRIEF_v1.0 Part A): the /workorder
@@ -259,6 +272,8 @@ const _hubWorkerCore = {
       // Tenant fix-check page (Oct 16 2026): public at the gate, but every handler self-verifies the signed, expiring fix-check token (scope 'fix-check',
       // hash-checked against WO_Followups.Token_Hash, bound to ONE follow-up and ONE tenant) before reading or writing anything.
       '/fix/page','/fix/answer','/fix/upload-session','/fix/log-attachment',
+      // Tenant delivery RSVP (Oct 23 2026 addendum): public at the gate; both handlers verify the signed per-delivery token (HMAC off WORKER_SECRET), rate limit, and answer a bad/expired link with one friendly message.
+      '/delivery/rsvp',
       // STR cleaner page (Oct 14 2026): public at the gate, but every handler self-verifies the cleaner's own random Link_Token
       // (STR_Cleaners) before reading or writing anything, and never returns another cleaner's phone/email.
       '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/ics','/fi/report','/fi/photo/view',
@@ -365,14 +380,27 @@ const _hubWorkerCore = {
         const _alertPushOk = alertPushTokenOk(env.ALERT_PUSH_TOKEN, _tok, request.method, path);
         // Narrow WRITE token for the Buildium email poller (B-103, Oct 12 2026): the Apps Script in
         // brett@'s mailbox POSTs each Buildium work-order email to /intake/email. Accepted ONLY for
-        // that one path. The handler itself creates a Work Order only after parsing + matching the
+        // that one path (Oct 23 2026: and, with the same token, POST /intake/delivery-email for the store delivery-email
+        // watcher, which writes a Deliveries row, at most one install WO and texts Brett; no other path). The handler itself creates a Work Order only after parsing + matching the
         // email to a real property, and parks everything uncertain, so a leaked token can at worst
         // inject a parked/created WO and learn (via dry_run) which property/unit/tenant IDs an
         // address maps to - it reaches nothing else. Fully inert unless env.INTAKE_TOKEN is set,
         // so deploying this changes nothing until the secret exists.
         const _intakeOk = !!env.INTAKE_TOKEN
           && _tok === env.INTAKE_TOKEN
-          && request.method === 'POST' && path === '/intake/email';
+          && request.method === 'POST' && (path === '/intake/email' || path === '/intake/delivery-email');
+        // Oct 23 2026: the delivery watcher can sign in with the mailbox owner's Google identity token instead of a shared secret (Authorization: Bearer <OpenID token>); see deliveryVerifyIdToken.
+        // Bad / expired / forged / not-allow-listed tokens all fall through to the same 401 as any other unknown caller, but each kind is reported (not silent, rate-limited).
+        let _idOk = false;
+        if (!_intakeOk && request.method === 'POST' && path === '/intake/delivery-email') {
+          const _bm = /^Bearer\s+(\S+)$/i.exec(request.headers.get('Authorization') || '');
+          if (_bm) {
+            const _v = await deliveryVerifyIdToken(env, _bm[1]);
+            if (_v.ok) { _idOk = true; _idEmail = _v.email; }
+            else if (_v.unavailable) return json({ error: 'Sign-in check unavailable. Please retry shortly.' }, 503);
+            else await deliveryAuthAlert(env, 'rejected_' + _v.reason, 'P1', 'A delivery e-mail sign-in was refused (' + _v.reason + (_v.email_hint ? ', ' + _v.email_hint : '') + '). If this was the real Apps Script, check Config Delivery_Mailboxes or re-run its setup; if not, someone is probing the route.');
+          }
+        }
         // Narrow token for staging smoke-testing (test-infrastructure build, Sep 19 2026): lets
         // a Cowork session run real read+write+read-back checks against
         // maintenance-hub-staging WITHOUT ever holding WORKER_SECRET. Structurally staging-only
@@ -483,7 +511,7 @@ const _hubWorkerCore = {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage', '/portal-access/backfill', '/admin/fi-premier-repair'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
           // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
           // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
@@ -507,7 +535,7 @@ const _hubWorkerCore = {
           const _schedAuth = _hubTestOk ? { ok: false } : await schedAuthCheck(env, _tok, request.method, path);
           if (_schedAuth.error) return json({ error: 'scheduler auth unavailable: could not read the Config sheet (' + _schedAuth.error + ')' }, 503);
           const _schedOk = _schedAuth.ok;
-          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_intakeOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk && !_schedOk) {
+          if (!_syncOk && !_nudgeOk && !_opsQueueOk && !_signOk && !_cronSweepOk && !_alertPushOk && !_intakeOk && !_idOk && !_hubTestOk && !_scoutOk && !_prodRoOk && !_prodWriteOk && !_qbRoOk && !_schedOk) {
           const _session = await verifySessionToken(_tok, env.WORKER_SECRET);
           if (!_session || !isPathAllowedForRole(path, _session.role))
             return json({ error: 'Unauthorized' }, 401);
@@ -524,6 +552,7 @@ const _hubWorkerCore = {
       if (callerRole) {
         const _mm = sessionIdentityMismatch(callerRole, callerSessionId, url, null);
         if (_mm) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mm);
+        { const _act = stampPortalActivity(env, callerRole, callerSessionId, path); if (ctx && ctx.waitUntil) ctx.waitUntil(_act); }   // Oct 23 2026: doing anything in the portal = proof of use (never blocks, never throws)
         if (request.method === 'GET') {
           url.searchParams.set(SESSION_IDENTITY_PARAM[callerRole], String(callerSessionId));
           if (WO_KEYED_READ_PATHS.includes(path)) {
@@ -594,6 +623,8 @@ const _hubWorkerCore = {
         if (path === '/wo-audit')               return await getWOAudit(env, url);
         if (path === '/wo/bid-group')           return await woBidGroupGet(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
+        if (path === '/portal-access')          return await portalAccessList(env, url);
+        if (path === '/portal-access/backfill-preview') return await portalBackfillPreview(env);
         // Session-flag refresh (Sep 21 2026, Brett's ask): can_submit_wo and the rest of the
         // tenant-by-pin payload are cached in the client's mh_tenant_sess at login and never
         // re-checked otherwise -- a tenant's own hard refresh restores that same stale cached
@@ -684,6 +715,7 @@ const _hubWorkerCore = {
         if (path === '/deliveries')             return await deliveriesList(env, url);
         if (path === '/wo/shared')              return await woSharedRead(env, url);
         if (path === '/fix/page')               return await fixPage(env, url);                // PUBLIC, token-verified (tenant fix-check)
+        if (path === '/delivery/rsvp')          return await deliveryRsvpGet(env, url, request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown');   // PUBLIC, token-verified (tenant delivery RSVP)
         if (path === '/followup/preview')       return await followupPreview(env, url);        // ADMIN-ONLY: no ROLE_SCOPES entry; read-only, never sends
         if (path === '/followup/list')          return await followupList(env, url);           // ADMIN-ONLY
         if (path === '/proposal/signatures')    return await proposalList(env, url);
@@ -700,6 +732,7 @@ const _hubWorkerCore = {
         if (path === '/fi/photo/view')          return await fiRoute(env, 'photo-view', () => fiPhotoView(env, url));
         if (path === '/fi/issue-types')         return await fiRoute(env, 'issue-types', () => fiTypesList(env));
         if (path === '/fi/directory')           return await fiRoute(env, 'directory', () => fiDirectory(env));
+        if (path === '/fi/bookings')            return await fiRoute(env, 'bookings', () => fiBookings(env));
         if (path === '/insp/properties')        return await inspPropertiesList(env, url);
         if (path === '/insp/units')             return await inspUnitsList(env, url);
         if (path === '/insp/availability')      return await inspAvailabilityGet(env);
@@ -795,6 +828,7 @@ const _hubWorkerCore = {
         if (path === '/wo/share-send')            return await woShareSend(env, body);
         if (path === '/wo/share-revoke')          return await woShareRevoke(env, body);
         if (path === '/fix/answer')               return await fixAnswer(env, body);              // PUBLIC, token-verified
+        if (path === '/delivery/rsvp')            return await deliveryRsvpPost(env, url, body, _clientIP || 'unknown');   // PUBLIC, token-verified (tenant delivery RSVP)
         if (path === '/fix/upload-session')       return await fixUploadSession(env, body);       // PUBLIC, token-verified
         if (path === '/fix/log-attachment')       return await fixLogAttachment(env, body);       // PUBLIC, token-verified
         if (path === '/followup/send')            return await followupSend(env, body, url);     // ADMIN-ONLY: Brett's tap on Send in the preview
@@ -825,12 +859,14 @@ const _hubWorkerCore = {
         }
         if (path === '/intake/email')             return await intakeEmail(env, body);
         if (path === '/intake/retry')             return await intakeRetry(env, body);
+        if (path === '/intake/delivery-email')    return await deliveryEmailIntake(env, _idEmail ? Object.assign({}, body, { mailbox: _idEmail, mailbox_claimed: String(body && body.mailbox || '').slice(0, 120) }) : body);   // a verified identity replaces whatever mailbox the body claims   // Oct 23 2026: store delivery emails (INTAKE_TOKEN or WORKER_SECRET)
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
         if (path === '/wo-tenant/add')            return await addTenantToWO(env, body);
         if (path === '/wo-tenant/remove')         return await removeTenantFromWO(env, body);
         if (path === '/time-entry/add')           return await addTimeEntry(env, body);
         if (path === '/time-entry/delete')        return await updateRow(env, 'Time_Entries', body.id, { Active: 'FALSE' });
+        if (path === '/time-entry/use-notes')     return await useTimeEntryNotes(env, body);
         if (path === '/receipt/add')              return await addReceipt(env, body);
         if (path === '/receipt/suggest')          return await receiptSuggest(env, body);
         if (path === '/receipt/delete')           return await updateRow(env, 'Receipts', body.id, { Active: 'FALSE' });
@@ -924,6 +960,7 @@ const _hubWorkerCore = {
         if (path === '/owner-user/update')        return await updateRow(env, 'Owner_Users', body.id, body.fields);
         if (path === '/send-pin')                 return await sendPinMessage(env, body);
         if (path === '/welcome/send')              return await welcomeSend(env, body);
+        if (path === '/portal-access/backfill')    return await portalBackfillApply(env);
         if (path === '/regenerate-pin')           return await regeneratePIN(env, body);
         if (path === '/message-template/update')  return await updateMessageTemplate(env, body);
         if (path === '/property/notice')          return await sendPropertyNotice(env, body);
@@ -1136,6 +1173,7 @@ const _hubWorkerCore = {
         if (path === '/fi/summarize')             return await fiRoute(env, 'summarize', () => fiSummarize(env, body));
         if (path === '/fi/brand/save')            return await fiRoute(env, 'brand-save', () => fiBrandSave(env, body));
         if (path === '/fi/email-report')          return await fiRoute(env, 'email-report', () => fiEmailReport(env, request, body));
+        if (path === '/fi/urgent-send')           return await fiRoute(env, 'urgent-send', () => fiUrgentSend(env, body));
         if (path === '/fi/route')                 return await fiRoute(env, 'route', () => fiRouteNotes(env, body));
         if (path === '/fi/brand/scrape')          return await fiRoute(env, 'brand-scrape', () => fiBrandScrape(env, body));
         if (path === '/fi/read-label')            return await fiRoute(env, 'read-label', () => fiReadLabel(env, body));
@@ -1143,6 +1181,9 @@ const _hubWorkerCore = {
         if (path === '/fi/issue-types/save')      return await fiRoute(env, 'issue-types-save', () => fiTypesSave(env, body));
         if (path === '/fi/issue-types/touch')     return await fiRoute(env, 'issue-types-touch', () => fiTypesTouch(env, body));
         if (path === '/fi/property/create')       return await fiRoute(env, 'property-create', () => fiPropertyCreate(env, body));
+        if (path === '/fi/booking/start')         return await fiRoute(env, 'booking-start', () => fiBookingStart(env, body));
+        if (path === '/fi/reword')                return await fiRoute(env, 'reword', () => fiReword(env, body));
+        if (path === '/admin/fi-premier-repair')  return await fiRoute(env, 'premier-repair', () => fiPremierRepair(env, body));
         if (path === '/fi/folder/organize')       return await fiRoute(env, 'folder-organize', () => fiFolderOrganize(env, body));
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
@@ -1170,6 +1211,7 @@ const _hubWorkerCore = {
         if (path === '/str/admin/cleaner/save')    return await strAdminCleanerSave(env, body);
         if (path === '/str/admin/cleaner/new-link') return await strAdminNewLink(env, body);
         if (path === '/str/admin/config')          return await strAdminConfig(env, body);
+        if (path === '/str/admin/calendar-check')  return await strAdminCalendarCheck(env, body);
         if (path === '/str/admin/assign')          return await strAdminAssign(env, body);
         if (path === '/str/admin/change/preview')  return await strChangePreview(env, body);
         if (path === '/str/admin/change/apply')    return await strChangeApply(env, body);
@@ -1388,11 +1430,262 @@ async function clearPinLockout(env, pin) {
   } catch(e) { /* non-fatal */ }
 }
 
+// ── Portal access tracking (Oct 22 2026, Brett) ──────────────────────────────────────────────────
+// Per person, on their own row (Tenants / Vendors / Owners / Owner_Users): was the link+PIN text really sent
+// (PIN_Sent_Date / PIN_Sent_Count / PIN_Send_Result) and have they ever logged in with it (First_Login_Date /
+// Last_Login_Date / Login_Count). "Sent" is written ONLY when Twilio accepted the text; a failed or skipped
+// send writes PIN_Send_Result with the reason and leaves the sent mark off. Login_Evidence marks people
+// with proven past portal use who predate this tracking (their login date is unknowable, so none is invented).
+const PORTAL_LOGIN_COLS = ['First_Login_Date', 'Last_Login_Date', 'Login_Count', 'Login_Evidence'];
+const PORTAL_PIN_COLS = ['PIN_Sent_Date', 'PIN_Sent_Count', 'PIN_Send_Result'];
+const PORTAL_WELCOME_COLS = ['Welcome_Sent', 'Welcome_Sent_Date', 'Welcome_Send_Result'];
+const PORTAL_TAB_BY_TYPE = { tenant: 'Tenants', vendor: 'Vendors', owner: 'Owners', owner_user: 'Owner_Users' };
+
+// Pure: did Twilio really accept this text? Takes whatever sendSMS returned.
+function smsSendVerdict(r) {
+  if (!r || typeof r !== 'object') return { ok: false, result: 'error: no response from the text sender' };
+  if (r.staged) return { ok: true, staged: true, result: 'staged (test environment, no real text)' };
+  if (r.skipped) return { ok: false, result: 'not sent: ' + (r.reason || 'texting is switched off') };
+  if (r.code || (typeof r.status === 'number' && r.status >= 400)) return { ok: false, result: 'Twilio error ' + (r.code || r.status) + ': ' + String(r.message || '').slice(0, 200) };
+  if (r.error && !r.sid) return { ok: false, result: 'error: ' + String(r.error).slice(0, 200) };
+  if (r.sid) return { ok: true, result: 'sent', sid: r.sid };
+  return { ok: false, result: 'error: unrecognized response from Twilio' };
+}
+
+// Pure: one person's portal-access state. level: ok | waiting | amber | red | none.
+// logged_in = a recorded login OR proven past use. amber/red = link+PIN sent but never logged in for N days.
+function portalAccessStatus(rec, nowMs, opt) {
+  const amberDays = (opt && opt.amberDays) || 14, redDays = (opt && opt.redDays) || 30;
+  const ms = (s) => { const t = Date.parse(String(s || '')); return isNaN(t) ? null : t; };
+  const T = (v) => String(v == null ? '' : v).toUpperCase() === 'TRUE';
+  const first = ms(rec.First_Login_Date), last = ms(rec.Last_Login_Date), pinAt = ms(rec.PIN_Sent_Date);
+  const proven = !!String(rec.Login_Evidence || '').trim();
+  const verified = String(rec.PIN_Send_Result || '') === 'sent';
+  const out = {
+    welcome_sent: T(rec.Welcome_Sent), welcome_date: rec.Welcome_Sent_Date || '',
+    pin_sent: pinAt != null, pin_sent_date: rec.PIN_Sent_Date || '', pin_sent_count: parseInt(rec.PIN_Sent_Count, 10) || 0,
+    pin_send_result: rec.PIN_Send_Result || '', pin_verified: verified,
+    logged_in: first != null || proven, first_login: rec.First_Login_Date || '', last_login: rec.Last_Login_Date || '',
+    login_count: parseInt(rec.Login_Count, 10) || 0, login_evidence: rec.Login_Evidence || '', days_since_pin: null, level: 'none', state: '',
+  };
+  if (out.logged_in) { out.level = 'ok'; out.state = first != null ? 'logged_in' : 'logged_in_prior_use'; return out; }
+  if (pinAt == null) { out.state = 'pin_not_sent'; return out; }
+  const days = Math.floor((nowMs - pinAt) / 86400000);
+  out.days_since_pin = days;
+  out.level = days >= redDays ? 'red' : days >= amberDays ? 'amber' : 'waiting';
+  out.state = out.level === 'waiting' ? 'sent_waiting' : 'sent_never_logged_in';
+  return out;
+}
+
+// Never blocks a login and never fails silently: any failure is logged to Ops_Telemetry (-> Needs Attention).
+async function stampPortalLogin(env, login) {
+  try {
+    await ensureColumns(env, login.tab, PORTAL_LOGIN_COLS);
+    const row = login.row || {}, now = new Date().toISOString();
+    await updateRowVerified(env, login.tab, login.id, {
+      First_Login_Date: row.First_Login_Date || now, Last_Login_Date: now, Login_Count: String((parseInt(row.Login_Count, 10) || 0) + 1),
+    });
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'portal_login_stamp_failed', Skill_Or_Endpoint: login.tab, Success: 'FALSE', Notes: login.tab + ' ' + login.id + ': ' + String((e && e.message) || e).slice(0, 300) }); }
+    catch (e2) { console.error('portal_login_stamp_failed AND telemetry failed:', login.tab, login.id, String((e && e.message) || e), String((e2 && e2.message) || e2)); }
+  }
+}
+
+// ---- Proof of use (Oct 23 2026): anyone who DOES something in their portal obviously has access and is using it.
+// Every request carrying a valid tenant / vendor / owner session counts. It fills Login_Evidence once (never overwrites a
+// recorded login or earlier evidence), so the person leaves the follow-up list. Checked at most once per person per 12 h
+// per Worker instance, so it costs at most one Sheets read per active person. Never blocks the request, never silent.
+const PORTAL_TAB_BY_ROLE = { tenant: 'Tenants', vendor: 'Vendors', owner: 'Owners' };
+const PORTAL_ACT_RECHECK_MS = 12 * 3600 * 1000;
+const __portalActSeen = new Map();
+async function stampPortalActivity(env, role, id, path) {
+  const tab = PORTAL_TAB_BY_ROLE[role];
+  if (!tab || id == null || String(id) === '') return;
+  const key = role + '|' + id, now = Date.now();
+  const seen = __portalActSeen.get(key);
+  if (seen && now - seen < PORTAL_ACT_RECHECK_MS) return;
+  __portalActSeen.set(key, now);
+  try {
+    const row = (await fetchTab(env, tab)).find(r => String(r.ID) === String(id));
+    if (!row) return;
+    if (String(row.First_Login_Date || '').trim() || String(row.Login_Evidence || '').trim()) return;
+    await ensureColumns(env, tab, PORTAL_LOGIN_COLS);
+    await updateRowVerified(env, tab, id, { Login_Evidence: 'portal use: ' + role + ' session called ' + String(path || '').slice(0, 60) + ' on ' + new Date(now).toISOString().slice(0, 10) });
+  } catch (e) {
+    __portalActSeen.delete(key);   // try again on the next request
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'portal_activity_stamp_failed', Skill_Or_Endpoint: tab, Success: 'FALSE', Notes: tab + ' ' + id + ': ' + String((e && e.message) || e).slice(0, 300) }); }
+    catch (e2) { console.error('portal_activity_stamp_failed AND telemetry failed:', tab, id, String((e && e.message) || e), String((e2 && e2.message) || e2)); }
+  }
+}
+
+// Pure: who has provably used their portal BEFORE login tracking existed? d = { vendors, tenants, timeEntries, receipts,
+// estimates, woAudit, workOrders } (row objects). Returns Map "type|id" -> { kinds:[...], last:'YYYY-MM-DD', text }.
+// Only actions a portal session can do count. A vendor's YES/NO text reply also logs a vendor "Accepted/Declined" audit row,
+// so those rows are NOT counted. Admin entries (Entered_By 'Admin', Created_By 'admin') are not counted.
+function portalEvidenceFromRecords(d) {
+  const norm = (s) => String(s == null ? '' : s).trim().toLowerCase().replace(/\s+/g, ' ');
+  const isTest = (s) => /^test[-\s]/i.test(String(s || '').trim());
+  const out = new Map();
+  const add = (type, id, kind, date) => {
+    id = String(id == null ? '' : id).trim(); if (!id) return;
+    const k = type + '|' + id, e = out.get(k) || { kinds: [], last: '' };
+    if (!e.kinds.includes(kind)) e.kinds.push(kind);
+    const dd = String(date || '').slice(0, 10); if (dd && dd > e.last) e.last = dd;
+    out.set(k, e);
+  };
+  const uniq = (m, key, id) => { if (!key) return; m.set(key, m.has(key) ? null : id); };   // null = ambiguous name, never matched
+  const vByName = new Map(), tFull = new Map(), tFirst = new Map(), tById = new Map();
+  for (const v of d.vendors || []) if (!isTest(v.Name)) uniq(vByName, norm(v.Name), String(v.ID));
+  for (const t of d.tenants || []) {
+    if (isTest(t.First_Name) || isTest(t.Last_Name)) continue;
+    tById.set(String(t.ID), t);
+    uniq(tFull, norm((t.First_Name || '') + ' ' + (t.Last_Name || '')), String(t.ID));
+    uniq(tFirst, norm(t.First_Name), String(t.ID));
+  }
+  for (const te of d.timeEntries || []) if (norm(te.Role) === 'vendor') add('vendor', te.Entered_By_ID, 'time entries', te.Start_DateTime);
+  for (const r of d.receipts || []) if (norm(r.Role) === 'vendor') add('vendor', r.Added_By_ID, 'receipts', r.Date);
+  for (const e of d.estimates || []) { const id = vByName.get(norm(e.Created_By)); if (id) add('vendor', id, 'estimates', e.Created_Date); }
+  for (const a of d.woAudit || []) {
+    const role = norm(a.Changed_By_Role);
+    if (role === 'vendor') {
+      const id = vByName.get(norm(a.Changed_By)); if (!id) continue;
+      if (/sms|text/i.test(String(a.Notes || ''))) continue;
+      const nv = norm(a.New_Value);
+      if (norm(a.Field) === 'status' && (nv === 'accepted' || nv === 'declined')) continue;
+      add('vendor', id, norm(a.Field) === 'status' ? 'job status updates' : (norm(a.Field) || 'job updates'), a.Timestamp);
+    } else if (role === 'tenant' && norm(a.Field) === 'notes') {
+      const nm = norm(a.Changed_By), id = tFull.get(nm) || tFirst.get(nm);
+      if (id) add('tenant', id, 'notes/photos on a work order', a.Timestamp);
+    }
+  }
+  for (const w of d.workOrders || []) {
+    if (norm(w.Type) !== 'tenant' || !String(w.Tenant_ID || '').trim()) continue;
+    const t = tById.get(String(w.Tenant_ID).trim()); if (!t) continue;
+    const cb = norm(w.Created_By);
+    if (cb && (cb === norm((t.First_Name || '') + ' ' + (t.Last_Name || '')) || cb === norm(t.First_Name))) add('tenant', t.ID, 'created work orders', w.Created_Date);
+  }
+  for (const e of out.values()) e.text = 'prior use (before login tracking): ' + e.kinds.join(', ') + (e.last ? '; last ' + e.last : '');
+  return out;
+}
+
+// Records the outcome of a link+PIN text on the person's row. Returns { ok, error? } - a failed mark is surfaced to the caller.
+async function stampPinSend(env, type, id, verdict) {
+  const tab = PORTAL_TAB_BY_TYPE[type];
+  try {
+    await ensureColumns(env, tab, PORTAL_PIN_COLS);
+    const cur = (await fetchTab(env, tab)).find(r => String(r.ID) === String(id)) || {};
+    const f = { PIN_Send_Result: verdict.result };
+    if (verdict.ok) { f.PIN_Sent_Date = new Date().toISOString(); f.PIN_Sent_Count = String((parseInt(cur.PIN_Sent_Count, 10) || 0) + 1); }
+    await updateRowVerified(env, tab, id, f);
+    return { ok: true };
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 300);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'portal_pin_stamp_failed', Skill_Or_Endpoint: tab, Success: 'FALSE', Notes: tab + ' ' + id + ': ' + msg }); }
+    catch (e2) { console.error('portal_pin_stamp_failed AND telemetry failed:', tab, id, msg, String((e2 && e2.message) || e2)); }
+    return { ok: false, error: msg };
+  }
+}
+
+// GET /portal-access — every active tenant / vendor / owner / owner sub-user with welcome + link&PIN + login state,
+// worst follow-up first. Thresholds: Config PORTAL_FOLLOWUP_AMBER_DAYS (14) / PORTAL_FOLLOWUP_RED_DAYS (30).
+async function portalAccessList(env, url) {
+  const cfg = await fetchConfig(env);
+  const opt = { amberDays: parseInt(cfg.PORTAL_FOLLOWUP_AMBER_DAYS, 10) || 14, redDays: parseInt(cfg.PORTAL_FOLLOWUP_RED_DAYS, 10) || 30 };
+  const [tenants, vendors, owners, ownerUsers] = await fetchTabs(env, ['Tenants', 'Vendors', 'Owners', 'Owner_Users']);
+  const now = Date.now(), people = [];
+  const add = (type, r, name, extra) => people.push(Object.assign({ type, id: String(r.ID), name: name || '', has_phone: !!String(r.Phone || '').trim(), has_pin: !!String(r.PIN || '').trim() }, extra || {}, portalAccessStatus(r, now, opt)));
+  const full = (r) => ((r.First_Name || '') + ' ' + (r.Last_Name || '')).trim();
+  for (const t of tenants) {
+    if (t.Active === 'FALSE') continue;
+    if (t.Move_Out_Date && new Date(t.Move_Out_Date + 'T23:59:59') < new Date()) continue;
+    add('tenant', t, full(t));
+  }
+  for (const v of vendors) if (v.Active !== 'FALSE') add('vendor', v, v.Name || full(v), { company: v.Company || '' });
+  for (const o of owners) if (o.Active !== 'FALSE') add('owner', o, full(o) || o.Company || '', { company: o.Company || '' });
+  for (const u of ownerUsers) if (u.Active !== 'FALSE') add('owner_user', u, full(u), { owner_id: u.Owner_ID || '' });
+  const rank = { red: 0, amber: 1, waiting: 2, none: 3, ok: 4 };
+  people.sort((a, b) => (rank[a.level] - rank[b.level]) || ((b.days_since_pin || 0) - (a.days_since_pin || 0)));
+  const count = (f) => people.filter(f).length;
+  return json({ ok: true, thresholds: opt, counts: {
+    total: people.length, logged_in: count(p => p.logged_in), pin_not_sent: count(p => p.state === 'pin_not_sent'),
+    waiting: count(p => p.level === 'waiting'), amber: count(p => p.level === 'amber'), red: count(p => p.level === 'red'),
+  }, people });
+}
+
+// One-time backfill from SMS_Logs: anyone whose log shows a PIN text gets PIN_Sent_* with result 'logged_unverified'
+// (the old sender logged even when the text may not have gone out). Never overwrites a verified mark.
+// GET /portal-access/backfill-preview shows what would change; POST /portal-access/backfill applies it in one batch per tab.
+async function portalBackfillPlan(env) {
+  const logs = await fetchTab(env, 'SMS_Logs');
+  const byKey = new Map();
+  for (const l of logs) {
+    const m = /^pin_send_(tenant|vendor|owner|owner_user)$/.exec(String(l.Recipient_Type || ''));
+    if (!m || !l.Recipient_ID) continue;
+    const k = m[1] + '|' + l.Recipient_ID, e = byKey.get(k) || { type: m[1], id: String(l.Recipient_ID), count: 0, last: '' };
+    e.count++; if (!e.last || String(l.Sent_Date) > e.last) e.last = String(l.Sent_Date);
+    byKey.set(k, e);
+  }
+  const plan = [];
+  for (const type of Object.keys(PORTAL_TAB_BY_TYPE)) {
+    const rows = await fetchTab(env, PORTAL_TAB_BY_TYPE[type]);
+    for (const e of byKey.values()) {
+      if (e.type !== type) continue;
+      const r = rows.find(x => String(x.ID) === e.id);
+      if (!r) { plan.push({ type, id: e.id, action: 'skip', why: 'person no longer in ' + PORTAL_TAB_BY_TYPE[type] }); continue; }
+      if (String(r.PIN_Sent_Date || '').trim()) { plan.push({ type, id: e.id, action: 'skip', why: 'already has a PIN-sent mark' }); continue; }
+      plan.push({ type, id: e.id, action: 'set', fields: { PIN_Sent_Date: e.last, PIN_Sent_Count: String(e.count), PIN_Send_Result: 'logged_unverified' } });
+    }
+  }
+  // Proof of use: people who provably did things in their portal before login tracking existed (never overwrites a login or earlier evidence).
+  const [vendors, tenants, timeEntries, receipts, estimates, woAudit, workOrders] = await fetchTabs(env, ['Vendors', 'Tenants', 'Time_Entries', 'Receipts', 'Estimates', 'WO_Audit', 'Work_Orders']);
+  const evidence = portalEvidenceFromRecords({ vendors, tenants, timeEntries, receipts, estimates, woAudit, workOrders });
+  const rowsByType = { vendor: vendors, tenant: tenants };
+  for (const [k, ev] of evidence) {
+    const [type, id] = k.split('|');
+    const r = (rowsByType[type] || []).find(x => String(x.ID) === id);
+    if (!r) continue;
+    if (String(r.First_Login_Date || '').trim() || String(r.Login_Evidence || '').trim()) { plan.push({ type, id, kind: 'evidence', action: 'skip', why: 'already counted as logged in' }); continue; }
+    plan.push({ type, id, kind: 'evidence', action: 'set', name: String(r.Name || ((r.First_Name || '') + ' ' + (r.Last_Name || ''))).trim(), fields: { Login_Evidence: ev.text } });
+  }
+  return plan;
+}
+async function portalBackfillPreview(env) {
+  const plan = await portalBackfillPlan(env);
+  return json({ ok: true, read_only: true, would_set: plan.filter(p => p.action === 'set').length, skipped: plan.filter(p => p.action === 'skip').length, would_credit_prior_use: plan.filter(p => p.kind === 'evidence' && p.action === 'set').length, plan });
+}
+async function portalBackfillApply(env) {
+  const plan = (await portalBackfillPlan(env)).filter(p => p.action === 'set');
+  const errors = [];
+  let written = 0;
+  for (const type of Object.keys(PORTAL_TAB_BY_TYPE)) {
+    const items = plan.filter(p => p.type === type);
+    if (!items.length) continue;
+    const tab = PORTAL_TAB_BY_TYPE[type];
+    try {
+      await ensureColumns(env, tab, PORTAL_PIN_COLS.concat(PORTAL_LOGIN_COLS));
+      const data = await sheetsRequest(env, 'GET', '/values/' + tab);
+      const [headers, ...rows] = data.values || [[]];
+      const idc = idColIndex(headers), batch = [];
+      for (const it of items) {
+        const ri = rows.findIndex(r => String(r[idc]) === it.id);
+        if (ri < 0) { errors.push(type + ' ' + it.id + ': row not found'); continue; }
+        for (const [f, v] of Object.entries(it.fields)) { const ci = headers.indexOf(f); if (ci < 0) { errors.push(type + ' ' + it.id + ': column ' + f + ' missing'); continue; } batch.push({ range: tab + '!' + col(ci) + (ri + 2), values: [[v]] }); }
+        written++;
+      }
+      if (batch.length) await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: batch });
+      invalidateTabCache(tab);
+    } catch (e) { errors.push(tab + ': ' + String((e && e.message) || e).slice(0, 200)); }
+  }
+  if (errors.length) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'portal_backfill_failed', Success: 'FALSE', Notes: errors.join(' | ').slice(0, 500) }); } catch (e2) { console.error('portal_backfill_failed AND telemetry failed:', errors.join(' | '), String((e2 && e2.message) || e2)); } }
+  return json({ ok: errors.length === 0, written, errors });
+}
+
 async function pinLookup(env, pin, finder) {
   if (!pin || pin.length < 5) return json({ error: 'Invalid PIN' }, 400);
   const lock = await checkPinLockout(env, pin);
   if (lock.locked) return json({ error: 'Too many failed attempts', locked: true, minutes_remaining: lock.minutes_remaining }, 429);
-  const result = await finder(pin);
+  const _meta = {};   // the finder fills _meta.login = { tab, id, row } for the person who matched (portal login tracking)
+  const result = await finder(pin, _meta);
   if (!result) {
     const fail = await recordPinFailure(env, pin);
     const left = PIN_MAX_ATTEMPTS - fail.fail_count;
@@ -1400,6 +1693,7 @@ async function pinLookup(env, pin, finder) {
     return json({ error: `PIN not found. ${left} attempt${left !== 1 ? 's' : ''} remaining.` }, 404);
   }
   await clearPinLockout(env, pin);
+  if (_meta.login) await stampPortalLogin(env, _meta.login);   // first/last login + count; never blocks the login, failures go to Ops_Telemetry
   return result;
 }
 
@@ -1409,7 +1703,7 @@ async function tenantByPin(env, url) {
   const pin  = url.searchParams.get('pin')  || '';
   const name = (url.searchParams.get('name') || '').trim().toLowerCase();
   if (!name) return json({ error: 'First name is required', name_required: true }, 400);
-  return await pinLookup(env, pin, async (p) => {
+  return await pinLookup(env, pin, async (p, _m) => {
     const tenants = await fetchTab(env, 'Tenants');
     const tenant = tenants.find(t => t.PIN && t.PIN.toLowerCase() === p.toLowerCase() && t.Active !== 'FALSE');
     if (!tenant) return null;
@@ -1419,6 +1713,7 @@ async function tenantByPin(env, url) {
     }
     const tFirst = (tenant.First_Name||'').toLowerCase();
     if (tFirst !== name && !tFirst.startsWith(name)) return null;
+    _m.login = { tab: 'Tenants', id: tenant.ID, row: tenant };
     const [props, units, owners] = await fetchTabs(env, ['Properties','Units','Owners']);
     const unit = units.find(u => u.ID === tenant.Unit_ID) || {};
     const prop = props.find(pr => pr.ID === (tenant.Property_ID || unit.Property_ID)) || {};
@@ -1477,7 +1772,7 @@ async function ownerByPin(env, url) {
   const pin = url.searchParams.get('pin') || '';
   const _ownerName = (url.searchParams.get('name') || '').trim();
   if (!_ownerName) return json({ error: 'First name is required', name_required: true }, 400);
-  return await pinLookup(env, pin, async (p) => {
+  return await pinLookup(env, pin, async (p, _m) => {
     const [ownerUsers, owners] = await fetchTabs(env, ['Owner_Users','Owners']);
     const enteredName = (url?.searchParams?.get('name')||'').trim().toLowerCase();
     if (!enteredName) return null;
@@ -1485,6 +1780,7 @@ async function ownerByPin(env, url) {
     if (user) {
       const uFirst = (user.First_Name||'').toLowerCase();
       if (uFirst !== enteredName && !uFirst.startsWith(enteredName)) return null;
+      _m.login = { tab: 'Owner_Users', id: user.ID, row: user };
       const owner = owners.find(o => o.ID === user.Owner_ID);
       return json({
         owner_id: user.Owner_ID, owner_user_id: user.ID,
@@ -1496,6 +1792,7 @@ async function ownerByPin(env, url) {
     }
     const owner = owners.find(o => o.PIN && o.PIN.toLowerCase() === p.toLowerCase() && o.Active !== 'FALSE');
     if (!owner) return null;
+    _m.login = { tab: 'Owners', id: owner.ID, row: owner };
     return json({
       owner_id: owner.ID, owner_name: `${owner.First_Name} ${owner.Last_Name||''}`.trim(),
       owner_company: owner.Company||'', owner_phone: owner.Phone||'',
@@ -1580,12 +1877,13 @@ async function vendorByPin(env, url) {
   const pin  = url.searchParams.get('pin')  || '';
   const name = (url.searchParams.get('name') || '').trim().toLowerCase();
   if (!name) return json({ error: 'Name is required', name_required: true }, 400);
-  return await pinLookup(env, pin, async (p) => {
+  return await pinLookup(env, pin, async (p, _m) => {
     const vendors = await fetchTab(env, 'Vendors');
     const vendor = vendors.find(v => v.PIN && v.PIN.toLowerCase() === p.toLowerCase() && v.Active !== 'FALSE');
     if (!vendor) return null;
     const loginName = ((vendor.First_Name||'').trim() || (vendor.Name||'').split(' ')[0]).toLowerCase();
     if (loginName !== name && !loginName.startsWith(name)) return null;
+    _m.login = { tab: 'Vendors', id: vendor.ID, row: vendor };
     return json({
       vendor_id: vendor.ID, vendor_name: vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim(),
       vendor_phone: vendor.Phone||'', vendor_trade: vendor.Trade||'',
@@ -5912,7 +6210,32 @@ async function scopeProposalBillMilestones(env, body) {
   feeCfg.warnings.forEach(w => warnings.push(w));
   const feeDefaultOn = !!vendor && instantPayEnabled(vendor, cfgAll, undefined);
   const feeOn = !!vendor && !vendorInHouse && vendTotal > 0 && instantPayEnabled(vendor, cfgAll, body.instant_pay);
-  const mkAdj = (force) => vendorBillAdjustments({ payable: vendTotal, lang: (vendor && String(vendor.Language || '').toLowerCase() === 'es') ? 'es' : 'en', feeOn: force === true || feeOn, cfg: feeCfg, credits: [] });
+  // Oct 26 2026: a vendor deposit recorded on the linked work order (paid by hand in QuickBooks, never a Vendor_Bills row or a milestone) comes off the
+  // FINAL vendor bill as its own visible line. An interim bill leaves it alone; the final one that cannot cover it is refused rather than sent short.
+  let depCredit = null;
+  if (vendor && !vendorInHouse && vendTotal > 0 && s.WO_ID) {
+    let woDep = null;
+    try { woDep = findWO(await fetchTab(env, 'Work_Orders'), s.WO_ID); }
+    catch (e) {
+      if (!body.preview_only) return json({ ok: false, error: 'Could not read the work order ' + s.WO_ID + ' to check for a vendor deposit (' + String((e && e.message) || e).slice(0, 140) + '), so nothing was billed. Try again in a minute.' }, 503);
+      warnings.push('Could not read the work order to check for a vendor deposit — any deposit already paid to the vendor is not reflected here.');
+    }
+    if (!woDep && !body.preview_only) return json({ ok: false, error: 'Work order ' + s.WO_ID + ' (linked to this proposal) was not found, so whether a vendor deposit was paid could not be checked. Nothing was billed. Fix the link first.' }, 409);
+    if (!woDep) warnings.push('⚠ The linked work order ' + s.WO_ID + ' was not found, so any vendor deposit already paid cannot be checked.');
+    const dep = woDepositCredit(woDep, vendor.ID);
+    if (dep) {
+      const pickedIdsDep = new Set(picked.map(m => m.ID));
+      const finalRound = !sigMilestones.some(m => !pickedIdsDep.has(m.ID) && (m.Status || 'pending') === 'pending');
+      if (!finalRound) warnings.push('💰 A $' + dep.amount.toFixed(2) + ' deposit was already paid to ' + vendDisplay + ' (QuickBooks bill ' + (dep.bill_number || dep.bill_id) + '). It stays off this interim bill and comes off the final one automatically.');
+      else if (vendTotal < dep.amount - 0.005) {
+        const msg = 'The $' + dep.amount.toFixed(2) + ' deposit already paid to ' + vendDisplay + ' is more than what is left to pay them on this final bill ($' + vendTotal.toFixed(2) + ').';
+        if (!body.preview_only) return json({ ok: false, deposit_blocked: true, error: msg + ' Nothing was billed. Fix the amounts, or clear the deposit on the work order if it was entered in error.', warnings }, 409);
+        warnings.push('⛔ ' + msg + ' The bill cannot be sent until that is fixed.');
+      } else { depCredit = dep; warnings.push('💰 A $' + dep.amount.toFixed(2) + ' deposit was already paid to ' + vendDisplay + ' (QuickBooks bill ' + (dep.bill_number || dep.bill_id) + ') — it comes off this final bill automatically.'); }
+    }
+  }
+  const mkAdj = (force) => vendorBillAdjustments({ payable: vendTotal, lang: (vendor && String(vendor.Language || '').toLowerCase() === 'es') ? 'es' : 'en', feeOn: force === true || feeOn, cfg: feeCfg,
+    credits: depCredit ? [{ type: 'deposit_credit', amount: depCredit.amount, desc: depCredit.desc, desc_es: depCredit.desc_es }] : [] });
   const adj = mkAdj(false);
   adj.notes.forEach(n => warnings.push(n));
 
@@ -5925,7 +6248,7 @@ async function scopeProposalBillMilestones(env, body) {
       pending_info: String(m.Pending_Info || '').toUpperCase() === 'TRUE', pending_info_note: m.Pending_Info_Note || '',
     })),
     invoice: { customer: custDisplay, level: billTo.level, amount: custTotal, item: tradeName, desc: invoiceDesc },
-    bill: (vendor && !vendorInHouse && vendTotal > 0) ? { vendor: vendDisplay, amount: vendTotal, trade: tradeName, fee: adj.fee, send_amount: adj.bill_total,
+    bill: (vendor && !vendorInHouse && vendTotal > 0) ? { vendor: vendDisplay, amount: vendTotal, trade: tradeName, deposit_credit: depCredit ? depCredit.amount : 0, fee: adj.fee, send_amount: adj.bill_total,
       fee_on: feeOn, fee_default_on: feeDefaultOn, fee_if_on: mkAdj(true).fee } : null,
     warnings,
   };
@@ -5983,6 +6306,7 @@ async function scopeProposalBillMilestones(env, body) {
         billId = (rb && rb.Bill && rb.Bill.Id) || '';
         billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
         if (!billId) billSkipReason = 'QB bill failed: ' + (qbFault(rb) || 'unknown error');
+        else if (depCredit) await woDepositMarkApplied(env, s.WO_ID, depCredit, { id: billId, number: billNumber }, warnings, '/scope/bill-milestones');
       } else { billSkipReason = 'The vendor\'s QuickBooks id could not be resolved — no vendor bill was created.'; }
     } catch (e) { billSkipReason = 'Vendor bill error: ' + e.message; }
     if (billSkipReason) warnings.push(billSkipReason);
@@ -6024,7 +6348,7 @@ async function scopeProposalBillMilestones(env, body) {
         const newCharge = +(priorCharge + custTotal).toFixed(2);
         const ts = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
         const vendorNote = vendTotal > 0
-          ? ('vendor paid $' + vendTotal.toFixed(2) + ' this round' + (adj.fee > 0 ? ' (send $' + adj.bill_total.toFixed(2) + ' after the $' + adj.fee.toFixed(2) + ' instant-pay fee)' : ''))
+          ? ('vendor paid $' + vendTotal.toFixed(2) + ' this round' + (depCredit ? ' (less the $' + depCredit.amount.toFixed(2) + ' deposit already paid)' : '') + (adj.fee > 0 ? ' (send $' + adj.bill_total.toFixed(2) + ' after the $' + adj.fee.toFixed(2) + ' instant-pay fee)' : ''))
           : ('vendor not paid this round' + (billSkipReason ? (' — ' + billSkipReason) : ''));
         const noteLine = '[' + ts + '] Scope Proposal billed — ' + labelList + ' — $' + custTotal.toFixed(2) + ' invoiced (' + (invoiceNumber || invoiceId) + '); ' + vendorNote + '.';
         const fields = { Customer_Charge: String(newCharge), Notes: woRow.Notes ? (woRow.Notes + '\n' + noteLine) : noteLine };
@@ -6287,8 +6611,29 @@ async function scopeProposalBookFinal(env, body) {
   const cfgAll = await fetchConfig(env);
   const feeCfg = instantFeeConfig(cfgAll);
   feeCfg.warnings.forEach(w => warnings.push(w));
+  // Oct 26 2026: same automatic deposit deduction as the milestone path (this IS the final bill).
+  let depCredit = null;
+  if (vendor && !vendorInHouse && finalVendorAmount > 0 && s.WO_ID) {
+    let woDep = null;
+    try { woDep = findWO(await fetchTab(env, 'Work_Orders'), s.WO_ID); }
+    catch (e) {
+      if (!body.preview_only) return json({ ok: false, error: 'Could not read the work order ' + s.WO_ID + ' to check for a vendor deposit (' + String((e && e.message) || e).slice(0, 140) + '), so nothing was billed. Try again in a minute.' }, 503);
+      warnings.push('Could not read the work order to check for a vendor deposit — any deposit already paid to the vendor is not reflected here.');
+    }
+    if (!woDep && !body.preview_only) return json({ ok: false, error: 'Work order ' + s.WO_ID + ' (linked to this proposal) was not found, so whether a vendor deposit was paid could not be checked. Nothing was billed. Fix the link first.' }, 409);
+    if (!woDep) warnings.push('⚠ The linked work order ' + s.WO_ID + ' was not found, so any vendor deposit already paid cannot be checked.');
+    const dep = woDepositCredit(woDep, vendor.ID);
+    if (dep) {
+      if (finalVendorAmount < dep.amount - 0.005) {
+        const msg = 'The $' + dep.amount.toFixed(2) + ' deposit already paid to ' + vendDisplay + ' is more than the remaining vendor balance ($' + finalVendorAmount.toFixed(2) + ').';
+        if (!body.preview_only) return json({ ok: false, deposit_blocked: true, error: msg + ' Nothing was billed. Fix the amounts, or clear the deposit on the work order if it was entered in error.', warnings }, 409);
+        warnings.push('⛔ ' + msg + ' The bill cannot be sent until that is fixed.');
+      } else { depCredit = dep; warnings.push('💰 A $' + dep.amount.toFixed(2) + ' deposit was already paid to ' + vendDisplay + ' (QuickBooks bill ' + (dep.bill_number || dep.bill_id) + ') — it comes off this final bill automatically.'); }
+    }
+  }
   const adj = vendorBillAdjustments({ payable: finalVendorAmount, lang: (vendor && String(vendor.Language || '').toLowerCase() === 'es') ? 'es' : 'en',
-    feeOn: !!vendor && !vendorInHouse && finalVendorAmount > 0 && instantPayEnabled(vendor, cfgAll, body.instant_pay), cfg: feeCfg, credits: [] });
+    feeOn: !!vendor && !vendorInHouse && finalVendorAmount > 0 && instantPayEnabled(vendor, cfgAll, body.instant_pay), cfg: feeCfg,
+    credits: depCredit ? [{ type: 'deposit_credit', amount: depCredit.amount, desc: depCredit.desc, desc_es: depCredit.desc_es }] : [] });
   adj.notes.forEach(n => warnings.push(n));
   const preview = {
     signature_id: row.ID, scope_id: row.Scope_ID, property: addr, signer: row.Signer_Name,
@@ -6351,6 +6696,7 @@ async function scopeProposalBookFinal(env, body) {
         billId = (rb && rb.Bill && rb.Bill.Id) || '';
         billNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
         if (!billId) billSkipReason = 'QB bill failed: ' + (qbFault(rb) || 'unknown error');
+        else if (depCredit) await woDepositMarkApplied(env, s.WO_ID, depCredit, { id: billId, number: billNumber }, warnings, '/scope-proposal/book-final');
       } else { billSkipReason = 'The vendor\'s QuickBooks id could not be resolved — no vendor bill was created.'; }
     } catch (e) { billSkipReason = 'Vendor bill error: ' + e.message; }
     if (billSkipReason) warnings.push(billSkipReason);
@@ -6534,6 +6880,47 @@ async function addTimeEntry(env, body) {
 
   await addRow(env, 'Time_Entries', { WO_ID: wo_id, Entered_By: entered_by||'', Entered_By_ID: String(entered_by_id||''), Role: role, Entry_Type: entry_type || (role === 'hub' ? 'Admin' : 'Labor'), Start_DateTime: start_datetime||'', End_DateTime: end_datetime||'', Duration_Minutes: String(durationMinutes), Notes: notes||'', Invoice_Description: invoice_description||'', Billable: role === 'hub' ? String(billable === 'TRUE' || billable === true) : 'TRUE', Hourly_Rate: String(rate), Billable_Amount: String(billableAmt.toFixed(2)), Created_Date: new Date().toISOString(), Active: 'TRUE' });
   return json({ success: true, duration_minutes: durationMinutes, hourly_rate: rate });
+}
+
+// POST /time-entry/use-notes { wo_id, ids? } — Oct 23 2026 (Brett: opt in to use the billable-hour
+// notes as the invoice descriptions "without having to retype them"). Copies the private Notes of
+// Brett's own billable hours that have NO Invoice_Description into Invoice_Description, so the
+// invoice (and the repair tool) can print them. Only Brett's own (role 'hub') billable hours; vendor
+// notes are never touched; an entry that already has an Invoice_Description is never overwritten.
+// Every write is read back; any failure is returned per entry AND filed in Ops_Telemetry.
+async function useTimeEntryNotes(env, body) {
+  const woId = String((body && body.wo_id) || '').trim();
+  if (!woId) return json({ error: 'wo_id required' }, 400);
+  const only = Array.isArray(body && body.ids) ? body.ids.map(String) : null;
+  const warnings = [];
+  // A failed audit row is reported to the caller (never swallowed); the copy result itself still stands.
+  const audit = async (rec) => {
+    try { await logTelemetry(env, Object.assign({ Source: 'worker', Job_Type: 'time_entry_use_notes', Skill_Or_Endpoint: '/time-entry/use-notes' }, rec)); }
+    catch (e) { warnings.push('Could not file the audit row in Ops_Telemetry: ' + String((e && e.message) || e).slice(0, 160)); }
+  };
+  let eligible;
+  try {
+    const all = await fetchTab(env, 'Time_Entries');
+    eligible = timeEntriesWithUsableNotes(all.filter(e => String(e.WO_ID) === woId), null).filter(e => !only || only.includes(String(e.ID)));
+  } catch (e) {
+    const msg = 'Could not read Time_Entries: ' + String((e && e.message) || e).slice(0, 200);
+    await audit({ Success: 'FALSE', Notes: 'wo=' + woId + ' ' + msg });
+    return json({ ok: false, error: msg, updated: [], errors: [{ id: '', error: msg }], warnings }, 500);
+  }
+  if (!eligible.length) return json({ ok: true, updated: [], errors: [], warnings, message: 'Nothing to copy: every billable hour entry on this job already has an Invoice Description, or has no note.' });
+  const updated = [], errors = [];
+  try { await ensureColumns(env, 'Time_Entries', ['Invoice_Description']); }
+  catch (e) { errors.push({ id: '', error: 'Could not make sure the Invoice_Description column exists: ' + String((e && e.message) || e).slice(0, 160) }); }
+  if (!errors.length) {
+    for (const e of eligible) {
+      const text = String(e.Notes || '').trim().slice(0, 1000);
+      try { await updateRowVerified(env, 'Time_Entries', e.ID, { Invoice_Description: text }); updated.push({ id: String(e.ID), text }); }
+      catch (err) { errors.push({ id: String(e.ID), error: String((err && err.message) || err).slice(0, 200) }); }
+    }
+  }
+  await audit({ Success: errors.length ? 'FALSE' : 'TRUE',
+    Notes: ('wo=' + woId + ' copied=' + updated.map(u => u.id).join(',') + (errors.length ? ' FAILED=' + errors.map(x => (x.id || 'all') + ':' + x.error).join(' | ') : '')).slice(0, 480) });
+  return json({ ok: errors.length === 0, updated, errors, warnings }, errors.length ? 500 : 200);
 }
 
 async function listWOTenants(env, url) {
@@ -7380,7 +7767,7 @@ async function createWorkOrder(env, body) {
     if ((body.type || '') === 'tenant' && owner?.Phone && property) {
       const notify = await shouldNotifyOwner(env, woLike, 'Received');
       if (notify) {
-        const msg = `Hi ${owner.First_Name}, we've received a new ${woLike.Trade || 'General'} request from your tenant at ${propUnitText(property, unit)}: ${woLike.Description || '(no description)'}. We'll follow up once it's scheduled. Ref: ${woId}.`;
+        const msg = `Hi ${owner.First_Name}, new ${woLike.Trade || 'General'} request from your tenant at ${propUnitText(property, unit)}: ${smsShort(woLike.Description, 80) || '(no description)'}. We'll update you once it's scheduled. Ref: ${woId}.`;   // D-16: shortened, description cut to 80
         const r = await smsGatedSend(env, { wo_id: woId, message_type: 'owner_job_received', recipient_type: 'owner', owner, property, message_body: msg });
         if (r.sent) await updateWOFields(env, woId, { Owner_Notified: 'TRUE' });
       }
@@ -7641,6 +8028,7 @@ async function intakeSmsAdmin(env, message, woId, property) {
     const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'admin_intake_alert', recipient_type: 'admin', admin: { Name: 'Admin', Phone: cfg.admin_phone }, property: property || null, message_body: message, bypassQuietHours: true });
     if (r && r.sent) return 'sent';
     if (r && r.send_ok === false) return 'BLOCKED: ' + r.gate_snapshot;
+    if (env.__STAGING__ ?? isStaging(env)) return 'STAGING STUB: the text was logged only, nothing was sent (this is the test server)';
     return 'FAILED: not sent (' + ((r && r.gate_snapshot) || 'unknown') + ')';
   } catch (e) { return 'FAILED: ' + String((e && e.message) || e).slice(0, 150); }
 }
@@ -9736,6 +10124,7 @@ async function updateStatus(env, body) {
     if (_live.length) return json({ error: addonLiveChildrenMessage(_live, body.wo_id, 'cancel'), open_additional_work: _live }, 409);
   }
   const changedBy = body.updated_by || 'system', changedRole = body.updated_by_role || 'admin';
+  const _repeatStatus = String(wo.Status || '') === String(body.status || '');   // D-16 item 4: the same status posted twice must not re-send the one-off texts
   const fields = { Status: body.status };
   if (body.notes) {
     let statusNote = body.notes;
@@ -9778,7 +10167,8 @@ async function updateStatus(env, body) {
       const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} at ${address} is complete. Thank you! Ref: ${body.wo_id}.`;
       await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_completed', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
-    if (config.admin_phone) await sendSMS(env, config.admin_phone, `✅ ${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${woJobLabel(wo)} at ${address}. Pending invoice.`);
+    // D-16: the same status posted again (a double tap, a retry) must not text Brett twice. The transport also refuses an identical text inside 10 minutes.
+    if (config.admin_phone && !_repeatStatus) await smsReportIfFailed(env, 'sms_admin_complete', body.wo_id, await sendSMS(env, config.admin_phone, `${body.wo_id} marked Complete${body.updated_by ? ' (by '+body.updated_by+')' : ''}. ${woJobLabel(wo)} at ${address}. Pending invoice.`, { context: { wo_id: body.wo_id, message_type: 'admin_wo_complete', recipient_type: 'admin' } }));
     await updateWOFields(env, body.wo_id, { Owner_Notified: 'PENDING' });
   }
   // Vendor accepted → notify the tenant that a technician has accepted and will reach out.
@@ -9789,7 +10179,9 @@ async function updateStatus(env, body) {
     if (wo.Tenant_Notify_Updates !== 'FALSE') for (const tenant of tenantsForDispatch(tenants, unit, wo)) {
       if (!isTenantNotifiable(tenant, wo)) continue;
       const msg = `Hi ${tenant.First_Name}, a technician has accepted your ${woJobLabel(wo)} at ${address} and will contact you to schedule. Ref: ${body.wo_id}.`;
-      await sendSMS(env, tenant.Phone, msg); await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
+      if (_repeatStatus) continue;   // D-16: already Accepted - the tenant has been told
+      const _ra = await sendSMS(env, tenant.Phone, msg, { context: { wo_id: body.wo_id, message_type: 'tenant_accepted', recipient_type: 'tenant' } });
+      if (await smsReportIfFailed(env, 'sms_tenant_accepted', body.wo_id, _ra)) await logSMS(env, body.wo_id, 'tenant_accepted', tenant.ID, tenant.Phone, msg);
     }
   }
   // Turnover dependency release (B-100). Repairs and Paint run in parallel with no gate on
@@ -9816,8 +10208,8 @@ async function updateStatus(env, body) {
     const notify = await shouldNotifyOwner(env, wo, ownerEvent);
     if (notify) {
       const ownerMsgs = {
-        Complete: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${address} — is complete. Ref: ${body.wo_id}.`,
-        On_Hold: `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${address} — is on hold: ${holdReason}. Ref: ${body.wo_id}.`,
+        Complete: `Hi ${owner.First_Name}, ${body.wo_id} (${woJobLabel(wo)}) at ${address} is complete.`,
+        On_Hold: `Hi ${owner.First_Name}, ${body.wo_id} (${woJobLabel(wo)}) at ${address} is on hold: ${smsShort(holdReason, 80)}.`,   // D-16: shortened
       };
       const msg = ownerMsgs[ownerEvent];
       const msgType = ownerEvent === 'On_Hold' ? 'owner_job_on_hold' : `owner_job_${ownerEvent.toLowerCase()}`;
@@ -9957,7 +10349,7 @@ async function ownerWorkorders(env, url, callerRole, callerSessionId) {
   // Still-linked bid-group copies (Duplicated_From AND Bid_Group_ID both set) are Brett's internal shotgun
   // and would show the owner every competing vendor — hidden here (this endpoint ignores Tenant_Visible).
   // The copy Brett KEPT ("Keep this", Bid_Winner TRUE) is shown (isHiddenBidCopy, Oct 13 2026).
-  const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && w.Voided !== 'TRUE' && String(w.Type || '') !== 'addon' && !isHiddenBidCopy(w) && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
+  const wos = workorders.filter(w => ownerPropIds.has(w.Property_ID) && w.Voided !== 'TRUE' && String(w.Type || '') !== 'addon' && !isHiddenBidCopy(w) && (includeClosed || WOStatus.sets.ACTIVE_OWNER.includes(w.Status)));   // Oct 23 2026 (#175): owner list also shows Estimate Requested
   // Owner gets the vendor's name/trade (who's on the job), not their phone — keeps the
   // vendor relationship mediated through Brett rather than owners going around him. No
   // Master_Keys/viewingVendorId passed — omitLockbox:true already zeroes lockboxes below,
@@ -10148,7 +10540,13 @@ async function regeneratePIN(env, body) {
   if (!record[phoneField]) return json({ error: 'Phone number required to generate PIN' }, 400);
   const newPIN = generatePIN(record[phoneField]);
   await updateRow(env, tab, id, { PIN: newPIN });
-  if (send) { const sendResult = await sendPinMessage(env, { type, id }); return json({ success: true, pin: newPIN, sms_sent: !!sendResult }); }
+  if (send) {
+    // sendPinMessage returns a Response (always truthy), so read what it actually said - sms_sent is only true when the text really went out.
+    const sendResult = await sendPinMessage(env, { type, id });
+    let sj;
+    try { sj = await sendResult.clone().json(); } catch (e) { sj = { error: 'Could not read the send result: ' + ((e && e.message) || e) }; }
+    return json({ success: true, pin: newPIN, sms_sent: !!(sj && sj.success), sms_error: (sj && !sj.success) ? (sj.error || 'send failed') : '', sms_warning: (sj && sj.warning) || '' });
+  }
   return json({ success: true, pin: newPIN });
 }
 
@@ -10214,9 +10612,14 @@ async function sendPinMessage(env, body) {
   // PIN, portal link and amounts are verified intact or the English original is sent.
   let outMessage = message, translatedTo = '';
   if (vendorRec) { const t = await translateForVendorDetailed(env, vendorRec, message); if (t.translated) { outMessage = t.text; translatedTo = 'es'; } }
-  await sendSMS(env, phone, outMessage);
+  // Oct 22 2026: the old code ignored sendSMS's answer and logged "sent" regardless, so a switched-off or rejected text still looked sent.
+  // Now the real result decides: the person's row gets PIN_Sent_Date/Count only when Twilio accepted it, and a failure is returned honestly.
+  const verdict = smsSendVerdict(await sendSMS(env, phone, outMessage, { redact: true, keepAccents: translatedTo === 'es', context: { message_type: 'pin_send_' + type, recipient_type: type } }));
+  const mark = await stampPinSend(env, type, id, verdict);
+  if (!verdict.ok) return json({ error: 'PIN text NOT sent: ' + verdict.result, name: firstName, mark_saved: mark.ok }, 502);
   await logSMS(env, '', `pin_send_${type}`, id, phone, `[PIN sent to ${firstName}]`);
-  return json({ success: true, sent_to: phone, name: firstName, translated_to: translatedTo });
+  return json(Object.assign({ success: true, sent_to: phone, name: firstName, translated_to: translatedTo, staged: !!verdict.staged },
+    mark.ok ? {} : { warning: 'The PIN text WAS sent, but the "sent" mark could not be saved: ' + mark.error }));
 }
 
 // POST /welcome/send { type: 'tenant'|'vendor', id, preview_only?, message? } — Sep 14 2026,
@@ -10228,9 +10631,40 @@ async function sendPinMessage(env, body) {
 // PERSONALIZED (real name/address) for the single-send preview; body.message, if provided,
 // overrides it entirely — the Hub always lets Brett edit before sending (single: pre-filled
 // textarea; bulk: one shared editable text for the whole batch, deliberately generic/unnamed).
+// POST /welcome/send for type owner | owner_user (Oct 22 2026): same warm intro as tenants/vendors, but sent through sendSMS and
+// judged by the real Twilio answer; Welcome_Sent is written ONLY when the text went out.
+async function welcomeSendOwner(env, body) {
+  const { type, id } = body, tab = PORTAL_TAB_BY_TYPE[type];
+  const rec = (await fetchTab(env, tab)).find(r => String(r.ID) === String(id));
+  if (!rec) return json({ error: (type === 'owner' ? 'Owner' : 'Owner user') + ' not found' }, 404);
+  if (!rec.Phone) return json({ error: 'No phone number on file', name: rec.First_Name || '' }, 400);
+  const firstName = rec.First_Name || 'there';
+  const cfg = await fetchConfig(env), assistantName = cfg.ASSISTANT_NAME || 'Riley';
+  const tokens = { FirstName: firstName, AssistantName: assistantName };
+  const tpl = await getMessageTemplate(env, 'owner_welcome', 'sms');
+  const defaultMsg = tpl ? renderTemplate(tpl.Body, tokens)
+    : `Hi ${firstName}, this is ${assistantName} with Ridge Co Property Maintenance - we handle maintenance on your properties. Save this number - we'll only text about maintenance here, never marketing.`;
+  if (body.preview_only) return json({ preview: defaultMsg, phone: rec.Phone, name: firstName });
+  const finalMsg = body.message ? renderTemplate(String(body.message), tokens) : defaultMsg;
+  const verdict = smsSendVerdict(await sendSMS(env, rec.Phone, finalMsg));
+  const f = { Welcome_Send_Result: verdict.result };
+  if (verdict.ok) { f.Welcome_Sent = 'TRUE'; f.Welcome_Sent_Date = new Date().toISOString(); }
+  let markError = '';
+  try { await ensureColumns(env, tab, PORTAL_WELCOME_COLS); await updateRowVerified(env, tab, id, f); }
+  catch (e) {
+    markError = String((e && e.message) || e).slice(0, 300);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'portal_welcome_stamp_failed', Skill_Or_Endpoint: tab, Success: 'FALSE', Notes: tab + ' ' + id + ': ' + markError }); }
+    catch (e2) { console.error('portal_welcome_stamp_failed AND telemetry failed:', tab, id, markError, String((e2 && e2.message) || e2)); }
+  }
+  if (!verdict.ok) return json({ error: 'Send failed: ' + verdict.result, name: firstName }, 502);
+  await logSMS(env, '', 'welcome_send_' + type, id, rec.Phone, '[welcome sent to ' + firstName + ']');
+  return json(Object.assign({ success: true, sent_to: rec.Phone, name: firstName }, markError ? { warning: 'The welcome text WAS sent, but the "welcomed" mark could not be saved: ' + markError } : {}));
+}
+
 async function welcomeSend(env, body) {
   const { type, id } = body;
   if (!type || !id) return json({ error: 'Missing type or id' }, 400);
+  if (type === 'owner' || type === 'owner_user') return await welcomeSendOwner(env, body);
   let recipient, firstName, phone, defaultMsg, property = null, owner = null;
   // Sep 17 2026 (Brett): a bulk welcome send lets Brett edit the shared text before sending —
   // that edited text (body.message) needs the SAME {FirstName}/{Owner}/{Address}/{AssistantName}
@@ -10266,7 +10700,7 @@ async function welcomeSend(env, body) {
       const tpl = await getMessageTemplate(env, 'tenant_welcome', 'sms');
       tokens = { FirstName: firstName, Address: address, Owner: ownerLabel, AssistantName: assistantName };
       defaultMsg = tpl ? renderTemplate(tpl.Body, tokens)
-        : `Hi ${firstName}, this is ${assistantName} with Ridge Co Property Maintenance - we handle maintenance on behalf of ${ownerLabel} at ${address}. Save this number (outbound-only for now, so a text back won't reach anyone yet) - we'll only text about maintenance here, never marketing.`;
+        : `Hi ${firstName}, this is ${assistantName} with Ridge Co Property Maintenance. We handle maintenance for ${ownerLabel} at ${address}. Please save this number; we only text about maintenance.`;
     }
   } else if (type === 'vendor') {
     const vendors = await fetchTab(env, 'Vendors');
@@ -10304,8 +10738,13 @@ async function welcomeSend(env, body) {
   // returned before reaching the Welcome_Sent write below, a person with a legitimately queued
   // welcome message would still show as "not yet welcomed" in the Hub's own filter.
   if (!r.sent && !r.held_for_quiet_hours) return json({ error: r.send_ok ? 'Send failed' : ('Blocked: ' + r.gate_snapshot), name: firstName }, r.send_ok ? 502 : 400);
-  await ensureColumns(env, type === 'tenant' ? 'Tenants' : 'Vendors', ['Welcome_Sent','Welcome_Sent_Date']);
-  const _wf = { Welcome_Sent: 'TRUE', Welcome_Sent_Date: new Date().toISOString() };
+  await ensureColumns(env, type === 'tenant' ? 'Tenants' : 'Vendors', PORTAL_WELCOME_COLS);
+  // Oct 22 2026: Test Mode sends to Brett's test phone, not to the person - that is NOT a welcome. Record why, leave them un-welcomed.
+  if (r.test_mode && !r.held_for_quiet_hours) {
+    const _tr = await updateRow(env, type === 'tenant' ? 'Tenants' : 'Vendors', id, { Welcome_Send_Result: 'test mode: went to the test phone, not to the person' });
+    return json({ success: true, test_mode: true, name: firstName, warning: 'Test Mode is ON, so that text went to your test phone, not to ' + firstName + '. NOT marked as welcomed.' + (_tr.ok ? '' : ' (also could not save the note: ' + await respErrText(_tr) + ')') }, 200);
+  }
+  const _wf = { Welcome_Sent: 'TRUE', Welcome_Sent_Date: new Date().toISOString(), Welcome_Send_Result: r.held_for_quiet_hours ? 'queued (quiet hours)' : 'sent' };
   // Oct 14 2026: Brett sending the welcome to a roster-added tenant (consent pending) IS the go-ahead: switch their texts on and
   // record it. The tenant can still reply STOP (SMS_OptOut, which this never touches).
   const _consentFlip = type === 'tenant' && String(recipient.SMS_Consent || '') === 'pending';
@@ -10379,7 +10818,7 @@ async function sendPropertyNotice(env, body) {
     try {
       const r = await smsGatedSend(env, { wo_id: body.wo_id || '', message_type: 'property_notice', recipient_type: 'tenant', tenant, owner, property, message_body: smsBody, bypassQuietHours: true });
       if (r.sent) results.sms_sent++; else if (r.held_for_quiet_hours) results.sms_queued_quiet_hours++; else results.sms_failed++;
-    } catch (e) { results.sms_failed++; }
+    } catch (e) { results.sms_failed++; await reportFailure(env, { system: 'hub', source: 'worker', where: 'property_notice_sms', ref: body.wo_id || property.ID || '', severity: 'P0', message: 'a property notice text threw: ' + String((e && e.message) || e).slice(0, 200) }); }
   }
   if (channels.includes('email')) {
     for (const tenant of emailRecipients) {
@@ -11609,17 +12048,10 @@ async function approveInvoiceReview(env, body) {
       return json({ success: false, id: realId, error: 'The invoice was approved, but its $' + padRes.pad.toFixed(2) + ' instant-pay pad did not save (' + String((e && e.message) || e).slice(0, 120) + '). Withdraw the approval and approve again before sending to QuickBooks.' }, 500);
     }
   }
-  // Sep 15 2026 — a WO carrying an unapplied vendor deposit (POST /wo/deposit-approve) has
-  // now had its final bill reviewed and folded into vendor_cost (per the deposit banner
-  // renderIRCard shows). Flip Deposit_Applied so a SECOND bill/review on this same WO never
-  // nets the same deposit out twice, and the banner stops showing once it's been accounted for.
-  try {
-    const wos = await fetchTab(env, 'Work_Orders');
-    const wo = findWO(wos, wo_id);
-    if (wo && wo.Deposit_Amount && parseFloat(wo.Deposit_Amount) > 0 && wo.Deposit_Applied !== 'TRUE') {
-      await updateWOFields(env, wo_id, { Deposit_Applied: 'TRUE' });
-    }
-  } catch (e) { /* non-fatal — the review itself is already saved */ }
+  // Oct 26 2026 — the deposit is NO LONGER flipped to applied here. Approving a review only queues the bill; the vendor bill is what actually
+  // deducts the deposit, automatically, as its own visible line (woDepositCredit in qbSendInvoice / qbSendCombinedInvoice / the proposal billing
+  // paths), and Deposit_Applied flips ONLY after QuickBooks returns that bill's id (woDepositMarkApplied). Flipping at approval meant an approved
+  // bill that never reached QuickBooks looked deducted when it was not, and it relied on Brett typing the net amount by hand.
   return json({ success: true, id: realId, instant_pad: padRes.pad || 0 });
 }
 
@@ -12333,11 +12765,11 @@ async function approveEstimate(env, body) {
 // half already gets created automatically elsewhere in this file (e.g. scopeProposalBook)
 // while payment itself always stays a separate, human-triggered step.
 // The Hub-side Work_Orders fields still exist so the FINAL bill's review card can show the
-// net amount still owed (renderIRCard's deposit banner + the Deposit_Applied flip in
-// approveInvoiceReview) — that part of the original design was right, just incomplete.
+// net amount still owed. UPDATE Oct 26 2026: the final vendor bill now deducts the deposit AUTOMATICALLY (woDepositCredit) and flips Deposit_Applied
+// only after QuickBooks returns that bill's id; the deposit is capped at the vendor's estimate and carries the instant-pay fee as its own line.
 async function depositApprove(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
-  const amount = parseFloat(body.amount);
+  const amount = money2(parseFloat(body.amount));
   if (!Number.isFinite(amount) || amount <= 0) return json({ error: 'amount must be a positive number' }, 400);
 
   const wos = await fetchTab(env, 'Work_Orders');
@@ -12363,6 +12795,34 @@ async function depositApprove(env, body) {
   const vendor = vendors.find(v => v.ID === vendorId);
   if (!vendor) return json({ error: `Vendor ${vendorId} not found` }, 404);
 
+  // Oct 26 2026 — a deposit can never be more than the vendor's own estimate (the number they agreed to), so a typo or a stale tap cannot overpay them.
+  // A failed READ of the estimates stops the deposit; "no estimate on file" is allowed but said out loud (older jobs were quoted outside the Hub).
+  let capInfo = null;
+  try { capInfo = woDepositEstimateCap(await fetchTab(env, 'Estimates'), woId, wo); }
+  catch (e) {
+    let tnote = '';
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_deposit_estimate_read_failed', Skill_Or_Endpoint: '/wo/deposit-approve', Success: 'FALSE', Notes: ('wo=' + woId + ' ' + String((e && e.message) || e)).slice(0, 300) }); }
+    catch (e2) { tnote = ' (That also could not be logged to Ops_Telemetry.)'; }
+    return json({ error: 'Could not read the estimates to check the deposit against the vendor\'s quote (' + String((e && e.message) || e).slice(0, 140) + '), so nothing was created. Try again in a minute.' + tnote }, 502);
+  }
+  if (capInfo && amount > capInfo.cap + 0.005) {
+    return json({ error: `A $${amount.toFixed(2)} deposit is more than the vendor's estimate allows: the estimate is $${capInfo.subtotal.toFixed(2)}` +
+      (capInfo.spent > 0 ? ` and $${capInfo.spent.toFixed(2)} of it was already paid as a deposit` : '') + `, so the most you can deposit is $${capInfo.cap.toFixed(2)}. Nothing was created.`,
+      estimate_subtotal: capInfo.subtotal, max_deposit: capInfo.cap }, 400);
+  }
+
+  // Instant-pay fee on the deposit (same rule as the final bill): its own visible negative line, so the bill total is exactly what Brett sends.
+  const cfgAll = await fetchConfig(env);
+  const feeCfg = instantFeeConfig(cfgAll);
+  const feeOn = instantPayEnabled(vendor, cfgAll, body.instant_pay);
+  const adj = vendorBillAdjustments({ payable: amount, credits: [], feeOn, cfg: feeCfg, lang: String(vendor.Language || '').toLowerCase() === 'es' ? 'es' : 'en' });
+  const warnings = feeCfg.warnings.concat(adj.notes);
+  const summary = { wo_id: woId, vendor: vendor.Name || vendor.Company || vendor.First_Name || ('Vendor ' + vendorId), amount: amount.toFixed(2), fee: money2(adj.fee).toFixed(2), send_amount: money2(adj.bill_total).toFixed(2),
+    fee_on: !!feeOn, estimate_subtotal: capInfo ? capInfo.subtotal : null, max_deposit: capInfo ? capInfo.cap : null, no_estimate_on_file: !capInfo, warnings };
+  if (!capInfo) warnings.push('No estimate is on file for this work order, so the deposit could not be checked against a quote.');
+  // Preview only: say exactly what the real click would do. Touches neither QuickBooks nor the sheet.
+  if (body.preview_only) return json({ success: true, preview: true, ...summary });
+
   const [properties, units] = await Promise.all([
     fetchTab(env, 'Properties').catch(() => []),
     fetchTab(env, 'Units').catch(() => []),
@@ -12379,13 +12839,29 @@ async function depositApprove(env, body) {
   try { vendorQbId = await qbFindOrCreateVendor(env, vendor, vendor.Name || vendor.Company || vendor.First_Name || 'Vendor', token); }
   catch (e) { return json({ error: 'QuickBooks vendor lookup failed, nothing was recorded: ' + e.message }, 502); }
 
+  // Replacing an outstanding deposit (force:true) must retire its QuickBooks bill first, or the vendor could be paid for two deposit bills while only one is
+  // ever deducted. If the old bill cannot be deleted (it was paid), refuse and leave everything as it is.
+  if (hasOutstanding && body.force && String(wo.Deposit_QB_Bill_ID || '').trim()) {
+    let del;
+    try { del = await qbDeleteBillSafe(env, wo.Deposit_QB_Bill_ID, token); }
+    catch (e) { return json({ error: 'Could not retire the existing deposit bill ' + (wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID) + ' in QuickBooks (' + String((e && e.message) || e).slice(0, 140) + '), so nothing was created. Check it in QuickBooks.' }, 502); }
+    if (!del.ok) return json({ error: 'The existing deposit bill ' + (wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID) + ' could not be deleted (' + del.error + ') — it may already be paid. Nothing was created; handle that bill in QuickBooks first.' }, 409);
+    summary.warnings.push('The earlier unapplied deposit bill ' + (del.doc || wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID) + ' was deleted in QuickBooks and replaced.');
+    // The old bill is gone, so the work order must stop pointing at it right now (a failure creating the new one below must not leave a deleted bill on file).
+    try {
+      await updateWOFields(env, woId, { Deposit_Amount: '', Deposit_QB_Bill_ID: '', Deposit_QB_Bill_Number: '', Deposit_Applied: 'FALSE', Deposit_Notes: 'Replaced' });
+      invalidateTabCache('Work_Orders');
+    } catch (e) { return json({ error: 'The old deposit bill was deleted in QuickBooks, but clearing it on ' + woId + ' failed (' + String((e && e.message) || e).slice(0, 140) + '). Nothing new was created; tell me so it can be fixed.' }, 500); }
+  }
   const trade = QB_TRADE_MAP[(wo.Trade || '').trim()] || QB_TRADE_MAP.General;
   const desc = (`Deposit — ${addr || ('WO ' + woId)}${wo.Description ? ' — ' + wo.Description : ''}`).slice(0, 4000);
   const billPayload = {
     Line: [{ DetailType: 'AccountBasedExpenseLineDetail', Amount: +amount.toFixed(2), Description: desc,
-      AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }],
+      AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }]
+      .concat(adj.lines.map(l => ({ DetailType: 'AccountBasedExpenseLineDetail', Amount: l.amount, Description: String(l.desc).slice(0, 4000),
+        AccountBasedExpenseLineDetail: { AccountRef: { value: trade.expense } } }))),
     VendorRef: { value: vendorQbId }, TxnDate: new Date().toISOString().slice(0, 10),
-    PrivateNote: (`Deposit approved by Brett — WO ${woId} — pay via QuickBooks Instant Pay; nets against the final vendor bill at job completion.` +
+    PrivateNote: (`Deposit approved by Brett — WO ${woId} — pay via QuickBooks Instant Pay; comes off the final vendor bill automatically.` +
                   (body.notes ? ' ' + body.notes : '')).slice(0, 1000),
   };
   const rb = await qbApi(env, 'bill?minorversion=73', 'POST', billPayload, token);
@@ -12393,17 +12869,33 @@ async function depositApprove(env, body) {
   const qbBillNumber = (rb && rb.Bill && rb.Bill.DocNumber) || '';
   if (!qbBillId) return json({ error: 'QuickBooks bill was not created (' + (qbFault(rb) || 'unknown error') + ') — nothing was recorded, nothing to pay yet.' }, 502);
 
-  await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied', 'Deposit_QB_Bill_ID', 'Deposit_QB_Bill_Number']);
-  await updateWOFields(env, woId, {
-    Deposit_Amount: amount.toFixed(2),
-    Deposit_Vendor_ID: vendorId,
-    Deposit_Approved_Date: new Date().toISOString().split('T')[0],
-    Deposit_Notes: body.notes || '',
-    Deposit_Applied: 'FALSE',
-    Deposit_QB_Bill_ID: qbBillId,
-    Deposit_QB_Bill_Number: qbBillNumber,
-  });
-  return json({ success: true, wo_id: woId, amount: amount.toFixed(2), qb_bill_id: qbBillId, qb_bill_number: qbBillNumber });
+  // The bill now EXISTS in QuickBooks. If recording it on the work order fails, say so loudly with the bill id — a bill nobody recorded is exactly
+  // how a deposit gets forgotten on the final bill.
+  try {
+    await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied', 'Deposit_QB_Bill_ID', 'Deposit_QB_Bill_Number', 'Deposit_Fee']);
+    await updateWOFields(env, woId, {
+      Deposit_Amount: amount.toFixed(2),
+      Deposit_Vendor_ID: vendorId,
+      Deposit_Approved_Date: new Date().toISOString().split('T')[0],
+      Deposit_Notes: body.notes || '',
+      Deposit_Applied: 'FALSE',
+      Deposit_QB_Bill_ID: qbBillId,
+      Deposit_QB_Bill_Number: qbBillNumber,
+      Deposit_Fee: money2(adj.fee).toFixed(2),
+    });
+    invalidateTabCache('Work_Orders');
+    const back = findWO(await fetchTab(env, 'Work_Orders'), woId);
+    if (!back || String(back.Deposit_QB_Bill_ID || '') !== String(qbBillId) || Math.abs((parseFloat(back.Deposit_Amount) || 0) - amount) > 0.005) {
+      throw new Error('the deposit read back as "' + (back ? back.Deposit_Amount + ' / bill ' + back.Deposit_QB_Bill_ID : 'no row') + '"');
+    }
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 200);
+    let tnote = '';
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_deposit_record_failed', Skill_Or_Endpoint: '/wo/deposit-approve', Success: 'FALSE', Notes: ('wo=' + woId + ' qb_bill=' + qbBillId + ' ' + msg).slice(0, 480) }); }
+    catch (e2) { tnote = ' (That also could not be logged to Ops_Telemetry.)'; }
+    return json({ error: `QuickBooks bill ${qbBillNumber || qbBillId} WAS created for $${amount.toFixed(2)}, but saving it on ${woId} failed (${msg}). Do NOT create it again — write down bill ${qbBillNumber || qbBillId} and tell me so it can be recorded, otherwise the final bill will not deduct it.` + tnote, qb_bill_id: qbBillId, qb_bill_number: qbBillNumber }, 500);
+  }
+  return json({ success: true, qb_bill_id: qbBillId, qb_bill_number: qbBillNumber, ...summary });
 }
 
 // POST /wo/deposit-clear { wo_id, reason? } — undo a deposit entered in error. If a QuickBooks
@@ -12416,6 +12908,9 @@ async function depositClear(env, body) {
   const wo = findWO(wos, woId);
   if (!wo) return json({ error: `No work order ${woId} found` }, 404);
   if (!wo.Deposit_Amount) return json({ error: 'No deposit recorded on this WO' }, 404);
+  if (String(wo.Deposit_Applied || '').toUpperCase() === 'TRUE') {
+    return json({ error: `The $${parseFloat(wo.Deposit_Amount).toFixed(2)} deposit on ${woId} was already taken off the final vendor bill${wo.Deposit_Applied_Bill ? ' (' + wo.Deposit_Applied_Bill + ')' : ''}, so clearing it would put the records out of step with QuickBooks. Nothing was changed.` }, 409);
+  }
 
   let qbNote = '';
   if (wo.Deposit_QB_Bill_ID) {
@@ -12427,11 +12922,11 @@ async function depositClear(env, body) {
     } catch (e) { qbNote = `Hub record cleared, but clearing the QuickBooks bill failed: ${e.message} — check QuickBooks directly.`; }
   }
 
-  await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied', 'Deposit_QB_Bill_ID', 'Deposit_QB_Bill_Number']);
+  await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied', 'Deposit_QB_Bill_ID', 'Deposit_QB_Bill_Number', 'Deposit_Fee', 'Deposit_Applied_Bill', 'Deposit_Applied_Date']);
   await updateWOFields(env, woId, {
     Deposit_Amount: '', Deposit_Vendor_ID: '', Deposit_Approved_Date: '',
     Deposit_Notes: body.reason ? `Cleared: ${body.reason}` : 'Cleared', Deposit_Applied: 'FALSE',
-    Deposit_QB_Bill_ID: '', Deposit_QB_Bill_Number: '',
+    Deposit_QB_Bill_ID: '', Deposit_QB_Bill_Number: '', Deposit_Fee: '', Deposit_Applied_Bill: '', Deposit_Applied_Date: '',
   });
   return json({ success: true, wo_id: woId, qb_note: qbNote });
 }
@@ -14160,8 +14655,8 @@ async function scheduleWO(env, body) {
   if (property && owner?.Phone) {
     const notify = await shouldNotifyOwner(env, wo, 'Scheduled');
     if (notify) {
-      const dateStr = new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
-      const ownerMsg = `Hi ${owner.First_Name}, work order ${body.wo_id} — ${woJobLabel(wo)} at ${propUnitText(property, unit)} — is scheduled for ${dateStr}, ${body.window}, subject to change. Ref: ${body.wo_id}.`;
+      const dateStr = new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
+      const ownerMsg = `Hi ${owner.First_Name}, ${body.wo_id} (${woJobLabel(wo)}) at ${propUnitText(property, unit)} is scheduled for ${dateStr}, ${body.window}, subject to change.`;   // D-16: shortened
       const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'owner_job_scheduled', recipient_type: 'owner', owner, property, message_body: ownerMsg });
       ownerSMSSent = r.sent;
       if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
@@ -14244,7 +14739,12 @@ async function processPendingNotifications(env) {
       const rowIndex=rows.indexOf(row);await sheetsRequest(env,'POST',`/values:batchUpdate`,{valueInputOption:'RAW',data:[{range:`${NOTIF_QUEUE_TAB}!${col(iSent)}${rowIndex+2}`,values:[['TRUE']]}]});processed++;
     }
     return json({processed});
-  } catch(e){return json({processed:0,error:e.message});}
+  } catch(e){
+    // D-16: a failure part-way (e.g. the "Sent" mark could not be saved) used to be returned and forgotten, and the same row was texted again next sweep.
+    // The gated texts are now protected by the Message_Queue duplicate check; the failure itself is reported so it is never silent.
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'process_pending_notifications', severity: 'P0', message: 'the deferred-text sweep stopped part-way: ' + String((e && e.message) || e).slice(0, 200) });
+    return json({processed:0,error:e.message});
+  }
 }
 
 // ── Vendor nudge/request system (Sep 14 2026, Brett) ───────────────────────────────────────
@@ -14255,8 +14755,8 @@ async function processPendingNotifications(env) {
 const VENDOR_REQ_TAB = 'Vendor_Requests';
 const VENDOR_REQ_COLS = ['ID','WO_ID','Vendor_ID','Request_Type','Status','Nudge_Count','First_Nudge_At','Next_Nudge_At','Last_Activity_At','Satisfied_Date','Created_Date','Active'];
 const VENDOR_NUDGE_MAX = 5;           // after this many sends with no resolution, flag Brett instead of nudging again
-const VENDOR_NUDGE_REPEAT_HOURS = 24; // status_update: daily, per Brett
-const VENDOR_MANUAL_REPEAT_HOURS = 48; // photos/invoice: Brett didn't specify a cadence for
+const VENDOR_NUDGE_REPEAT_HOURS = 72; // status_update: every 3 days (Oct 23 2026, D-16: was daily; smsGatedSend also enforces one nudge per person per work order per 3 days)
+const VENDOR_MANUAL_REPEAT_HOURS = 72; // photos/invoice: was 48; 3 days to match the cap above. Brett didn't specify a cadence for
   // these two — 2 days is a reasonable middle ground between the daily auto-clock (which
   // exists specifically to chase a QUIET vendor) and a full week; easy to tune if wrong.
 // Satisfied-condition status sets (Sep 16 2026, Brett — replaces the earlier Vendor_Bills-row
@@ -14429,8 +14929,8 @@ async function processVendorNudges(env) {
     if (nudgeCount >= VENDOR_NUDGE_MAX) {
       await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'flagged' });
       const property = properties.find(p => p.ID === wo.Property_ID);
-      const flagMsg = `⚠️ ${vendor.Name||vendor.First_Name||'Vendor'} hasn't responded after ${VENDOR_NUDGE_MAX} reminders on ${row.WO_ID}${property?' at '+property.Address:''} (${row.Request_Type}). May need a personal follow-up.`;
-      if (config.admin_phone) await sendSMS(env, config.admin_phone, flagMsg);
+      const flagMsg = `${vendor.Name||vendor.First_Name||'Vendor'} has not responded after ${VENDOR_NUDGE_MAX} reminders on ${row.WO_ID}${property?' at '+property.Address:''} (${row.Request_Type}). May need a personal follow-up.`;
+      if (config.admin_phone) await smsReportIfFailed(env, 'sms_vendor_nudge_flag', row.WO_ID, await sendSMS(env, config.admin_phone, flagMsg, { context: { wo_id: row.WO_ID, message_type: 'admin_vendor_nudge_flag', recipient_type: 'admin' } }));
       results.push({ id: row.ID, action: 'flagged_to_brett' }); continue;
     }
     const property = properties.find(p => p.ID === wo.Property_ID);
@@ -14443,7 +14943,7 @@ async function processVendorNudges(env) {
       // above already peeled off anything Complete-or-later into an invoice chase instead).
       // Coaching language per Brett (Sep 16 2026): walk the vendor through the actual portal
       // steps we're waiting on, not just a bare "any update?" ask.
-      msg = `Hi ${vname}, checking in on ${row.WO_ID} — ${woJobLabel(wo)} at ${address}. Remember to add the schedule for the job in your portal, and mark it Complete once the work's done — then you'll just need to submit your invoice. ${vendorPortalLink(row.WO_ID)}`;
+      msg = `Hi ${vname}, checking in on ${row.WO_ID}: ${woJobLabel(wo)} at ${address}. Please add the schedule in your portal, mark it Complete when done, then submit your invoice. ${vendorPortalLink(row.WO_ID)}`;   // D-16: was about 6 pieces, now 2
       msgType = 'vendor_nudge_status'; repeatHours = VENDOR_NUDGE_REPEAT_HOURS;
     } else if (row.Request_Type === 'photos') {
       msg = `Hi ${vname}, following up — could you upload before/after photos for ${row.WO_ID} at ${address}? ${vendorPortalLink(row.WO_ID)}`;
@@ -14456,6 +14956,10 @@ async function processVendorNudges(env) {
     // Same dispatched-vs-sent distinction as createVendorRequest above — a quiet-hours hold
     // still counts and still advances the timer, since the message IS queued to go out.
     const dispatched = r.sent || r.held_for_quiet_hours;
+    // D-16 (Oct 23 2026): a nudge to the account owner's own number is never sent, so its clock is closed, not re-armed every day. A nudge held back by the
+    // 3-day cap is pushed to the moment it is next allowed (no count used). Both were logged to SMS_Logs by smsGatedSend.
+    if (r.suppress_reason === 'own_number') { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Status: 'cancelled' }); results.push({ id: row.ID, action: 'cancelled_own_number' }); continue; }
+    if (r.suppress_reason === 'nudge_cap' && r.next_allowed_at) { await updateRow(env, VENDOR_REQ_TAB, row.ID, { Next_Nudge_At: r.next_allowed_at }); results.push({ id: row.ID, action: 'nudge_capped', next_allowed_at: r.next_allowed_at }); continue; }
     await updateRow(env, VENDOR_REQ_TAB, row.ID, {
       Nudge_Count: String(nudgeCount + (dispatched ? 1 : 0)),
       Next_Nudge_At: new Date(now.getTime() + repeatHours*3600000).toISOString(),
@@ -14682,31 +15186,291 @@ async function handleInboundSMS(env, request) {
   return twilioResponse(`Message received. Your coordinator will follow up.`);
 }
 
-// Raw Twilio transport — no gating, sends if credentials are present. Only ever called by
+// ========== SMS COST CONTROL (D-16, Oct 23 2026) ==========
+// Twilio bills a text in 70-character pieces (67 once it needs more than one) if it holds ANY character outside the GSM-7 set (em dash, curly
+// quote, ellipsis character, bullet, most accented letters, emoji), versus 160 (153) per piece for plain text. One central sanitizer
+// (smsSanitize, run in smsGatedSend before the queue write AND again in sendSMSRaw as the net) keeps every outbound text plain. Spanish
+// vendor texts keep their accents (stripping a/n changes meaning) but still get plain dashes, quotes and dots. smsEstimate says how many
+// pieces a text will bill as; it is used in the SMS_Logs row and in the tests. Marker for deploy checks: sms-cost-d16-2026-10-23.
+const SMS_COST_D16_MARKER = 'sms-cost-d16-2026-10-23';
+const SMS_GSM7_BASIC = "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
+const SMS_GSM7_EXT = "^{}\\[~]|€\f";
+const SMS_GSM_SET = new Set(Array.from(SMS_GSM7_BASIC));
+const SMS_GSM_EXT_SET = new Set(Array.from(SMS_GSM7_EXT));
+// Pure. How will Twilio bill this text? { encoding:'GSM-7'|'UCS-2', units, pieces, non_gsm:[chars that force UCS-2] }.
+function smsEstimate(text) {
+  const s = String(text == null ? '' : text);
+  let gsm = true, units = 0; const bad = [];
+  for (const ch of s) {
+    if (SMS_GSM_SET.has(ch)) units += 1;
+    else if (SMS_GSM_EXT_SET.has(ch)) units += 2;
+    else { gsm = false; if (bad.length < 12 && bad.indexOf(ch) < 0) bad.push(ch); }
+  }
+  if (gsm) return { encoding: 'GSM-7', units, pieces: units === 0 ? 0 : (units <= 160 ? 1 : Math.ceil(units / 153)), non_gsm: [] };
+  const u = s.length;   // UTF-16 code units: an emoji counts 2, exactly as Twilio counts it
+  return { encoding: 'UCS-2', units: u, pieces: u <= 70 ? 1 : Math.ceil(u / 67), non_gsm: bad };
+}
+// Punctuation and symbols that have a safe plain equivalent. '' = drop.
+const SMS_CHAR_MAP = {
+  '—': '-', '–': '-', '‒': '-', '―': '-', '−': '-', '‐': '-', '‑': '-',
+  '‘': "'", '’': "'", '‚': "'", '‛': "'", '′': "'", '`': "'", '´': "'",
+  '“': '"', '”': '"', '„': '"', '‟': '"', '″': '"', '«': '"', '»': '"',
+  '…': '...',
+  ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', ' ': ' ', '　': ' ',
+  '•': '-', '·': '-', '●': '-', '◦': '-', '▪': '-', '‣': '-', '⁃': '-', '∙': '-',
+  '×': 'x', '÷': '/', '±': '+/-', '°': 'deg', '™': 'TM', '©': '(c)', '®': '(R)', '№': 'No.',
+  '½': '1/2', '¼': '1/4', '¾': '3/4', '→': '->', '←': '<-', '✓': '', '✔': '', '✅': '', '❌': '', '✖': '',
+  '⚠': 'WARNING:', '🔴': 'ALERT:',
+};
+// Dropped outright: zero-width characters, variation selectors, soft hyphen, emoji and pictographs.
+const SMS_DROP_RE = /[​-‍﻿⁠­︀-️⃣]|\p{Extended_Pictographic}|[\u{1F3FB}-\u{1F3FF}]|[\u{1F1E6}-\u{1F1FF}]/u;
+const SMS_LATIN_ACCENT_RE = /[À-ɏḀ-ỿ]/;
+const SMS_LETTER_SPECIAL = { 'œ': 'oe', 'Œ': 'OE', 'ł': 'l', 'Ł': 'L', 'đ': 'd', 'Đ': 'D', 'ð': 'd', 'Ð': 'D', 'þ': 'th', 'Þ': 'Th', 'ı': 'i', 'ħ': 'h' };
+// Pure. Plain unaccented form of an accented Latin letter, or '' when there is no safe one.
+function smsBaseLetter(ch) {
+  if (SMS_LETTER_SPECIAL[ch]) return SMS_LETTER_SPECIAL[ch];
+  const n = ch.normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return (n !== ch && /^[\x20-\x7E]+$/.test(n)) ? n : '';
+}
+// Pure. { text, changed, unmapped:[chars with no safe plain form, left alone], before, after } (before/after = smsEstimate).
+// Only characters OUTSIDE GSM-7 are touched, so a name with an e-acute (which GSM-7 has) is never altered.
+// opts.keepAccents (Spanish vendor texts): Latin letters keep their accents; everything else is still normalised.
+function smsSanitize(text, opts) {
+  const keepAccents = !!(opts && opts.keepAccents);
+  const before = String(text == null ? '' : text);
+  let out = ''; const unmapped = [];
+  for (const ch of before) {
+    if (SMS_GSM_SET.has(ch) || SMS_GSM_EXT_SET.has(ch)) { out += ch; continue; }
+    if (Object.prototype.hasOwnProperty.call(SMS_CHAR_MAP, ch)) { out += SMS_CHAR_MAP[ch]; continue; }
+    if (SMS_DROP_RE.test(ch)) continue;
+    if (SMS_LATIN_ACCENT_RE.test(ch)) {
+      if (keepAccents) { out += ch; continue; }
+      const b = smsBaseLetter(ch);
+      if (b) { out += b; continue; }
+    }
+    out += ch; if (unmapped.length < 12 && unmapped.indexOf(ch) < 0) unmapped.push(ch);   // e.g. Chinese or Arabic: no safe plain form, sent as written
+  }
+  out = out.replace(/[ \t]{2,}/g, ' ').replace(/^[ \t]+|[ \t]+$/g, '');
+  return { text: out, changed: out !== before, unmapped, before: smsEstimate(before), after: smsEstimate(out) };
+}
+const smsSanitizeText = (text, opts) => smsSanitize(text, opts).text;
+
+// -- Where a text may go (Oct 23 2026, D-16 item 6). Brett enabled US, Canada, Puerto Rico and the US Virgin Islands in Twilio Geo Permissions. --
+// +1 numbers are allowed EXCEPT the area codes of other Caribbean countries (they are a different country to Twilio). Anything not +1 is refused.
+const SMS_FOREIGN_NANP_AREAS = ['242', '246', '264', '268', '284', '345', '441', '473', '649', '658', '664', '721', '758', '767', '784', '809', '829', '849', '868', '869', '876'];
+// Pure. { ok:true } or { ok:false, reason, last4 }. `phone` is E.164 (normalizePhone output).
+function smsDestinationCheck(phone) {
+  const p = String(phone == null ? '' : phone).trim();
+  const last4 = p.replace(/\D/g, '').slice(-4);
+  if (!/^\+1\d{10}$/.test(p)) return { ok: false, last4, reason: /^\+1/.test(p) ? 'not a 10-digit US/Canada/PR/USVI number' : 'not a +1 number (outside the regions enabled in Twilio)' };
+  if (SMS_FOREIGN_NANP_AREAS.indexOf(p.slice(2, 5)) >= 0) return { ok: false, last4, reason: 'area code ' + p.slice(2, 5) + ' is another Caribbean country, not enabled in Twilio' };
+  return { ok: true, last4 };
+}
+// Twilio errors that will never succeed on a retry. 21408 (region) is permanent only until Geo Permissions change, so it is never remembered.
+const SMS_PERMANENT_ERRORS = {
+  21408: 'Twilio is not allowed to text that region (Geo Permissions)',
+  21211: 'that is not a valid phone number',
+  21614: 'that is not a valid mobile number',
+  21610: 'the person replied STOP and opted out',
+  21612: 'Twilio cannot route a text to that number',
+  30003: 'the handset is unreachable',
+  30005: 'unknown destination handset',
+  30006: 'that is a landline or an unreachable carrier',
+};
+const SMS_NEVER_REMEMBER_CODES = [21408, 21610];   // fixed by a settings change / the person texting START: do not block future sends because of them
+// The ONLY codes that may stop a later text to the same number: the number itself is wrong (invalid / not a mobile). Temporary trouble (30003 handset off,
+// 30005, 30006, 21612) never blocks a later text - the phone may simply have been off. Each block is logged to the failure ledger (P2), not only SMS_Logs.
+const SMS_KNOWN_BAD_CODES = [21211, 21614];
+// Pure. Any phone number inside a piece of Twilio error text becomes ***<last 4 digits>. Twilio echoes the To number in some errors (21608 and others);
+// nothing stored or logged (Message_Queue Error_Reason, SMS_Logs Note, the failure ledger) may carry a full number.
+function smsMaskPhones(s) {
+  const mask = (m) => '***' + m.replace(/\D/g, '').slice(-4);
+  return String(s == null ? '' : s)
+    .replace(/(?<![A-Za-z0-9])\+\d[\d\s().-]{6,}\d(?![A-Za-z0-9])/g, mask)
+    .replace(/(?<![A-Za-z0-9*])\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?![A-Za-z0-9])/g, mask)
+    .replace(/(?<![A-Za-z0-9*])\d{10,}(?![A-Za-z0-9])/g, mask);
+}
+// Pure. { code, permanent, reason } from a Twilio send response (or '' code when it was a success).
+function smsErrorInfo(r) {
+  const raw = r && (r.code != null ? r.code : r.error_code);
+  const code = raw == null || raw === '' ? 0 : parseInt(raw, 10) || 0;
+  if (!code) return { code: 0, permanent: false, reason: '' };
+  return { code, permanent: Object.prototype.hasOwnProperty.call(SMS_PERMANENT_ERRORS, code), reason: SMS_PERMANENT_ERRORS[code] || smsMaskPhones(String((r && r.message) || 'Twilio error ' + code)).slice(0, 160) };
+}
+
+// -- Never send the same text twice (D-16 item 4). Per-isolate memory + the Message_Queue rows smsGatedSend already reads. --
+const SMS_DEDUPE_WINDOW_MS = 10 * 60000;
+const __smsRecent = new Map();   // "<to>|<hash>" -> ms it was sent (or started)
+function smsHash(s) { let h = 2166136261; const t = String(s); for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; } return h.toString(36) + ':' + t.length; }
+function smsDedupeKey(to, body) { return String(to) + '|' + smsHash(body); }
+// Pure over the map. { dup, ageMs }.
+function smsDedupeCheck(map, key, nowMs, windowMs) {
+  const at = map.get(key);
+  if (at != null && nowMs - at < windowMs) return { dup: true, ageMs: nowMs - at };
+  return { dup: false, ageMs: 0 };
+}
+function smsDedupeRemember(map, key, nowMs, windowMs) {
+  map.set(key, nowMs);
+  if (map.size > 300) for (const [k, t] of map) if (nowMs - t >= (windowMs || SMS_DEDUPE_WINDOW_MS)) map.delete(k);
+}
+// Pure. Is there already a row in Message_Queue for this exact text to this number that is sent, sending, or waiting to go? `rows` = array of
+// objects; `selfRow` = a sheet row number to ignore (our own). A held (Send_After) pending row counts at any age; everything else within windowMs.
+// With opts.earlierThanRow, only rows ABOVE that sheet row count (the earlier row wins a race, so two racers never both stand down).
+function mqFindDuplicate(rows, o) {
+  const nowMs = o.nowMs, win = o.windowMs || SMS_DEDUPE_WINDOW_MS;
+  for (let i = 0; i < (rows || []).length; i++) {
+    const r = rows[i], sheetRow = i + 2;
+    if (o.selfRow && sheetRow === o.selfRow) continue;
+    if (o.earlierThanRow && sheetRow >= o.earlierThanRow) continue;
+    if (String(r.Active == null ? 'TRUE' : r.Active).toUpperCase() === 'FALSE') continue;
+    if (normalizePhone(r.Recipient_Phone) !== o.phone || String(r.Message_Body || '') !== o.body) continue;
+    const st = String(r.Status || '').toLowerCase();
+    if (st === 'sent' || st === 'sending') { const t = Date.parse(r.Sent_Date || r.Created_Date || ''); if (isFinite(t) && nowMs - t < win) return { id: r.ID, status: st, sheetRow }; continue; }
+    if (st === 'pending') {
+      if (r.Send_After) return { id: r.ID, status: 'held', sheetRow };
+      const t = Date.parse(r.Created_Date || ''); if (isFinite(t) && nowMs - t < win) return { id: r.ID, status: 'pending', sheetRow };
+    }
+  }
+  return null;
+}
+// Pure. Automatic nudges: has this number already been nudged about this work order (any nudge type) inside gapMs? { at, id } or null.
+function mqFindRecentNudge(rows, o) {
+  let best = null;
+  for (const r of rows || []) {
+    if (String(r.Message_Type || '').indexOf(o.family) !== 0 || String(r.WO_ID || '') !== o.woId) continue;
+    if (normalizePhone(r.Recipient_Phone) !== o.phone) continue;
+    const st = String(r.Status || '').toLowerCase();
+    if (st !== 'sent' && st !== 'sending' && !(st === 'pending')) continue;
+    const t = Date.parse(r.Sent_Date || r.Created_Date || '');
+    if (!isFinite(t) || o.nowMs - t >= o.gapMs) continue;
+    if (!best || t > best.at) best = { at: t, id: r.ID };
+  }
+  return best;
+}
+// Pure. Has this number already been refused as invalid / not a mobile (21211, 21614 ONLY) recently? { code, id } or null. Region, opt-out and every temporary code never count.
+function mqFindKnownBad(rows, o) {
+  for (const r of rows || []) {
+    if (String(r.Status || '').toLowerCase() !== 'failed') continue;
+    const code = parseInt(r.Error_Code, 10) || 0;
+    if (!code || SMS_KNOWN_BAD_CODES.indexOf(code) < 0) continue;
+    if (normalizePhone(r.Recipient_Phone) !== o.phone) continue;
+    const t = Date.parse(r.Created_Date || '');
+    if (isFinite(t) && o.nowMs - t < o.windowMs) return { code, id: r.ID };
+  }
+  return null;
+}
+
+// -- SMS_Logs: one row per real send / refusal, with what Twilio billed (D-16 item 5) --
+const SMS_LOG_TAB = 'SMS_Logs';
+const SMS_LOG_BASE_COLS = ['ID', 'WO_ID', 'Recipient_Type', 'Recipient_ID', 'Phone', 'Message', 'Sent_Date', 'Status', 'Twilio_SID'];
+const SMS_LOG_COST_COLS = ['Segments', 'Est_Segments', 'Encoding', 'Chars', 'Price', 'Price_Unit', 'Message_Type', 'Queue_ID', 'Log_Source', 'Error_Code', 'Note'];
+let __smsLogHeaders = null;   // { at, headers } per isolate: no per-send read
+async function smsLogHeaders(env) {
+  const now = Date.now();
+  if (__smsLogHeaders && now - __smsLogHeaders.at < COLS_OK_MS) return __smsLogHeaders.headers;
+  const want = SMS_LOG_BASE_COLS.concat(SMS_LOG_COST_COLS);
+  try { await ensureColumns(env, SMS_LOG_TAB, want); }
+  catch (e) { if (!isMissingTabError(e)) throw e; await ensureTab(env, SMS_LOG_TAB, want); }   // a brand-new sheet (staging) only; the live tab exists, so it is never created over
+  const h = (((await sheetsRequest(env, 'GET', `/values/${SMS_LOG_TAB}!1:1`)).values || [])[0]) || [];
+  if (!h.length) throw new Error('SMS_Logs has no header row');
+  __smsLogHeaders = { at: now, headers: h };
+  return h;
+}
+let __smsLogSeq = 0;
+// Appends one SMS_Logs row. WRITE ONLY (headers cached per isolate). Never throws: returns { ok } or { ok:false, error }.
+async function smsLogAppend(env, rec) {
+  try {
+    const headers = await smsLogHeaders(env);
+    const row = Object.assign({ ID: 'T' + Date.now().toString(36) + (++__smsLogSeq).toString(36), Sent_Date: new Date().toISOString(), Log_Source: 'transport' }, rec);
+    const resp = await sheetsRequest(env, 'POST', `/values/${SMS_LOG_TAB}:append?valueInputOption=RAW`, { values: [headers.map(h => row[h] == null ? '' : String(row[h]).slice(0, 2000))] });
+    if (!resp || !resp.updates) return { ok: false, error: 'append gave no confirmation' };
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String((e && e.message) || e).slice(0, 300) }; }
+}
+// Logs and, if the log write itself fails, reports it to the failure ledger (never silent). Never throws.
+async function smsLogRecord(env, rec) {
+  if (rec && rec.Note) rec = Object.assign({}, rec, { Note: smsMaskPhones(rec.Note) });   // defence in depth: no full number in a log note, whatever the caller passed
+  const r = await smsLogAppend(env, rec);
+  if (!r.ok) await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_log_write', ref: String(rec.Message_Type || rec.Log_Source || ''), message: 'could not write an SMS_Logs row (' + String(rec.Status || '') + '): ' + r.error, severity: 'P1' });
+  return r;
+}
+// The refusal for a destination outside the enabled regions: ONE calm P2 ledger row, the row id and the LAST FOUR digits only.
+async function smsReportRegionBlocked(env, rowId, check) {
+  return reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_destination_region', ref: rowId ? 'Message_Queue ' + rowId : '', severity: 'P2',
+    message: 'text not sent: destination outside enabled regions (' + (rowId ? 'Message_Queue row ' + rowId : 'no queue row') + ', number ending ' + check.last4 + ')', context: { reason: check.reason } });
+}
+
+// Raw Twilio transport - no gating, sends if credentials are present. Only ever called by
 // (a) sendSMS below, once the global kill switch has already been checked, and (b)
-// smsGatedSend, which has already run the full four/two-layer gate + Test Mode redirect.
-// Never call this directly from a new call site — call sendSMS (legacy/ungated sites) or
-// smsGatedSend (the 6 TWILIO_SMS_BUILD_BRIEF_v1.0 message types) instead.
+// smsGatedSend / the queue release paths, which have already run the full gate + Test Mode redirect.
+// Never call this directly from a new call site - call sendSMS (legacy/ungated sites) or
+// smsGatedSend (the gated message types) instead.
 // Auth: Twilio accepts Basic auth with EITHER (Account SID : Auth Token) OR (API Key SID :
 // API Key Secret) — Brett's Cloudflare secrets are the API-Key pair (TWILIO_API_SID /
 // TWILIO_API_KEY), not a classic Auth Token (no TWILIO_AUTH var exists), so this uses that
 // pair. The URL path always uses the Account SID (TWILIO_SID) regardless of which credential
-// authenticates the request — that part is unchanged.
-async function sendSMSRaw(env, to, message) {
+// authenticates the request - that part is unchanged.
+// D-16 (Oct 23 2026): the ONE place every text passes. It (1) makes the text plain (smsSanitize), (2) refuses a destination outside the enabled
+// regions, (3) refuses an identical text to the same number inside 10 minutes (opts.allowRepeat to override on a deliberate resend), (4) sends,
+// (5) reads Twilio's answer (segments, price, error code) and (6) writes one SMS_Logs row. opts: { keepAccents, allowRepeat, context:{wo_id,
+// message_type, recipient_type, queue_id} }. Result = Twilio's JSON (sid on success), or { skipped, duplicate|region_blocked, reason }.
+async function sendSMSRaw(env, to, message, opts) {
+  opts = opts || {};
+  const ctx = opts.context || {};
   to = normalizePhone(to);
   if (!to) return { error: 'No phone number' };
+  const san = smsSanitize(message, { keepAccents: opts.keepAccents === true });
+  message = san.text;
+  const est = san.after;
+  const redact = opts.redact === true || /^pin_/.test(String(ctx.message_type || ''));   // a text that carries a login PIN is never copied into the log
+  const logBase = { WO_ID: ctx.wo_id || '', Recipient_Type: ctx.recipient_type || '', Phone: to, Message: redact ? '[text not copied here: it contains a login PIN]' : message, Est_Segments: est.pieces, Encoding: est.encoding, Chars: est.units, Message_Type: ctx.message_type || '', Queue_ID: ctx.queue_id || '' };
+  const dest = smsDestinationCheck(to);
+  if (!dest.ok) {
+    if (!ctx.queue_id) await smsReportRegionBlocked(env, '', dest);   // a queue-backed send reports with its row id from smsGatedSend
+    await smsLogRecord(env, Object.assign({}, logBase, { Phone: '***' + dest.last4, Message: '[not sent] ' + message.slice(0, 40), Status: 'blocked_region', Note: dest.reason }));
+    return { skipped: true, region_blocked: true, reason: 'text not sent: destination outside enabled regions (' + dest.reason + ')' };
+  }
+  const key = smsDedupeKey(to, message), nowMs = Date.now();
+  if (!opts.allowRepeat) {
+    const d = smsDedupeCheck(__smsRecent, key, nowMs, SMS_DEDUPE_WINDOW_MS);
+    if (d.dup) {
+      await smsLogRecord(env, Object.assign({}, logBase, { Status: 'suppressed_duplicate', Note: 'the same text to this number went out ' + Math.round(d.ageMs / 1000) + 's ago (10-minute guard)' }));
+      return { skipped: true, duplicate: true, reason: 'the same text to the same number was already sent ' + Math.round(d.ageMs / 1000) + 's ago' };
+    }
+  }
+  smsDedupeRemember(__smsRecent, key, nowMs);   // marked BEFORE the call, so a second caller in the same isolate cannot slip in while Twilio is answering
   if (env.__STAGING__ ?? isStaging(env)) {
     console.log(`🧪 STAGING — SMS stubbed (not sent via Twilio) → ${to}: ${message}`);
-    return { staged: true, would_have: { to, message }, note: '🧪 STAGING MODE — logged only, no real SMS sent.' };
+    await smsLogRecord(env, Object.assign({}, logBase, { Status: 'staged', Segments: est.pieces, Note: 'staging stub: pieces are our estimate' }));
+    return { staged: true, would_have: { to, message }, segments_est: est.pieces, encoding: est.encoding, note: '🧪 STAGING MODE — logged only, no real SMS sent.' };
   }
-  if (!env.TWILIO_SID || !env.TWILIO_API_SID || !env.TWILIO_API_KEY || !env.TWILIO_FROM)
+  if (!env.TWILIO_SID || !env.TWILIO_API_SID || !env.TWILIO_API_KEY || !env.TWILIO_FROM) {
+    __smsRecent.delete(key);
     return { error: 'Twilio not configured (missing TWILIO_SID/TWILIO_API_SID/TWILIO_API_KEY/TWILIO_FROM)' };
-  const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json`, {
-    method: 'POST',
-    headers: { 'Authorization': 'Basic ' + btoa(`${env.TWILIO_API_SID}:${env.TWILIO_API_KEY}`), 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ From: env.TWILIO_FROM, To: to, Body: message }).toString(),
-  });
-  return resp.json();
+  }
+  let resp, j;
+  try {
+    resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_SID}/Messages.json`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Basic ' + btoa(`${env.TWILIO_API_SID}:${env.TWILIO_API_KEY}`), 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ From: env.TWILIO_FROM, To: to, Body: message }).toString(),
+    });
+    j = await resp.json();
+  } catch (e) {
+    __smsRecent.delete(key);   // no answer from Twilio: a deliberate retry must be possible
+    await smsLogRecord(env, Object.assign({}, logBase, { Status: 'failed', Note: 'no usable answer from Twilio: ' + smsMaskPhones(String((e && e.message) || e)).slice(0, 200) }));
+    throw e;
+  }
+  const ok = !!(resp.ok && j && j.sid);
+  if (!ok && j && typeof j === 'object') { if (j.message) j.message = smsMaskPhones(j.message); if (j.error && typeof j.error === 'string') j.error = smsMaskPhones(j.error); }   // Twilio may echo the To number in an error: only the last 4 digits travel on
+  if (!ok) __smsRecent.delete(key);   // Twilio refused it: nothing went out, a later fix-and-resend is allowed
+  const einfo = smsErrorInfo(j);
+  await smsLogRecord(env, Object.assign({}, logBase, {
+    Status: ok ? 'sent' : 'failed', Twilio_SID: (j && j.sid) || '',
+    Segments: ok && j.num_segments != null ? j.num_segments : '', Price: ok && j.price != null ? j.price : '', Price_Unit: ok && j.price_unit ? j.price_unit : '',
+    Error_Code: einfo.code || '', Note: ok ? (j.num_segments != null && String(j.num_segments) !== String(est.pieces) ? 'Twilio billed ' + j.num_segments + ' piece(s), we estimated ' + est.pieces : '') : (einfo.reason || String((j && j.message) || 'HTTP ' + resp.status)).slice(0, 200),
+  }));
+  return j;
 }
 
 // sendSMS — the long-standing chokepoint every pre-existing call site in this file already
@@ -14721,11 +15485,16 @@ async function sendSMSRaw(env, to, message) {
 // own stated intent (kept off until he's run live tests) at the one place that can enforce it
 // for every SMS in the codebase, not just the 6 new ones. TWILIO_ENABLED defaults OFF (missing
 // Config key reads as '', which is !== 'TRUE'), so nothing sends anywhere until Brett flips it.
-async function sendSMS(env, to, message) {
+async function sendSMS(env, to, message, opts) {
   let cfg;
   try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; }
   if (String(cfg.TWILIO_ENABLED || '').toUpperCase() !== 'TRUE') return { skipped: true, reason: 'TWILIO_ENABLED not TRUE' };
-  return sendSMSRaw(env, to, message);
+  // D-16: the 10-minute identical-text guard protects people (tenants, vendors, owners) from a double send. A text to Brett himself (admin alerts, admin-notify,
+  // door / cabin / inspection alerts, failure alerts, the digest) is NEVER held back by it: a repeat alert must always reach him.
+  const _toNorm = normalizePhone(to);
+  const _alertToBrett = !!_toNorm && (smsIsOwnNumber(_toNorm, cfg, null) || (!!cfg.digest_sms_to && normalizePhone(cfg.digest_sms_to) === _toNorm));
+  if (_alertToBrett && !(opts && opts.allowRepeat)) opts = Object.assign({}, opts || {}, { allowRepeat: true });
+  return sendSMSRaw(env, to, message, opts);   // opts (D-16): { allowRepeat, keepAccents, context } - see sendSMSRaw
 }
 
 // ── POST /admin-notify (Oct 12 2026) — narrow server-to-server "text Brett" endpoint ─────────────
@@ -14830,7 +15599,7 @@ async function adminNotify(env, body) {
   } catch (e) { const m = scrubPhones((e && e.message) || e).slice(0, 200); return done(500, false, { ok: false, error: 'could not record daily cap counter, NOT sent: ' + m }, `FAILED cap_write ${meta}: ${m}`); }
 
   let r;
-  try { r = await sendSMS(env, phone, v.text); }
+  try { r = await sendSMS(env, phone, v.text, { allowRepeat: true, context: { message_type: 'admin_notify', recipient_type: 'admin' } }); }   // an alert to Brett is never held back as a repeat
   catch (e) { const m = scrubPhones((e && e.message) || e).slice(0, 200); return done(502, false, { ok: false, error: 'SMS send threw: ' + m }, `FAILED send_threw ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}: ${m}`); }
   if (r && r.skipped) return done(200, true, { ok: true, sent: false, skipped: true, reason: String(r.reason || 'sending is disabled') }, `skipped (${scrubPhones(r.reason)}) ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}`);
   if (r && r.staged) return done(200, true, { ok: true, sent: true, staged: true, note: 'staging stub - logged only, no real SMS' }, `sent (STAGING stub) ${meta} cap=${used + 1}/${ADMIN_NOTIFY_DAILY_CAP}`);
@@ -14872,7 +15641,7 @@ const DOOR_WD_URL = 'https://str-automation.brett-2f8.workers.dev/health';
 const DOOR_WD_TIMEOUT_MS = 8000;
 const DOOR_WD_SMS_TIMEOUT_MS = 20000;   // Oct 21 2026: deadline for the alert text itself (see runDoorWatchdogPass)
 const DOOR_WD_STALE_MS = 75 * 60000;
-const DOOR_WD_DEDUPE_MS = 6 * 3600000;
+const DOOR_WD_DEDUPE_MS = 24 * 3600000;   // Oct 23 2026 (D-16): one text per problem key per 24 hours (was 6 hours: lock_set texted every 6h since Oct 17). A changed key or a recovery still sends at once.
 const DOOR_WD_ABSENT_GRACE_MS = 24 * 3600000;
 const DOOR_WD_STATE_KEY = 'door_watchdog_state';
 const DOOR_WD_JOB = 'door_watchdog';
@@ -15091,6 +15860,16 @@ async function runDoorWatchdogPass(env, opts) {
   const ev = evaluateDoorHealth(fr, nowMs, { absentSinceMs: absentMs });
   const decision = doorWdDecide(ev, state, nowMs);
   res.healthy = ev.healthy; res.reason_key = ev.key; res.reasons = ev.reasons; res.action = decision;
+  // D-16: every alert attempt and every suppressed repeat is written to SMS_Logs (a row each), so a text that was NOT sent is as visible as one that was.
+  const logSms = async (status, note, text) => {
+    const rec = { Recipient_Type: 'admin', Phone: 'admin', Message: String(text || '').slice(0, 300), Status: status, Message_Type: 'door_watchdog', Log_Source: 'door_watchdog', Note: String(note || '').slice(0, 300) };
+    try { const lr = await (io.logSms ? io.logSms(rec) : smsLogRecord(env, rec)); if (lr && lr.ok === false) fail('sms_log', lr.error || 'log write failed'); }
+    catch (e) { fail('sms_log', e); }
+  };
+  if (decision === 'suppressed') {
+    const lastIso = state.sent && state.sent[ev.key];
+    await logSms('alert_suppressed_24h', 'key=' + ev.key + '; the same problem was already texted ' + (lastIso ? doorWdAge(nowMs - Date.parse(lastIso)) + ' ago' : 'inside the last 24h') + '; next text allowed after 24h or when the problem changes', doorWdComposeAlert(ev.reasons));
+  }
 
   // 4. deliver
   let delivered = null;
@@ -15108,7 +15887,7 @@ async function runDoorWatchdogPass(env, opts) {
         const smsWait = (io && io.smsTimeoutMs) || DOOR_WD_SMS_TIMEOUT_MS; let smsTimer;
         const smsTimeout = new Promise((_, rej) => { smsTimer = setTimeout(() => rej(new Error('text message did not finish within ' + Math.round(smsWait / 1000) + 's')), smsWait); });
         let r;
-        try { r = await Promise.race([io.sendSms ? io.sendSms(phone, text) : sendSMS(env, phone, text), smsTimeout]); } finally { clearTimeout(smsTimer); }
+        try { r = await Promise.race([io.sendSms ? io.sendSms(phone, text) : sendSMS(env, phone, text, { allowRepeat: true, context: { message_type: 'door_watchdog_' + decision, recipient_type: 'admin' } }), smsTimeout]); } finally { clearTimeout(smsTimer); }
         if (r && r.skipped) smsDetail = 'skipped: ' + scrubPhones(r.reason || 'sending disabled');
         else if (r && r.staged) { smsOk = true; smsOutcome = 'staged'; }
         else if (r && r.sid && !r.error && !r.code) { smsOk = true; smsOutcome = 'sent'; }
@@ -15133,6 +15912,7 @@ async function runDoorWatchdogPass(env, opts) {
     }
     delivered = smsOk || emailOk;
     res.delivered = delivered;
+    await logSms(decision === 'alert' ? 'alert_attempted' : 'recovery_attempted', 'key=' + ev.key + '; sms=' + (smsOk ? smsOutcome : 'failed: ' + smsDetail) + (smsOk ? '' : '; email=' + (emailOk ? 'sent' : 'failed')) + '; delivered=' + (delivered ? 'yes' : 'NO'), text);
     if (!delivered) {
       fail('delivery', 'neither SMS nor email delivered the ' + decision + '; it will be retried next pass');
       await tel(false, 'delivery_failed_' + decision, 'key=' + ev.key + ' - no channel delivered; retrying next pass');
@@ -15257,7 +16037,8 @@ async function doorWatchdogTest(env, url, body) {
 // the durable review trail, not just a "while Global is off" log. Self-provisions like
 // Ops_Telemetry (ensureTab once per isolate + ensureColumns on every write, FL rule 37).
 const MSG_QUEUE_TAB = 'Message_Queue';
-const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active','Send_After','Original_Body','Translated_To','Skip_If_Seen'];
+// Error_Code / Error_Reason were added Oct 23 2026 (D-16 item 6), at the END; ensureColumns adds them to the live tab.
+const MSG_QUEUE_COLS = ['ID','WO_ID','Message_Type','Recipient_Type','Recipient_Name','Recipient_Phone','Property_ID','Property_Address','Message_Body','Status','Delivered_To','Gate_Snapshot','Created_Date','Sent_Date','Twilio_Message_SID','Active','Send_After','Original_Body','Translated_To','Skip_If_Seen','Error_Code','Error_Reason'];
 const SMS_TOGGLE_TABS = ['Properties','Owners','Tenants','Vendors'];
 let _msgQueueTabReady = false, _smsTogglesReady = false;
 
@@ -15292,11 +16073,11 @@ const DEFAULT_MESSAGE_TEMPLATES = [
   { Message_Type: 'pin_owner', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}! This is {AssistantName} with Ridge Co (outbound-only line for now - texting back won't reach us yet). Your owner portal's ready: {PortalUrl} PIN: {PIN}. Log in to check on your work orders, submit requests, and manage your notification settings." },
   { Message_Type: 'tenant_welcome', Channel: 'sms', Subject: '', Body:
-    "Hi {FirstName}, this is {AssistantName} with Ridge Co Property Maintenance - we handle maintenance on behalf of {Owner} at {Address}. Save this number (outbound-only for now, so a text back won't reach anyone yet) - we'll only text about maintenance here, never marketing." },
+    "Hi {FirstName}, this is {AssistantName} with Ridge Co Property Maintenance. We handle maintenance for {Owner} at {Address}. Please save this number; we only text about maintenance." },
   { Message_Type: 'vendor_welcome', Channel: 'sms', Subject: '', Body:
     "Hi {FirstName}, it's {AssistantName} with Ridge Co. Save this number - you'll get job details by text whenever we assign you work, plus a link to your vendor portal ({PortalUrl}) to accept jobs, log time, and submit invoices. (This line is outbound-only for now - a text back won't reach anyone yet.)" },
   { Message_Type: 'property_notice', Channel: 'sms', Subject: '', Body:
-    "This is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}, with an update about {Address}: [describe the issue here] (This line is outbound-only for now - a reply won't reach us.)" },
+    "{AssistantName} with Ridge Co, for {Owner}: update about {Address}. [describe the issue here] (Replies are not read.)" },
   // Estimate / proposal notifications (Sep 28 2026, FEATURE_LOG rule 201). Editable in Message_Templates.
   // Vendor texts deliberately contain NO dollar amounts. {Job} is "work order WO-1234" or "proposal #7".
   { Message_Type: 'admin_estimate_new', Channel: 'sms', Subject: '', Body:
@@ -15486,6 +16267,40 @@ function tenantForQueuedText(tenants, phone, propertyId) {
   return m.find(t => !tenantMovedOut(t)) || m[0] || null;
 }
 
+// Pure. Message_Queue values grid (header row first) -> array of row objects. Index i is sheet row i + 2.
+function mqRowsToObjects(values) {
+  const v = values || [], h = v[0] || [];
+  return v.slice(1).map(r => { const o = {}; h.forEach((k, i) => { o[k] = r && r[i] != null ? r[i] : ''; }); return o; });
+}
+// Pure. Is `phone` Brett's own? Config admin_phone is the account owner's number; a Vendors row with In_House = TRUE is Brett himself.
+function smsIsOwnNumber(phone, cfg, vendor) {
+  const p = normalizePhone(phone);
+  if (!p) return false;
+  if (cfg && cfg.admin_phone && normalizePhone(cfg.admin_phone) === p) return true;
+  return !!vendor && String(vendor.In_House || '').toUpperCase() === 'TRUE';
+}
+const SMS_NUDGE_MIN_GAP_MS = 72 * 3600000;        // Brett, Oct 23 2026: at most one automatic nudge per person per work order every 3 days
+const SMS_KNOWN_BAD_WINDOW_MS = 30 * 86400000;    // a number Twilio said is invalid / not a mobile (21211, 21614 only) is not retried for 30 days; every block is a P2 ledger row
+// Pure. What happened to a send, as Message_Queue wants it written: { sent, status, sid, errorCode, reason, duplicate, regionBlocked, permanent }.
+function smsSendOutcome(result) {
+  if (result && result.sid) return { sent: true, status: 'sent', sid: result.sid, errorCode: '', reason: '' };
+  if (result && result.duplicate) return { sent: false, status: 'skipped', sid: '', errorCode: '', reason: 'duplicate: ' + (result.reason || 'the same text was already sent'), duplicate: true };
+  if (result && result.region_blocked) return { sent: false, status: 'failed', sid: '', errorCode: 'blocked_region', reason: result.reason || 'text not sent: destination outside enabled regions', regionBlocked: true };
+  if (result && result.staged) return { sent: false, status: 'failed', sid: '', errorCode: '', reason: 'staging stub: nothing was really sent' };
+  const e = smsErrorInfo(result);
+  const why = e.code ? 'Twilio error ' + e.code + ': ' + e.reason + (e.permanent ? ' (final - this text will not be retried)' : '') : smsMaskPhones(String((result && (result.error || result.message)) || 'Twilio gave no message sid')).slice(0, 160);
+  return { sent: false, status: 'failed', sid: '', errorCode: e.code ? String(e.code) : '', reason: why, permanent: e.permanent };
+}
+
+// For the legacy sendSMS call sites that used to ignore Twilio's answer. A text that was switched off (skipped), stubbed (staging), held back as a
+// duplicate or refused for its region is not a failure; anything else without a message sid is reported to the ledger (P0, it is a text). Returns true when it went.
+async function smsReportIfFailed(env, where, ref, r) {
+  if (r && (r.sid || r.staged || r.skipped)) return !!(r && r.sid);
+  const o = smsSendOutcome(r);
+  await reportFailure(env, { system: 'hub', source: 'worker', where: where, ref: ref || '', severity: o.permanent ? 'P2' : 'P0', message: 'a text was not sent: ' + o.reason });
+  return false;
+}
+
 // The one entry point for all 6 TWILIO_SMS_BUILD_BRIEF_v1.0 message types. Always writes a
 // Message_Queue row first (queue-write-first, per the brief's Build Order step 3), regardless
 // of gate outcome — then sends immediately only if every applicable gate is open, redirecting
@@ -15532,6 +16347,11 @@ async function smsGatedSend(env, opts) {
       if (t.translated) { originalBody = t.original; translatedTo = 'es'; messageBody = t.text; }
     } catch (e) { /* fail open: English goes out */ }
   }
+  // D-16 (Oct 23 2026): make the text plain BEFORE it is queued, so the Message_Queue row shows exactly what is sent and Twilio bills 160-character
+  // pieces. A Spanish vendor text keeps its accents (stripping them changes meaning) but still gets plain dashes, quotes and dots.
+  const _spanish = translatedTo === 'es' || (kind === 'vendor' && !!opts.vendor && /^es/i.test(String(opts.vendor.Language || '')));   // a Spanish-language vendor keeps accents even when the body was hand-built in Spanish (already_localized)
+  messageBody = smsSanitizeText(messageBody, { keepAccents: _spanish });
+  if (originalBody) originalBody = smsSanitizeText(originalBody);
   const recipientName = recipient ? (recipient.Name || `${recipient.First_Name || ''} ${recipient.Last_Name || ''}`.trim()) : '';
 
   const now = new Date().toISOString();
@@ -15539,12 +16359,51 @@ async function smsGatedSend(env, opts) {
   const rows = data.values || [];
   const headers = rows[0] && rows[0].length ? rows[0] : MSG_QUEUE_COLS;
   let id = String(nextSafeId(rows));
+  // ── D-16 guards. They use the Message_Queue rows read just above (no extra Sheets read) and run BEFORE the new queue row is written. ──
+  const _nowMs = Date.now();
+  const _qObjs = mqRowsToObjects(rows);
+  const _isNudge = String(opts.message_type || '').indexOf('vendor_nudge_') === 0;
+  const _redirect = opts.redirectTo ? normalizePhone(opts.redirectTo) : '';
+  const _repeatOk = opts.allowRepeat === true || kind === 'admin' || smsIsOwnNumber(recipientPhone, cfg, null);   // an alert to Brett himself is never held back as a repeat
+  if (sendOk && recipientPhone) {
+    let _sup = null;
+    if (_isNudge && smsIsOwnNumber(recipientPhone, cfg, opts.vendor)) _sup = { reason: 'own_number', status: 'suppressed_own_number', note: 'automatic nudge to the account owner\'s own number is never sent' };
+    else if (_isNudge) {
+      const _rn = mqFindRecentNudge(_qObjs, { family: 'vendor_nudge_', woId: opts.wo_id || '', phone: recipientPhone, gapMs: SMS_NUDGE_MIN_GAP_MS, nowMs: _nowMs });
+      if (_rn) _sup = { reason: 'nudge_cap', status: 'suppressed_nudge_cap', next_allowed_at: new Date(_rn.at + SMS_NUDGE_MIN_GAP_MS).toISOString(), note: 'one automatic nudge per person per work order every 3 days; last one is Message_Queue row ' + _rn.id };
+    }
+    if (!_sup && !testMode && !_redirect) {
+      const _kb = mqFindKnownBad(_qObjs, { phone: recipientPhone, nowMs: _nowMs, windowMs: SMS_KNOWN_BAD_WINDOW_MS });
+      if (_kb) _sup = { reason: 'known_undeliverable', status: 'suppressed_known_bad', note: 'Twilio permanently refused this number (error ' + _kb.code + ', Message_Queue row ' + _kb.id + '); not tried again' };
+    }
+    if (!_sup && !_repeatOk) {
+      const _dup = mqFindDuplicate(_qObjs, { phone: recipientPhone, body: messageBody, nowMs: _nowMs });
+      if (_dup) _sup = { reason: 'duplicate', status: 'suppressed_duplicate', note: 'the same text to this number is already ' + _dup.status + ' (Message_Queue row ' + _dup.id + ')' };
+    }
+    if (_sup && _sup.reason === 'known_undeliverable') await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_known_undeliverable', ref: 'phone ending ' + String(recipientPhone).replace(/\D/g, '').slice(-4), severity: 'P2', message: 'a text was not sent: ' + _sup.note + ' (number ending ' + String(recipientPhone).replace(/\D/g, '').slice(-4) + ', ' + (opts.message_type || 'text') + '). Fix the phone number on the record to send again.' });
+    if (_sup) {
+      const _se = smsEstimate(messageBody);
+      await smsLogRecord(env, { WO_ID: opts.wo_id || '', Recipient_Type: kind || '', Phone: recipientPhone, Message: messageBody, Status: _sup.status, Est_Segments: _se.pieces, Encoding: _se.encoding, Chars: _se.units, Message_Type: opts.message_type || '', Log_Source: 'gated', Note: _sup.note });
+      return { queued_id: '', send_ok: sendOk, sent: false, suppressed: true, suppress_reason: _sup.reason, duplicate_suppressed: _sup.reason === 'duplicate', next_allowed_at: _sup.next_allowed_at || '', test_mode: testMode, gate_snapshot: gateSnapshot + ' - not sent: ' + _sup.note, delivered_to: '', recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
+    }
+  }
+  // Will this text go out right now (not held for quiet hours, not blocked)? Then its queue row is born "sending": the durable marker is written BEFORE
+  // the send, so a failed status save afterwards can never leave a sent text looking "pending" and be sent again.
+  const _earlyMorningOk = opts.allowEarlyMorning === true && etHour(new Date()) === 8;
+  const _qw = opts.quietWindow && Number.isFinite(opts.quietWindow.start) && Number.isFinite(opts.quietWindow.end) ? opts.quietWindow : null;
+  let _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
+  let _holdNow = !!(_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk);
+  // opts.holdUntil (Oct 23 2026, delivery tenant request): a caller may hold THIS text to a later batch slot (ISO string). The text is queued exactly like a
+  // quiet-hours hold (Status pending + Send_After) and released by the same sweep, which re-checks every gate at release. It can only delay a text, never advance one.
+  const _batchHold = opts.holdUntil ? new Date(opts.holdUntil) : null;
+  if (_batchHold && !isNaN(_batchHold) && _batchHold > new Date() && (!_holdNow || _batchHold > _holdUntil)) { _holdUntil = _batchHold; _holdNow = true; }
+  const _sendNow = !!(sendOk && recipientPhone && !_holdNow);
   const rowObj = {
     ID: id, WO_ID: opts.wo_id || '', Message_Type: opts.message_type || '',
     Recipient_Type: kind || '', Recipient_Name: recipientName, Recipient_Phone: recipientPhone,
     Property_ID: (opts.property && opts.property.ID) || '',
     Property_Address: opts.property_address || (opts.property && opts.property.Address) || '',
-    Message_Body: messageBody, Status: 'pending', Delivered_To: '', Gate_Snapshot: gateSnapshot,
+    Message_Body: messageBody, Status: _sendNow ? 'sending' : 'pending', Delivered_To: '', Gate_Snapshot: gateSnapshot,
     Created_Date: now, Sent_Date: '', Twilio_Message_SID: '', Active: 'TRUE', Send_After: '',
     Original_Body: originalBody, Translated_To: translatedTo, Skip_If_Seen: opts.skip_if_seen || '',
   };
@@ -15557,9 +16416,26 @@ async function smsGatedSend(env, opts) {
     const _g = await guardAppendedIds(env, MSG_QUEUE_TAB, _mqAppend, rows.length, headers.indexOf('ID') >= 0 ? headers.indexOf('ID') : 0, [id]);
     id = _g.ids[0]; mqRow = _g.row || mqRow;
   } catch (e) { await mqReportFailure(env, id, 'could not confirm the new queue id is unique: ' + ((e && e.message) || e)); }
-  const mqOpts = mqRow ? { sheetRow: mqRow } : undefined;
+  const mqOpts = mqRow ? { sheetRow: mqRow, headers } : undefined;   // headers: the save needs no second read of the whole tab (Oct 23 2026)
 
-  let sent = false, deliveredTo = '', outcome = 'blocked';
+  // D-16 race check: if our row did not land right after the rows we read, another request wrote in the gap - possibly the SAME text (a double tap, a client
+  // retry). Look again; the EARLIER row wins, so two racers never both stand down. A failed look is reported (P0) and the text still goes out: a rare
+  // duplicate costs a few cents, a lost text costs a tenant or a vendor.
+  if (_sendNow && !_repeatOk && mqRow && mqRow !== rows.length + 1) {
+    try {
+      invalidateTabCache(MSG_QUEUE_TAB);
+      const _again = mqRowsToObjects((await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`)).values);
+      const _dup2 = mqFindDuplicate(_again, { phone: recipientPhone, body: messageBody, nowMs: Date.now(), selfRow: mqRow, earlierThanRow: mqRow });
+      if (_dup2) {
+        await updateMessageQueueRow(env, id, { Status: 'skipped', Gate_Snapshot: gateSnapshot + ' - duplicate of Message_Queue row ' + _dup2.id + ' (two requests at once); not sent' }, mqOpts);
+        const _se2 = smsEstimate(messageBody);
+        await smsLogRecord(env, { WO_ID: opts.wo_id || '', Recipient_Type: kind || '', Phone: recipientPhone, Message: messageBody, Status: 'suppressed_duplicate', Est_Segments: _se2.pieces, Encoding: _se2.encoding, Chars: _se2.units, Message_Type: opts.message_type || '', Queue_ID: id, Log_Source: 'gated', Note: 'two requests at once; the earlier Message_Queue row ' + _dup2.id + ' sent it' });
+        return { queued_id: id, send_ok: sendOk, sent: false, suppressed: true, suppress_reason: 'duplicate', duplicate_suppressed: true, test_mode: testMode, gate_snapshot: gateSnapshot, delivered_to: '', recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
+      }
+    } catch (e) { await mqReportFailure(env, id, 'duplicate check after a write race failed, sending anyway: ' + String((e && e.message) || e).slice(0, 200)); }
+  }
+
+  let sent = false, deliveredTo = '', outcome = 'blocked', queueSaveWarning = '', errorCode = '', errorReason = '';
   if (sendOk && recipientPhone) {
     // Quiet hours (Sep 14 2026, Brett): never let an automatic send land after 7pm ET or
     // before 9am ET. Gates already passed — this only affects WHEN, not whether. Held here,
@@ -15572,37 +16448,45 @@ async function smsGatedSend(env, opts) {
     // allowEarlyMorning (Sep 28 2026, Brett): recurring/auto-posted WOs go out at 8:00am ET, an
     // hour before quiet hours normally end. Only those vendor dispatch texts may set this, and
     // it only opens the 8:00-8:59am ET hour — 7pm-8am stays held exactly as before.
-    const _earlyMorningOk = opts.allowEarlyMorning === true && etHour(new Date()) === 8;
+    // (_earlyMorningOk / _qw / _holdUntil / _holdNow are worked out above, before the queue row is written - D-16.)
     // opts.quietWindow {start,end} (Oct 14 2026): a caller may use its own ET window instead of the
     // global 7pm-9am (owner proposal heads-up text: 8pm-8am). Default path is unchanged.
-    const _qw = opts.quietWindow && Number.isFinite(opts.quietWindow.start) && Number.isFinite(opts.quietWindow.end) ? opts.quietWindow : null;
-    const _holdUntil = _qw ? quietHoldUntil(new Date(), _qw.start, _qw.end) : (isQuietHoursNow(new Date()) ? nextQuietHoursEnd(new Date()) : null);
-    if (_holdUntil && !opts.bypassQuietHours && !_earlyMorningOk) {
+    if (_holdNow) {
       const sendAfter = _holdUntil.toISOString();
-      await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` }, mqOpts);
-      if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) {} }
-      return { queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
+      const _holdSaved = await updateMessageQueueRow(env, id, { Send_After: sendAfter, Gate_Snapshot: gateSnapshot + ` — held for quiet hours, sending after ${sendAfter}` }, mqOpts);
+      if (opts.wo_id) { try { await logMessageAudit(env, { woId: opts.wo_id, channel: 'sms', recipientName, recipientType: kind, messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome: 'held_quiet_hours', notes: 'Sends after ' + sendAfter }); } catch (e) { await reportFailure(env, { system: 'hub', source: 'worker', where: 'message_audit', ref: opts.wo_id, severity: 'P2', message: 'could not write the WO audit row for a held text: ' + String((e && e.message) || e).slice(0, 160) }); } }
+      return Object.assign({ queued_id: id, send_ok: sendOk, sent: false, held_for_quiet_hours: true, send_after: sendAfter, test_mode: testMode, gate_snapshot: gateSnapshot, message_body: messageBody, original_body: originalBody, translated_to: translatedTo },
+        _holdSaved === false ? { warning: 'The text was held for quiet hours but its Message_Queue row could not be marked (Send_After). It will not release by itself - see Needs Attention (message_queue_update).' } : {});
     }
     // opts.redirectTo (Oct 14 2026): a caller may send THIS text to a safe test phone while the global
     // TWILIO_TEST_MODE stays off, so one feature (the Milam Ridge cleaning scheduler) can be tested live without
     // redirecting every other Hub text. Only a valid, already-normalized phone is accepted; any other value
     // fails the send closed (nothing goes to the real recipient) - never silently falls through to the real phone.
-    const _redirect = opts.redirectTo ? normalizePhone(opts.redirectTo) : '';
     if (opts.redirectTo && !_redirect) {
       outcome = 'failed';
       await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', redirectTo is not a valid phone - NOT sent to the real recipient' }, mqOpts);
       return { queued_id: id, send_ok: sendOk, sent: false, test_mode: true, gate_snapshot: gateSnapshot + ', redirectTo is not a valid phone - NOT sent', delivered_to: '', recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
     }
     deliveredTo = _redirect || (testMode ? testRecipient : recipientPhone);
-    const result = await sendSMSRaw(env, deliveredTo, messageBody);
-    sent = !!(result && result.sid);
-    outcome = sent ? 'sent' : 'failed';
-    await updateMessageQueueRow(env, id, {
-      Status: sent ? 'sent' : 'failed',
-      Delivered_To: deliveredTo,
-      Sent_Date: new Date().toISOString(),
-      Twilio_Message_SID: (result && result.sid) || '',
-    }, mqOpts);
+    // Destination region (D-16 item 6): refuse BEFORE calling Twilio. One calm ledger row with the row id and the last four digits only.
+    const _dc = smsDestinationCheck(deliveredTo);
+    let result;
+    if (!_dc.ok) {
+      await smsReportRegionBlocked(env, id, _dc);
+      result = { skipped: true, region_blocked: true, reason: 'text not sent: destination outside enabled regions (' + _dc.reason + ')' };
+    } else {
+      try { result = await sendSMSRaw(env, deliveredTo, messageBody, { keepAccents: _spanish, allowRepeat: _repeatOk, context: { wo_id: opts.wo_id || '', message_type: opts.message_type || '', recipient_type: kind || '', queue_id: id } }); }
+      catch (e) { result = { error: 'no answer from Twilio: ' + smsMaskPhones(String((e && e.message) || e)).slice(0, 160) }; await mqReportFailure(env, id, 'the send to Twilio threw, the text may or may not have gone out - check the Twilio log before resending: ' + smsMaskPhones(String((e && e.message) || e)).slice(0, 200)); }
+    }
+    const _o = smsSendOutcome(result);
+    sent = _o.sent; errorCode = _o.errorCode; errorReason = _o.reason;
+    outcome = sent ? 'sent' : (_o.duplicate ? 'duplicate_suppressed' : 'failed');
+    const _fin = { Status: _o.status, Delivered_To: sent ? deliveredTo : '', Sent_Date: new Date().toISOString(), Twilio_Message_SID: _o.sid };
+    if (!sent) { _fin.Error_Code = _o.errorCode; _fin.Error_Reason = _o.reason; }
+    const _sentSaved = await updateMessageQueueRow(env, id, _fin, mqOpts);
+    // A permanent Twilio refusal is recorded ONCE as a calm P2 ledger row (the queue row says failed, with the code and the reason); it is never retried.
+    if (!sent && _o.permanent && !_o.regionBlocked) await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_undeliverable', ref: 'Message_Queue ' + id, severity: 'P2', message: 'text not delivered, Twilio error ' + _o.errorCode + ' (Message_Queue row ' + id + ', number ending ' + String(recipientPhone).replace(/\D/g, '').slice(-4) + '): ' + _o.reason });
+    if (_sentSaved === false) queueSaveWarning = (sent ? 'The text WAS sent' : 'The text was NOT sent') + ' but its Message_Queue row could not be updated and may still say "sending" (see Needs Attention: message_queue_update, it names the Twilio SID).';
   } else if (sendOk && !recipientPhone) {
     outcome = 'failed_no_phone';
     await updateMessageQueueRow(env, id, { Status: 'failed', Gate_Snapshot: gateSnapshot + ', no phone on file' }, mqOpts);
@@ -15619,9 +16503,50 @@ async function smsGatedSend(env, opts) {
         messageType: opts.message_type || '', messageBody, originalBody, translatedTo, outcome,
         notes: outcome === 'blocked' ? gateSnapshot : '',
       });
-    } catch (e) {}
+    } catch (e) { await reportFailure(env, { system: 'hub', source: 'worker', where: 'message_audit', ref: opts.wo_id, severity: 'P2', message: 'could not write the WO audit row for a text (' + outcome + '): ' + String((e && e.message) || e).slice(0, 160) }); }
   }
-  return { queued_id: id, send_ok: sendOk, sent, test_mode: testMode || !!opts.redirectTo, gate_snapshot: gateSnapshot, delivered_to: deliveredTo, recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo };
+  return Object.assign({ queued_id: id, send_ok: sendOk, sent, test_mode: testMode || !!opts.redirectTo, gate_snapshot: gateSnapshot, delivered_to: deliveredTo, recipient_phone: recipientPhone, message_body: messageBody, original_body: originalBody, translated_to: translatedTo },
+    errorCode ? { error_code: errorCode, error_reason: errorReason } : {}, outcome === 'duplicate_suppressed' ? { duplicate_suppressed: true } : {},
+    queueSaveWarning ? { warning: queueSaveWarning } : {});
+}
+
+// Sends one ALREADY-QUEUED Message_Queue row (a quiet-hours release or a manual release) the safe way (D-16 item 4). The row is first marked "sending"
+// (a durable marker written BEFORE the text goes out); if that mark cannot be saved the text is NOT sent (it stays pending and is retried next sweep, and
+// the failure is reported). Because of the mark, a failed save of "sent" afterwards leaves the row "sending", never "pending", so no later sweep can
+// send it a second time. Returns { sent, claim_failed, outcome } and never throws.
+const __mqInFlight = new Set();   // queue ids this isolate is sending right now: a second release of the same row (sweep + a manual release) stands down
+async function mqSendQueuedRow(env, row, deliverTo, extraFields) {
+  const id = row.ID;
+  if (__mqInFlight.has(String(id))) return { sent: false, claim_failed: true, outcome: smsSendOutcome({ error: 'this row is already being sent by another release; not sent twice' }) };
+  __mqInFlight.add(String(id));
+  try { return await mqSendQueuedRowInner(env, row, deliverTo, extraFields); } finally { __mqInFlight.delete(String(id)); }
+}
+async function mqSendQueuedRowInner(env, row, deliverTo, extraFields) {
+  const id = row.ID;
+  const claimed = await updateMessageQueueRow(env, id, { Status: 'sending', Sent_Date: new Date().toISOString() }, { retryWaitsMs: [2500] });
+  if (claimed === false) return { sent: false, claim_failed: true, outcome: smsSendOutcome({ error: 'could not mark the row as sending, so the text was not sent (it will be tried again next sweep)' }) };
+  const dc = smsDestinationCheck(deliverTo);
+  let result;
+  if (!dc.ok) { await smsReportRegionBlocked(env, id, dc); result = { skipped: true, region_blocked: true, reason: 'text not sent: destination outside enabled regions (' + dc.reason + ')' }; }
+  else {
+    try { result = await sendSMSRaw(env, deliverTo, row.Message_Body, { keepAccents: String(row.Translated_To || '') === 'es', allowRepeat: String(row.Recipient_Type || '') === 'admin' || String(row.Message_Type || '') === 'delivery_tenant_notice', context: { wo_id: row.WO_ID || '', message_type: row.Message_Type || '', recipient_type: row.Recipient_Type || '', queue_id: id } }); }
+    catch (e) { result = { error: 'no answer from Twilio: ' + smsMaskPhones(String((e && e.message) || e)).slice(0, 160) }; await mqReportFailure(env, id, 'the send to Twilio threw, the text may or may not have gone out - check the Twilio log before resending: ' + smsMaskPhones(String((e && e.message) || e)).slice(0, 200)); }
+  }
+  const o = smsSendOutcome(result);
+  const fin = Object.assign({ Status: o.status, Delivered_To: o.sent ? deliverTo : '', Sent_Date: new Date().toISOString(), Twilio_Message_SID: o.sid }, extraFields || {});
+  if (!o.sent) { fin.Error_Code = o.errorCode; fin.Error_Reason = o.reason; }
+  await updateMessageQueueRow(env, id, fin);   // reports (P0) by itself if it cannot save; the row then stays "sending", not "pending"
+  if (!o.sent && o.permanent && !o.regionBlocked) await reportFailure(env, { system: 'hub', source: 'worker', where: 'sms_undeliverable', ref: 'Message_Queue ' + id, severity: 'P2', message: 'text not delivered, Twilio error ' + o.errorCode + ' (Message_Queue row ' + id + ', number ending ' + String(row.Recipient_Phone || '').replace(/\D/g, '').slice(-4) + '): ' + o.reason });
+  return { sent: o.sent, outcome: o };
+}
+// Pure. Rows left "sending" for more than 15 minutes: a text was claimed and its result never confirmed. They are listed on EVERY sweep for as long as
+// they stay that way (the ledger groups repeats into one row with a count), so a stuck text can never scroll out of sight.
+function mqStuckSending(rows, nowMs) {
+  return (rows || []).filter(r => {
+    if (String(r.Status || '').toLowerCase() !== 'sending') return false;
+    const t = Date.parse(r.Sent_Date || r.Created_Date || '');
+    return isFinite(t) && nowMs - t >= 15 * 60000;
+  });
 }
 
 // Internal row update for Message_Queue — mirrors the raw sheetsRequest batchUpdate pattern
@@ -15632,17 +16557,26 @@ async function smsGatedSend(env, opts) {
 // throws: this runs right after a text has really gone out, and crashing there would hide that from the caller.
 async function mqReportFailure(env, id, msg) {
   console.error('Message_Queue update problem (#' + id + '): ' + msg);
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'message_queue_update', Skill_Or_Endpoint: 'updateMessageQueueRow', Success: 'FALSE', Notes: ('row ' + id + ': ' + msg).slice(0, 480) }); } catch (_) {}
-  try { await alertAdminOnFailure(env, 'message_queue_update', 'row ' + id + ': ' + msg); } catch (_) {}
+  // Reporting code must not report on itself (loop): if the ledger write or the alert fails, the console is the last resort.
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'message_queue_update', Skill_Or_Endpoint: 'updateMessageQueueRow', Success: 'FALSE', Notes: ('row ' + id + ': ' + msg).slice(0, 480) }); } catch (e) { console.error('Message_Queue failure report: telemetry write failed (#' + id + '):', (e && e.message) || e); }   // silent-ok: reporting code must not recurse
+  try { await alertAdminOnFailure(env, 'message_queue_update', 'row ' + id + ': ' + msg); } catch (e) { console.error('Message_Queue failure report: admin alert failed (#' + id + '):', (e && e.message) || e); }   // silent-ok: reporting code must not recurse
 }
 // opts.sheetRow: edit exactly this sheet row (used right after our own append). Otherwise find the row by id; if an old duplicate id
 // exists, prefer the one still "pending" (the one a person is waiting to act on). Returns true when every field landed.
 async function updateMessageQueueRow(env, id, fields, opts) {
-  try {
-    const data = await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`);
-    const [headers, ...rows] = data.values || [[]];
+  // Oct 23 2026 (the "lost text" fix): this runs right after a real text went out. It used to re-read the WHOLE Message_Queue tab just to find the
+  // header row (a read the caller had already made), so one Google quota hit left a SENT text marked "pending" and nobody told. Now (1) a caller that
+  // has the headers and the row number passes them (opts.headers + opts.sheetRow) and no read happens at all, and (2) a failing save is tried again
+  // over ~30 s (Google's quota is per MINUTE; the old ~2 s of backoff gave up long before it cleared) before it is reported. The save writes absolute
+  // values, so repeating it is safe. The report (P0, message_queue_update) names what was sent - Twilio SID and phone - so it can be fixed by hand.
+  const waits = (opts && Array.isArray(opts.retryWaitsMs)) ? opts.retryWaitsMs : [2500, 8000, 20000];
+  // One attempt. THROWS on a Sheets failure (retried below); returns false after reporting a data problem that retrying cannot fix.
+  const once = async () => {
+    let headers, rows = [];
+    if (opts && opts.sheetRow && Array.isArray(opts.headers) && opts.headers.length) headers = opts.headers;   // nothing to read
+    else { const data = await sheetsRequest(env, 'GET', `/values/${MSG_QUEUE_TAB}`); [headers, ...rows] = data.values || [[]]; }
     const idCol = Math.max(0, headers.indexOf('ID'));
-    const isPending = r => r[headers.indexOf('Status')] === 'pending';   // -1 (no Status column) -> undefined -> not pending
+    const isPending = r => { const s = r[headers.indexOf('Status')]; return s === 'pending' || s === 'sending'; };   // -1 (no Status column) -> undefined -> not pending; 'sending' = claimed by a release (D-16)
     let sheetRow = opts && opts.sheetRow ? opts.sheetRow : 0;
     if (!sheetRow) {
       const hits = []; rows.forEach((r, i) => { if (String(r[idCol]) === String(id)) hits.push(i); });
@@ -15660,7 +16594,16 @@ async function updateMessageQueueRow(env, id, fields, opts) {
     const res = await sheetsRequest(env, 'POST', `/values:batchUpdate`, { valueInputOption: 'RAW', data: updates });
     if (res && typeof res.totalUpdatedCells === 'number' && res.totalUpdatedCells < updates.length) { await mqReportFailure(env, id, 'only ' + res.totalUpdatedCells + ' of ' + updates.length + ' cells saved'); return false; }
     return true;
-  } catch (e) { await mqReportFailure(env, id, String((e && e.message) || e)); return false; }
+  };
+  let lastErr = null;
+  for (let attempt = 0; attempt <= waits.length; attempt++) {
+    if (attempt > 0) await new Promise(r => setTimeout(r, waits[attempt - 1]));
+    try { return await once(); }
+    catch (e) { lastErr = e; }   // retried; reported below if every try fails
+  }
+  const sentInfo = [fields && fields.Twilio_Message_SID ? 'Twilio SID ' + fields.Twilio_Message_SID : '', fields && fields.Delivered_To ? 'to ' + fields.Delivered_To : '', fields && fields.Status ? 'wanted Status=' + fields.Status : ''].filter(Boolean).join(', ');
+  await mqReportFailure(env, id, 'could not save the queue row after ' + (waits.length + 1) + ' tries' + (sentInfo ? ' (' + sentInfo + ')' : '') + ': ' + String((lastErr && lastErr.message) || lastErr));
+  return false;
 }
 
 // GET /message-queue?status=pending — backs the review/release screen. Small tab at this
@@ -15711,10 +16654,8 @@ async function releaseMessageQueue(env, body) {
     const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant) });
     if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot }); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
-    const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
-    const sent = !!(result && result.sid);
-    await updateMessageQueueRow(env, id, { Status: sent ? 'sent' : 'failed', Delivered_To: deliverTo, Sent_Date: new Date().toISOString(), Twilio_Message_SID: (result && result.sid) || '', Gate_Snapshot: gateSnapshot });
-    results.push({ id, sent, gate_snapshot: gateSnapshot });
+    const _r = await mqSendQueuedRow(env, row, deliverTo, { Gate_Snapshot: gateSnapshot });
+    results.push(Object.assign({ id, sent: _r.sent, gate_snapshot: gateSnapshot }, _r.claim_failed ? { error: _r.outcome.reason } : {}, !_r.sent && _r.outcome.errorCode ? { error_code: _r.outcome.errorCode, error_reason: _r.outcome.reason } : {}));
   }
   return json({ ok: true, results });
 }
@@ -15739,6 +16680,7 @@ async function processQuietHoursQueue(env) {
   ]);
   const due = rows.filter(r => r.Status === 'pending' && r.Send_After && new Date(r.Send_After) <= now);
   const results = [];
+  for (const r of mqStuckSending(rows, +now)) await reportFailure(env, { system: 'hub', source: 'worker', where: 'message_queue_stuck_sending', ref: 'Message_Queue ' + r.ID, severity: 'P2', message: 'a text was marked "sending" ' + Math.round((+now - Date.parse(r.Sent_Date || r.Created_Date)) / 60000) + ' minutes ago and its result was never saved (Twilio SID on the row: ' + (r.Twilio_Message_SID || 'none') + '). It was NOT sent again. Check the Twilio log, then fix the row by hand.' });
   let _scopesForSkip = null;   // loaded lazily, only when a due row carries Skip_If_Seen
   for (const row of due) {
     const id = row.ID, kind = row.Recipient_Type;
@@ -15761,6 +16703,14 @@ async function processQuietHoursQueue(env) {
         try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_skip_check_failed', Skill_Or_Endpoint: 'processQuietHoursQueue', Success: 'FALSE', Notes: 'row=' + id + ' err=' + String((e && e.message) || e).slice(0, 200) + ' - sending anyway' }); } catch (_) {}
       }
     }
+    // Oct 23 2026: a batch-held tenant delivery notice is released at 6pm ET (the last window). If the sweep runs late and it is already quiet
+    // hours, push it to the next 9am rather than text a tenant at night. (Other held texts keep their old behaviour.)
+    if (row.Message_Type === 'delivery_tenant_notice' && isQuietHoursNow(now)) {
+      const nx = nextQuietHoursEnd(now).toISOString();
+      await updateMessageQueueRow(env, id, { Send_After: nx, Gate_Snapshot: String(row.Gate_Snapshot || '') + ' (released late in quiet hours, moved to ' + nx + ')' });
+      results.push({ id, sent: false, held: true, send_after: nx });
+      continue;
+    }
     const property = properties.find(p => p.ID === row.Property_ID);
     const owner = property ? owners.find(o => o.ID === property.Owner_ID) : null;
     const tenant = kind === 'tenant' ? tenantForQueuedText(tenants, row.Recipient_Phone, row.Property_ID) : null;
@@ -15774,9 +16724,9 @@ async function processQuietHoursQueue(env) {
     const { sendOk, gateSnapshot } = smsGateDecision({ global, propertyOn, ownerOn, tenantOn, vendorOn, tenantOptOut, vendorOptOut, kind, tenantMovedOut: kind === 'tenant' && tenantMovedOut(tenant) });
     if (!sendOk) { await updateMessageQueueRow(env, id, { Gate_Snapshot: gateSnapshot + ' (re-checked at quiet-hours release)', Send_After: '' }); if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), 'blocked'); results.push({ id, sent: false, gate_snapshot: gateSnapshot }); continue; }
     const deliverTo = testMode ? testRecipient : row.Recipient_Phone;
-    const result = await sendSMSRaw(env, deliverTo, row.Message_Body);
-    const sent = !!(result && result.sid);
-    await updateMessageQueueRow(env, id, { Status: sent ? 'sent' : 'failed', Delivered_To: deliverTo, Sent_Date: new Date().toISOString(), Twilio_Message_SID: (result && result.sid) || '', Gate_Snapshot: gateSnapshot, Send_After: '' });
+    const _r = await mqSendQueuedRow(env, row, deliverTo, { Gate_Snapshot: gateSnapshot, Send_After: '' });
+    const sent = _r.sent;
+    if (_r.claim_failed) { results.push({ id, sent: false, failed: false, claim_failed: true, error: _r.outcome.reason, gate_snapshot: gateSnapshot }); continue; }   // still pending: tried again next sweep
     if (row.Skip_If_Seen && String(row.Skip_If_Seen).startsWith('scope:')) await proposalStampSms(env, String(row.Skip_If_Seen).slice(6), sent ? 'sent' : 'failed');
     results.push({ id, sent, failed: !sent, gate_snapshot: gateSnapshot });
   }
@@ -15936,6 +16886,12 @@ function failSeverity(where, message, explicit) {
   if (/write|append|update|queue|duplicate|sheet|integrity|sweep|id_race/i.test(w) || /quota exceeded|did not land|not found after|duplicate/i.test(m)) return 'P1';
   return 'P2';
 }
+// PURE. The severity a Where is FIXED at on purpose (FAIL_SEVERITY_BY_WHERE), or null when it has no fixed value.
+function failTableSeverity(where) {
+  const w = String(where || '');
+  for (const [re, sev] of FAIL_SEVERITY_BY_WHERE) if (re.test(w)) return sev;
+  return null;
+}
 // Builds one Failure_Events row from whatever a caller has. Never throws.
 function failBuildEvent(f, nowMs, rand) {
   f = f || {};
@@ -16004,10 +16960,29 @@ function failRollupPlan(inp) {
     const row = findRow(fp);
     if (!row) created.push({ ID: 'F-c' + now + '-' + created.length, Fingerprint: fp, Severity: c.severity, System: c.system || 'hub', Where: c.where, Message: String(c.message).slice(0, 400), Source: 'condition', First_Seen: iso, Last_Seen: iso, Count: 1, Status: 'open', Notified_At: '', Notified_Count: 0, Last_Event_ID: '', Fixed_In: '', Notes: '' });
     else if (row.Status === 'fixed') { Object.assign(row, { Severity: c.severity, Message: String(c.message).slice(0, 400), First_Seen: iso, Last_Seen: iso, Count: 1, Status: 'open', Notified_At: '', Notified_Count: 0, Notes: (row.Notes ? row.Notes + ' | ' : '') + `came back ${day}` }); touch(row); }
-    else { row.Last_Seen = iso; row.Message = String(c.message).slice(0, 400); if (failSevRank(c.severity) < failSevRank(row.Severity)) row.Severity = c.severity; touch(row); }
+    else {
+      row.Last_Seen = iso; row.Message = String(c.message).slice(0, 400);
+      // Oct 22 2026: severity follows the CURRENT rule in both directions. For conditions it only ever escalated, so "alerts OFF" and "dead-man OFF"
+      // (P2 since Oct 21, Brett's standing choice) stayed on Needs Attention as a P0 / P1 because that is what they were when first seen.
+      if (row.Status !== 'wontfix' && c.severity !== row.Severity) {
+        if (failSevRank(c.severity) > failSevRank(row.Severity)) row.Notes = (row.Notes ? row.Notes + ' | ' : '') + `severity ${row.Severity} -> ${c.severity} ${day} (current rule)`;
+        row.Severity = c.severity;
+      }
+      touch(row);
+    }
   }
   for (const r of ledger) if (r.Source === 'condition' && FAIL_OPEN.indexOf(r.Status) >= 0 && !activeFp.has(r.Fingerprint)) {
     r.Status = 'fixed'; r.Fixed_In = 'cleared automatically'; r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `cleared ${day}: no longer true`; touch(r);
+  }
+  // Oct 22 2026: an open event row whose Where has a fixed severity (FAIL_SEVERITY_BY_WHERE) is brought down to it even when no new event arrived. Rows that
+  // were filed before a Where was classed P2 (e.g. qb_payables_payment_date_missing, WO-1246) kept their first-sighting P0 for as long as they stayed quiet,
+  // and a quiet P0 takes 7 days to close. Only ever DOWN here (never escalates); rows with new events this run were already re-derived above.
+  for (const r of ledger) {
+    if (r.Source === 'condition' || FAIL_OPEN.indexOf(r.Status) < 0 || updates.has(r._row)) continue;
+    // Only a table value of P2, and only when the row's own message does not trip the "always urgent" billing/auth wording (failSeverity agrees with the table):
+    // "credit balance too low" on receipt_parse is a P0 on purpose even though receipt_parse is normally P2.
+    const ts = failTableSeverity(r.Where);
+    if (ts === 'P2' && failSeverity(r.Where, r.Message) === 'P2' && failSevRank(ts) > failSevRank(r.Severity)) { r.Notes = (r.Notes ? r.Notes + ' | ' : '') + `severity ${r.Severity} -> ${ts} ${day} (fixed severity for ${String(r.Where).slice(0, 40)})`; r.Severity = ts; touch(r); }
   }
   // Event rows that have gone quiet close themselves (see FAIL_QUIET_CLOSE_MS). A row touched by new events this run is by definition not quiet.
   for (const r of ledger) {
@@ -16324,14 +17299,21 @@ async function failInvariantsCollect(env, nowMs) {
   return data;
 }
 // IO. Stored result if fresh, else re-check. Returns condition items. Never throws.
-async function failInvariantConditions(env, cfg, nowMs) {
+async function failInvariantConditions(env, cfg, nowMs, out) {   // `out` (optional, D-16): receives { balance, balance_at } for the daily Twilio balance snapshot
   let stored = null;
   try { const p = JSON.parse(cfg[FAIL_INV_KEY] || 'null'); if (p && typeof p.at === 'number' && Array.isArray(p.items)) stored = p; } catch (e) { stored = null; }
-  if (stored && nowMs - stored.at < FAIL_INV_MAX_AGE_MS) return stored.items;
+  if (stored && nowMs - stored.at < FAIL_INV_MAX_AGE_MS) {
+    const hasBal = typeof stored.balance === 'number' && isFinite(stored.balance);
+    if (hasBal && out) { out.balance = stored.balance; out.balance_at = stored.at; }
+    if (hasBal || !out) return stored.items;   // a snapshot caller whose stored copy has no balance lets the check run once (that is the one Twilio call)
+  }
   try {
-    const items = failInvariantItems(await failInvariantsCollect(env, nowMs));
+    const data = await failInvariantsCollect(env, nowMs);
+    const items = failInvariantItems(data);
     const compact = items.map(i => ({ key: i.key, system: i.system, where: i.where, severity: i.severity, message: failTrim(i.message, 300) }));
-    await failSetConfig(env, FAIL_INV_KEY, JSON.stringify({ at: nowMs, items: compact }));
+    const balance = data.twilio && typeof data.twilio.balance === 'number' ? data.twilio.balance : null;
+    await failSetConfig(env, FAIL_INV_KEY, JSON.stringify({ at: nowMs, items: compact, balance }));
+    if (out && balance != null) { out.balance = balance; out.balance_at = nowMs; }
     return compact;
   } catch (e) {
     const old = stored ? stored.items : [];
@@ -16491,7 +17473,7 @@ const SCHED_OVERDUE_INTERVAL_MIN = 45;
 const SCHED_OVERDUE_GRACE_MIN = 180;
 const SCHED_DOW_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 // Staging smoke (HUB_TEST_TOKEN) may only dry-run, or run these two read-mostly jobs.
-const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard', 'sms_delivery_check', 'str_cleaning', 'followup_sweep', 'ai_credit_probe']; // str_cleaning: SMS, Gmail and calendar writes are all stubbed on staging; ai_credit_probe: does nothing unless AI is paused, then one 1-token call + a stubbed notice
+const SCHED_STAGING_SAFE_JOBS = ['door_watchdog', 'insp_guard', 'sms_delivery_check', 'twilio_balance_log', 'str_cleaning', 'followup_sweep', 'ai_credit_probe']; // str_cleaning: SMS, Gmail and calendar writes are all stubbed on staging; ai_credit_probe: does nothing unless AI is paused, then one 1-token call + a stubbed notice
 
 // Pure. Constant-time check that `tok` is the Scheduler_Token for exactly POST /cron/run or GET /cron/status.
 // Fails closed for a blank/short/missing secret, an empty header, any other method or path.
@@ -16568,7 +17550,7 @@ function schedAtMinutes(at) { const m = /^(\d{1,2}):(\d{2})$/.exec(String(at)); 
 // 7am the job runs on the next tick that day. retry:false = never auto-retry a failed run (it may have
 // already sent something); a job result may also set no_retry:true when the failure was after a send.
 const SCHED_JOBS = [
-  { name: 'door_watchdog',      kind: 'interval', every_min: 14, run: (env) => schedRunDoorWatchdog(env) },
+  { name: 'door_watchdog',      kind: 'interval', every_min: 14, critical: true, run: (env) => schedRunDoorWatchdog(env) },   // critical (Oct 23 2026): never held back by the Sheets-quota cooldown, and keeps the full read retries
   { name: 'sweep',              kind: 'interval', every_min: 14, run: (env) => schedRunSweepMessages(env) },
   { name: 'sweep_work',         kind: 'interval', every_min: 14, run: (env) => schedRunSweepWork(env) },
   { name: 'sweep_checks',       kind: 'interval', every_min: 14, run: (env) => schedRunSweepChecks(env) },
@@ -16584,6 +17566,7 @@ const SCHED_JOBS = [
   { name: 'daily_turnover',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyTurnover(env) },
   { name: 'daily_qb_sync',      kind: 'daily',    at: '07:00', run: (env) => schedRunDailyQbSync(env) },
   { name: 'sms_delivery_check', kind: 'daily',    at: '07:00', run: (env) => schedRunSmsDeliveryCheck(env) },
+  { name: 'twilio_balance_log', kind: 'daily',    at: '07:00', run: (env) => schedRunTwilioBalanceLog(env) },   // D-16 (Oct 23 2026): saves the Twilio balance once a day in Twilio_Balance_Log (reuses the integrity check's balance fetch)
   { name: 'review_mon',         kind: 'weekly',   dow: 1, at: '08:30', run: (env) => schedRunWeeklyReview(env, true) },
   { name: 'review_wed',         kind: 'weekly',   dow: 3, at: '08:00', run: (env) => schedRunWeeklyReview(env, false) },
   { name: 'ar_report_mon',      kind: 'weekly',   dow: 1, at: '09:00', retry: false, run: (env) => schedRunArReport(env) },
@@ -17063,7 +18046,7 @@ function smsDcLast4(n) { const d = String(n == null ? '' : n).replace(/\D/g, '')
 // Pure. `messages` = Twilio Message resources (JSON). Only OUTBOUND messages sent in the lookback window are counted.
 function smsDcClassify(messages, nowMs) {
   const since = nowMs - SMS_DC_LOOKBACK_MS;
-  const out = { total: 0, delivered: 0, failed: 0, in_flight: 0, stuck: 0, filter_hits: [], other_errors: {}, with_link: smsDcBucket(), no_link: smsDcBucket(), by_from: {} };
+  const out = { total: 0, delivered: 0, failed: 0, in_flight: 0, stuck: 0, filter_hits: [], other_errors: {}, with_link: smsDcBucket(), no_link: smsDcBucket(), by_from: {}, pieces: 0, price_usd: 0, priced: 0 };   // pieces / price_usd: what Twilio billed for these texts (D-16 item 5)
   for (const m of (Array.isArray(messages) ? messages : [])) {
     if (!m || typeof m !== 'object') continue;
     if (!/^outbound/i.test(String(m.direction || ''))) continue;
@@ -17074,6 +18057,8 @@ function smsDcClassify(messages, nowMs) {
     const status = String(m.status || '').toLowerCase();
     const code = m.error_code == null ? '' : String(m.error_code);
     out.total++; b.sent++; fb.sent++;
+    const _segs = parseInt(m.num_segments, 10); if (isFinite(_segs) && _segs > 0) out.pieces += _segs;
+    const _pr = parseFloat(m.price); if (isFinite(_pr)) { out.price_usd += Math.abs(_pr); out.priced++; }
     if (status === 'delivered' || status === 'read') { out.delivered++; b.delivered++; fb.delivered++; continue; }
     if (status === 'failed' || status === 'undelivered') {
       out.failed++; b.failed++; fb.failed++;
@@ -17147,6 +18132,7 @@ function smsDcCompose(s, ev, state, etDate, truncated) {
     parts.push('<p><b>What to do:</b> tell Claude. The fix is to move this number onto the new campaign that allows links (and to send vendor links through bmoremanagement.com), and meanwhile to stop sending link texts from it.</p>');
   }
   if (ev.notes.length) parts.push('<ul>' + ev.notes.map(n => `<li>${_escHtml(n)}</li>`).join('') + '</ul>');
+  if (s.pieces) parts.push(`<p>Cost: ${s.total} texts billed as ${s.pieces} piece(s) (${(s.pieces / Math.max(1, s.total)).toFixed(2)} per text)${s.priced ? `, $${s.price_usd.toFixed(2)} for the ${s.priced} that Twilio has priced so far` : ''}.</p>`);
   if (truncated) parts.push('<p><i>Note: Twilio returned more messages than this check reads in one run; counts may be incomplete.</i></p>');
   parts.push(`<p>Clean-day streak: ${state.clean_days}. ${smsDcCanRetire(state) ? `<b>${state.clean_days} clean days with ${state.clean_link_texts} link texts: this looks resolved. Tell Claude to turn this check off (or set enabled:false on the sms_delivery_check row of the Apps Script JOBS table).</b>` : `The check keeps running daily until it has ${SMS_DC_RETIRE_CLEAN_DAYS} clean days and ${SMS_DC_RETIRE_LINK_TEXTS} link texts.`}</p>`);
   return { subject, html: parts.join('\n') };
@@ -17222,6 +18208,52 @@ async function smsDeliveryCheckPass(env, deps) {
   return { ok: !errors.length, errors, warnings, no_retry, detail: { level: ev.level, total: summary.total, delivered: summary.delivered, failed: summary.failed, filtered: summary.filter_hits.length, stuck: summary.stuck, with_link: summary.with_link, no_link: summary.no_link, clean_days: nextState.clean_days, emailed, truncated: fetched.truncated, pages: fetched.pages } };
 }
 async function schedRunSmsDeliveryCheck(env) { return smsDeliveryCheckPass(env); }
+
+// -- Twilio balance snapshot (D-16 item 5, Oct 23 2026) --
+// Once a day the Hub saves (date, Twilio balance) in the small Twilio_Balance_Log tab, so the daily burn can be read off a column instead of
+// guessed. It adds NO Twilio call of its own: it reuses the balance the daily integrity check (failInvariantsCollect) already fetches and
+// stores in Config (failure_invariants_json), and only if that stored value is missing or stale does it let that same check run once.
+// Runs as the scheduler job `twilio_balance_log` (Apps Script clock, daily 07:00 ET). NO CRON.
+const TWILIO_BAL_TAB = 'Twilio_Balance_Log';
+const TWILIO_BAL_COLS = ['ID', 'Date', 'Balance_USD', 'Change_USD', 'Recorded_At', 'Source', 'Note'];
+// Pure. rows = existing Twilio_Balance_Log objects. -> { skip:true, reason } | { row }. One row per ET date; Change_USD = this balance minus the
+// last recorded one (negative = spent, positive = money added).
+function twilioBalancePlan(rows, etDate, balance, nowIso, source) {
+  if (typeof balance !== 'number' || !isFinite(balance)) return { skip: true, reason: 'no balance number available' };
+  const list = (rows || []).filter(r => r && r.Date);
+  if (list.some(r => String(r.Date) === etDate)) return { skip: true, reason: 'already recorded for ' + etDate };
+  const prev = list.slice().sort((a, b) => String(a.Date).localeCompare(String(b.Date))).filter(r => String(r.Date) < etDate).pop();
+  const pb = prev ? parseFloat(prev.Balance_USD) : NaN;
+  return { row: { Date: etDate, Balance_USD: balance.toFixed(2), Change_USD: isFinite(pb) ? (balance - pb).toFixed(2) : '', Recorded_At: nowIso, Source: source || 'integrity check', Note: isFinite(pb) ? 'since ' + prev.Date : 'first row' } };
+}
+async function twilioBalanceSnapshotPass(env, io) {
+  io = io || {};
+  const errors = [], t0 = Date.now(), nowMs = io.nowMs || Date.now();
+  const etDate = schedEtParts(new Date(nowMs)).date;
+  const fail = async (step, e, sev) => { const m = schedErrText(e); errors.push({ step, error: m }); await (io.reportFailure || reportFailure)(env, { system: 'hub', source: 'worker', where: 'twilio_balance_log', ref: step, severity: sev || 'P1', message: 'Twilio balance snapshot: ' + step + ': ' + m.slice(0, 200) }); };
+  if (!io.skipCredsCheck && !(env.TWILIO_SID && env.TWILIO_API_SID && env.TWILIO_API_KEY)) return { ok: true, errors, detail: { skipped: 'no Twilio credentials in this environment' } };
+  let cfg;
+  try { cfg = configFromValues(await (io.readConfigRows ? io.readConfigRows() : schedReadConfigRows(env, true))); }
+  catch (e) { await fail('read_config', e); return { ok: false, errors, detail: {} }; }
+  const out = {};
+  await (io.conditions || failInvariantConditions)(env, cfg, nowMs, out);   // never throws; fills out.balance from the stored check or from the one fetch it makes when stale
+  if (typeof out.balance !== 'number' || !isFinite(out.balance)) { await fail('no_balance', 'the integrity check had no Twilio balance to record (see the open "integrity_check:twilio_balance" item)'); return { ok: false, errors, detail: {} }; }
+  let existing;
+  try {
+    if (!io.readRows) await ensureTab(env, TWILIO_BAL_TAB, TWILIO_BAL_COLS);   // creates ONLY a missing tab (this one is new); never touches a tab that exists
+    existing = io.readRows ? await io.readRows() : await fetchTab(env, TWILIO_BAL_TAB);
+  } catch (e) { await fail('read_log_tab', e); return { ok: false, errors, detail: {} }; }
+  const age = out.balance_at ? Math.round((nowMs - out.balance_at) / 3600000) : null;
+  const plan = twilioBalancePlan(existing, etDate, out.balance, new Date(nowMs).toISOString(), 'integrity check' + (age != null ? ' (' + age + 'h old)' : ''));
+  if (plan.skip) return { ok: true, errors, detail: { skipped: plan.reason, date: etDate, balance: out.balance } };
+  try {
+    const wr = io.appendRow ? await io.appendRow(plan.row) : await (await addRow(env, TWILIO_BAL_TAB, plan.row)).json();
+    if (!wr || wr.success !== true) throw new Error('append not confirmed: ' + JSON.stringify(wr || {}).slice(0, 160));
+  } catch (e) { await fail('write_row', e); return { ok: false, errors, detail: { date: etDate, balance: out.balance } }; }
+  return { ok: true, errors, detail: { date: etDate, balance: out.balance, change: plan.row.Change_USD, ms: Date.now() - t0 } };
+}
+async function schedRunTwilioBalanceLog(env) { return twilioBalanceSnapshotPass(env); }
+
 // ── END SMS delivery check ───────────────────────────────────────────────────────────────────────────────────────
 
 // ── The dispatcher ────────────────────────────────────────────────────────────────────────────────
@@ -17240,6 +18272,7 @@ const SCHED_PF_WHAT = {
   daily_turnover: 'releases turnover work orders due today',
   daily_qb_sync: 'syncs QuickBooks payments and the deposit-paid sweep',
   sms_delivery_check: 'reads the last day of outbound texts from Twilio, flags carrier-filtered / unregistered / link texts that fail, and emails Brett the result',
+  twilio_balance_log: 'saves today\'s Twilio balance as one row in the Twilio_Balance_Log tab (uses the balance the daily integrity check already fetched; no extra Twilio call)',
   review_mon: 'runs the Monday weekly review and delivers it',
   review_wed: 'runs the Wednesday weekly review (logged only)',
   ar_report_mon: 'builds and delivers the Monday AR aging report',
@@ -17334,6 +18367,23 @@ async function schedPreflight(env, dueNames, cfgRows, now, seeded) {
 
 function schedRand() { const a = new Uint8Array(9); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
 // Pure-ish core. Returns { status, body }. opts (tests): jobs, now(), sleep(ms), verifyDelayMs, budgetMs, only[], force, dry.
+// Oct 23 2026. PURE. Given the stored cooldown marker, which of the due jobs may start now? Returns { cooling, until, runnable, held }.
+// Only a marker in the future cools; a forced run is never held; a job flagged critical always runs.
+function schedCooldownPlan(state, nowMs, due, jobs, force) {
+  const untilMs = Date.parse((state && state.quota_hot_until) || '');
+  const cooling = !force && !isNaN(untilMs) && untilMs > nowMs;
+  if (!cooling) return { cooling: false, until: null, runnable: due, held: [] };
+  const crit = (name) => { const j = (jobs || []).find(x => x.name === name); return !!(j && j.critical); };
+  return { cooling: true, until: new Date(untilMs).toISOString(), runnable: due.filter(d => crit(d.name)), held: due.filter(d => !crit(d.name)).map(d => d.name) };
+}
+// Oct 23 2026. PURE. The marker to store after a run: a throttled run sets it to now+cooldown (never shortens one already in force); an un-throttled
+// run keeps a still-future marker as it is and drops an expired one (returns '').
+function schedCooldownNext(prevIso, nowMs, throttled, cooldownMs) {
+  const prevMs = Date.parse(prevIso || '');
+  const prevFuture = !isNaN(prevMs) && prevMs > nowMs ? prevMs : 0;
+  if (throttled) return new Date(Math.max(prevFuture, nowMs + cooldownMs)).toISOString();
+  return prevFuture ? new Date(prevFuture).toISOString() : '';
+}
 async function schedRunNext(env, ctx, opts) {
   opts = opts || {};
   const baseJobs = opts.jobs || SCHED_JOBS;
@@ -17381,7 +18431,11 @@ async function schedRunNext(env, ctx, opts) {
   const stamped = schedStampFirstSeen(st, now, jobs);   // Oct 20 2026: new / re-enabled jobs get a grace clock (persisted by the claim or heartbeat write below)
   if (stamped.length) base.grace_stamped = stamped;
   const aiPausedAt = aiCreditPausedAtFromRows(rows);   // '' = AI is not paused; otherwise the id of the pause episode in force
-  const dueNow = schedDueJobs(st, now, jobs, { only, aiPausedAt });
+  let dueNow = schedDueJobs(st, now, jobs, { only, aiPausedAt });
+  // Oct 23 2026: SHEETS-QUOTA COOLDOWN. A run that hit the shared read quota left Scheduler_State.quota_hot_until in the future; until it passes, only
+  // jobs marked critical (door_watchdog) are started - the rest wait (they stay due and run on the first tick after). A forced run ignores it.
+  const coolPlan = schedCooldownPlan(st, t, dueNow, jobs, force);
+  if (coolPlan.cooling) { dueNow = coolPlan.runnable; base.quota_cooldown = { until: coolPlan.until, held: coolPlan.held }; }
   base.due = force ? only.slice() : dueNow.map(d => d.name);
   if (aiPausedAt) base.ai_paused = true;
 
@@ -17427,7 +18481,9 @@ async function schedRunNext(env, ctx, opts) {
   } catch (e) { return await infraFail('could not write the scheduler claim: ' + schedErrText(e)); }
 
   const jobEnv = __meterCronEnv(__cronEnv(env), job.name);
+  if (job.critical) jobEnv.__CRON_CRITICAL__ = true;
   const t0 = Date.now();
+  const hit429Before = __cronLast429At();
   const work = (async () => {
     let jobRes;
     try { jobRes = await job.run(jobEnv, { now }); }
@@ -17451,6 +18507,7 @@ async function schedRunNext(env, ctx, opts) {
     // pause is a standing red banner + Needs Attention row): no failure telemetry, no per-run alert, no retry every 30 min. Shown as "paused: AI credit".
     const jobPaused = jobRes.paused === true && errors.length === 0;
     const jobOk = jobPaused || (jobRes.ok !== false && errors.length === 0);
+    let quotaBusyRun = false;
     const errText = jobOk ? '' : (errors.length ? errors.map(x => (x.step ? x.step + ': ' : '') + x.error).join(' | ') : 'ok:false').slice(0, 480);
     const out = Object.assign({}, base, { ran: job.name, job_ok: jobOk, error: jobOk ? null : errText, duration_ms: Date.now() - t0 });
     if (jobPaused) { out.paused = true; out.paused_reason = String(jobRes.reason || 'paused: AI credit').slice(0, 300); }
@@ -17458,10 +18515,16 @@ async function schedRunNext(env, ctx, opts) {
     if (errors.length) out.errors = errors;
     if (jobRes.warnings && jobRes.warnings.length) out.warnings = jobRes.warnings.slice();
     if (!jobOk) {
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: job.name, Success: 'FALSE', Latency_ms: out.duration_ms, Notes: errText }); }
+      // Oct 22 2026: Google's shared per-minute read quota ran out during the run. Still recorded (P2 row, job state "failed", retried next tick, the
+      // run's answer says quota_busy), but it is not a P0 scheduler failure and nobody is paged for it.
+      const quotaBusy = schedErrorsAreQuotaBusy(errors);
+      if (quotaBusy) { out.quota_busy = true; quotaBusyRun = true; }
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: quotaBusy ? 'sheets_quota_busy' : 'scheduler_job', Skill_Or_Endpoint: quotaBusy ? 'scheduler/' + job.name : job.name, Success: 'FALSE', Latency_ms: out.duration_ms, Notes: errText }); }
       catch (e) { out.telemetry_error = schedErrText(e); console.error('scheduler: job ' + job.name + ' failed and telemetry write failed:', errText, out.telemetry_error); }
-      try { const a = await alertAdminOnFailure(env, 'scheduler_' + job.name, errText); if (a && a.sent) out.admin_alerted = true; }
-      catch (e) { out.warnings = (out.warnings || []).concat('admin alert failed: ' + schedErrText(e)); }
+      if (!quotaBusy) {
+        try { const a = await alertAdminOnFailure(env, 'scheduler_' + job.name, errText); if (a && a.sent) out.admin_alerted = true; }
+        catch (e) { out.warnings = (out.warnings || []).concat('admin alert failed: ' + schedErrText(e)); }
+      }
     }
     // Record the outcome: fresh read-modify-write that preserves anyone else's claim, verified by re-read.
     let landed = false, stateErr = null, finalState = null, aiPausedFinal = aiPausedAt;
@@ -17478,6 +18541,9 @@ async function schedRunNext(env, ctx, opts) {
         rec.last_error = jobPaused ? out.paused_reason : (jobOk ? null : errText); rec.duration_ms = out.duration_ms;
         if (jobOk && !jobPaused) rec.last_ok = rec.last_end;
         rec.paused_key = null; rec.paused_ep = null;
+        // Oct 23 2026: a throttled run (the job failed on the quota, or any background read took a real 429 while it ran) starts / extends the cooldown.
+        const coolNext = schedCooldownNext(cur.quota_hot_until, nowMs(), quotaBusyRun || __cronLast429At() > hit429Before, CRON_QUOTA_COOLDOWN_MS);
+        if (coolNext) { cur.quota_hot_until = coolNext; out.quota_hot_until = coolNext; } else delete cur.quota_hot_until;
         if (job.kind !== 'interval') {
           const finalFail = !jobOk && (job.retry === false || jobRes.no_retry === true);
           const etDay = force ? schedEtParts(new Date(nowMs())).date : key;
@@ -17566,6 +18632,8 @@ async function schedStatusHandler(env) {
   const aiState = aiCreditStateFromRows(rows);
   const s = schedStatus(parsed.state, new Date(), eff.jobs, aiState.paused ? (aiState.at || 'paused') : '');
   if (eff.schedule_error) s.schedule_error = eff.schedule_error;
+  const _hot = Date.parse(parsed.state.quota_hot_until || '');
+  if (!isNaN(_hot) && _hot > Date.now()) s.quota_cooldown_until = new Date(_hot).toISOString();   // Oct 23 2026: non-critical jobs are being held back until then
   s.ai_credit = Object.assign({ paused: !!aiState.paused, since: aiState.paused ? (aiState.at || null) : null, kind: aiState.paused ? aiState.kind : null }, aiState.paused ? { reason: aiCreditSchedPaused(aiState).reason, paused_jobs: Object.keys(s.jobs).filter(n => s.jobs[n].paused) } : {});
   const claimUntil = Date.parse(parsed.state.claim_until || '');
   return json(Object.assign({ ok: true }, s, { claim: (!isNaN(claimUntil) && claimUntil > Date.now()) ? { job: parsed.state.claim_job || null, until: parsed.state.claim_until } : null, failures: await failStatusForScheduler(env) }));
@@ -18024,12 +19092,11 @@ async function sendCustomMessage(env, body) {
   });
 }
 
+// D-16 (Oct 23 2026): the old version read the WHOLE SMS_Logs tab on every call (a quota burner, and a swallowed failure). It now appends one
+// row using the cached header list (a write only) and reports a failed write to the failure ledger. The transport row (Log_Source 'transport',
+// written by sendSMSRaw) carries the cost; this row carries who the text was for (Recipient_Type/ID), which the portal-access backfill reads.
 async function logSMS(env, woId, recipientType, recipientId, phone, message) {
-  try {
-    const data=await sheetsRequest(env,'GET',`/values/SMS_Logs`);const rows=data.values||[[]];const headers=rows[0];const now=new Date().toISOString();
-    const newRow=headers.map(h=>({ID:String(nextSafeId(rows)),WO_ID:woId||'',Recipient_Type:recipientType||'',Recipient_ID:recipientId||'',Phone:phone||'',Message:message||'',Sent_Date:now,Status:'sent',Twilio_SID:''}[h]??''));
-    await sheetsRequest(env,'POST',`/values/SMS_Logs:append?valueInputOption=RAW`,{values:[newRow]});
-  } catch(e) { /* non-fatal — SMS already sent, logging is secondary */ }
+  return smsLogRecord(env, { WO_ID: woId || '', Recipient_Type: recipientType || '', Recipient_ID: recipientId || '', Phone: phone || '', Message: message || '', Status: 'sent', Log_Source: 'logSMS', Message_Type: recipientType || '' });
 }
 
 // ── DAILY DIGEST (Session 5) ─────────────────────────────────
@@ -18398,6 +19465,12 @@ class AiCreditPausedError extends Error {
 function sheetsQuotaBusyError(e) {
   const m = String((e && e.message) || e || '');
   return /^Sheets API error on GET /.test(m) && /quota exceeded|read requests per minute|RESOURCE_EXHAUSTED|\b429\b/i.test(m);
+}
+// Oct 22 2026. PURE. A scheduler job's errors ([{step, error}]) where EVERY entry is the shared Sheets read quota ("busy"), not a bug in the job.
+// Such a run is retried on the next tick; it is a calm P2 "sheets_quota_busy" row, not a P0 "scheduler_job" failure that pages Brett.
+// (A job that stays unable to run is still caught loudly: the "Scheduled job X is overdue" condition is P0.)
+function schedErrorsAreQuotaBusy(errors) {
+  return Array.isArray(errors) && errors.length > 0 && errors.every(x => x && sheetsQuotaBusyError(x.error));
 }
 function aiCreditIsPausedError(e) { return !!e && e.code === AI_CREDIT_CODE; }
 
@@ -19348,10 +20421,18 @@ async function opsQueueRead(env, url) {
   // that's already been queued or built instead of re-offering it as fresh. Same read-only data
   // (titles/problems, no money/PII), so the narrow OPS_QUEUE_TOKEN may read it too.
   if (url && url.searchParams && url.searchParams.get('all') === '1') {
-    return json({ ok: true, all: true, count: rows.length, queue: rows.slice().reverse().slice(0, 400) });
+    // Oct 23 2026: a cap that drops rows must say so. `truncated` is true when older rows were left out.
+    return json({ ok: true, all: true, count: rows.length, truncated: rows.length > 400, queue: rows.slice().reverse().slice(0, 400) });
   }
   const active = rows.filter(r => r.Status && r.Status !== 'done' && r.Status !== 'dropped');
-  return json({ ok: true, count: active.length, queue: active.reverse().slice(0, 50) });
+  // Oct 23 2026 (Brett: "fix the invisible old items issue"): this used to be active.reverse().slice(0, 50), i.e. only
+  // the 50 NEWEST active rows, so the overnight Prepare agent (and anything else reading /ops-queue) could never see an
+  // older greenlit item. Now every active row comes back, newest first. A caller that wants fewer can pass ?limit=N
+  // (1-1000); the response then says `truncated: true` if rows were left out, so a cut-off list is never silent.
+  const lim = parseInt((url && url.searchParams && url.searchParams.get('limit')) || '', 10);
+  const newestFirst = active.reverse();
+  const capped = lim > 0 ? newestFirst.slice(0, Math.min(lim, 1000)) : newestFirst;
+  return json({ ok: true, count: active.length, truncated: capped.length < active.length, queue: capped });
 }
 
 // POST /ops-queue-update {id, status} — advance a greenlit item along its lifecycle
@@ -22502,6 +23583,32 @@ async function gmailSendEmailWithAttachment(env, { to, subject, html, attachment
   return { sent: true, message_id: data.id };
 }
 
+// Multi-photo email with an optional Cc (Oct 28 2026, field-inspection urgent items). Staging never sends real mail with attachments:
+// it goes through gmailSendEmail's stub/redirect policy unchanged (recipient overridden, nothing reaches a real requester).
+async function gmailSendEmailMulti(env, { to, cc, subject, html, attachments }) {
+  if (!to) throw new Error('gmailSendEmailMulti: to required');
+  const atts = Array.isArray(attachments) ? attachments : [];
+  if (env.__STAGING__ ?? isStaging(env)) return await gmailSendEmail(env, { to, subject: (subject || '') + (atts.length ? ' [' + atts.length + ' photo(s) not attached on staging]' : ''), html });
+  const accessToken = await gmailAccessToken(env);
+  const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
+  const subjectEncoded = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject || '')))}?=`;
+  const boundary = 'ridgeco_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
+  const head = [`From: Ridge Co <${from}>`, `To: ${to}`].concat(cc ? [`Cc: ${cc}`] : [], [`Subject: ${subjectEncoded}`, 'MIME-Version: 1.0', `Content-Type: multipart/mixed; boundary="${boundary}"`, '', `--${boundary}`, 'Content-Type: text/html; charset="UTF-8"', '', html || '', '']);
+  const parts = head.slice();
+  for (const a of atts) {
+    const safeName = String(a.filename || 'photo.jpg').replace(/[^\w .-]/g, '_').slice(0, 80);
+    parts.push(`--${boundary}`, `Content-Type: ${a.mimeType || 'application/octet-stream'}; name="${safeName}"`, 'Content-Transfer-Encoding: base64', `Content-Disposition: attachment; filename="${safeName}"`, '', String(a.base64Data || '').replace(/(.{76})/g, '$1\r\n'), '');
+  }
+  parts.push(`--${boundary}--`);
+  const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw: _utf8B64url(parts.join('\r\n')) }),
+  });
+  const data = await resp.json().catch(() => null);
+  if (!resp.ok || !data || !data.id) throw new Error('Gmail send failed (HTTP ' + resp.status + '): ' + JSON.stringify(data || {}).slice(0, 200));
+  return { sent: true, message_id: data.id };
+}
+
 // Read a receipt image/PDF with Claude vision → strict JSON. Money-facing ⇒ Claude (PAT-031).
 // Routed through routeAI (B-127) as of Aug 23 — moneyFacing:true pins this to REASON/Claude,
 // the same model this call has always used, so cost/behavior are unchanged. The only real
@@ -24816,6 +25923,16 @@ function __meterTop(rows, which, n) {
 }
 function __meterMaybeAlarm(b, why) {
   const now = Date.now();
+  if (why !== '429') {
+    // (own timer: a busy-minute log line must never use up the gap that a real throttle row needs)
+    if (now - (__meter.lastBusyLogAt || 0) < METER_ALARM_GAP_MS) return;
+    // Oct 22 2026: a busy minute in which Google throttled NOTHING is not a failure - nobody got an error. It used to file a P2 "Needs Attention" row that
+    // re-opened every time it was marked fixed (F-1792553535622-hzqa). It is still counted and shown on read-meter.html and in the Worker log; the moment
+    // Google actually throttles a read ("429") the P2 row is filed as before.
+    __meter.lastBusyLogAt = now;
+    console.warn('[read-meter] busy minute (not filed: nothing throttled): ' + b.reads + ' reads on this instance. See read-meter.html.');
+    return;
+  }
   if (__meter.pending || now - __meter.lastAlarmAt < METER_ALARM_GAP_MS) return;
   __meter.lastAlarmAt = now;
   const rows = __meterWindow(2);
@@ -25009,6 +26126,13 @@ function __staleTab(tab) {
 const CRON_CACHE_MS = 90 * 1000;
 const CRON_READ_GAP_MS = 2500;
 let __cronNextReadAt = 0;
+// Oct 23 2026: when a non-critical background read is throttled it retries once, quickly (see sheetsRequest). CRON_QUOTA_COOLDOWN_MS is how long the
+// dispatcher then holds back the non-critical jobs (Scheduler_State.quota_hot_until). Google's quota is per MINUTE, so 2.5 min lets the bucket refill.
+const CRON_FAST_ATTEMPTS = 2;
+const CRON_FAST_BACKOFF_MS = 2000;
+const CRON_QUOTA_COOLDOWN_MS = 150 * 1000;
+let __cronHit429At = 0;   // ms epoch of the last real 429 seen by a background read in this Worker instance
+function __cronLast429At() { return __cronHit429At; }
 function __cronEnv(env) {
   if (env && env.__CRON__) return env;
   const c = Object.create(env);
@@ -25096,8 +26220,13 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
   // Reads get a much longer retry budget than writes (6 tries, ~0.5/1/2/4/8s waits = ~15s)
   // because Google's quota is per MINUTE: the old ~2s of total waiting gave up long before
   // the limit could clear. Writes keep 4 tries / 300ms base (a vendor staring at a Save button).
-  const MAX_ATTEMPTS = method === 'GET' ? 6 : 4;
-  const BACKOFF_BASE_MS = method === 'GET' ? 500 : 300;
+  // Oct 23 2026 (cron cooldown): a BACKGROUND (cron) read that is not door-critical gives up after ONE retry. Six tries x ~15 s of waiting, from
+  // several jobs in a row, re-spent the same exhausted per-minute quota again and again (a retry storm that kept people locked out). The failed read
+  // is reported by the job as a calm quota-busy row and the dispatcher cools the non-critical jobs down (schedRunNext). People and door_watchdog
+  // keep the full 6 tries.
+  const __cronFast = method === 'GET' && !!(env && env.__CRON__) && !(env && env.__CRON_CRITICAL__);
+  const MAX_ATTEMPTS = method === 'GET' ? (__cronFast ? CRON_FAST_ATTEMPTS : 6) : 4;
+  const BACKOFF_BASE_MS = method === 'GET' ? (__cronFast ? CRON_FAST_BACKOFF_MS : 500) : 300;
   for(let attempt=1;;attempt++){
     const token=await getAccessToken(env);
     const opts={method,headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'}};
@@ -25107,6 +26236,7 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
     try { res=await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}${path}`,opts); }
     catch (e) { __meterGoogle(env, method, path, 'err'); throw e; }
     __meterGoogle(env, method, path, res.status === 429 ? '429' : (res.status >= 400 ? 'err' : 'ok'));   // every real attempt, retries included
+    if (res.status === 429 && env && env.__CRON__) __cronHit429At = Date.now();   // the dispatcher reads this after a job and starts the cooldown
     const data=await res.json();
     if(data.error){
       const code=data.error.code||res.status;
@@ -25833,8 +26963,24 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/owner/tenant-roster/preview') return true;
   if (path === '/owner/tenant-roster/apply') return !!(body && body.owner_id) && await isTestRecord(env, 'Owners', body.owner_id);
   // Oct 15 2026 (field inspection): the staging token may only write inspections whose id starts TEST-, brands named TEST- (never default, never a non-TEST brand); structure/summarize write nothing.
-  if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report') return String((body && body.id) || '').startsWith('TEST-');
+  if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report' || path === '/fi/urgent-send') return String((body && body.id) || '').startsWith('TEST-');
   if (path === '/fi/structure' || path === '/fi/summarize' || path === '/fi/route' || path === '/fi/brand/scrape' || path === '/fi/transcribe/json') return true; // AI / read-only: no sheet writes
+  if (path === '/fi/reword') return true; // AI only: writes nothing
+  if (path === '/admin/fi-premier-repair') { // staging may only repair a TEST- partner's links, to a TEST- inspection
+    if (!body || body.dry_run !== false) return true; // a dry run writes nothing
+    const _cu = (await fetchTab(env, 'Insp_Customers')).find(c => String(c.ID) === String(body.customer_id));
+    if (body.copy_partner_contact === true) { // copying contact details onto an owner may only ever touch a TEST- owner on staging
+      const _ow = (await fetchTab(env, 'Owners')).find(o => String(o.ID) === String(body.owner_id));
+      if (!_ow || !String(_ow.Company || '').startsWith('TEST-')) return false;
+    }
+    return !!_cu && String(_cu.Name || '').startsWith('TEST-') && Array.isArray(body.links) && body.links.every(l => String((l && l.inspection_id) || '').startsWith('TEST-'));
+  }
+  if (path === '/fi/booking/start') { // staging may only claim a TEST- booking (address starts TEST-) for a TEST- inspection id
+    if (!String((body && body.inspection_id) || '').startsWith('TEST-')) return false;
+    const _bk = await fetchTab(env, 'Insp_Bookings');
+    const _br = _bk.find(r => String(r.ID) === String(body && body.booking_id));
+    return !!_br && String(_br.Address || '').startsWith('TEST-');
+  }
   if (path === '/fi/read-label') return String((body && body.inspection_id) || '').startsWith('TEST-'); // reads a private photo: TEST- inspections only
   if (path === '/fi/folder/organize') return String((body && body.inspection_id) || '').startsWith('TEST-');
   if (path === '/fi/property/create') { // staging may only create a TEST- address owned by a TEST- owner (new TEST- company, or an existing TEST- owner)
@@ -25896,6 +27042,19 @@ async function hubTestWriteAllowed(env, path, body) {
     const _okProp = String((_a.property && _a.property.Access_Notes) || '').startsWith('TEST-');
     return { ok: _okProp, debug: _okProp ? undefined : 'intake-guard: email resolves to a non-TEST property ' + (_a.property && _a.property.ID) };
   }
+  // Delivery email watcher (Oct 23 2026): staging-only token. The message id must be TEST- prefixed, and when the email resolves to a real
+  // property it must be a TEST- one (Access_Notes marker, same as /workorder). Parked / unmatched outcomes write only a Deliveries row + the alert.
+  if (path === '/intake/delivery-email') {
+    const _mid = String((body && (body.rfc_message_id || body.message_id || body.gmail_id)) || '');
+    if (!_mid.startsWith('TEST-')) return { ok: false, debug: 'delivery-intake-guard: message_id must start with TEST-' };
+    const _p = deliveryParseEmail({ subject: String(body.subject || ''), body: body.body != null ? body.body : body.text, html: String(body.html || '').slice(0, 200000), received_at: body.received_at });
+    if (!_p.address) return { ok: true };
+    const [_props, _units, _tenants] = await fetchTabs(env, ['Properties', 'Units', 'Tenants']);
+    const _pl = deliveryMatchPlace(_p.address, _p.unit_raw, _props, _units, _tenants);
+    if (_pl.status !== 'matched') return { ok: true };
+    const _okProp = String(_pl.property.Access_Notes || '').startsWith('TEST-');
+    return { ok: _okProp, debug: _okProp ? undefined : 'delivery-intake-guard: email resolves to a non-TEST property ' + _pl.property.ID };
+  }
   if (path === '/intake/retry') {
     const _q = (await fetchTab(env, INTAKE_TAB).catch(() => [])).find(r => String(r.ID) === String(body && body.id));
     if (!_q || !String(_q.Message_ID || '').startsWith('TEST-')) return { ok: false, debug: 'intake-guard: retry row is not a TEST- message' };
@@ -25935,6 +27094,12 @@ async function hubTestWriteAllowed(env, path, body) {
     const _sn = (await fetchTab(env, WO_SNIPPETS_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id));
     return !!_sn && String(_sn.Name || '').startsWith('TEST-');
   }
+  // Portal access tracking (Oct 22 2026): the staging token may send or preview a PIN / welcome text, or regenerate a PIN, only for a TEST- person
+  // (staging stubs every SMS, so nothing is really texted). Owner_Users has no TEST marker field, so it is not reachable with this token.
+  if (path === '/send-pin' || path === '/welcome/send' || path === '/regenerate-pin') {
+    const _pt = PORTAL_TAB_BY_TYPE[body && body.type];
+    return !!_pt && _pt !== 'Owner_Users' && await isTestRecord(env, _pt, body && body.id);
+  }
   if (path === '/vendor/complete-onboarding') {
     return await isTestRecord(env, 'Vendors', body && body.vendor_id);
   }
@@ -25966,7 +27131,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/str/admin/pending/create') return String((body && body.note) || '').startsWith('TEST-');
   if (path === '/str/admin/pending/cancel' || path === '/str/admin/pending/convert' || path === '/str/admin/pending/send-now') { const _p = (await fetchTab(env, 'STR_Turnovers')).find(x => x.Task_Key === String((body && body.task_key) || '')); return !!_p && String(_p.Pending || '').toUpperCase() === 'TRUE' && String(_p.Pending_Note || '').startsWith('TEST-'); }
   if (path === '/str/admin/change/apply') { const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => String(x.ID) === String(body && body.cleaner_id)); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
-  if (path === '/str/admin/config' || path === '/str/admin/offer-now' || path === '/str/admin/alert/ack' || path === '/str/admin/run') return true; // staging only; config keys are allow-listed in the handler
+  if (path === '/str/admin/config' || path === '/str/admin/calendar-check' || path === '/str/admin/offer-now' || path === '/str/admin/alert/ack' || path === '/str/admin/run') return true; // staging only; config keys are allow-listed in the handler
   if (path === '/str/admin/digest-run') return !!(body && body.dry);
   if (path === '/insp/str-guard/run') return true; // staging: reads fixture/calendars, alerts are stubbed; writes only the STR_GUARD_NOTIFIED Config key
   // Scheduler smoke (Oct 12 2026): staging only dry-runs, or runs ONE of the two read-mostly jobs (never force, never the sweeps/dailies that touch customers).
@@ -26304,7 +27469,7 @@ async function hubTestWriteAllowed(env, path, body) {
   }
   const _WO_KEYED = ['/wo/share-link', '/wo/share-revoke', '/wo/add-note', '/wo/append-description', '/wo/checklist', '/wo/void', '/wo/unvoid',
     '/wo/owner-update', '/wo/set-tenant-visibility', '/wo/admin-update', '/wo/tenant-update-manual', '/workorder/notes', '/log-attachment',
-    '/create-upload-session', '/receipt/add', '/time-entry/add', '/wo-tenant/add', '/wo-tenant/remove', '/vendor-task-request/create'];
+    '/create-upload-session', '/receipt/add', '/time-entry/add', '/time-entry/use-notes', '/wo-tenant/add', '/wo-tenant/remove', '/vendor-task-request/create'];
   if (_WO_KEYED.includes(path)) {
     const woId = _b.wo_id || _b.wo;
     if (woId) { if (!(await isTestWO(env, woId))) return false; }
@@ -26788,7 +27953,7 @@ async function qbRepairable(env, url) {
         paid, balance: isNaN(qBal) ? null : qBal,
         customer: (q.CustomerRef && q.CustomerRef.name) || '',
         issues,
-        new_description: rebuilt.lines[0] ? rebuilt.lines[0].Description : '',
+        new_description: (() => { const lab = rebuilt.lines.filter(l => !/^Materials — /.test(String(l.Description || ''))); return (lab.length ? lab : rebuilt.lines.slice(0, 1)).map(l => l.Description).join(' | '); })(),
         photo_url: folderUrl,
       });
     }
@@ -30681,21 +31846,57 @@ function qbGroupOpenRows(irRows, ir, woRows, estRows) {
 // the bill's own Invoice_Description leads if set (the flat-rate / no-time-entry case). Only
 // when NEITHER exists — old bills, or nobody filled either field in — does this fall back to
 // wo.Invoice_Memo/Description, so nothing already sent regresses.
+//
+// Oct 23 2026 (invoice 1767 / WO-1169, owner asked "more detail of the larger amounts"): Brett's own
+// billable hours logged BEFORE the Invoice Description field existed carry their detail only in
+// Notes, which are PRIVATE. Notes NEVER reach an invoice on their own. Brett opts in with the
+// "Use notes as invoice descriptions" action (POST /time-entry/use-notes), which COPIES a hub
+// billable entry's Notes into its Invoice_Description (verified write) so nothing is retyped and
+// nothing private goes out unseen. After that the entry is described like any other.
+function isTrueish(v) { return v === true || String(v == null ? '' : v).trim().toUpperCase() === 'TRUE'; }
+
+function laborEntryText(e) {
+  const inv = englishOnly((e && e.Invoice_Description) || '').trim();
+  if (!inv) return '';
+  // Brett's own hours print a date only when a work date was recorded: Created_Date is when the entry
+  // was LOGGED (often days after the work), so it is never shown for him. Vendor entries keep the old rule.
+  const isHub = String((e && e.Role) || '').toLowerCase() === 'hub';
+  const d = String(isHub ? (e.Start_DateTime || '') : (e.Start_DateTime || e.Created_Date || '')).split('T')[0];
+  return d ? (d + ' — ' + inv) : inv;
+}
+
+// Brett's own billable hours that have a private note but no Invoice Description (the ones the
+// opt-in action can copy). billId: a string limits to entries on that bill ('' = not on any bill);
+// null = every entry passed in.
+function timeEntriesWithUsableNotes(timeEntries, billId) {
+  return (Array.isArray(timeEntries) ? timeEntries : []).filter(e => e && e.Active !== 'FALSE'
+    && (billId === null || billId === undefined || String(e.Bill_ID || '').trim() === String(billId))
+    && String(e.Role || '').toLowerCase() === 'hub' && isTrueish(e.Billable)
+    && !String(e.Invoice_Description || '').trim() && String(e.Notes || '').trim());
+}
+
 function buildLaborDescription(billRow, timeEntries, wo) {
   const billId = String((billRow && billRow.ID) || '').trim();
   const parts = [];
   const billDesc = englishOnly((billRow && billRow.Invoice_Description) || '').trim();   // customer-facing = English (Sep 28 2026): [ES]/[EN] tags resolve to the EN half
   if (billDesc) parts.push(billDesc);
   (Array.isArray(timeEntries) ? timeEntries : [])
-    .filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId && String(e.Invoice_Description || '').trim())
+    .filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId && laborEntryText(e))
     .sort((a, b) => new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0))
-    .forEach(e => {
-      const d = String(e.Start_DateTime || e.Created_Date || '').split('T')[0];
-      const desc = englishOnly(e.Invoice_Description || '').trim();
-      parts.push(d ? (d + ' — ' + desc) : desc);
-    });
+    .forEach(e => parts.push(laborEntryText(e)));
   if (parts.length) return parts.join('; ');
   return String((wo && (wo.Invoice_Memo || wo.Description)) || '').trim();
+}
+
+// True when billable hours exist on this job but NONE of them (nor the bill) said anything the
+// customer can read — the invoice would go out with only the generic work-order text. Used to
+// warn loudly in the send preview instead of letting a vague invoice go out silently.
+function laborDescriptionIsGeneric(billRow, timeEntries) {
+  const billId = String((billRow && billRow.ID) || '').trim();
+  if (englishOnly((billRow && billRow.Invoice_Description) || '').trim()) return false;
+  const list = (Array.isArray(timeEntries) ? timeEntries : []).filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId);
+  if (!list.some(e => isTrueish(e.Billable) || String(e.Role || '').toLowerCase() === 'vendor')) return false;   // no billable hours: nothing to explain
+  return !list.some(e => laborEntryText(e));
 }
 
 // Async pre-pass for the invoice builders (Sep 28 2026): returns COPIES of the bill row and time
@@ -30717,6 +31918,41 @@ async function invoiceInputsEnglish(env, billRow, timeEntries) {
     } catch (_) {}
   }
   return { billRow: bill, timeEntries: entries };
+}
+
+// Oct 23 2026 (Brett: "split these billable hours into line items. That way it makes more sense"):
+// Brett's own hours on a job with NO vendor bill become one invoice line per logged visit, each
+// with its own description and hours x rate, instead of one lump "Billable hours" line. ONLY when
+// the visits' stored Billable_Amounts add up to the labor amount to the cent; otherwise (a flat
+// price, a markup, anything that does not reconcile) it returns null and the single combined line
+// is used, so the invoice TOTAL is never changed by this.
+function hubVisitLaborLines(timeEntries, laborAmt, tradeName, wo, ir, itemRef) {
+  const woId = String((ir && ir.WO_ID) || '');
+  const list = (Array.isArray(timeEntries) ? timeEntries : []).filter(e => e && e.Active !== 'FALSE'
+    && !String(e.Bill_ID || '').trim()
+    && String(e.Role || '').toLowerCase() === 'hub' && isTrueish(e.Billable)
+    && (!e.WO_ID || !woId || String(e.WO_ID) === woId)
+    && Math.round((Number(e.Billable_Amount) || 0) * 100) > 0);
+  if (!list.length) return null;
+  const cents = list.reduce((n, e) => n + Math.round((Number(e.Billable_Amount) || 0) * 100), 0);
+  if (cents !== Math.round(laborAmt * 100)) return null;
+  list.sort((a, b) => new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0));
+  return list.map(e => {
+    const amt = +(Number(e.Billable_Amount) || 0).toFixed(2);
+    const hrs = +((parseFloat(e.Duration_Minutes) || 0) / 60).toFixed(2);
+    const rate = +(Number(e.Hourly_Rate) || 0).toFixed(2);
+    const parts = [tradeName];
+    const text = laborEntryText(e);
+    if (text) parts.push(text);
+    parts.push('WO ' + (ir.WO_ID || ''));
+    let label = parts.join(' — ');
+    let detail = { ItemRef: itemRef, Qty: 1, UnitPrice: amt };
+    if (hrs > 0 && rate > 0 && Math.abs(+(hrs * rate).toFixed(2) - amt) < 0.01) {
+      detail = { ItemRef: itemRef, Qty: hrs, UnitPrice: rate };
+      label += ' — ' + hrs + ' hr' + (hrs === 1 ? '' : 's') + ' × $' + rate.toFixed(2) + '/hr';
+    }
+    return { DetailType: 'SalesItemLineDetail', Amount: amt, Description: label.slice(0, 4000), SalesItemLineDetail: detail };
+  });
 }
 
 function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, ownReceipts, timeEntries) {
@@ -30770,6 +32006,13 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
   }
   const total = +(Number(ir.Customer_Total) || 0).toFixed(2);
   const laborAmt = +(total - materialsTotal).toFixed(2);
+  if (!String((billRow && billRow.ID) || '').trim()) {
+    const visitLines = hubVisitLaborLines(timeEntries, laborAmt, tradeName, wo, ir, itemRef);
+    if (visitLines) {
+      visitLines.slice().reverse().forEach(l => lines.unshift(l));
+      return { lines, materialsTotal: +materialsTotal.toFixed(2), laborAmt, total };
+    }
+  }
   // Say what was actually done. The description belongs on the line the owner is paying,
   // not buried in a note under the total — an invoice reading "Labor & service —
   // Landscaping" tells them nothing about the job.
@@ -31016,6 +32259,7 @@ async function qbReadyQueue(env, url) {
     // Was `return json([])`. A Sheets outage or a renamed tab then rendered as a green
     // "✓ Nothing waiting for QuickBooks" — a read returning [] is not proof the tab exists
     // (FEATURE_LOG rule 16). Fail loudly instead.
+    if (sheetsQuotaBusyError(e)) throw e;   // Oct 22 2026: Google's shared read quota is "busy, retry" (typed 429 + one calm P2 row), not an HTTP 500 that every open Hub page reports as a failure
     return json({ error: 'Could not read the QuickBooks queue: ' + (e && e.message || 'unknown error') }, 500);
   }
 }
@@ -31449,6 +32693,60 @@ function proposalNettingPlan(o) {
   };
 }
 
+// ── Vendor deposit paid outside the proposal schedule (Oct 26 2026, WO-1253 / Cesar) ─────────────────────
+// A deposit recorded on the work order (POST /wo/deposit-approve) is a real QuickBooks bill Brett pays by hand. It is NOT a Vendor_Bills row
+// (so the vendor can never be paid for it twice) and it is NOT on the proposal's milestone schedule, so nothing netted it off the final bill.
+// woDepositCredit() says what comes off the final bill; woDepositEstimateCap() is the most a deposit may be.
+//   - credit only while Deposit_Applied !== TRUE, a QuickBooks bill id is on file (no bill = nothing was paid = nothing to deduct), and the
+//     deposit belongs to the vendor being billed.
+//   - the credit rides the same visible negative-line path as the proposal credit; Deposit_Applied flips only after QuickBooks returns the bill id.
+function woDepositCredit(wo, vendorId, irRows) {
+  if (!wo) return null;
+  const amt = money2(parseFloat(wo.Deposit_Amount) || 0);
+  if (!(amt > 0)) return null;
+  if (String(wo.Deposit_Applied || '').toUpperCase() === 'TRUE') return null;
+  const billId = String(wo.Deposit_QB_Bill_ID || '').trim();
+  if (!billId) return null;
+  const dv = String(wo.Deposit_Vendor_ID || '').trim();
+  if (dv && vendorId != null && String(vendorId).trim() !== '' && dv !== String(vendorId).trim()) return null;
+  // Belt and braces: if a vendor bill on this work order already recorded taking this deposit off (Invoice_Review.Deposit_Credit) but the flag flip failed,
+  // the deposit is spent. Never deduct it a second time just because the flag did not save.
+  const woKey = String(wo.WO_ID || wo.ID || '').trim();
+  if (woKey && (irRows || []).some(r => String(r.WO_ID) === woKey && String(r.Active || '').toUpperCase() !== 'FALSE' && (parseFloat(r.Deposit_Credit) || 0) > 0 && String(r.QB_Bill_ID || '').trim())) return null;
+  const ref = String(wo.Deposit_QB_Bill_Number || '').trim() || ('#' + billId);
+  return { type: 'deposit_credit', amount: amt, bill_id: billId, bill_number: String(wo.Deposit_QB_Bill_Number || '').trim(),
+    desc: 'Less: deposit already paid to you (Bill ' + ref + ')', desc_es: 'Menos: depósito ya pagado a usted (Factura ' + ref + ')' };
+}
+// Latest live estimate for the work order (a declined or withdrawn one is not what the vendor agreed to). null = no estimate on file.
+function woDepositEstimateCap(estimateRows, woId, wo) {
+  const mine = (estimateRows || []).filter(e => String(e.WO_ID) === String(woId) && !/^(declined|withdrawn)$/i.test(String(e.Status || '').trim()));
+  if (!mine.length) return null;
+  const latest = mine.slice().sort((a, b) => (parseInt(a.Version || '0', 10) || 0) - (parseInt(b.Version || '0', 10) || 0)).pop();
+  const subtotal = money2(parseFloat(latest.Subtotal) || 0);
+  if (!(subtotal > 0)) return null;
+  // A deposit that was already taken off a final bill is spent: the next one can only be the rest.
+  const spent = (wo && String(wo.Deposit_Applied || '').toUpperCase() === 'TRUE') ? money2(parseFloat(wo.Deposit_Amount) || 0) : 0;
+  return { estimate_id: String(latest.ID || ''), version: String(latest.Version || ''), subtotal, spent, cap: Math.max(0, money2(subtotal - spent)) };
+}
+// Mark the deposit as taken off a final bill — called ONLY after QuickBooks returned that bill's id. The write is read back; a miss is loud
+// (warning + Ops_Telemetry) because the bill already carries the deduction and an unflipped flag would deduct the deposit a second time.
+async function woDepositMarkApplied(env, woId, dep, finalBill, warnings, source) {
+  try {
+    await ensureColumns(env, 'Work_Orders', ['Deposit_Applied', 'Deposit_Applied_Bill', 'Deposit_Applied_Date']);
+    await updateWOFields(env, woId, { Deposit_Applied: 'TRUE', Deposit_Applied_Bill: String(finalBill.number || finalBill.id || ''), Deposit_Applied_Date: new Date().toISOString().split('T')[0] });
+    invalidateTabCache('Work_Orders');
+    const back = findWO(await fetchTab(env, 'Work_Orders'), woId);
+    if (!back || String(back.Deposit_Applied || '').toUpperCase() !== 'TRUE') throw new Error('Deposit_Applied read back as "' + (back ? back.Deposit_Applied : 'no row') + '"');
+    return true;
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 160);
+    warnings.push('⚠ The vendor bill went out with the $' + dep.amount.toFixed(2) + ' deposit already deducted, but marking the deposit as used failed (' + msg + '). Set Deposit_Applied to TRUE on ' + woId + ' by hand now, or the next bill to this vendor will deduct it again.');
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_deposit_apply_flag_failed', Skill_Or_Endpoint: source || '/qb/send-invoice', Success: 'FALSE', Notes: ('wo=' + woId + ' deposit_bill=' + dep.bill_id + ' final_bill=' + (finalBill.id || '') + ' ' + msg).slice(0, 480) }); }
+    catch (e2) { warnings.push('(That failure also could not be written to Ops_Telemetry: ' + String((e2 && e2.message) || e2).slice(0, 100) + '.)'); }
+    return false;
+  }
+}
+
 // The vendor bill's extra lines: proposal credit(s), then the instant-pay fee. Every adjustment is a
 // visible line to the vendor (never a silently smaller total). `payable` is the amount the main work
 // line carries after any loan deduction. `bill_total` is what the whole bill adds up to = what Brett sends.
@@ -31847,7 +33145,7 @@ async function qbSendInvoice(env, body) {
         groupRows, bills, vendors, wo: _ctxWo, woList: wos, owner, prop, unit, billTo, trade, tradeName,
         warnings, previewOnly, batch: body.batch, timeEntries: _ctxTimeEntries,
         overridePendingInfo: !!body.override_pending_info,
-        netting: body.netting, overrideOverbill: body.override_overbill === true, instantPay: body.instant_pay,
+        netting: body.netting, overrideOverbill: body.override_overbill === true, instantPay: body.instant_pay, irRows,
       });
     }
 
@@ -31873,6 +33171,19 @@ async function qbSendInvoice(env, body) {
     const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
     const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
+    // Oct 23 2026 (invoice 1767): say so in the preview when the customer would read only the generic work-order text
+    // even though hours were billed, and point at the opt-in that copies the private notes (nothing is copied automatically).
+    {
+      const _usable = timeEntriesWithUsableNotes(_inEn.timeEntries, String(_inEn.billRow.ID || '').trim());
+      const _n = _usable.length;
+      if (laborDescriptionIsGeneric(_inEn.billRow, _inEn.timeEntries)) {
+        warnings.push(_n
+          ? ('⚠ ' + _n + ' billable hour ' + (_n === 1 ? 'entry has a private note but no Invoice Description' : 'entries have a private note but no Invoice Description') + ', so the owner would read only the generic work-order text. Open this job\'s Time Tracking and tap "Use notes as invoice descriptions", then preview again.')
+          : '⚠ Hours are billed on this job but none of them has an Invoice Description, so the owner will read only the generic work-order text. Add an Invoice Description to the time entries (or the bill) before sending.');
+      } else if (_n) {
+        warnings.push('ℹ ' + _n + ' billable hour ' + (_n === 1 ? 'entry still has' : 'entries still have') + ' a private note but no Invoice Description, so ' + (_n === 1 ? 'it prints' : 'they print') + ' without a description. Time Tracking > "Use notes as invoice descriptions" copies them over.');
+      }
+    }
 
     // ── Signed-proposal netting + instant-pay fee (Oct 19 2026) ──────────────────────────────
     // Before this, a job on a signed proposal was billed in FULL here even when its deposit had
@@ -31893,6 +33204,16 @@ async function qbSendInvoice(env, body) {
         SalesItemLineDetail: { ItemRef: { value: trade.item }, Qty: 1, UnitPrice: -creditCust } });
     }
     const netCustTotal = money2(custTotal - creditCust);
+    // Oct 26 2026: a vendor deposit recorded on this work order (paid by hand in QuickBooks, never a Vendor_Bills row) comes off THIS vendor bill as its
+    // own visible line. Only a bill that is still to be created takes it; a retry that already has its bill never re-deducts.
+    const depCredit = (!haveBill && !vendorInHousePre && vendorCost > 0) ? woDepositCredit(wo, ir.Vendor_ID, irRows) : null;
+    if (depCredit) {
+      warnings.push('💰 A $' + depCredit.amount.toFixed(2) + ' deposit was already paid to this vendor (QuickBooks bill ' + (depCredit.bill_number || depCredit.bill_id) + ') — it comes off this bill automatically.');
+      if (money2(vendorCost - creditVend) < depCredit.amount - 0.005) warnings.push('⛔ The $' + depCredit.amount.toFixed(2) + ' deposit is more than what is left to pay this vendor ($' + money2(vendorCost - creditVend).toFixed(2) + ') — the bill cannot be sent until the amounts are fixed.');
+    } else if (!haveBill && wo && parseFloat(wo.Deposit_Amount) > 0 && String(wo.Deposit_Applied || '').toUpperCase() !== 'TRUE') {
+      warnings.push(vendorInHousePre ? '⚠ This work order has an unapplied vendor deposit, but this vendor bill is not being created (in-house), so the deposit was not deducted.' :
+        '⚠ This work order has an unapplied $' + (parseFloat(wo.Deposit_Amount) || 0).toFixed(2) + ' vendor deposit that was NOT deducted from this bill (' + (!String(wo.Deposit_QB_Bill_ID || '').trim() ? 'it has no QuickBooks bill on file' : 'it belongs to a different vendor') + ') — check the work order before paying.');
+    }
     // Instant-pay fee for THIS payment: the per-bill toggle if Brett set one, else the vendor's own setting.
     // A retry of a send that already recorded its fee reuses that exact number.
     const storedFee = (String(ir.Instant_Fee || '').trim() !== '' && (haveInv || haveBill || body.instant_pay === undefined)) ? { on: String(ir.Instant_Pay || '').toUpperCase() === 'TRUE', amount: +ir.Instant_Fee || 0 } : null;
@@ -31913,7 +33234,8 @@ async function qbSendInvoice(env, body) {
     const buildAdj = (loanDed, forceFee) => vendorBillAdjustments({
       payable: money2(vendorCostGross - (loanDed || 0)), lang: vendorLang, feeOn: (forceFee === true || feeOn) && !vendorInHousePre && vendorCostGross > 0, cfg: feeCfg,
       feeOverride: storedFee && storedFee.on ? storedFee.amount : undefined, pad: irPad, feeCredit: feeCreditAvail,
-      credits: creditVend > 0 ? [{ type: 'proposal_credit', amount: creditVend, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [],
+      credits: (creditVend > 0 ? [{ type: 'proposal_credit', amount: creditVend, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [])
+        .concat(depCredit ? [{ type: 'deposit_credit', amount: depCredit.amount, desc: depCredit.desc, desc_es: depCredit.desc_es }] : []),
     });
 
     const custDisplay = owner ? (owner.Billing_Name || owner.Company || ((owner.First_Name || '') + ' ' + (owner.Last_Name || '')).trim()) : '';
@@ -32008,7 +33330,7 @@ async function qbSendInvoice(env, body) {
           if (previewLoanBalance > 0) {
             const isFlatPrev = String((billRow && billRow.Bill_Type) || '').toLowerCase() === 'flat';
             const laborPrev = isFlatPrev ? (parseFloat(billRow && billRow.Flat_Rate) || 0) : (parseFloat(billRow && billRow.Labor_Total) || 0);
-            previewLoanDeduction = Math.min(computeLoanDeduction(laborPrev, previewLoanBalance), vendorCost);
+            previewLoanDeduction = Math.min(computeLoanDeduction(laborPrev, previewLoanBalance), money2(vendorCost - creditVend - (depCredit ? depCredit.amount : 0)));
             if (previewLoanDeduction > 0) warnings.push(`Loan repayment: $${previewLoanDeduction.toFixed(2)} will be deducted from ${vendDisplay}'s payment (current balance $${previewLoanBalance.toFixed(2)}).`);
           }
         } catch (e) { /* best-effort — confirm still applies/records the real deduction */ }
@@ -32030,10 +33352,11 @@ async function qbSendInvoice(env, body) {
                     vendor_id: vendor.ID || '', suggest: vendSuggest, qb_list: qbVendors },
         invoice:  { total: +netCustTotal.toFixed(2), gross_total: +custTotal.toFixed(2), credit: +creditCust.toFixed(2), lines: inv.lines.map(l => ({ desc: l.Description, amount: l.Amount })), attach_receipts: allWithUrl },
         netting:  nres.block,
+        deposit:  depCredit ? { amount: depCredit.amount, bill: depCredit.bill_number || depCredit.bill_id, label: depCredit.desc } : null,
         fee:      (() => { const a = buildAdj(previewLoanDeduction); return { applies: !vendorInHousePre && vendorCost > 0 && (feeDefaultOn || feeOn), on: feeOn, vendor_default_on: feeDefaultOn, amount: a.fee, pad: a.pad || 0, amount_if_on: buildAdj(previewLoanDeduction, true).fee, send_amount: a.bill_total, vendor_credit: +creditVend.toFixed(2),
           rate: feeCfg.rate, min: feeCfg.min, max: feeCfg.max, notes: a.notes,
           lines: a.lines.map(l => ({ type: l.type, desc: l.desc, amount: l.amount })) }; })(),
-        bill:     { total: +buildAdj(previewLoanDeduction).bill_total.toFixed(2), gross_total: +(vendorCost - previewLoanDeduction).toFixed(2), account: trade.expense,
+        bill:     { total: +buildAdj(previewLoanDeduction).bill_total.toFixed(2), gross_total: +(vendorCost - previewLoanDeduction).toFixed(2), deposit_credit: depCredit ? depCredit.amount : 0, account: trade.expense,
                     terms: vendorTermLabel(vendor),
                     doc_number: qbBillDocNumber(billRow, ir, 0).number,
                     doc_from: qbBillDocNumber(billRow, ir, 0).source,
@@ -32060,12 +33383,15 @@ async function qbSendInvoice(env, body) {
       }, 409);
     }
 
+    if (depCredit && money2(vendorCost - creditVend) < depCredit.amount - 0.005) {
+      return json({ ok: false, deposit_blocked: true, error: 'The $' + depCredit.amount.toFixed(2) + ' deposit already paid to this vendor is more than what is left to pay them on this bill ($' + money2(vendorCost - creditVend).toFixed(2) + '), so nothing was sent. Fix the bill amount, or clear the deposit on the work order if it was entered in error.', warnings }, 409);
+    }
     // Size the vendor-side adjustments (loan deduction, proposal credit, instant fee) and RECORD the
     // decision on the review row before anything is written to QuickBooks — a retry must see exactly
     // what this attempt decided. If it cannot be saved, nothing is sent.
     let loanAdjPre = { deduction: 0, laborAmount: 0, balance: 0 };
     if (!haveBill && vendorCostGross > 0 && !vendorInHousePre && vendor.ID) {
-      try { loanAdjPre = await computeVendorLoanAdjustment(env, { vendorId: vendor.ID, vendorCost: money2(vendorCostGross - creditVend), billRow }); }
+      try { loanAdjPre = await computeVendorLoanAdjustment(env, { vendorId: vendor.ID, vendorCost: money2(vendorCostGross - creditVend - (depCredit ? depCredit.amount : 0)), billRow }); }
       catch (e) { warnings.push('Loan-ledger check failed (' + (e.message || 'error') + ') — bill sent at the full amount; nothing was deducted.'); }
     }
     const adjPre = buildAdj(loanAdjPre.deduction);
@@ -32255,6 +33581,7 @@ async function qbSendInvoice(env, body) {
           if (loanAdj.deduction > 0) vendorCost = +(vendorCost + loanAdj.deduction).toFixed(2);
         } else {
           billDocAssigned = (r.Bill && r.Bill.DocNumber) || '';
+          if (depCredit) await woDepositMarkApplied(env, ir.WO_ID, depCredit, { id: billId, number: billDocAssigned }, warnings, '/qb/send-invoice');
           if (adjFinal.credit_applied > 0) {
             // Mark the credit used ONLY now that QuickBooks returned the bill id. If this write fails the bill already carries the credit line, so say so loudly.
             try {
@@ -32265,7 +33592,7 @@ async function qbSendInvoice(env, body) {
               await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' vendor=' + vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
             }
           }
-          if (adjFinal.fee > 0) warnings.push('Instant-pay fee: send $' + adjFinal.bill_total.toFixed(2) + ' to ' + vendDisplay + ' (bill $' + money2(vendorCostGross - loanAdj.deduction).toFixed(2) + (creditVend > 0 ? ' − $' + creditVend.toFixed(2) + ' already billed' : '') + ' − $' + adjFinal.fee.toFixed(2) + ' fee).');
+          if (adjFinal.fee > 0) warnings.push('Instant-pay fee: send $' + adjFinal.bill_total.toFixed(2) + ' to ' + vendDisplay + ' (bill $' + money2(vendorCostGross - loanAdj.deduction).toFixed(2) + (creditVend > 0 ? ' − $' + creditVend.toFixed(2) + ' already billed' : '') + (depCredit ? ' − $' + depCredit.amount.toFixed(2) + ' deposit already paid' : '') + ' − $' + adjFinal.fee.toFixed(2) + ' fee).');
           if (loanAdj.deduction > 0) {
             try {
               const newBalance = await recordVendorLoanDeduction(env, {
@@ -32295,9 +33622,9 @@ async function qbSendInvoice(env, body) {
     // Record WHICH ledger this landed on, and whether a bill was deliberately not raised.
     // Without these, an owner ledger lighter than expected has no explanation in the sheet,
     // and in-house rows carry a Vendor_Cost with no matching payable to reconcile against.
-    try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number']); }
+    try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number', 'Deposit_Credit', 'Deposit_Credit_Bill']); }
     catch (e) { warnings.push('Could not record which ledger this billed to — the invoice and bill ids are still saved.'); }
-    await updateRow(env, 'Invoice_Review', ir.ID, {
+    await updateRow(env, 'Invoice_Review', ir.ID, Object.assign({
       QB_Invoice_ID: invoiceId, QB_Bill_ID: billId, QB_Invoice_Status: status,
       // The NUMBER, kept apart from the internal id. Screens were showing the id
       // (a five-digit QuickBooks key) under the label "invoice number".
@@ -32305,7 +33632,7 @@ async function qbSendInvoice(env, body) {
       QB_Bill_Number: billDocAssigned,
       QB_Bill_To: billTo.level + (billTo.display ? ': ' + billTo.display : ''),
       QB_In_House: vendorInHouse ? 'TRUE' : 'FALSE',
-    });
+    }, (depCredit && billId && !haveBill) ? { Deposit_Credit: depCredit.amount.toFixed(2), Deposit_Credit_Bill: depCredit.bill_number || depCredit.bill_id } : {}));
     if (status === 'sent' && ir.WO_ID) {
       try {
         await updateWOFields(env, ir.WO_ID, { Status: 'Invoiced' });
@@ -32444,6 +33771,8 @@ async function qbSendCombinedInvoice(env, ctx) {
         }
       }
     }
+    // Oct 26 2026: a vendor deposit recorded on this work order comes off the SAME vendor's bill, once (the first row for that vendor that still needs a bill).
+    let depTaken = false;
     for (const rb of rowBuilds) {
       const feeDefaultOn = instantPayEnabled(rb.vendor, cfgAll, undefined);
       // The per-send toggle can only switch a vendor that is already on OFF here; to turn instant pay ON for another vendor, set it on that vendor.
@@ -32451,12 +33780,32 @@ async function qbSendCombinedInvoice(env, ctx) {
       rb.feeDefaultOn = feeDefaultOn;
       rb.vendorLang = String(rb.vendor.Language || '').toLowerCase() === 'es' ? 'es' : 'en';
       rb.credit = (creditRow === rb) ? applied.plan.credit_vendor : 0;
+      rb.dep = null;
+      // The first row for that vendor that still needs a bill AND can cover the deposit takes it (a $100 row and a $300 row: the $300 row).
+      if (!depTaken && !rb.vendorInHouse && rb.vendorCost > 0 && !(rb.row.QB_Bill_ID && String(rb.row.QB_Bill_ID).trim())) {
+        const d = woDepositCredit(wo, rb.row.Vendor_ID, ctx.irRows);
+        if (d && money2(rb.vendorCost - rb.credit) >= d.amount - 0.005) { rb.dep = d; depTaken = true;
+          warnings.push('💰 A $' + d.amount.toFixed(2) + ' deposit was already paid to ' + rb.vendDisplay + ' (QuickBooks bill ' + (d.bill_number || d.bill_id) + ') — it comes off their bill automatically.'); }
+      }
       rb.pad = money2(+rb.row.Instant_Pad || 0);
       rb.creditAvail = creditLeft.get(String(rb.row.Vendor_ID)) || 0;
       const mk = (forceOn) => vendorBillAdjustments({ payable: rb.vendorCost, lang: rb.vendorLang, feeOn: (forceOn === true || rb.feeOn) && !rb.vendorInHouse && rb.vendorCost > 0, cfg: feeCfg, pad: rb.pad, feeCredit: rb.creditAvail,
-        credits: rb.credit > 0 ? [{ type: 'proposal_credit', amount: rb.credit, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [] });
+        credits: (rb.credit > 0 ? [{ type: 'proposal_credit', amount: rb.credit, desc: applied.plan.vendor_label_en, desc_es: applied.plan.vendor_label_es }] : [])
+          .concat(rb.dep ? [{ type: 'deposit_credit', amount: rb.dep.amount, desc: rb.dep.desc, desc_es: rb.dep.desc_es }] : []) });
       rb.adj = mk(false); rb.adjIfOn = mk(true);
       if (rb.adj.credit_applied > 0) creditLeft.set(String(rb.row.Vendor_ID), money2(rb.creditAvail - rb.adj.credit_applied));
+    }
+
+    // A deposit that exists but could not be taken off ANY bill in this group is never skipped quietly: say why, and stop the real send when a vendor's bill
+    // was simply too small to cover it.
+    let depUntaken = null;
+    if (!depTaken && wo && (parseFloat(wo.Deposit_Amount) || 0) > 0 && String(wo.Deposit_Applied || '').toUpperCase() !== 'TRUE') {
+      const cand = rowBuilds.filter(rb => !rb.vendorInHouse && rb.vendorCost > 0 && !(rb.row.QB_Bill_ID && String(rb.row.QB_Bill_ID).trim()) && woDepositCredit(wo, rb.row.Vendor_ID, ctx.irRows));
+      if (cand.length) {
+        const d = woDepositCredit(wo, cand[0].row.Vendor_ID, ctx.irRows);
+        depUntaken = { amount: d.amount, vendor: cand[0].vendDisplay };
+        warnings.push('⛔ The $' + d.amount.toFixed(2) + ' deposit already paid to ' + cand[0].vendDisplay + ' is more than any one of their bills in this group can cover — the bills cannot be sent until the amounts are fixed.');
+      } else warnings.push('⚠ This work order has an unapplied $' + (parseFloat(wo.Deposit_Amount) || 0).toFixed(2) + ' vendor deposit that was NOT deducted from these bills (no QuickBooks bill on file, it belongs to a vendor that is not being billed here, or it was already taken off) — check the work order before paying.');
     }
 
     const photoFolderId  = wo.Drive_Folder_ID || '';
@@ -32488,7 +33837,7 @@ async function qbSendCombinedInvoice(env, ctx) {
           billsPreview.push({
             bill_id: rb.row.Bill_ID,
             vendor: { display: rb.vendDisplay, existing_id: rb.vendor.QBO_Vendor_ID || '', vendor_id: rb.vendor.ID || '', suggest: vendSuggestRow },
-            total: +rb.adj.bill_total.toFixed(2), gross_total: +rb.vendorCost.toFixed(2), account: trade.expense, terms: vendorTermLabel(rb.vendor),
+            total: +rb.adj.bill_total.toFixed(2), gross_total: +rb.vendorCost.toFixed(2), deposit_credit: rb.dep ? rb.dep.amount : 0, account: trade.expense, terms: vendorTermLabel(rb.vendor),
             doc_number: rb.billDoc.number, doc_from: rb.billDoc.source,
             skipped: rb.vendorCost <= 0 || rb.vendorInHouse, in_house: rb.vendorInHouse,
             fee: { applies: !rb.vendorInHouse && rb.vendorCost > 0 && rb.feeDefaultOn, on: rb.feeOn, vendor_default_on: rb.feeDefaultOn, amount: rb.adj.fee, pad: rb.adj.pad || 0, amount_if_on: rb.adjIfOn.fee, send_amount: rb.adj.bill_total,
@@ -32532,6 +33881,7 @@ async function qbSendCombinedInvoice(env, ctx) {
       }, 409);
     }
 
+    if (depUntaken) return json({ ok: false, deposit_blocked: true, warnings, error: 'The $' + depUntaken.amount.toFixed(2) + ' deposit already paid to ' + depUntaken.vendor + ' is more than any single bill to them in this group can cover, so nothing was sent. Fix the bill amounts, or clear the deposit on the work order if it was entered in error.' }, 409);
     try {
       const feeTotal = money2(rowBuilds.reduce((sum, rb) => sum + (rb.adj.fee || 0), 0));
       await qbPersistNettingDecision(env, leadIr.ID, {
@@ -32676,6 +34026,7 @@ async function qbSendCombinedInvoice(env, ctx) {
           if (!billId) errors.push('Bill (' + rb.vendDisplay + '): ' + (qbFault(br) || 'unknown error'));
           else {
             rb.billDocAssigned = (br.Bill && br.Bill.DocNumber) || '';
+            if (rb.dep) await woDepositMarkApplied(env, wo.WO_ID || wo.ID || rb.row.WO_ID, rb.dep, { id: billId, number: rb.billDocAssigned }, warnings, '/qb/send-invoice');
             if (rb.adj.credit_applied > 0) {
               try {
                 const used = await feeCreditApplyOnce(env, { vendorId: rb.vendor.ID, vendorName: rb.vendDisplay, amount: rb.adj.credit_applied, irId: rb.row.ID, qbBillId: billId, woId: rb.row.WO_ID });
@@ -32685,7 +34036,7 @@ async function qbSendCombinedInvoice(env, ctx) {
                 await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + rb.row.ID + ' vendor=' + rb.vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
               }
             }
-            if (rb.adj.fee > 0) warnings.push('Instant-pay fee: send $' + rb.adj.bill_total.toFixed(2) + ' to ' + rb.vendDisplay + ' (bill $' + rb.vendorCost.toFixed(2) + (rb.credit > 0 ? ' − $' + rb.credit.toFixed(2) + ' already billed' : '') + ' − $' + rb.adj.fee.toFixed(2) + ' fee).');
+            if (rb.adj.fee > 0) warnings.push('Instant-pay fee: send $' + rb.adj.bill_total.toFixed(2) + ' to ' + rb.vendDisplay + ' (bill $' + rb.vendorCost.toFixed(2) + (rb.credit > 0 ? ' − $' + rb.credit.toFixed(2) + ' already billed' : '') + (rb.dep ? ' − $' + rb.dep.amount.toFixed(2) + ' deposit already paid' : '') + ' − $' + rb.adj.fee.toFixed(2) + ' fee).');
           }
         }
       } else if (rb.vendorInHouse && rb.vendorCost > 0) {
@@ -32769,7 +34120,13 @@ const TRASH_DOW = { Mon:0, Tue:1, Wed:2, Thu:3, Fri:4, Sat:5, Sun:6 };
 // A Delivery record is the spine: what was ordered, where it's going, who meets it,
 // and which WO(s) it belongs to. SAFE class — no Twilio, no money, no customer send.
 // Tab self-provisions (mirrors the Trash pattern) so first use just works.
-const DELIVERY_HEADERS = ['ID','Order_Number','Store','Item_Type','New_Make_Model','New_Dims','Property_ID','Unit_ID','Tenant_ID','Delivery_Address','Expected_Date','Expected_Window','Onsite_Contact','Onsite_Contact_Phone','Backup_Contact','Backup_Phone','Delivery_Notes','Linked_WO_IDs','Status','Source','Message_ID','Created_Date','Active'];
+const DELIVERY_HEADERS = ['ID','Order_Number','Store','Item_Type','New_Make_Model','New_Dims','Property_ID','Unit_ID','Tenant_ID','Delivery_Address','Expected_Date','Expected_Window','Onsite_Contact','Onsite_Contact_Phone','Backup_Contact','Backup_Phone','Delivery_Notes','Linked_WO_IDs','Status','Source','Message_ID','Created_Date','Active',
+  // Oct 23 2026 email watcher: every Message-ID seen for the order, last email applied (kind/time/signature), "N stops away", tenant-notice bookkeeping, result of Brett's last text.
+  'Seen_Message_IDs','Last_Event','Last_Event_At','Last_Event_Sig','Stops_Away','Tenant_Notice_Sig','Tenant_Notice_Status','Tenant_Notice_Draft','Brett_SMS_Status',
+  // Oct 23 2026 addendum: tenant RSVP (blank | Confirmed | Declined | Unsure), when the request text was handed to the text gate, and a claim marker that stops two mailboxes double-alerting on one update.
+  'Tenant_RSVP','Tenant_RSVP_At','Tenant_RSVP_Note','Tenant_Notice_Sent_At','Event_Claim',
+  // Oct 23 2026: the Hub writes the calendar event itself (as Brett): its Google event id (so a move/cancel finds it) and the last result.
+  'Calendar_Event_ID','Calendar_Status'];
 
 async function ensureDeliveryTab(env) {
   const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
@@ -32806,6 +34163,7 @@ async function deliveriesList(env, url) {
       backup_contact: d.Backup_Contact || '', backup_phone: d.Backup_Phone || '',
       notes: d.Delivery_Notes || '', linked_wo_ids: d.Linked_WO_IDs || '',
       status: d.Status || 'Ordered', source: d.Source || '',
+      tenant_rsvp: d.Tenant_RSVP || '', tenant_rsvp_at: d.Tenant_RSVP_At || '', tenant_rsvp_note: d.Tenant_RSVP_Note || '', tenant_notice_sent_at: d.Tenant_Notice_Sent_At || '', tenant_notice_status: d.Tenant_Notice_Status || '', calendar_status: d.Calendar_Status || '', calendar_event_id: d.Calendar_Event_ID || '',
     };
   });
   out.sort((a, b) => String(a.expected_date || '9999').localeCompare(String(b.expected_date || '9999')));
@@ -32880,6 +34238,1429 @@ async function deliveryRelay(env, body) {
   try { await logSMS(env, (d.Linked_WO_IDs || '').split(',')[0] || '', 'delivery_relay', id, targetPhone, message); } catch (_) {}
   return json({ success: true, sms_sent: smsSent, email_sent: emailSent, phone: targetPhone, email: tenantEmail });
 }
+
+// ── Delivery EMAIL watcher, Hub side (Phase 1, Oct 23 2026) ──────────────────────────────────────────────
+// context/DELIVERY_SYSTEM_BUILD_BRIEF_v1.0.md section 7 + the Oct 23 spec. The Apps Script in info@ (apps-script/delivery-intake/)
+// forwards every store email here: POST /intake/delivery-email {subject, body, html?, from, message_id, received_at, mailbox, dry_run?}.
+// Auth: the narrow INTAKE_TOKEN (same one /intake/email uses), accepted for that exact path only.
+//
+// This file section has two halves:
+//   1. DELIVERY-EMAIL-PURE (below): the parser and every decision that needs no Sheets. Pure functions, unit-tested
+//      directly in test/delivery-email-intake.test.mjs. ALL wording the parser keys on lives in ONE table, DEP.
+//   2. The handler (deliveryEmailIntake, further down): matching, records, texts, calendar object.
+//
+// No real delivery-scheduling email existed when this was written (Brett's mailbox only had receipts), so every pattern
+// below is written from Home Depot's / Lowe's typical wording and is deliberately TOLERANT. When the first real email
+// arrives, tighten DEP and add that email as a fixture. An email from a store sender that mentions an order or a delivery
+// but matches no kind is NEVER dropped: it is parked (Deliveries row, Status "Needs Review") and Brett is texted.
+// ═══ DELIVERY-EMAIL-PURE-START ═══
+const DELIVERY_SENDER_DOMAINS_DEFAULT = 'homedepot.com,lowes.com,acehardware.com,walmart.com';
+const DELIVERY_STORE_NAMES = { 'homedepot.com': 'Home Depot', 'lowes.com': "Lowe's", 'acehardware.com': 'Ace Hardware', 'walmart.com': 'Walmart' };
+// Status only ever moves RIGHT along this line (except reschedule -> Scheduled, cancel -> Cancelled).
+const DELIVERY_STATUS_ORDER = ['Ordered', 'Scheduled', 'Window-Set', 'En-Route', 'Approaching', 'Arrived', 'Delivered'];
+const DELIVERY_KIND_STATUS = { order_confirmation: 'Ordered', prep: 'Ordered', scheduled: 'Scheduled', window_set: 'Window-Set', en_route: 'En-Route', approaching: 'Approaching', delivered: 'Delivered', reschedule: 'Scheduled', cancel: 'Cancelled' };
+
+// THE PATTERNS TABLE. Everything the parser keys on is here. Tighten after the first real email.
+const DEP = {
+  // Kind detection. For each kind: `strong` runs on subject AND body, `subj` only on the subject.
+  // The subject is read first (first kind found wins); only if it names no kind is the body read.
+  // Within one text the kinds are tried in this order (DEP_KIND_ORDER).
+  kinds: {
+    cancel: {
+      strong: [/\b(?:has|have|was|been)\s+(?:been\s+)?cancel+ed\b/i, /\border\s+cancel+ation\b/i, /\bcancel+ation\s+(?:confirmation|notice)\b/i, /\bwe(?:'|’)?ve\s+cancel+ed\b/i, /\bdelivery\s+cancel+ed\b/i],
+      subj: [/\bcancel/i],
+    },
+    delivered: {
+      strong: [/\b(?:was|has\s+been|been|successfully)\s+delivered\b/i, /\bdelivery\s+(?:is\s+)?complete(?:d)?\b/i, /\bdelivered\s+(?:on|at|today)\b/i],
+      subj: [/\bdelivered\b/i],
+    },
+    reschedule: {   // past tense only: "need to reschedule? call us" is footer text on ordinary scheduled emails
+      strong: [/\b(?:has\s+been|was|been)\s+rescheduled\b/i, /\brescheduled\s+(?:for|to)\b/i, /\bdelivery\s+rescheduled\b/i, /\bnew\s+delivery\s+date\b/i, /\bdelivery\s+(?:date\s+)?(?:has\s+been|was)\s+(?:changed|updated|moved)\b/i, /\bwe(?:'|\u2019)?ve\s+(?:changed|updated|moved|rescheduled)\s+your\s+delivery\b/i],
+      subj: [/\breschedul/i],
+    },
+    approaching: {   // also carries the "N stops away" number
+      strong: [/\b(\d{1,2})\s+stops?\s+away\b/i, /\bnext\s+stop\b/i, /\byou(?:'|’)?re\s+next\b/i],
+      subj: [],
+    },
+    en_route: {
+      strong: [/\bon\s+(?:its|the)\s+way\b/i, /\bout\s+for\s+delivery\b/i, /\bdriver\s+is\s+(?:on|en)\b/i, /\ben\s+route\b/i, /\barriving\s+(?:soon|today)\b/i],
+      subj: [],
+    },
+    // Oct 27 2026 (Brett's real Home Depot order WH49670828): "Prep for Appliance Delivery!" is a how-to-get-ready notice with NO new date or window. The store's order
+    // emails also print "Delivery Window Pending" before a window exists, which is not a window. Tried before window_set / scheduled so neither phrase in its body wins.
+    prep: {
+      strong: [/\bget\s+ready\s+for\s+your\s+(?:appliance|delivery)\b/i, /\blook\s+for\s+a\s+delivery\s+scheduled\s+email\s+next\b/i],
+      subj: [/\bprep(?:are)?\s+for\b[^.!?\n]{0,40}\b(?:delivery|installation)\b/i],
+    },
+    window_set: {
+      strong: [/\bdelivery\s+(?:time\s+)?window\b(?!\s*(?:is\s+|are\s+)?(?:still\s+)?(?:pending|tbd|tba|to\s+be|not\s+(?:yet\s+)?(?:set|scheduled|available|determined)|unavailable|coming|soon))/i, /\barrival\s+window\b(?!\s*(?:is\s+|are\s+)?(?:still\s+)?(?:pending|tbd|tba|to\s+be|not\s+(?:yet\s+)?(?:set|scheduled|available|determined)|unavailable|coming|soon))/i, /\barrive\s+between\b/i, /\bbetween\s+\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\s*(?:and|to|-|–)\s*\d{1,2}(?::\d{2})?\s*(?:a|p)\.?m\.?/i],
+      subj: [],
+    },
+    scheduled: {
+      strong: [/\bscheduled\s+for\s+delivery\b/i, /\bdelivery\s+date\b/i, /\bdelivery\s+(?:is|has\s+been)\s+scheduled\b/i, /\bscheduled\s+delivery\b/i, /\bdelivery\s+scheduled\b/i, /\bwe(?:'|’)?ve\s+scheduled\b/i],
+      subj: [],
+    },
+    order_confirmation: {
+      strong: [/\border\s+confirmation\b/i, /\border\s+confirmed\b/i, /\bprocessing\s+your\s+order\b/i, /\bthank\s+you\s+for\s+your\s+(?:order|purchase)\b/i, /\bwe\s+(?:have\s+)?received\s+your\s+order\b/i, /\border\s+(?:received|placed)\b/i, /\byour\s+order\s+(?:has\s+been|was)\s+(?:placed|received)\b/i],
+      subj: [],
+    },
+    // Weakest signal, tried last: "track your delivery" shows up in confirmations too.
+    en_route_weak: {
+      strong: [/\btrack(?:ing)?\s+(?:your\s+)?(?:delivery|order|driver)\b/i, /\blive\s+tracking\b/i],
+      subj: [],
+    },
+  },
+  // Body-only emails that carry BOTH a confirmation phrase from this list and a date/window phrase are read as confirmations
+  // (the date is still saved). "Thank you for your order" alone is not enough: scheduled emails say it too.
+  confirmationOverride: [/\border\s+confirmation\b/i, /\bwe\s+(?:have\s+)?received\s+your\s+order\b/i, /\border\s+(?:received|placed)\b/i],
+  // Marketing. Only matters when the email carries NO order number (a real order email is never promo).
+  promo: [/\b\d{1,3}\s?%\s+off\b/i, /\bsave\s+(?:up\s+to\s+)?\$?\d/i, /\bshop\s+now\b/i, /\bspecial\s+offers?\b/i, /\blimited[-\s]time\b/i, /\bblack\s+friday\b/i, /\bclearance\b/i, /\bdoorbusters?\b/i, /\bcoupons?\b/i, /\bexclusive\b/i, /\bsales?\b/i, /\bdeals?\b/i, /\bnew\s+arrivals\b/i, /\bgift\s+cards?\b/i, /\brewards?\b/i, /\bbuy\s+now\b/i, /\bnewsletter\b/i, /\bview\s+(?:this\s+)?(?:email\s+)?in\s+(?:your\s+)?browser\b/i],
+  unsubscribe: /\bunsubscribe\b/i,
+  // A promo-looking email with no order number still gets through when its SUBJECT names one of these kinds.
+  promoOverrideKinds: ['delivered', 'en_route', 'approaching', 'reschedule', 'cancel'],
+  // "This email is about an order or a delivery" (used only to decide park-vs-ignore when no kind matched).
+  mentionsOrder: /\b(?:your\s+order|order\s*(?:#|number|no\b)|deliver(?:y|ies|ed|ing)?\b|shipment|shipped)/i,
+  // Order numbers. First the store formats, then a labelled fallback ("Order #...", "Order Number:", "Order No.").
+  orderStore: [/\bH\d{4}-\d{6}\b/i, /\bW\d{9}\b/i, /\bCM\d{8}\b/i],
+  orderLabel: /\border\s*(?:#|number|no\.?|num\.?)\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{5,19})\b/gi,
+  // Item type -> the vocabulary deliveries.html's item dropdown already uses.
+  items: [
+    [/\bwater\s+heaters?\b/i, 'Water heater'], [/\bmicrowaves?\b/i, 'Microwave'], [/\bdishwashers?\b/i, 'Dishwasher'],
+    [/\b(?:refrigerators?|fridges?)\b/i, 'Refrigerator'], [/\bfreezers?\b/i, 'Other'], [/\b(?:ranges?|stoves?|ovens?|cooktops?)\b/i, 'Range'],
+    [/\bwashers?\b/i, 'Washer'], [/\bdryers?\b/i, 'Dryer'],
+  ],
+  // Text removed before the item scan so "price range" / "over-the-range microwave" do not read as a range.
+  itemNoise: [/over[-\s]the[-\s]range/gi, /microwave\s+oven/gi, /\b(?:price|time|date|temperature|delivery)\s+range\b/gi, /\brange\s+of\b/gi, /\bwithin\s+range\b/gi],
+  // Where the item scan stops (cross-sell blocks list other appliances).
+  itemStop: /you\s+may\s+also\s+like|recommended\s+for\s+you|customers\s+also\s+(?:bought|viewed)|related\s+items|frequently\s+bought/i,
+  brands: ['Whirlpool', 'GE', 'Samsung', 'LG', 'Frigidaire', 'Maytag', 'Kenmore', 'Amana', 'Hotpoint', 'Bosch', 'Haier', 'Midea', 'Electrolux', 'KitchenAid', 'Insignia', 'Danby', 'Avanti', 'Magic Chef', 'Crosley', 'Speed Queen', 'Fisher & Paykel', 'Beko', 'Café', 'Cafe', 'Monogram', 'Signature Kitchen'],
+  caseSensitiveBrands: ['GE', 'LG'],
+  modelLabel: /\bmodel\s*(?:#|number|no\.?)?\s*[:#]?\s*([A-Z0-9][A-Z0-9-]{4,17})\b/i,
+  modelToken: /\b([A-Z]{1,5}\d[A-Z0-9-]{3,16})\b/,
+  // Address.
+  addressLabel: /(?:deliver(?:y|ed)?\s+(?:to|address|location)|ship(?:ping)?\s+(?:to|address)|service\s+address)\s*[:\-]?/gi,
+  addressSkipBefore: /pick\s?up|store\s|return|bill(?:ing)?\s+(?:to|address)|sold\s+to|from:/i,
+  streetSuffix: 'st|street|ave|avenue|av|rd|road|dr|drive|ln|lane|ct|court|pl|place|blvd|boulevard|way|ter|terrace|cir|circle|pkwy|parkway|hwy|highway|sq|square|trl|trail',
+  unitWord: 'apt|apartment|unit|ste|suite|bldg|fl|floor',
+  // Dates and windows.
+  dateKeywords: [
+    /new\s+delivery\s+date/gi, /delivery\s+date/gi, /scheduled\s+(?:for|delivery)(?:\s+on)?/gi, /deliver(?:y|ed)?\s+(?:on|is\s+scheduled\s+for)/gi, /will\s+(?:be\s+)?deliver(?:ed)?(?:\s+on)?/gi,
+    /arriv(?:e|es|ing|al)(?:\s+on)?/gi, /estimated\s+delivery/gi, /expected(?:\s+delivery)?/gi,
+    /deliver(?:y|ed|ies)?/gi,   // weakest, tried last
+  ],
+  dateAfterWindowChars: 140,
+  dateSkipBefore: /(?:order(?:ed)?\s+(?:date|on|placed)|placed\s+on|purchased|order\s+date)\s*[:\-]?\s*$/i,
+  // How far in the past a year-less date may sit before it rolls to next year (late-processed "delivered" mail).
+  pastGraceDays: 14,
+};
+const DEP_KIND_ORDER = ['cancel', 'delivered', 'reschedule', 'approaching', 'en_route', 'prep', 'window_set', 'scheduled', 'order_confirmation', 'en_route_weak'];
+const DEP_MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12 };
+
+// HTML -> text. Keeps line breaks (the address parser reads lines); never turns &lt; back into a tag.
+function deliveryEmailText(body, html) {
+  let t = String(body == null ? '' : body);
+  const looksHtml = /<\/?[a-z][^>]*>/i.test(t);
+  if ((t.replace(/\s/g, '').length < 40 || looksHtml) && (html || looksHtml)) {
+    t = String(looksHtml && !html ? t : (html || t));
+    t = t.slice(0, 250000).replace(/<(style|script)[\s\S]*?<\/\1>/gi, ' ').replace(/<br\s*\/?>/gi, '\n').replace(/<\/(?:p|div|tr|li|h[1-6]|table|td|th)>/gi, '\n').replace(/<[^>]{0,500}>/g, ' ');
+  }
+  return t.slice(0, 250000).replace(/&nbsp;| /g, ' ').replace(/&#39;|&apos;|&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&lt;|&gt;/g, ' ').replace(/&#(\d{2,4});/g, (m, n) => String.fromCharCode(+n)).replace(/&amp;/g, '&')
+    .replace(/\r\n?/g, '\n').replace(/[ \t\f\v]+/g, ' ').replace(/ ?\n ?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// The real sender address (bare, or the LAST <...> of "Name <addr>") must be on an allowed domain or a subdomain of one.
+// A display name like "Home Depot homedepot.com" <x@evil.io> must not pass. domainsCsv defaults to the built-in list.
+function deliverySenderDomain(from, domainsCsv) {
+  const s = String(from == null ? '' : from).toLowerCase().slice(0, 300).trim();
+  const m = /<\s*([^<>\s@]{1,64}@[a-z0-9.-]{3,200})\s*>\s*$/.exec(s) || /^([^<>\s@"]{1,64}@[a-z0-9.-]{3,200})$/.exec(s);
+  if (!m) return '';
+  const host = m[1].split('@')[1].replace(/\.+$/, '');
+  const allowed = String(domainsCsv || DELIVERY_SENDER_DOMAINS_DEFAULT).toLowerCase().split(/[,\s;]+/).map(x => x.trim().replace(/^@/, '')).filter(Boolean);
+  for (const d of allowed) if (host === d || host.endsWith('.' + d)) return d;
+  return '';
+}
+
+function deliveryParseOrderNumber(text) {
+  for (const re of DEP.orderStore) { const m = re.exec(text); if (m) return m[0].toUpperCase(); }
+  DEP.orderLabel.lastIndex = 0;
+  let m;
+  while ((m = DEP.orderLabel.exec(text))) {
+    const v = m[1].toUpperCase();
+    if (/\d/.test(v) && !/^\d{1,2}$/.test(v)) return v.replace(/-+$/, '');
+  }
+  return '';
+}
+
+function deliveryDetectKind(text, isSubject) {
+  for (const k of DEP_KIND_ORDER) {
+    const def = DEP.kinds[k];
+    const pats = isSubject ? def.strong.concat(def.subj) : def.strong;
+    for (const re of pats) { const m = re.exec(text); if (m) return { kind: k === 'en_route_weak' ? 'en_route' : k, weak: k === 'en_route_weak', match: m }; }
+  }
+  return null;
+}
+
+// The "Job / PO Number:" line the store prints from the PO field Brett types when he orders: "WO 1237 115 W 29th St Apt 2". Returns { wo_ref: 'WO-1237' | '', unit_raw: 'Apt 2' | '', raw }.
+// Only a LABELLED line counts, and only "WO <digits>" in it names a work order (a bare number or a name never does). The unit is read from the same line (never from the phone
+// number or street number, which have no unit word).
+function deliveryParseJobRef(text) {
+  const out = { wo_ref: '', unit_raw: '', raw: '' };
+  const flat = String(text == null ? '' : text).replace(/\s+/g, ' ');
+  const labelRe = /\b(?:job\s*\/\s*po|job|po)(?:\s+(?:number|no\.?|num\.?))?\s*(?::|#)\s*/gi;
+  let lm;
+  while ((lm = labelRe.exec(flat))) {
+    let v = flat.slice(lm.index + lm[0].length, lm.index + lm[0].length + 140);
+    const stop = /\b(?:customer\s+phone|phone|delivery|estimated|order|deliver\s+to|sku|qty|manage|job\s*\/|po\s+number)\b/i.exec(v);
+    if (stop) v = v.slice(0, stop.index);
+    const wm = /\bwo\s*[-#]?\s*(\d{1,7})\b/i.exec(v);
+    if (!wm) continue;
+    out.wo_ref = 'WO-' + wm[1];
+    out.raw = v.trim().slice(0, 120);
+    const rest = v.slice(wm.index + wm[0].length);
+    const um = /\b(apt|apartment|unit|ste|suite)\.?\s*#?\s*([A-Za-z0-9-]+)/i.exec(rest) || /#\s*([A-Za-z0-9-]+)/.exec(rest);
+    if (um) {
+      const word = um.length > 2 ? ({ apt: 'Apt', apartment: 'Apt', unit: 'Unit', ste: 'Ste', suite: 'Suite' })[um[1].toLowerCase()] : 'Unit';
+      out.unit_raw = word + ' ' + (um.length > 2 ? um[2] : um[1]).replace(/-+$/, '');
+    }
+    return out;
+  }
+  return out;
+}
+
+function deliveryParseItem(flat) {
+  let t = flat; const stop = DEP.itemStop.exec(t); if (stop) t = t.slice(0, stop.index);
+  for (const re of DEP.itemNoise) t = t.replace(re, ' ');
+  let best = null; const found = [];
+  for (const [re, label] of DEP.items) { const m = re.exec(t); if (m) { found.push({ idx: m.index, label }); if (!best || m.index < best.idx) best = { idx: m.index, label }; } }
+  const others = [...new Set(found.filter(f => !best || f.label !== best.label).map(f => f.label))];
+  return { item_type: best ? best.label : '', also: others, scan: t };
+}
+
+function deliveryParseMakeModel(scan, orderNo) {
+  let brand = '', bidx = -1;
+  for (const b of DEP.brands) {
+    const cs = DEP.caseSensitiveBrands.indexOf(b) >= 0;
+    const re = new RegExp('(?:^|[^A-Za-z])(' + b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')(?![A-Za-z])', cs ? '' : 'i');
+    const m = re.exec(scan);
+    if (m) { const idx = m.index + m[0].indexOf(m[1]); if (bidx < 0 || idx < bidx) { bidx = idx; brand = m[1].length <= 2 ? m[1].toUpperCase() : b; } }
+  }
+  const okModel = v => v && /[A-Za-z]/.test(v) && /\d/.test(v) && v.toUpperCase() !== String(orderNo || '').toUpperCase() && !/^H\d{4}-\d{6}$/i.test(v) && !/^W\d{9}$/i.test(v);
+  let model = '';
+  const lm = DEP.modelLabel.exec(scan);
+  if (lm && okModel(lm[1])) model = lm[1].toUpperCase();
+  if (!model) {
+    const region = bidx >= 0 ? scan.slice(bidx, bidx + 220) : scan.slice(0, 400);
+    const re = new RegExp(DEP.modelToken.source, 'g'); let tm;
+    while ((tm = re.exec(region))) { if (okModel(tm[1])) { model = tm[1]; break; } }
+  }
+  // No model number printed (the store prints SKU / Internet numbers instead): the product title is the make/model line. "FRIGIDAIRE 30 in. 5 Burner Freestanding Gas
+  // Range in Stainless Steel with Quick Boil..." -> "Frigidaire 30 in. 5 Burner Freestanding Gas Range". Only a title that starts with a size (a digit) is trusted, so a sentence that
+  // merely mentions the brand ("Your Whirlpool refrigerator will be delivered...") never becomes the model.
+  if (!model && brand && bidx >= 0) {
+    let desc = scan.slice(bidx + brand.length).replace(/^[\s:,\u2013\u2014-]+/, '');
+    const cut = /\s+(?:in\s+(?!\.)|with\s+|sku\b|internet\b|model\b|qty\b|item\b|\$|parts\s*&|haul\s+away)/i.exec(' ' + desc);
+    if (cut) desc = (' ' + desc).slice(0, cut.index).trim();
+    desc = desc.replace(/\s+/g, ' ').replace(/[\s,.;:-]+$/, '').trim();
+    if (desc.length > 80) { desc = desc.slice(0, 80); desc = desc.slice(0, desc.lastIndexOf(' ') > 20 ? desc.lastIndexOf(' ') : 80).trim(); }
+    if (/^\d/.test(desc) && /[A-Za-z]{3}/.test(desc) && desc.length >= 8) model = desc;
+  }
+  return { brand, model, make_model: [brand, model].filter(Boolean).join(' ') };
+}
+
+function deliveryParseAddress(flat) {
+  const suf = DEP.streetSuffix, uw = DEP.unitWord;
+  const streetRe = new RegExp("\\b(\\d{1,6}\\s+(?:[NSEW]\\.?\\s+|North\\s+|South\\s+|East\\s+|West\\s+)?(?:[A-Za-z0-9.'\\u2019-]+\\s+){0,4}(?:" + suf + ")\\b\\.?)(?:\\s*[,.]?\\s*((?:" + uw + ")\\.?\\s*#?\\s*[A-Za-z0-9-]+|#\\s*[A-Za-z0-9-]+))?", 'i');
+  const tailRe = /^[,\s]+([A-Za-z][A-Za-z .'-]{1,30}?)[,\s]+([A-Z]{2})[,\s]+(\d{5})(?:-\d{4})?/;
+  const build = (seg, offset) => {
+    const m = streetRe.exec(seg); if (!m) return null;
+    const after = seg.slice(m.index + m[0].length);
+    const t = tailRe.exec(after);
+    const street = m[1].replace(/\s+/g, ' ').replace(/[.,]+$/, '').trim();
+    const unit = (m[2] || '').replace(/\s+/g, ' ').replace(/^#\s*/, 'Unit ').trim();
+    const addr = street + (unit ? ' ' + unit : '') + (t ? ', ' + t[1].trim() + ', ' + t[2] + ' ' + t[3] : '');
+    return { address: addr, unit_raw: unit, has_zip: !!t, index: offset + m.index };
+  };
+  DEP.addressLabel.lastIndex = 0; let lm;
+  while ((lm = DEP.addressLabel.exec(flat))) {
+    const start = lm.index + lm[0].length;
+    const r = build(flat.slice(start, start + 240), start);
+    if (r) return r;
+  }
+  const re = new RegExp(streetRe.source, 'gi'); let m;
+  while ((m = re.exec(flat))) {
+    const before = flat.slice(Math.max(0, m.index - 60), m.index);
+    if (DEP.addressSkipBefore.test(before)) continue;
+    const r = build(flat.slice(m.index, m.index + 240), m.index);
+    if (r && r.has_zip) return r;
+  }
+  return { address: '', unit_raw: '', has_zip: false, index: -1 };
+}
+
+// Date helpers. All dates are plain 'YYYY-MM-DD' strings; arithmetic goes through UTC noon so no zone can shift a day.
+function deliveryIsoDate(y, m, d) { return String(y).padStart(4, '0') + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0'); }
+function deliveryDayNum(iso) { return Math.round(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 86400000); }
+function deliveryAddDays(iso, n) { const t = new Date((deliveryDayNum(iso) + n) * 86400000 + 12 * 3600000); return deliveryIsoDate(t.getUTCFullYear(), t.getUTCMonth() + 1, t.getUTCDate()); }
+function deliveryValidDate(y, m, d) { if (m < 1 || m > 12 || d < 1 || d > 31) return false; const t = new Date(Date.UTC(y, m - 1, d, 12)); return t.getUTCMonth() === m - 1 && t.getUTCDate() === d; }
+// The date part of an ISO instant in Eastern time (received_at is UTC; an evening email belongs to that ET day).
+function deliveryEtDate(iso) {
+  const d = new Date(iso); if (isNaN(d)) return '';
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+// A date with no year: nearest FUTURE occurrence relative to received_at (ET), allowing a short grace into the past.
+function deliveryInferYear(m, d, recvIso) {
+  const recv = deliveryEtDate(recvIso) || deliveryEtDate(new Date().toISOString());
+  const ry = +recv.slice(0, 4), rn = deliveryDayNum(recv);
+  for (const y of [ry - 1, ry, ry + 1, ry + 2]) {
+    if (!deliveryValidDate(y, m, d)) continue;
+    const diff = deliveryDayNum(deliveryIsoDate(y, m, d)) - rn;
+    if (diff >= -DEP.pastGraceDays) return deliveryIsoDate(y, m, d);
+  }
+  return '';
+}
+function deliveryDateCandidates(flat, recvIso) {
+  const out = [];
+  const monthRe = /(?:(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?,?\s+)?\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?\s+(20\d{2}))?/gi;
+  let m;
+  while ((m = monthRe.exec(flat))) {
+    const mo = DEP_MONTHS[m[1].toLowerCase()], d = +m[2];
+    const iso = m[3] ? (deliveryValidDate(+m[3], mo, d) ? deliveryIsoDate(+m[3], mo, d) : '') : deliveryInferYear(mo, d, recvIso);
+    if (iso) out.push({ idx: m.index, end: m.index + m[0].length, iso });
+  }
+  const isoRe = /\b(20\d{2})-(\d{2})-(\d{2})\b/g;
+  while ((m = isoRe.exec(flat))) { if (deliveryValidDate(+m[1], +m[2], +m[3])) out.push({ idx: m.index, end: m.index + m[0].length, iso: m[0] }); }
+  const slashRe = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2}|\d{4}))?\b/g;
+  while ((m = slashRe.exec(flat))) {
+    const mo = +m[1], d = +m[2];
+    let iso = '';
+    if (m[3]) { const y = m[3].length === 2 ? 2000 + +m[3] : +m[3]; if (deliveryValidDate(y, mo, d)) iso = deliveryIsoDate(y, mo, d); }
+    else if (deliveryValidDate(2024, mo, d)) iso = deliveryInferYear(mo, d, recvIso);
+    if (iso) out.push({ idx: m.index, end: m.index + m[0].length, iso });
+  }
+  out.sort((a, b) => a.idx - b.idx);
+  return out;
+}
+// The delivery date: the first date that follows a delivery keyword (strongest keyword first). Order/placed dates never count.
+function deliveryParseDate(flat, recvIso) {
+  const cands = deliveryDateCandidates(flat, recvIso);
+  const recv = deliveryEtDate(recvIso);
+  for (const kwRe of DEP.dateKeywords) {
+    const re = new RegExp(kwRe.source, 'gi'); let km;
+    while ((km = re.exec(flat))) {
+      const kend = km.index + km[0].length;
+      const c = cands.find(x => x.idx >= kend - 1 && x.idx <= kend + DEP.dateAfterWindowChars && !DEP.dateSkipBefore.test(flat.slice(Math.max(0, x.idx - 40), x.idx)));
+      if (c) return c.iso;
+      const rel = /^[\s:,-]*(?:\w+\s+){0,3}?(today|tomorrow)\b/i.exec(flat.slice(kend, kend + 50));
+      if (rel && recv) return rel[1].toLowerCase() === 'today' ? recv : deliveryAddDays(recv, 1);
+      const relBefore = /\b(today|tomorrow)\b[^.]{0,30}$/i.exec(flat.slice(Math.max(0, km.index - 40), km.index));
+      if (relBefore && recv) return relBefore[1].toLowerCase() === 'today' ? recv : deliveryAddDays(recv, 1);
+    }
+  }
+  return '';
+}
+
+// "between 9:00 AM and 1:00 PM" / "9am-1pm" / "8 AM - 12 PM" / "11 AM - 3 PM" -> "9a-1p" style (deliveries.html). '' when none.
+function deliveryParseWindow(flat) {
+  const T = '(\\d{1,2})(?::(\\d{2}))?\\s*(?:([ap])\\.?m\\.?)?';
+  const re = new RegExp('(?:between\\s+)?' + T + '\\s*(?:and|to|-|\\u2013|\\u2014)\\s*' + T, 'gi');
+  let m;
+  const fmt = (h, mi, ap) => String(h) + (mi && mi !== '00' ? ':' + mi : '') + ap;
+  while ((m = re.exec(flat))) {
+    const h1 = +m[1], m1 = m[2], a1raw = (m[3] || '').toLowerCase(), h2 = +m[4], m2 = m[5], a2raw = (m[6] || '').toLowerCase();
+    if (!a1raw && !a2raw) continue;                             // "8-12" with no am/pm anywhere is not a window
+    if (h1 < 1 || h1 > 12 || h2 < 1 || h2 > 12) continue;
+    const a2 = a2raw || a1raw;
+    let a1 = a1raw;
+    if (!a1) {                                                  // "11 - 3 PM": the first hour borrows the suffix unless that would run backwards
+      const t1 = (h1 % 12) + (a2 === 'p' ? 12 : 0), t2 = (h2 % 12) + (a2 === 'p' ? 12 : 0);
+      a1 = t1 <= t2 ? a2 : (a2 === 'p' ? 'a' : 'p');
+    }
+    return fmt(h1, m1, a1) + '-' + fmt(h2, m2, a2);
+  }
+  return '';
+}
+// "9a-1p" -> {start:[h,m], end:[h,m]} in 24h.
+function deliveryWindowTimes(win) {
+  const m = /^(\d{1,2})(?::(\d{2}))?([ap])-(\d{1,2})(?::(\d{2}))?([ap])$/.exec(String(win || ''));
+  if (!m) return null;
+  const to24 = (h, ap) => (+h % 12) + (ap === 'p' ? 12 : 0);
+  return { start: [to24(m[1], m[3]), +(m[2] || 0)], end: [to24(m[4], m[6]), +(m[5] || 0)] };
+}
+function deliveryParseStops(flat) {
+  const m = /\b(\d{1,2})\s+stops?\s+away\b/i.exec(flat);
+  if (m) return +m[1];
+  if (/\bnext\s+stop\b|\byou(?:'|’)?re\s+next\b/i.test(flat)) return 0;
+  return null;
+}
+
+// The whole parse. Pure. Returns:
+// { kind, store, order_number, item_type, make_model, address, unit_raw, expected_date, expected_window, stops_away, missing[], notes[], reason }
+// kind is one of order_confirmation|scheduled|window_set|en_route|approaching|delivered|reschedule|cancel|not_delivery|unknown.
+function deliveryParseEmail(msg) {
+  const subject = String((msg && msg.subject) || '').slice(0, 500);
+  const text = deliveryEmailText(msg && (msg.body != null ? msg.body : msg.text), msg && msg.html);
+  const flat = (subject + ' \n ' + text).replace(/\s+/g, ' ');
+  const out = { kind: 'unknown', order_number: '', wo_ref: '', item_type: '', make_model: '', address: '', unit_raw: '', expected_date: '', expected_window: '', stops_away: null, missing: [], notes: [], reason: '', excerpt: flat.slice(0, 400) };
+  const recvIso = (msg && msg.received_at) || new Date().toISOString();
+  out.order_number = deliveryParseOrderNumber(subject + '\n' + text);
+
+  const sk = deliveryDetectKind(subject, true);
+  const bk = sk ? null : deliveryDetectKind(text, false);
+  let kind = (sk || bk) ? (sk || bk).kind : '';
+  if (!sk && bk && (kind === 'scheduled' || kind === 'window_set') && DEP.confirmationOverride.some(re => re.test(text))) kind = 'order_confirmation';
+  out.kind_source = sk ? 'subject' : (bk ? 'body' : '');
+
+  // Marketing: no order number and (promo wording or an unsubscribe footer), unless the SUBJECT names a live-delivery kind.
+  if (!out.order_number) {
+    const promoHit = DEP.promo.some(re => re.test(flat)) || DEP.unsubscribe.test(flat);
+    if (promoHit && !(sk && DEP.promoOverrideKinds.indexOf(sk.kind) >= 0)) { out.kind = 'not_delivery'; out.reason = 'promotional email (no order number)'; return out; }
+  }
+  if (!kind) {
+    if (out.order_number || DEP.mentionsOrder.test(flat)) { out.kind = 'unknown'; out.reason = 'store email mentions an order or delivery but matches no known kind'; }
+    else { out.kind = 'not_delivery'; out.reason = 'store email with no order or delivery content'; return out; }
+  } else out.kind = kind;
+
+  const it = deliveryParseItem(flat);
+  out.item_type = it.item_type;
+  if (it.also.length) out.notes.push('also mentions: ' + it.also.join(', '));
+  out.make_model = deliveryParseMakeModel(it.scan, out.order_number).make_model;
+  const ad = deliveryParseAddress(flat);
+  out.address = ad.address; out.unit_raw = ad.unit_raw;
+  // The Job / PO line names the work order and the unit. Some store emails leave the unit out of the address block (the Prep email), so the unit is taken from here too.
+  const jr = deliveryParseJobRef(flat);
+  out.wo_ref = jr.wo_ref;
+  if (!out.unit_raw && jr.unit_raw) {
+    out.unit_raw = jr.unit_raw;
+    if (out.address && !/\b(?:apt|apartment|unit|ste|suite|bldg|fl|floor)\b|#/i.test(out.address.split(',')[0])) out.address = out.address.replace(/^([^,]*)/, '$1 ' + jr.unit_raw);
+  }
+  out.expected_date = deliveryParseDate(flat, recvIso);
+  out.expected_window = deliveryParseWindow(flat);
+  const stops = deliveryParseStops(flat);
+  if (out.kind === 'approaching' || out.kind === 'en_route') out.stops_away = stops;
+  // A scheduled email that also carries a time window IS a window-set email (status Window-Set).
+  if (out.kind === 'scheduled' && out.expected_window) out.kind = 'window_set';
+  // "N stops away" in a mail that otherwise reads en-route is an approaching mail.
+  if (out.kind === 'en_route' && stops !== null && stops <= 20) out.kind = 'approaching';
+
+  if (out.kind !== 'unknown') {
+    if (!out.order_number) out.missing.push('order_number');
+    if (!out.address && ['order_confirmation', 'prep', 'scheduled', 'window_set', 'reschedule'].indexOf(out.kind) >= 0) out.missing.push('delivery_address');
+    if ((out.kind === 'scheduled' || out.kind === 'reschedule') && !out.expected_date) out.missing.push('expected_date');
+    if (out.kind === 'window_set' && !out.expected_window) out.missing.push('expected_window');
+    if ((out.kind === 'order_confirmation' || out.kind === 'prep') && !out.item_type) out.missing.push('item_type');
+    if (out.kind === 'approaching' && out.stops_away === null) out.missing.push('stops_away');
+  }
+  return out;
+}
+
+// Status only moves forward, except reschedule -> Scheduled and cancel -> Cancelled.
+// Returns {status, changed, anomaly}. anomaly = a note for Brett (e.g. a reschedule on a delivered order); status is then unchanged.
+function deliveryNextStatus(cur, kind) {
+  cur = String(cur || 'Ordered');
+  const want = DELIVERY_KIND_STATUS[kind];
+  if (!want) return { status: cur, changed: false, anomaly: '' };
+  if (cur === 'Needs Review') return { status: want, changed: want !== cur, anomaly: '' };
+  if (cur === 'Cancelled') {
+    if (kind === 'reschedule') return { status: 'Scheduled', changed: true, anomaly: 'order was Cancelled, a reschedule email arrived: reopened' };
+    if (kind === 'cancel') return { status: cur, changed: false, anomaly: '' };
+    return { status: cur, changed: false, anomaly: 'order is Cancelled but a ' + kind + ' email arrived' };
+  }
+  if (cur === 'Delivered') {
+    if (kind === 'delivered') return { status: cur, changed: false, anomaly: '' };
+    if (kind === 'cancel' || kind === 'reschedule') return { status: cur, changed: false, anomaly: 'order is already Delivered but a ' + kind + ' email arrived' };
+    return { status: cur, changed: false, anomaly: '' };   // an older email processed late: nothing to do
+  }
+  if (kind === 'cancel') return { status: 'Cancelled', changed: true, anomaly: '' };
+  if (kind === 'reschedule') return { status: 'Scheduled', changed: cur !== 'Scheduled', anomaly: '' };
+  const ci = DELIVERY_STATUS_ORDER.indexOf(cur), wi = DELIVERY_STATUS_ORDER.indexOf(want);
+  if (ci < 0) return { status: want, changed: true, anomaly: '' };   // an unrecognised hand-typed status: let the email set it
+  return wi > ci ? { status: want, changed: true, anomaly: '' } : { status: cur, changed: false, anomaly: '' };
+}
+
+// Text for Brett's own phone: plain GSM characters only (no emoji, curly quotes, dashes) so it stays one segment where it can.
+function deliveryPlainSms(s, keepNewlines) {
+  return String(s == null ? '' : s).replace(/[‘’‚′]/g, "'").replace(/[“”„″]/g, '"').replace(/[–—−]/g, '-').replace(/…/g, '...').replace(/ /g, ' ')
+    .replace(/[^\x20-\x7e\n]/g, '').replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, keepNewlines ? '\n' : ' ').trim();
+}
+function deliveryShortDate(iso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return '';
+  const t = new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10), 12));
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][t.getUTCDay()] + ' ' + (+iso.slice(5, 7)) + '/' + (+iso.slice(8, 10));
+}
+// One concise text per event. o: { event, order, item, make, date, window, address, wo_id, stops, note, store }
+function deliveryBrettText(o) {
+  const lead = { new: 'Delivery order found', scheduled: 'Delivery date set', window_set: 'Delivery window set', reschedule: 'Delivery changed', en_route: 'Delivery on its way', approaching: 'Delivery close', delivered: 'Delivered', cancel: 'Delivery CANCELLED', review: 'DELIVERY EMAIL NEEDS REVIEW', problem: 'Delivery problem' }[o.event] || 'Delivery';
+  const when = [deliveryShortDate(o.date), o.window].filter(Boolean).join(' ');
+  const parts = [lead + (o.order ? ' ' + o.order : ''), o.item || '', when, o.event === 'approaching' && o.stops != null ? (o.stops === 0 ? 'you are next' : o.stops + ' stop' + (o.stops === 1 ? '' : 's') + ' away') : '', o.address || '', o.wo_id ? 'WO ' + o.wo_id : '', o.note || ''].filter(Boolean);
+  let s = deliveryPlainSms(parts.join('. ').replace(/\.\s*\./g, '.'));
+  if (s.length > 300) s = s.slice(0, 297) + '...';
+  return s;
+}
+
+// Tenant notice timing (Oct 23 decision, BACKLOG B-20261023-0302-mb): tenants are batched at 9am / 12pm / 6pm ET; 6pm is the last window.
+// A delivery dated TODAY (ET) is urgent and goes out at once (quiet hours 7pm-9am still apply inside smsGatedSend). Anything else is
+// held to the next allowed slot: today 6pm ET if it is before 6pm now, otherwise tomorrow 9am ET. Returns null (send now) or a Date.
+function deliveryEtWallToUtc(y, m, d, h) {
+  const guess = Date.UTC(y, m - 1, d, h, 0, 0);
+  const off1 = nyOffsetMinutes(new Date(guess));
+  const r = guess - off1 * 60000;
+  const off2 = nyOffsetMinutes(new Date(r));
+  return new Date(guess - off2 * 60000);
+}
+function deliveryNoticeHoldUntil(now, expectedDate) {
+  now = now || new Date();
+  const today = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  if (expectedDate && String(expectedDate).slice(0, 10) === today) return null;
+  const y = +today.slice(0, 4), mo = +today.slice(5, 7), d = +today.slice(8, 10);
+  if (etHour(now) < 18) return deliveryEtWallToUtc(y, mo, d, 18);
+  const nxt = deliveryAddDays(today, 1);
+  return deliveryEtWallToUtc(+nxt.slice(0, 4), +nxt.slice(5, 7), +nxt.slice(8, 10), 9);
+}
+
+// The calendar event the Apps Script upserts (it runs as Brett; the Hub never writes the calendar here). One event per order number.
+// o: { order, delivery_id, item, date, window, address, wo_id, kind, status, brett_note }
+function deliveryCalendarObject(o) {
+  const key = 'delivery-' + (o.order ? String(o.order).toLowerCase() : 'id-' + (o.delivery_id || 'unknown'));
+  const item = o.item || 'appliance';
+  const base = { key, title: 'Delivery: ' + item + (o.order ? ' (' + o.order + ')' : ''), start_iso: '', end_iso: '', all_day: false, location: o.address || '', description: '' };
+  const desc = [o.order ? 'Order ' + o.order : '', o.make ? 'Item: ' + o.make : '', o.wo_id ? 'Work order ' + o.wo_id + ' - https://ridge-co.github.io/RidgeCo/deliveries.html' : 'Deliveries: https://ridge-co.github.io/RidgeCo/deliveries.html',
+    'Driver calls Brett. Tenant should be there if they can; Brett receives otherwise and makes sure the old unit is hauled away.', o.status ? 'Status: ' + o.status : ''].filter(Boolean).join('\n');
+  base.description = desc;
+  if (o.kind === 'cancel' || o.status === 'Cancelled') return Object.assign(base, { action: 'cancel', title: 'CANCELLED - ' + base.title });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date || '')) return Object.assign(base, { action: 'none' });
+  const action = o.is_new ? 'create' : 'update';
+  if (o.kind === 'delivered' || o.status === 'Delivered') base.title = 'Delivered: ' + item + (o.order ? ' (' + o.order + ')' : '');
+  const w = deliveryWindowTimes(o.window);
+  if (!w) return Object.assign(base, { action, all_day: true, start_iso: o.date, end_iso: deliveryAddDays(o.date, 1) });   // all-day: end date is exclusive
+  const iso = (hm) => {
+    const utc = deliveryEtWallToUtc(+o.date.slice(0, 4), +o.date.slice(5, 7), +o.date.slice(8, 10), 0).getTime() + (hm[0] * 60 + hm[1]) * 60000;
+    const zone = nyOffsetMinutes(new Date(utc));   // ET wall clock minus UTC, in minutes (-240 in summer)
+    const sign = zone < 0 ? '-' : '+', az = Math.abs(zone);
+    const wall = new Date(utc + zone * 60000);
+    return wall.getUTCFullYear() + '-' + String(wall.getUTCMonth() + 1).padStart(2, '0') + '-' + String(wall.getUTCDate()).padStart(2, '0') + 'T' + String(wall.getUTCHours()).padStart(2, '0') + ':' + String(wall.getUTCMinutes()).padStart(2, '0') + ':00' + sign + String(Math.floor(az / 60)).padStart(2, '0') + ':' + String(az % 60).padStart(2, '0');
+  };
+  return Object.assign(base, { action, all_day: false, start_iso: iso(w.start), end_iso: iso(w.end) });
+}
+
+// ── Tenant-facing wording (Oct 23 2026 addendum). Warm, brief, never scolding. Plain GSM characters only. ──
+// "9a-1p" -> "9am-1pm"; "" -> "".
+function deliveryWindowHuman(win) {
+  const m = /^(\d{1,2})(?::(\d{2}))?([ap])-(\d{1,2})(?::(\d{2}))?([ap])$/.exec(String(win || '').trim());
+  if (!m) return String(win || '').trim();
+  return m[1] + (m[2] ? ':' + m[2] : '') + m[3] + 'm-' + m[4] + (m[5] ? ':' + m[5] : '') + m[6] + 'm';
+}
+// "5425 Belle Vista Ave, Baltimore, MD 21206" -> "5425 Belle Vista Ave" (the tenant knows the city); a unit stays: "928 N Calvert St Apt 2".
+function deliveryStreet(addr) { return String(addr || '').split(',')[0].replace(/\s+/g, ' ').trim(); }
+// "2026-10-16" -> "Friday, October 16" (the page).
+function deliveryLongDate(iso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso || '')) return '';
+  const t = new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10), 12));
+  return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][t.getUTCDay()] + ', ' + ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][+iso.slice(5, 7) - 1] + ' ' + (+iso.slice(8, 10));
+}
+// SMS segments: GSM-7 text is 160 for one segment and 153 per segment after that (all our tenant text is plain ASCII, so GSM-7).
+function deliverySmsSegments(s) { const n = String(s || '').length; return n === 0 ? 0 : (n <= 160 ? 1 : Math.ceil(n / 153)); }
+// "2026-10-18" -> "10/18/26" (the tenant text: terse, unambiguous, plain ASCII).
+function deliveryDateYY(iso) { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || '')); return m ? (+m[2]) + '/' + (+m[3]) + '/' + m[1].slice(2) : ''; }
+// Oct 23 2026 (Brett): the tenant text is a terse summary; the warm wording, street, haul-away and "may be rescheduled" lines live on the RSVP page.
+// o: { kind: 'request'|'changed'|'cancel', item, date, window, link }.  Plain ASCII only (stays GSM-7).
+function deliveryTenantText(o) {
+  const item = String(o.item || 'appliance').toLowerCase();
+  const when = [deliveryWindowHuman(o.window), deliveryDateYY(o.date)].filter(Boolean).join(' ');
+  let msg;
+  if (o.kind === 'cancel') msg = item.charAt(0).toUpperCase() + item.slice(1) + ' delivery is no longer scheduled. No need to be home.';
+  else if (o.kind === 'fyi') msg = 'Update: ' + item + ' delivery' + (when ? ' now ' + when : ' time changed') + '. Thanks for being there, no need to reply.';   // Oct 30 2026 (Brett): the tenant already said yes, so a better window is news, not a new question: no link, no ask
+  else if (o.kind === 'changed') msg = 'Delivery changed: ' + item + (when ? ' now ' + when : '') + '. Can you be there? ' + o.link;
+  else msg = 'New ' + item + ' ordered.' + (when ? ' Delivery ' + when + '.' : '') + ' Please let us know if you can be there: ' + o.link;
+  return deliveryPlainSms(msg, true);
+}
+// ═══ DELIVERY-EMAIL-PURE-END ═══
+
+// ═══ DELIVERY-EMAIL-HANDLER-START ═══
+// 2. The handler. Reads are cheap and run first; every write is verified by a read-back (updateRowVerified / addRow landing check).
+// What it writes: ONE Deliveries row per order (created, or updated on every later email), at most one Work Order per delivery,
+// Ops_Telemetry, and (only when the tenant-notice switch allows it) one tenant text through the gated chokepoint.
+// What it never does: write the calendar (the Apps Script does, as Brett: the response carries the event), send a text on a dry run,
+// text a tenant directly, create a record from a promo email, or drop a store email that mentions an order.
+const DELIVERY_EXTRA_COLS = ['Seen_Message_IDs', 'Last_Event', 'Last_Event_At', 'Last_Event_Sig', 'Stops_Away', 'Tenant_Notice_Sig', 'Tenant_Notice_Status', 'Tenant_Notice_Draft', 'Brett_SMS_Status', 'Tenant_RSVP', 'Tenant_RSVP_At', 'Tenant_RSVP_Note', 'Tenant_Notice_Sent_At', 'Event_Claim', 'Calendar_Event_ID', 'Calendar_Status'];
+const DELIVERY_NOTICE_DEFAULT_TEXT = 'Hi {FirstName}, this is {AssistantName} with Ridge Co Property Maintenance, on behalf of {Owner}. Your {Item} has been ordered{When}. Please be home if you can. If not, Ridge Co will be there to receive it, so you do not need to do anything.';
+const DELIVERY_DRIVER_NOTE = 'Driver calls Brett (ok to call me for now). Tenant: be there if you can; otherwise Brett receives and makes sure the old unit is hauled away.';
+
+const deliveryNormOrder = s => String(s == null ? '' : s).trim().toUpperCase();
+const deliveryRowNum = r => { const n = parseInt(r && r.ID, 10); return Number.isFinite(n) ? n : 1e12; };
+// Message keys: the RFC Message-ID (same in every mailbox that got the email), the caller's message_id, and "gmail:<mailbox>:<gmail id>". Compared case-insensitively.
+function deliveryKeyList(x) { return (Array.isArray(x) ? x : [x]).map(k => String(k == null ? '' : k).replace(/[,\s]+/g, '').trim()).filter(Boolean); }
+function deliverySawMessage(row, keys) {
+  const want = deliveryKeyList(keys).map(k => k.toLowerCase());
+  if (!row || !want.length) return false;
+  const have = [String(row.Message_ID || '')].concat(String(row.Seen_Message_IDs || '').split(',')).map(x => x.trim().toLowerCase()).filter(Boolean);
+  return want.some(k => have.indexOf(k) >= 0);
+}
+function deliverySeenAppend(row, keys) {
+  const list = String(row && row.Seen_Message_IDs || '').split(',').map(x => x.trim()).filter(Boolean);
+  const lc = () => list.map(x => x.toLowerCase());
+  if (String(row && row.Message_ID || '') && lc().indexOf(String(row.Message_ID).toLowerCase()) < 0) list.push(String(row.Message_ID));
+  for (const k of deliveryKeyList(keys)) if (lc().indexOf(k.toLowerCase()) < 0) list.push(k);
+  return list.slice(-60).join(',');   // an order sends maybe a dozen emails, times two mailboxes; 60 is plenty and keeps the cell small
+}
+function deliveryNoteAppend(existing, line, recvIso) {
+  const stamp = (deliveryEtDate(recvIso) || '').slice(5).replace('-', '/');
+  const next = (String(existing || '').trim() ? String(existing).trim() + '\n' : '') + (stamp ? '[' + stamp + '] ' : '') + line;
+  return next.length > 6000 ? '...' + next.slice(-5900) : next;
+}
+function deliveryEventSig(status, date, win, stops) { return [status, date || '', win || '', stops == null ? '' : stops].join('|'); }
+
+// Address -> property/unit/tenant. Reuses the Buildium intake matchers (intakeMatchProperty / intakeResolveUnit) so there is ONE address-matching rule.
+// status: 'matched' | 'none' | 'ambiguous' | 'no_address'. Never guesses: 0 or 2+ properties leave everything blank.
+function deliveryMatchPlace(address, unitRaw, properties, units, tenants) {
+  if (!String(address || '').trim()) return { status: 'no_address', detail: 'no delivery address in the email' };
+  const m = intakeMatchProperty(address, properties);
+  if (m.matches.length === 0) return { status: 'none', detail: 'no active property matches "' + address + '"' };
+  if (m.matches.length > 1) return { status: 'ambiguous', detail: m.matches.map(x => x.property.ID + ' ' + x.property.Address).join(' | ') };
+  const property = m.matches[0].property;
+  const ur = intakeResolveUnit(property, m.matches[0].unit_raw || (unitRaw || '').replace(/^(?:apt|apartment|unit|ste|suite)\.?\s*#?\s*/i, ''), units);
+  const out = { status: 'matched', property, unit_id: ur.ok ? ur.unit_id : '', unit_label: ur.ok ? ur.unit_label : '', unit_problem: ur.ok ? '' : (ur.detail || ur.reason), tenant_id: '', tenant: null };
+  const pool = tenantsForDispatch(tenants, null, { Unit_ID: out.unit_id, Property_ID: String(property.ID) });
+  if (pool.length === 1) { out.tenant_id = String(pool[0].ID); out.tenant = pool[0]; }
+  return out;
+}
+
+// The Job / PO line names a work order ("WO 1237"). Link the delivery to THAT work order (never create a second one) and take its unit and tenant, but only when it
+// is safe: the work order must exist, not be closed (Paid / Cancelled / Closed / Void), and be on the same property the address matched. Returns { wo_id, note, place }; `place` is the (possibly
+// upgraded) address match. Never throws; every refusal comes back as a note that reaches Brett's text and the delivery's notes (nothing is guessed silently).
+function deliveryApplyWoRef(woRef, wos, place, priorPropertyId, properties, units, tenants) {
+  const none = (note) => ({ wo_id: '', note, place });
+  if (!woRef) return none('');
+  const w = (wos || []).find(x => String(x.ID).toUpperCase() === String(woRef).toUpperCase());
+  if (!w) return none('JOB/PO names ' + woRef + ' but no such work order exists: not linked');
+  if (WOStatus.sets.CLOSED_FINAL.indexOf(String(w.Status || '')) >= 0) return none('JOB/PO names ' + woRef + ' but it is ' + w.Status + ' (closed): not linked');
+  const expected = place.status === 'matched' ? String(place.property.ID) : String(priorPropertyId || '');
+  if (expected && String(w.Property_ID) !== expected) return none('JOB/PO names ' + woRef + ' but it is on property ' + w.Property_ID + ' and the address is property ' + expected + ': not linked');
+  const property = place.status === 'matched' ? place.property : (properties || []).find(x => String(x.ID) === String(w.Property_ID));
+  if (!property) return none('JOB/PO names ' + woRef + ' but its property ' + w.Property_ID + ' is not in Properties: not linked');
+  const np = Object.assign({}, place, { status: 'matched', property });
+  const notes = [];
+  if (w.Unit_ID) {
+    const u = (units || []).find(x => String(x.ID) === String(w.Unit_ID));
+    if (place.unit_id && String(place.unit_id) !== String(w.Unit_ID)) notes.push('the email address says unit "' + (place.unit_label || place.unit_id) + '" but ' + woRef + ' is unit "' + (u ? u.Unit_Label : w.Unit_ID) + '": using the work order\'s');
+    np.unit_id = String(w.Unit_ID); np.unit_label = u ? u.Unit_Label : ''; np.unit_problem = '';
+  }
+  const wt = w.Tenant_ID ? (tenants || []).find(x => String(x.ID) === String(w.Tenant_ID) && x.Active !== 'FALSE' && String(x.Property_ID) === String(property.ID)) : null;
+  if (wt) {
+    if (place.tenant_id && String(place.tenant_id) !== String(wt.ID)) notes.push('tenant from the address (' + place.tenant_id + ') differs from ' + woRef + '\'s tenant ' + wt.ID + ': using the work order\'s');
+    np.tenant_id = String(wt.ID); np.tenant = wt;
+  } else if (w.Unit_ID && String(place.unit_id || '') !== String(w.Unit_ID)) {
+    const pool = tenantsForDispatch(tenants, null, { Unit_ID: np.unit_id, Property_ID: String(property.ID) });
+    np.tenant_id = pool.length === 1 ? String(pool[0].ID) : ''; np.tenant = pool.length === 1 ? pool[0] : null;
+  }
+  return { wo_id: String(w.ID), note: notes.join('; '), place: np };
+}
+
+async function deliveryReadTabs(env) {
+  invalidateTabCache('Deliveries');
+  let dels = [];
+  try { dels = await fetchTab(env, 'Deliveries'); } catch (e) { if (!isMissingTabError(e)) throw e; }   // first use: the tab does not exist yet, which is fine for a read
+  const [properties, units, tenants] = await fetchTabs(env, ['Properties', 'Units', 'Tenants']);
+  return { dels, properties, units, tenants };
+}
+
+async function deliveryTelemetry(env, t0, ok, notes) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'delivery_email_intake', Skill_Or_Endpoint: '/intake/delivery-email', Success: ok ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: String(notes).slice(0, 480) }); return true; }
+  catch (_) { return false; }
+}
+
+// Creates the install WO once per delivery. Returns {wo_id, created, error}. Never throws.
+const DELIVERY_WO_HEAL_AFTER_MS = 45000;
+async function deliveryEnsureWO(env, row, p, msgId, adminName) {
+  const existing = String(row.Linked_WO_IDs || '').split(',').map(x => x.trim()).filter(Boolean)[0];
+  if (existing) return { wo_id: existing, created: false, error: '' };
+  if (!row.Property_ID) return { wo_id: '', created: false, error: '' };
+  // PLACEHOLDER (Phase 2 size check): later, compare the new unit's dimensions (New_Dims) with the old unit / opening and flag a mismatch BEFORE the WO is created. Not built; no dimension logic here.
+  // PLACEHOLDER (Phase 4 voice routing): later, route the driver's phone call (store gives Brett's number) through the Hub voice line. Not built; the store-facing contact is Brett's own number for now.
+  try {
+    const what = [row.Item_Type, row.New_Make_Model].filter(Boolean).join(' ') || 'appliance';
+    const desc = ('Receive appliance delivery (' + (row.Store || 'store') + (row.Order_Number ? ' order ' + row.Order_Number : '') + '): ' + what + '. Ridge Co receives the delivery; the delivery crew must haul away the old unit and leave the new one. Tenant should be there if they can; otherwise ' + adminName + ' opens the door and lets the crew in. ' + adminName + ' installs (tenant does not install). Driver calls ' + adminName + '.').slice(0, 1500);
+    const res = await createWorkOrder(env, {
+      property_id: row.Property_ID, unit_id: row.Unit_ID || '', tenant_id: row.Tenant_ID || '', trade: 'Appliance', type: 'delivery', description: desc, priority: 'normal',
+      created_by: 'email-watcher', tenant_notify_created: false, tenant_notify_updates: false,
+      notes: 'Delivery #' + row.ID + (row.Order_Number ? ' / order ' + row.Order_Number : '') + '. ' + DELIVERY_DRIVER_NOTE,
+    });
+    const j = await res.clone().json();
+    if (res.status !== 200 || !j || j.success !== true || !j.id) return { wo_id: '', created: false, error: 'createWorkOrder failed: ' + JSON.stringify(j).slice(0, 160) };
+    const woId = j.id;
+    let warn = '';
+    try {
+      await ensureColumns(env, 'Work_Orders', ['Source', 'Intake_Message_ID']);
+      await updateWOFields(env, woId, { Source: 'email-watcher', Intake_Message_ID: msgId });
+      invalidateTabCache('Work_Orders');
+      const back = (await fetchTab(env, 'Work_Orders')).find(w => String(w.ID) === String(woId));
+      if (!back || String(back.Source || '') !== 'email-watcher') warn = 'WO ' + woId + ' created but its Source column did not save';
+    } catch (e) { warn = 'WO ' + woId + ' created but Source could not be set: ' + String((e && e.message) || e).slice(0, 120); }
+    await updateRowVerified(env, 'Deliveries', row.ID, { Linked_WO_IDs: woId });
+    return { wo_id: woId, created: !j.duplicate, error: '', warning: warn };
+  } catch (e) {
+    return { wo_id: '', created: false, error: String((e && e.message) || e).slice(0, 200) };
+  }
+}
+
+// ── Tenant RSVP link token (Oct 23 2026 addendum). Bearer token tied to the DELIVERY ID (not the date), so it survives a reschedule.
+// Format: "<delivery id>.<16 chars>" where the 16 chars are the first 96 bits of HMAC-SHA256(WORKER_SECRET, "delivery-rsvp|<id>"), base64url.
+// It never contains the date, the phone or the order number. Expiry is checked against the row's CURRENT Expected_Date (3 days after).
+const DELIVERY_RSVP_PAGE = 'rsvp.html';
+const DELIVERY_RSVP_GRACE_DAYS = 3;
+async function deliveryRsvpToken(env, id) {
+  if (!env.WORKER_SECRET) throw new Error('WORKER_SECRET is not set: cannot sign the tenant link');
+  return String(id) + '.' + (await _hmac('delivery-rsvp|' + String(id), env.WORKER_SECRET)).slice(0, 16);
+}
+function deliveryRsvpLink(token) { return PORTAL_BASE + '/' + DELIVERY_RSVP_PAGE + '?t=' + encodeURIComponent(token); }
+// ── Short link (Oct 23 2026, Brett: shorter links). STATELESS: nothing is stored. The code is "<delivery id>.<8 chars>", the 8 chars being the first 48 bits of
+// HMAC-SHA256(WORKER_SECRET, "delivery-short|<id>") (a different message than the page token, so one cannot be derived from the other). GET <base>/r/<code> answers
+// 302 -> PORTAL_BASE/rsvp.html?t=<full token>. Tied to the delivery id (not the date), so it survives a reschedule. Expiry stays with the page/API: the redirect never reads
+// the sheet, and the page + API give a bad code and an expired one the same "link not working" result.
+const DELIVERY_SHORT_PATH = '/r/';
+async function deliveryShortCode(env, id) {
+  if (!env.WORKER_SECRET) throw new Error('WORKER_SECRET is not set: cannot sign the tenant link');
+  return String(id) + '.' + (await _hmac('delivery-short|' + String(id), env.WORKER_SECRET)).slice(0, 8);
+}
+// Base of the short link: Config Delivery_Link_Base (set to e.g. https://ridgeco.app once that domain is attached to this Worker) > the host this request came in on > WORKER_BASE_URL > production.
+function deliveryLinkBase(env, cfg) {
+  const ok = v => { v = String(v || '').trim().replace(/\/+$/, ''); return /^https:\/\/[a-z0-9.-]+(:\d+)?$/i.test(v) ? v : ''; };
+  return ok(cfg && cfg.Delivery_Link_Base) || ok(env.__SELF_ORIGIN__) || ok(env.WORKER_BASE_URL) || 'https://maintenance-hub.brett-2f8.workers.dev';
+}
+async function deliveryShortLink(env, cfg, id) { return deliveryLinkBase(env, cfg) + DELIVERY_SHORT_PATH + (await deliveryShortCode(env, id)); }
+async function deliveryShortVerify(env, code) {
+  const m = /^(\d{1,9})\.([A-Za-z0-9_-]{8})$/.exec(String(code || '').trim());
+  if (!m || !env.WORKER_SECRET) return null;
+  const want = (await _hmac('delivery-short|' + m[1], env.WORKER_SECRET)).slice(0, 8);
+  return deliveryCtEq(want, m[2]) ? m[1] : null;
+}
+// GET /r/<code>  (PUBLIC). Rate limit per IP (same bucket as the page API). A bad code goes to the page with a dead token, so it shows the same friendly "link not working" as an expired one.
+async function deliveryShortRedirect(env, code, ip) {
+  const page = PORTAL_BASE + '/' + DELIVERY_RSVP_PAGE;
+  const go = (t) => new Response(null, { status: 302, headers: { 'Location': page + '?t=' + encodeURIComponent(t), 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' } });
+  try {
+    if (!deliveryRsvpRate('ip:' + ip, 120, DELIVERY_RSVP_RATE_WINDOW)) return new Response('That was a lot of taps at once. Please wait a minute and try again.', { status: 429, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+    const id = await deliveryShortVerify(env, code);
+    if (!id) return go('x');
+    return go(await deliveryRsvpToken(env, id));
+  } catch (e) {
+    await deliveryTelemetry(env, Date.now(), false, 'short link redirect failed: ' + String((e && e.message) || e));
+    return go('x');
+  }
+}
+function deliveryCtEq(a, b) { a = String(a); b = String(b); let d = a.length ^ b.length; const n = Math.max(a.length, b.length); for (let i = 0; i < n; i++) d |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0); return d === 0; }
+// Returns the delivery id when the token's signature is genuine, else null. Same null for every kind of bad token.
+async function deliveryRsvpVerify(env, t) {
+  const m = /^(\d{1,9})\.([A-Za-z0-9_-]{16})$/.exec(String(t || '').trim());
+  if (!m || !env.WORKER_SECRET) return null;
+  const want = (await _hmac('delivery-rsvp|' + m[1], env.WORKER_SECRET)).slice(0, 16);
+  return deliveryCtEq(want, m[2]) ? m[1] : null;
+}
+// Link works until DELIVERY_RSVP_GRACE_DAYS after the CURRENT Expected_Date (ET). No date = not usable.
+function deliveryRsvpExpired(row, now) {
+  const d = String(row && row.Expected_Date || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return true;
+  const today = (now || new Date()).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  return today > deliveryAddDays(d, DELIVERY_RSVP_GRACE_DAYS);
+}
+const DELIVERY_RSVP_CURRENT = { Confirmed: 'yes', Declined: 'no', Unsure: 'unsure' };
+
+function deliveryNoticeMode(cfg) {
+  const raw = String(cfg.Delivery_Tenant_Notice == null ? '' : cfg.Delivery_Tenant_Notice).trim().toLowerCase();
+  const mode = raw === '' ? 'auto' : raw;
+  if (mode !== 'auto' && mode !== 'draft' && mode !== 'off') return { mode: 'off', bad: raw };
+  return { mode };
+}
+
+// Tenant request text. mode (Config Delivery_Tenant_Notice): 'auto' (default) | 'draft' | 'off'. Goes ONLY through smsGatedSend (global switch,
+// property, owner and tenant consent, opt-out, moved-out), as a held Message_Queue row released by the existing sweep (processQuietHoursQueue).
+// variant: 'request' (first ask) | 'changed' (date/window moved after we asked) | 'cancel' (we asked, then the delivery was cancelled).
+// No delivery date = no request at all. Timing: see deliveryNoticeHoldUntil. Returns {tenant_sms, detail, sig, draft, sent_at, record}. Never throws.
+async function deliveryTenantNotice(env, o) {
+  const { cfg, row, place, woId, date, win } = o;
+  const variant = o.variant || 'request';
+  const nm = deliveryNoticeMode(cfg);
+  if (nm.bad !== undefined) return { tenant_sms: 'off', detail: 'Delivery_Tenant_Notice has an unknown value "' + nm.bad + '" (use auto, draft or off): no tenant text', warn: true };
+  if (nm.mode === 'off') return { tenant_sms: 'off', detail: 'Delivery_Tenant_Notice is off' };
+  const tenant = place && place.tenant;
+  if (!tenant) return { tenant_sms: 'skipped', detail: 'no single tenant resolved for this delivery' };
+  if (variant !== 'cancel' && !date) return { tenant_sms: 'skipped', detail: 'no delivery date yet: the tenant is asked when a later email sets the date', no_date: true };
+  const sig = variant === 'cancel' ? 'CANCELLED' : (date || '') + '|' + (win || '');
+  if (String(row.Tenant_Notice_Sig || '') === sig && /^(queued|sent|draft)/.test(String(row.Tenant_Notice_Status || ''))) return { tenant_sms: 'skipped', detail: 'tenant already told this date/window', record: false };
+  // Oct 30 2026: everyone active in the unit gets the text (co-tenants), not only the one tenant on the delivery row. Same phone twice = once.
+  const people = [tenant].concat((Array.isArray(o.recipients) ? o.recipients : []).filter(x => x && String(x.ID) !== String(tenant.ID)));
+  const seenPhones = {};
+  const list = people.filter(x => { const ph = normalizePhone(x.Phone); if (!ph) return true; if (seenPhones[ph]) return false; seenPhones[ph] = true; return true; });
+  const multi = list.length > 1;
+  try {
+    const owners = await fetchTab(env, 'Owners');
+    const owner = owners.find(w => String(w.ID) === String(place.property.Owner_ID)) || null;
+    let queue = [];
+    try { queue = await fetchTab(env, MSG_QUEUE_TAB); } catch (e) { if (!isMissingTabError(e)) throw e; }
+    const item = String(row.Item_Type || '').toLowerCase() || 'appliance';
+    let link = '';
+    if (variant === 'request' || variant === 'changed') link = await deliveryShortLink(env, cfg, o.deliveryId || row.ID);
+    const hold = deliveryNoticeHoldUntil(new Date(), variant === 'cancel' ? (row.Expected_Date || date) : date);
+    const sendOne = async (tn) => {
+      const who = String(tn.First_Name || 'tenant');
+      const tag = (x) => Object.assign({ who }, x);
+      if (!tn.Phone) return tag({ state: 'skipped', detail: 'no phone on file' });
+      const ph = normalizePhone(tn.Phone);
+      const mine = r => r.Message_Type === 'delivery_tenant_notice' && woId && String(r.WO_ID) === String(woId) && normalizePhone(r.Recipient_Phone) === ph;
+      const waiting = queue.filter(r => mine(r) && r.Status === 'pending' && r.Send_After);
+      // A newer text replaces one still waiting for its slot: never two texts for one person for one delivery.
+      if (nm.mode !== 'draft') for (const q of waiting) {
+        const ok = await updateMessageQueueRow(env, q.ID, { Status: 'skipped', Gate_Snapshot: variant === 'cancel' ? 'delivery cancelled before this request went out' : 'superseded by a newer delivery notice', Send_After: '' });
+        if (ok === false) return tag({ state: 'failed', detail: 'could not retire the older waiting notice (queue row ' + q.ID + '), nothing new queued', warn: true });
+      }
+      if (variant === 'cancel' && !queue.some(r => mine(r) && r.Status === 'sent')) return tag({ state: 'skipped', detail: waiting.length ? 'the request had not gone out yet: it was withdrawn, tenant not texted' : 'tenant was never asked, nothing to cancel' });
+      const first = !queue.some(r => r.Status === 'sent' && normalizePhone(r.Recipient_Phone) === ph);
+      const ctx = { first: tn.First_Name || 'there', assistant: cfg.ASSISTANT_NAME || 'Riley', owner: (owner && (owner.Company || owner.First_Name)) || 'your property owner', item, street: deliveryStreet(row.Delivery_Address), date, window: win };
+      let msg;
+      if (variant === 'request' && cfg.Delivery_Tenant_Notice_Text) {
+        msg = deliveryPlainSms(renderTemplate(cfg.Delivery_Tenant_Notice_Text, { FirstName: ctx.first, AssistantName: ctx.assistant, Owner: ctx.owner, Item: item, Street: ctx.street, Address: row.Delivery_Address || '', When: [deliveryShortDate(date), deliveryWindowHuman(win)].filter(Boolean).join(' '), Link: link }), true);
+        if (link && msg.indexOf(link) < 0) msg += ' ' + link;   // a custom template that forgot {Link} must still carry the answer link
+      } else msg = deliveryTenantText(Object.assign({ kind: variant, link }, ctx));
+      if (first) msg = withTenantStopNote(msg);
+      if (nm.mode === 'draft') return tag({ state: 'draft', detail: 'draft saved on the delivery (Tenant_Notice_Draft), not sent', draft: msg });
+      const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'delivery_tenant_notice', recipient_type: 'tenant', tenant: tn, property: place.property, owner, message_body: msg, holdUntil: hold ? hold.toISOString() : undefined, allowRepeat: true });   // once-per-event is enforced above (Tenant_Notice_Sig + the waiting-row swap + Event_Claim); the D-16 same-text guard must NOT swallow a real second move that reads exactly like an earlier one (Y, back to X, Y again)
+      if (r && r.sent) return tag({ state: 'sent', detail: 'sent now (delivery is today)', text: msg });
+      if (r && r.held_for_quiet_hours) return tag({ state: 'queued', detail: 'held until ' + r.send_after, send_after: r.send_after, text: msg });
+      if (r && r.send_ok === false) return tag({ state: 'skipped', detail: 'blocked by the text gate: ' + r.gate_snapshot });
+      return tag({ state: 'failed', detail: 'not sent (' + ((r && (r.gate_snapshot || r.warning)) || 'unknown') + ')', warn: true });
+    };
+    const results = [];
+    for (const tn of list) {
+      try { results.push(await sendOne(tn)); }
+      catch (e) { results.push({ who: String(tn.First_Name || 'tenant'), state: 'failed', detail: String((e && e.message) || e).slice(0, 120), warn: true }); }   // one co-tenant failing must not hide the others' results
+    }
+    const nowIso = new Date().toISOString();
+    const detail = results.map(x => (multi ? x.who + ': ' : '') + x.detail).join(' | ');
+    const has = s => results.some(x => x.state === s);
+    const warn = results.some(x => x.warn) || undefined;
+    const withText = results.find(x => x.text);
+    const common = { detail, warn };
+    if (has('queued')) return Object.assign(common, { tenant_sms: 'queued', sig, send_after: (results.find(x => x.send_after) || {}).send_after, sent_at: nowIso, text: withText && withText.text });
+    if (has('sent')) return Object.assign(common, { tenant_sms: 'sent', sig, sent_at: nowIso, text: withText && withText.text });
+    if (has('draft')) return Object.assign(common, { tenant_sms: 'draft', sig, draft: results.filter(x => x.draft).map(x => (multi ? x.who + ': ' : '') + x.draft).join('\n') });
+    if (has('failed')) return Object.assign(common, { tenant_sms: 'failed', warn: true });
+    return { tenant_sms: 'skipped', detail };
+  } catch (e) { return { tenant_sms: 'failed', detail: String((e && e.message) || e).slice(0, 160), warn: true }; }
+}
+
+// ── Public RSVP endpoints. GET /delivery/rsvp?t=TOKEN and POST /delivery/rsvp {t, answer, note?}. Public at the gate; the signed token IS the credential. ──
+// Rate limits are per Worker instance (the same in-memory pattern as the other public pages): per token, per IP, and per IP for bad tokens.
+const __rsvpHits = new Map();
+function deliveryRsvpRate(key, max, windowMs) {
+  const now = Date.now();
+  if (__rsvpHits.size > 2000) for (const [k, v] of __rsvpHits) if (!v.length || now - v[v.length - 1] > windowMs) __rsvpHits.delete(k);
+  const arr = (__rsvpHits.get(key) || []).filter(t => now - t < windowMs);
+  if (arr.length >= max) { __rsvpHits.set(key, arr); return false; }
+  arr.push(now); __rsvpHits.set(key, arr); return true;
+}
+const DELIVERY_RSVP_RATE_WINDOW = 10 * 60000;
+function deliveryRsvpTooMany() { return json({ ok: false, expired: false, message: 'That was a lot of taps at once. Please wait a minute and try again.' }, 429); }
+function deliveryRsvpDead() { return json({ ok: false, expired: true, message: 'This link is no longer active. If you still need to reach us, please text or call Ridge Co and we will be glad to help.' }, 200); }   // the same answer for a bad, tampered, unknown or expired link
+function deliveryRsvpCleanNote(v) { return String(v == null ? '' : v).replace(/[\u0000-\u001f\u007f<>]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300); }
+async function deliveryRsvpLoad(env, t, ip) {
+  if (!deliveryRsvpRate('ip:' + ip, 120, DELIVERY_RSVP_RATE_WINDOW)) return { resp: deliveryRsvpTooMany() };
+  const id = await deliveryRsvpVerify(env, t);
+  if (!id) {
+    if (!deliveryRsvpRate('bad:' + ip, 15, DELIVERY_RSVP_RATE_WINDOW)) return { resp: deliveryRsvpTooMany() };
+    return { resp: deliveryRsvpDead() };
+  }
+  if (!deliveryRsvpRate('tok:' + id, 60, DELIVERY_RSVP_RATE_WINDOW)) return { resp: deliveryRsvpTooMany() };
+  let dels = [];
+  try { invalidateTabCache('Deliveries'); dels = await fetchTab(env, 'Deliveries'); } catch (e) { if (!isMissingTabError(e)) throw e; }
+  const row = dels.find(d => String(d.ID) === id);
+  if (!row || row.Active === 'FALSE' || deliveryRsvpExpired(row)) return { resp: deliveryRsvpDead() };
+  return { row, id };
+}
+function deliveryRsvpClosed(row) {
+  if (row.Status === 'Delivered') return 'This delivery has already arrived. Thank you for being part of it!';
+  if (row.Status === 'Cancelled') return 'This delivery is no longer scheduled, so there is nothing to answer. We will let you know if a new date is set.';
+  return '';
+}
+async function deliveryRsvpGet(env, url, ip) {
+  try {
+    const ld = await deliveryRsvpLoad(env, url.searchParams.get('t'), ip);
+    if (ld.resp) return ld.resp;
+    const row = ld.row;
+    let first = '';
+    if (row.Tenant_ID) { try { const t = (await fetchTab(env, 'Tenants')).find(x => String(x.ID) === String(row.Tenant_ID)); first = t ? String(t.First_Name || '') : ''; } catch (e) { first = ''; } }
+    const closed = deliveryRsvpClosed(row);
+    // Only what the tenant needs. No phone numbers, no other tenants, no order number, no ids.
+    return json({ ok: true, closed: !!closed, delivered: row.Status === 'Delivered', cancelled: row.Status === 'Cancelled', message: closed, first_name: first, item_type: String(row.Item_Type || '').toLowerCase(), date_text: deliveryLongDate(row.Expected_Date), window_text: deliveryWindowHuman(row.Expected_Window), street: deliveryStreet(row.Delivery_Address),
+      current: DELIVERY_RSVP_CURRENT[row.Tenant_RSVP] || '', note: String(row.Tenant_RSVP_Note || '') });
+  } catch (e) {
+    await deliveryTelemetry(env, Date.now(), false, 'rsvp GET failed: ' + String((e && e.message) || e));
+    return json({ ok: false, expired: false, message: 'Sorry, something went wrong on our end. Please try the link again in a few minutes.' }, 500);
+  }
+}
+async function deliveryRsvpPost(env, url, body, ip) {
+  const t0 = Date.now();
+  body = body || {};
+  try {
+    const ld = await deliveryRsvpLoad(env, body.t, ip);
+    if (ld.resp) return ld.resp;
+    const row = ld.row;
+    if (!deliveryRsvpRate('post:' + ld.id, 20, DELIVERY_RSVP_RATE_WINDOW)) return deliveryRsvpTooMany();
+    const answer = String(body.answer || '').toLowerCase();
+    if (['yes', 'no', 'unsure'].indexOf(answer) < 0) return json({ ok: false, current: DELIVERY_RSVP_CURRENT[row.Tenant_RSVP] || '', message: 'Please tap one of the three buttons.' }, 400);
+    const closed = deliveryRsvpClosed(row);
+    if (closed) return json({ ok: false, closed: true, current: DELIVERY_RSVP_CURRENT[row.Tenant_RSVP] || '', message: closed });
+    if (isStaging(env, url) && !String(row.Message_ID || '').startsWith('TEST-')) return json({ ok: false, current: '', message: 'This is the test site: only test deliveries can be answered here.' }, 403);
+    const note = deliveryRsvpCleanNote(body.note);
+    const newRsvp = { yes: 'Confirmed', no: 'Declined', unsure: 'Unsure' }[answer];
+    const same = row.Tenant_RSVP === newRsvp;
+    const msgs = {
+      yes: 'Thank you, that is a big help! You can change your answer on this page any time before the delivery.',
+      no: "No problem at all, thank you for letting us know. We'll do our best to be there instead. The delivery may need to be rescheduled, and we will keep you posted.",
+      unsure: 'Thanks for letting us know. Come back to this page any time to update your answer.',
+    };
+    if (same && String(row.Tenant_RSVP_Note || '') === note) return json({ ok: true, current: answer, message: msgs[answer], unchanged: true });   // a repeat tap: nothing written, nobody texted
+    await ensureDeliveryTab(env);
+    const cfg = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values);
+    const adminPhone = normalizePhone(cfg.admin_phone || '');
+    const nowIso = new Date().toISOString();
+    const f = { Tenant_RSVP: newRsvp, Tenant_RSVP_At: nowIso, Tenant_RSVP_Note: note };
+    let noteLine = '';
+    if (!same) {
+      if (answer === 'no') { Object.assign(f, { Onsite_Contact: 'me', Onsite_Contact_Phone: adminPhone }); noteLine = "Tenant can't be present. Driver calls Brett."; }
+      else {
+        if (row.Tenant_ID) Object.assign(f, { Onsite_Contact: 'tenant', Onsite_Contact_Phone: '' });
+        noteLine = answer === 'yes' ? 'Tenant says they will be there. Driver still calls Brett.' : 'Tenant is not sure yet. Driver calls Brett.';
+      }
+      f.Delivery_Notes = deliveryNoteAppend(row.Delivery_Notes, 'Tenant answered "' + answer + '"' + (note ? ' (note: ' + note.slice(0, 80) + ')' : '') + '. ' + noteLine, nowIso);
+    }
+    await updateRowVerified(env, 'Deliveries', row.ID, f);
+    // Brett is texted only when the answer CHANGES to no / unsure (never for yes, never for a repeat).
+    let sms = '', warn = '';
+    if (!same && (answer === 'no' || answer === 'unsure')) {
+      const when = [deliveryShortDate(row.Expected_Date), row.Expected_Window].filter(Boolean).join(' ');
+      const street = deliveryStreet(row.Delivery_Address) || 'Delivery';
+      const txt = deliveryPlainSms(answer === 'no'
+        ? street + ": tenant can't be there for " + when + '. Driver will call you. Update the order if needed.'
+        : street + ': tenant is not sure yet about ' + when + '. They can still answer.');
+      let prop = null;
+      try { prop = row.Property_ID ? (await fetchTab(env, 'Properties')).find(x => String(x.ID) === String(row.Property_ID)) || null : null; } catch (e) { prop = null; }
+      sms = await intakeSmsAdmin(env, txt, String(row.Linked_WO_IDs || '').split(',')[0].trim(), prop);
+      if (sms !== 'sent') warn = 'Brett text about the tenant answer not sent: ' + sms;
+      try { await updateRowVerified(env, 'Deliveries', row.ID, { Brett_SMS_Status: sms }); } catch (e) { warn = (warn ? warn + ' / ' : '') + 'could not record the alert result: ' + String((e && e.message) || e).slice(0, 80); }
+    }
+    await deliveryTelemetry(env, t0, !warn, 'rsvp delivery ' + row.ID + ' ' + (row.Tenant_RSVP || '-') + ' -> ' + newRsvp + (sms ? '; brett=' + sms : '') + (warn ? '; WARN ' + warn : ''));
+    return json({ ok: true, current: answer, message: msgs[answer] });   // the tenant's answer is saved even when the text to Brett failed; that failure is in telemetry (Needs Attention)
+  } catch (e) {
+    await deliveryTelemetry(env, t0, false, 'rsvp POST failed: ' + String((e && e.message) || e));
+    return json({ ok: false, message: 'Sorry, something went wrong on our end and your answer was not saved. Please try again in a few minutes.' }, 500);
+  }
+}
+
+// ── Sign-in for the Apps Script without a shared secret (Oct 23 2026, Brett) ──
+// The script sends `Authorization: Bearer <Google OpenID identity token>` (ScriptApp.getIdentityToken(): the mailbox owner's own Google identity). We check, with WebCrypto only:
+// RS256 signature against Google's published keys (JWKS, cached per Worker instance), issuer, expiry (small skew), email_verified, and that the e-mail is in Config
+// Delivery_Mailboxes. `aud` is NOT pinned (it is the script project's own client id). The token is never logged. The X-Auth-Token INTAKE_TOKEN path still works beside it.
+const DELIVERY_MAILBOXES_DEFAULT = 'brett@bmoremanagement.com,info@bmoremanagement.com';
+const GOOGLE_JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
+const GOOGLE_ID_ISSUERS = ['accounts.google.com', 'https://accounts.google.com'];
+const GOOGLE_ID_SKEW_S = 60, GOOGLE_JWKS_MIN_TTL_MS = 5 * 60000, GOOGLE_JWKS_MAX_TTL_MS = 6 * 3600000, GOOGLE_JWKS_STALE_GRACE_MS = 6 * 3600000, GOOGLE_JWKS_REFETCH_GAP_MS = 60000;
+let __gJwks = null;          // { keys: Map(kid -> { jwk, key }), exp }
+let __gJwksTriedAt = 0;      // last network attempt: an unknown key id can force a refetch at most once a minute (forged ids cannot flood Google or us)
+let __gAuthAlertAt = {};     // reason -> last ledger report (ms)
+async function googleJwksLoad(env, force) {
+  const now = Date.now();
+  if (__gJwks && __gJwks.exp > now && !force) return __gJwks;
+  if (force && __gJwks && now - __gJwksTriedAt < GOOGLE_JWKS_REFETCH_GAP_MS) return __gJwks;
+  if (!force && __gJwks && now - __gJwksTriedAt < GOOGLE_JWKS_REFETCH_GAP_MS) return __gJwks;   // an expired list that just failed to refresh is not hammered
+  __gJwksTriedAt = now;
+  try {
+    const resp = await fetch(GOOGLE_JWKS_URL, { method: 'GET', headers: { Accept: 'application/json' } });
+    if (!resp.ok) throw new Error('Google key list answered HTTP ' + resp.status);
+    const j = await resp.json();
+    const keys = new Map();
+    for (const k of ((j && j.keys) || [])) if (k && k.kid && k.kty === 'RSA' && k.n && k.e) keys.set(String(k.kid), { jwk: k, key: null });
+    if (!keys.size) throw new Error('Google key list was empty');
+    const m = /max-age=(\d+)/.exec(resp.headers.get('Cache-Control') || '');
+    const ttl = Math.min(GOOGLE_JWKS_MAX_TTL_MS, Math.max(GOOGLE_JWKS_MIN_TTL_MS, m ? parseInt(m[1], 10) * 1000 : 3600000));
+    __gJwks = { keys, exp: now + ttl };
+    return __gJwks;
+  } catch (e) {
+    // Keep using a list we already have for a few hours (Google rotates keys slowly) but say so loudly; with nothing in memory, fail closed.
+    await deliveryAuthAlert(env, 'jwks_unavailable', 'P1', 'Could not fetch Google\'s sign-in keys (' + String((e && e.message) || e).slice(0, 120) + '). ' + (__gJwks && now - __gJwks.exp < GOOGLE_JWKS_STALE_GRACE_MS ? 'Using the last known keys for now.' : 'Delivery e-mails from the Apps Script are being refused until this clears.'));
+    if (__gJwks && now - __gJwks.exp < GOOGLE_JWKS_STALE_GRACE_MS) return __gJwks;
+    const err = new Error('jwks_unavailable'); err.code = 'jwks_unavailable'; throw err;
+  }
+}
+// Never throws. { ok:true, email } | { ok:false, reason, unavailable? }.  `reason` goes to the ledger only; the caller always answers 401 with the same body.
+async function deliveryVerifyIdToken(env, jwt) {
+  try {
+    jwt = String(jwt || '').trim();
+    if (!jwt || jwt.length > 4096) return { ok: false, reason: 'malformed' };
+    const parts = jwt.split('.');
+    if (parts.length !== 3 || parts.some(x => !/^[A-Za-z0-9_-]+$/.test(x))) return { ok: false, reason: 'malformed' };
+    let head, claims;
+    try { head = JSON.parse(_tdec.decode(_b64urlToBytes(parts[0]))); claims = JSON.parse(_tdec.decode(_b64urlToBytes(parts[1]))); } catch (e) { return { ok: false, reason: 'malformed' }; }
+    if (!head || head.alg !== 'RS256' || !head.kid || !claims || typeof claims !== 'object') return { ok: false, reason: 'bad_header' };
+    let list = await googleJwksLoad(env, false);
+    let ent = list.keys.get(String(head.kid));
+    if (!ent) { list = await googleJwksLoad(env, true); ent = list.keys.get(String(head.kid)); }   // unknown key id: refetch once (rate-limited)
+    if (!ent) return { ok: false, reason: 'unknown_kid' };
+    if (!ent.key) ent.key = await crypto.subtle.importKey('jwk', { kty: 'RSA', n: ent.jwk.n, e: ent.jwk.e, alg: 'RS256', ext: true }, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+    const okSig = await crypto.subtle.verify({ name: 'RSASSA-PKCS1-v1_5' }, ent.key, _b64urlToBytes(parts[2]), _tenc.encode(parts[0] + '.' + parts[1]));
+    if (!okSig) return { ok: false, reason: 'bad_signature' };
+    const nowS = Math.floor(Date.now() / 1000);
+    if (GOOGLE_ID_ISSUERS.indexOf(String(claims.iss)) < 0) return { ok: false, reason: 'bad_issuer' };
+    if (!Number.isFinite(claims.exp) || claims.exp < nowS - GOOGLE_ID_SKEW_S) return { ok: false, reason: 'expired' };
+    if (!Number.isFinite(claims.iat) || claims.iat > nowS + GOOGLE_ID_SKEW_S) return { ok: false, reason: 'not_yet_valid' };
+    if (!(claims.email_verified === true || claims.email_verified === 'true')) return { ok: false, reason: 'email_not_verified' };
+    const email = String(claims.email || '').trim().toLowerCase();
+    if (!email) return { ok: false, reason: 'no_email' };
+    let cfg;
+    try { cfg = await fetchConfig(env); } catch (e) { await deliveryAuthAlert(env, 'config_unreadable', 'P1', 'Could not read Config to check the mailbox allow-list (' + String((e && e.message) || e).slice(0, 100) + '); delivery e-mails are being refused.'); return { ok: false, reason: 'config_unreadable', unavailable: true }; }
+    const allowed = String(cfg.Delivery_Mailboxes || DELIVERY_MAILBOXES_DEFAULT).split(/[,;\s]+/).map(x => x.trim().toLowerCase()).filter(Boolean);
+    if (allowed.indexOf(email) < 0) return { ok: false, reason: 'email_not_allowed', email_hint: email.replace(/^(.).*(@.*)$/, '$1***$2') };
+    return { ok: true, email };
+  } catch (e) {
+    if (e && e.code === 'jwks_unavailable') return { ok: false, reason: 'jwks_unavailable', unavailable: true };
+    return { ok: false, reason: 'verify_error', detail: String((e && e.message) || e).slice(0, 100) };
+  }
+}
+// Not silent, not a flood: at most one ledger report per where+ref per 10 minutes per Worker instance (the ledger also dedupes and caps by itself). Never contains a token.
+async function deliveryLedgerOnce(env, where, ref, severity, message) {
+  const now = Date.now(), k = where + '|' + ref;
+  if (__gAuthAlertAt[k] && now - __gAuthAlertAt[k] < 10 * 60000) return;
+  __gAuthAlertAt[k] = now;
+  await reportFailure(env, { system: 'hub', source: 'worker', where, ref: String(ref), severity, message: String(message).slice(0, 300) });   // never throws
+}
+function deliveryAuthAlert(env, reason, severity, message) { return deliveryLedgerOnce(env, 'delivery_auth_' + reason, reason, severity, message); }
+
+// ── The delivery lands on Brett's own Google Calendar, written by the Hub (Oct 23 2026). The Hub's service account acts as Brett (domain-wide delegation, narrow scope
+// calendar.events: the same mechanism as the cleaning calendar, getCalendarAccessToken). Config Delivery_Cal_Impersonate (falls back to STR_CAL_IMPERSONATE) names whose
+// primary calendar it is. One event per order (tagged with a private extended property, so a lost id can be found again); create / move / delete; every failure is
+// reported (failure ledger P1 + the response's calendar_status + the delivery row), never swallowed. On staging the write is a stub.
+const DELIVERY_CAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
+const DELIVERY_CAL_KEY_PROP = 'ridgecoDeliveryKey';
+function deliveryCalEventBody(cal, patch) {
+  const ev = { summary: cal.title, location: cal.location || '', description: cal.description || '', status: 'confirmed', extendedProperties: { private: { [DELIVERY_CAL_KEY_PROP]: cal.key } } };
+  // patch=true (updating an event that may already exist in the OTHER shape): Google merges nested objects on PATCH, so a timed update on a
+  // date-only event would carry BOTH date and dateTime and answer 400 "Invalid start time" (the Oct 29 2026 range delivery). Null the other field out.
+  if (cal.all_day) { ev.start = patch ? { date: cal.start_iso, dateTime: null, timeZone: null } : { date: cal.start_iso }; ev.end = patch ? { date: cal.end_iso, dateTime: null, timeZone: null } : { date: cal.end_iso }; }
+  else { ev.start = Object.assign({ dateTime: cal.start_iso, timeZone: 'America/New_York' }, patch ? { date: null } : {}); ev.end = Object.assign({ dateTime: cal.end_iso, timeZone: 'America/New_York' }, patch ? { date: null } : {}); }
+  return ev;
+}
+async function deliveryCalFetch(env, sub, method, pathAndQuery, body) {
+  const token = await getCalendarAccessToken(env, { sub, scope: DELIVERY_CAL_SCOPE });
+  const resp = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary' + pathAndQuery, { method, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  if (resp.status === 204) return { _status: 204 };
+  const text = await resp.text();
+  if (!resp.ok) {
+    const e = new Error('Google Calendar answered ' + resp.status + ' while acting as ' + sub + ': ' + smsMaskPhones(text).replace(/\s+/g, ' ').slice(0, 160) + (resp.status === 403 && /scope/i.test(text) ? ' (the narrow calendar.events permission is not enough; do not widen it without a decision)' : ''));
+    e.httpStatus = resp.status; throw e;
+  }
+  let j = {}; try { j = text ? JSON.parse(text) : {}; } catch (_) { throw new Error('Google Calendar returned unreadable JSON'); }
+  return j;
+}
+// -> { status, event_id, warn? } where status is created | updated | cancelled | nothing_to_cancel | none | staged: ... | dry_run: ... | failed: ...
+async function deliveryCalSync(env, cfg, deliveryId, row, cal, dry) {
+  const had = String(row && row.Calendar_Event_ID || '').trim();
+  if (!cal || cal.action === 'none') return { status: 'none', event_id: had };
+  if (dry) return { status: 'dry_run: would ' + cal.action, event_id: had };
+  if (inspCalStaged(env, cfg)) return { status: 'staged: calendar writes are stubbed on the test server', event_id: had };
+  const sub = String(cfg.Delivery_Cal_Impersonate || cfg.STR_CAL_IMPERSONATE || '').trim();
+  try {
+    if (!sub || !STR_EMAIL_RE.test(sub)) throw Object.assign(new Error('Config Delivery_Cal_Impersonate (or STR_CAL_IMPERSONATE) is ' + (sub ? 'not an email address' : 'not set') + ': set it to brett@bmoremanagement.com so the Hub can write deliveries to Brett\'s calendar'), { notConfigured: true });
+    const find = async () => {
+      const q = '/events?privateExtendedProperty=' + encodeURIComponent(DELIVERY_CAL_KEY_PROP + '=' + cal.key) + '&maxResults=10&fields=items(id,status)';
+      return ((await deliveryCalFetch(env, sub, 'GET', q)).items || []).filter(x => x && x.id && x.status !== 'cancelled').map(x => x.id);
+    };
+    const gone = e => e && (e.httpStatus === 404 || e.httpStatus === 410);
+    if (cal.action === 'cancel') {
+      const ids = Array.from(new Set([had].filter(Boolean).concat(await find())));
+      if (!ids.length) return { status: 'nothing_to_cancel', event_id: '' };
+      for (const id of ids) { try { await deliveryCalFetch(env, sub, 'DELETE', '/events/' + encodeURIComponent(id)); } catch (e) { if (!gone(e)) throw e; } }
+      return { status: 'cancelled', event_id: '' };
+    }
+    const body = deliveryCalEventBody(cal), patchBody = deliveryCalEventBody(cal, true);
+    let id = had, how = 'updated';
+    if (id) { try { await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), patchBody); } catch (e) { if (!gone(e)) throw e; id = ''; } }
+    if (!id) {
+      const found = await find();
+      if (found.length) { id = found[0]; await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), patchBody); }
+      else { const made = await deliveryCalFetch(env, sub, 'POST', '/events', body); id = String(made.id || ''); how = 'created'; if (!id) throw new Error('Google Calendar did not return an event id'); }
+    }
+    return { status: how, event_id: id };
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 220);
+    await deliveryLedgerOnce(env, 'delivery_calendar', (e && e.notConfigured ? 'not_configured' : deliveryId), 'P1', 'Delivery ' + deliveryId + ' was saved but its calendar event was NOT written: ' + msg);
+    return { status: 'failed: ' + msg, event_id: had, failed: true };
+  }
+}
+
+// POST /intake/delivery-email. See the contract at the top of this section.
+async function deliveryEmailIntake(env, body) {
+  const t0 = Date.now();
+  body = body || {};
+  const subject = String(body.subject || ''), from = String(body.from || ''), dry = body.dry_run === true;
+  // Which email is this? The RFC Message-ID is identical in every mailbox that received it (the key for cross-mailbox dedupe); the Gmail id differs per
+  // mailbox. The mailbox string is only logged: ANY value is accepted (info@, brett@, a future RidgeCo address), never allow-listed by name.
+  const rfcId = String(body.rfc_message_id || '').replace(/^[<\s]+|[>\s]+$/g, ''), gmailId = String(body.gmail_id || '').trim();
+  const mailboxStr = String(body.mailbox == null ? '' : body.mailbox).replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 120);
+  const msgId = deliveryKeyList(rfcId || String(body.message_id || '').trim() || gmailId)[0] || '';
+  const msgKeys = deliveryKeyList([rfcId, String(body.message_id || ''), gmailId ? 'gmail:' + (mailboxStr || 'x') + ':' + gmailId : '']);
+  const recvIso = (body.received_at && !isNaN(new Date(body.received_at))) ? new Date(body.received_at).toISOString() : new Date().toISOString();
+  if (!msgId) return json({ success: false, error: 'message_id (or rfc_message_id / gmail_id) required' }, 400);
+  let stage = 'config', cfg;
+  const warnings = [];
+  const R = (over) => json(Object.assign({
+    success: true, kind: 'unknown', delivery_id: '', created: false, updated: false, duplicate: false, parked: false, reason: '', detail: '', status: '',
+    order_number: '', item_type: '', make_model: '', expected_date: '', expected_window: '', delivery_address: '',
+    property_matched: false, property_id: '', unit_id: '', tenant_id: '', wo_id: '', wo_created: false,
+    brett_sms_sent: null, sms_status: '', tenant_sms: 'off', tenant_sms_detail: '',
+    calendar: { action: 'none' }, calendar_status: 'none', calendar_event_id: '', telemetry_ok: true, needs_attention: false, warnings, dry_run: dry,
+  }, over), 200);
+  try {
+    // Loud Config read (fetchConfig swallows errors and would silently fall back to defaults).
+    try { cfg = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values); }
+    catch (e) { return json({ success: false, error: 'could not read Config: ' + String((e && e.message) || e).slice(0, 160), stage }, 500); }
+    const domain = deliverySenderDomain(from, cfg.Delivery_Sender_Domains);
+    if (!domain) return json({ success: false, error: 'sender is not an allowed store domain (Config Delivery_Sender_Domains)' }, 400);
+    const store = DELIVERY_STORE_NAMES[domain] || domain;
+    const p = deliveryParseEmail({ subject, body: body.body != null ? body.body : body.text, html: String(body.html || '').slice(0, 200000), received_at: recvIso });
+    const parsedFields = { kind: p.kind, wo_ref: p.wo_ref || '', order_number: p.order_number, item_type: p.item_type, make_model: p.make_model, expected_date: p.expected_date, expected_window: p.expected_window, delivery_address: p.address };
+    if (p.kind === 'not_delivery') return R(Object.assign(parsedFields, { reason: p.reason }));   // promo / chatter: no record, no text, no write of any kind
+
+    stage = 'read';
+    const { dels, properties, units, tenants } = await deliveryReadTabs(env);
+    const adminPhone = normalizePhone(cfg.admin_phone || '');
+    const adminName = 'Brett';
+    if (!adminPhone) warnings.push('Config admin_phone is not set: Brett cannot be texted and the Backup_Phone on new deliveries is blank');
+    const order = deliveryNormOrder(p.order_number);
+
+    // ── dedupe 1: this exact email (RFC Message-ID) was already handled, by either mailbox ──
+    const seenRow = dels.find(d => deliverySawMessage(d, msgKeys));
+    if (seenRow) {
+      let wo = { wo_id: String(seenRow.Linked_WO_IDs || '').split(',')[0].trim(), created: false };
+      // A previous run made the row but could not make its WO (Sheets hiccup): finish that job now, loudly.
+      // ...but NOT while the first attempt may still be creating that WO (two mailboxes deliver the same email at the same instant; the row exists a moment before its WO is linked):
+      // a row younger than DELIVERY_WO_HEAL_AFTER_MS is left to the attempt that made it. If that attempt died, it reported itself and the Apps Script retries a minute later.
+      const _age = new Date().getTime() - Date.parse(seenRow.Created_Date || '');
+      if (!dry && seenRow.Property_ID && !wo.wo_id && seenRow.Active !== 'FALSE' && ['Cancelled', 'Needs Review', 'Delivered'].indexOf(seenRow.Status) < 0 && !(Number.isFinite(_age) && _age < DELIVERY_WO_HEAL_AFTER_MS)) {
+        stage = 'wo-heal';
+        wo = await deliveryEnsureWO(env, seenRow, p, msgId, adminName);
+        if (wo.error) { await deliveryTelemetry(env, t0, false, 'WO heal failed for delivery ' + seenRow.ID + ': ' + wo.error); return json({ success: false, error: 'Work order could not be created for delivery ' + seenRow.ID + ': ' + wo.error, delivery_id: String(seenRow.ID), stage }, 500); }
+      }
+      // The calendar of the delivery's CURRENT state rides along so a retry of an attempt whose calendar step failed can finish it (the upsert is idempotent by key).
+      const dupCal = seenRow.Status === 'Needs Review' ? { action: 'none' } : deliveryCalendarObject({ order: seenRow.Order_Number, delivery_id: seenRow.ID, item: seenRow.Item_Type, make: seenRow.New_Make_Model, date: seenRow.Expected_Date, window: seenRow.Expected_Window, address: seenRow.Delivery_Address, wo_id: wo.wo_id || '', kind: '', status: seenRow.Status, is_new: false });
+      // A copy of an email whose calendar write FAILED earlier retries it (idempotent: the event is found again by its key). Same 45 s rule as the WO: not while the first attempt may still be writing.
+      let dupCs = { status: 'none', event_id: String(seenRow.Calendar_Event_ID || '') };
+      if (!dry && dupCal.action !== 'none' && /^failed|^not_configured/.test(String(seenRow.Calendar_Status || '')) && !(Number.isFinite(_age) && _age < DELIVERY_WO_HEAL_AFTER_MS)) {
+        dupCs = await deliveryCalSync(env, cfg, seenRow.ID, seenRow, dupCal, false);
+        try { await updateRowVerified(env, 'Deliveries', seenRow.ID, { Calendar_Status: dupCs.status.slice(0, 200), Calendar_Event_ID: dupCs.event_id }); } catch (e) { warnings.push('could not record the calendar result on the delivery: ' + String((e && e.message) || e).slice(0, 100)); }
+        if (dupCs.failed) warnings.push('calendar: ' + dupCs.status);
+      }
+      return R(Object.assign(parsedFields, { duplicate: true, reason: 'already_processed', delivery_id: String(seenRow.ID), status: seenRow.Status || '', wo_id: wo.wo_id || '', wo_created: !!wo.created, property_id: seenRow.Property_ID || '', unit_id: seenRow.Unit_ID || '', tenant_id: seenRow.Tenant_ID || '', property_matched: !!seenRow.Property_ID, calendar: dupCal, calendar_status: dupCs.status, calendar_event_id: dupCs.event_id || '' }));
+    }
+
+    // ── find the existing delivery: by order number, else (no order number) the single open delivery at this address ──
+    const active = dels.filter(d => d.Active !== 'FALSE');
+    let row = null, matchedBy = '';
+    if (order) { row = active.filter(d => deliveryNormOrder(d.Order_Number) === order).sort((a, b) => deliveryRowNum(a) - deliveryRowNum(b))[0] || null; if (row) matchedBy = 'order'; }
+    else if (p.kind !== 'unknown' && p.address) {
+      const norm = a => qbNormAddress(String(a || '').replace(/,?\s*[A-Za-z]{2}\s*\d{5}(?:-\d{4})?\s*$/, ''));
+      const open = active.filter(d => d.Order_Number && ['Delivered', 'Cancelled', 'Needs Review'].indexOf(d.Status) < 0 && norm(d.Delivery_Address) && norm(d.Delivery_Address) === norm(p.address));
+      if (open.length === 1) { row = open[0]; matchedBy = 'address'; }
+    }
+
+    // ── unknown kind, or a clear kind with no way to tie it to an order: PARK + alert (never dropped) ──
+    const parkReason = p.kind === 'unknown' ? p.reason : ((!row && !order) ? 'no order number in the email and no single open delivery at that address' : '');
+    if (parkReason) {
+      const excerpt = 'NEEDS REVIEW: ' + parkReason + '. Subject: ' + subject.slice(0, 160) + ' | Excerpt: ' + p.excerpt;
+      const sms = deliveryBrettText({ event: 'review', order: p.order_number, item: p.item_type, address: p.address, note: parkReason + '. Subject: ' + subject.slice(0, 70) });
+      if (dry) return R(Object.assign(parsedFields, { parked: true, reason: 'needs_review', detail: parkReason, calendar: { action: 'none' } }));
+      stage = 'park';
+      await ensureDeliveryTab(env);
+      let parkedId, status = 'Needs Review';
+      if (row) {   // known order: keep its status, add the email to its notes, still tell Brett
+        status = row.Status;
+        await updateRowVerified(env, 'Deliveries', row.ID, { Delivery_Notes: deliveryNoteAppend(row.Delivery_Notes, 'UNRECOGNISED EMAIL: ' + subject.slice(0, 120) + ' | ' + p.excerpt.slice(0, 200), recvIso), Seen_Message_IDs: deliverySeenAppend(row, msgKeys) });
+        parkedId = String(row.ID);
+      } else {
+        const add = await addRow(env, 'Deliveries', { Order_Number: p.order_number, Store: store, Item_Type: p.item_type, New_Make_Model: p.make_model, Delivery_Address: p.address, Expected_Date: p.expected_date, Expected_Window: p.expected_window,
+          Onsite_Contact: 'me', Onsite_Contact_Phone: adminPhone, Backup_Contact: adminName, Backup_Phone: adminPhone, Delivery_Notes: excerpt.slice(0, 1500), Status: 'Needs Review', Source: 'email-watcher', Message_ID: msgId, Seen_Message_IDs: msgKeys.join(','),
+          Created_Date: new Date().toISOString(), Active: 'TRUE', Last_Event: p.kind, Last_Event_At: recvIso });
+        const aj = await add.clone().json();
+        if (add.status !== 200 || !aj || aj.success !== true || !aj.id) throw new Error('could not save the Needs Review row: ' + JSON.stringify(aj).slice(0, 120));
+        invalidateTabCache('Deliveries');
+        const back = (await fetchTab(env, 'Deliveries')).find(d => String(d.ID) === String(aj.id));
+        if (!back || back.Message_ID !== msgId) throw new Error('Needs Review row ' + aj.id + ' did not read back');
+        parkedId = String(aj.id);
+      }
+      stage = 'park-sms';
+      const smsRes = await intakeSmsAdmin(env, sms, '', null);
+      await updateRow(env, 'Deliveries', parkedId, { Brett_SMS_Status: smsRes }).catch(e => warnings.push('could not record the alert result on the delivery: ' + String((e && e.message) || e).slice(0, 100)));
+      const tok = await deliveryTelemetry(env, t0, smsRes === 'sent', 'parked ' + (order || '(no order)') + ' ' + parkReason.slice(0, 120) + '; sms=' + smsRes);
+      return R(Object.assign(parsedFields, { parked: true, reason: 'needs_review', detail: parkReason, delivery_id: parkedId, status, updated: !!row, created: !row, brett_sms_sent: smsRes === 'sent', sms_status: smsRes, telemetry_ok: tok, needs_attention: smsRes !== 'sent' || !tok, calendar: { action: 'none' } }));
+    }
+
+    // ── the email is clear and tied to an order ──
+    const isNew = !row;
+    const prior = row || {};
+    let place = deliveryMatchPlace(p.address || prior.Delivery_Address, p.unit_raw, properties, units, tenants);
+    // Job / PO line -> the work order Brett already made for this job: link it (no second WO), and take its unit + tenant.
+    let woRes = { wo_id: '', note: '', place };
+    if (p.wo_ref) {
+      stage = 'job-po';
+      woRes = deliveryApplyWoRef(p.wo_ref, await fetchTab(env, 'Work_Orders'), place, prior.Property_ID, properties, units, tenants);
+      place = woRes.place;
+      stage = 'read';
+    }
+    const notes = [];
+    if (p.missing.length) notes.push('MISSING from email: ' + p.missing.join(', '));
+    if (p.notes.length) notes.push(p.notes.join('; '));
+    const placeNotes = [];
+    if (!prior.Property_ID) {
+      if (place.status === 'none' || place.status === 'no_address') placeNotes.push('NEEDS PROPERTY: ' + (p.address ? 'address as received "' + p.address + '" matches no property' : 'no delivery address in the email'));
+      else if (place.status === 'ambiguous') placeNotes.push('NEEDS PROPERTY: address as received "' + p.address + '" matches more than one property (' + place.detail + ')');
+      else if (place.unit_problem) placeNotes.push('UNIT UNKNOWN: ' + place.unit_problem);
+    }
+    if (p.wo_ref && (woRes.note || !woRes.wo_id)) placeNotes.push(woRes.note || ('JOB/PO names ' + p.wo_ref + ' but it could not be linked'));
+    else if (woRes.wo_id && !prior.Linked_WO_IDs) notes.push('Linked to ' + woRes.wo_id + ' from the Job/PO line');
+    let anomaly = '';
+    if (prior.Property_ID && place.status === 'matched' && String(place.property.ID) !== String(prior.Property_ID)) anomaly = 'the address in this email matches property ' + place.property.ID + ' (' + place.property.Address + ') but the record is on property ' + prior.Property_ID + ' - not changed';
+
+    // stale = older than the last email applied to this row (Apps Script retries can deliver out of order): fill blanks only
+    const stale = !isNew && prior.Last_Event_At && recvIso < String(prior.Last_Event_At);
+    const next = isNew ? { status: DELIVERY_KIND_STATUS[p.kind], changed: true, anomaly: '' } : (stale ? { status: prior.Status, changed: false, anomaly: '' } : deliveryNextStatus(prior.Status, p.kind));
+    if (next.anomaly) anomaly = anomaly ? anomaly + '; ' + next.anomaly : next.anomaly;
+    const frozen = ['Delivered', 'Cancelled'].indexOf(prior.Status) >= 0 && !(prior.Status === 'Cancelled' && p.kind === 'reschedule');
+    let date = prior.Expected_Date || '', win = prior.Expected_Window || '';
+    if (!stale && !frozen) {
+      if (['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+        if (p.expected_date) { if (p.expected_date !== date && p.kind === 'reschedule' && !p.expected_window) win = ''; date = p.expected_date; }
+        if (p.expected_window) win = p.expected_window;
+      } else if (p.kind !== 'cancel') {
+        if (!date && p.expected_date) date = p.expected_date;
+        if (!win && p.expected_window) win = p.expected_window;
+      }
+      if (p.kind === 'delivered' && !date) date = deliveryEtDate(recvIso);
+    }
+    const stops = (!stale && (p.kind === 'approaching' || p.kind === 'en_route')) ? p.stops_away : (prior.Stops_Away === '' || prior.Stops_Away == null ? null : +prior.Stops_Away);
+    const newStatus = next.status;
+    const dateChanged = !isNew && date !== (prior.Expected_Date || ''), winChanged = !isNew && win !== (prior.Expected_Window || '');
+    const sig = deliveryEventSig(newStatus, date, win, p.kind === 'approaching' ? stops : null);
+    const statusChanged = isNew || newStatus !== prior.Status;
+
+    // who gets a text from Brett's phone: new order, date/window set or changed, en route / stops away, delivered, cancelled, problems. Nothing else.
+    let alertEvent = '';
+    if (!stale) {
+      if (anomaly) alertEvent = 'problem';
+      else if (isNew) alertEvent = ['order_confirmation', 'prep', 'scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0 ? 'new' : p.kind;
+      else if (['cancel', 'delivered', 'en_route'].indexOf(p.kind) >= 0) alertEvent = statusChanged ? p.kind : '';
+      else if (p.kind === 'approaching') alertEvent = (statusChanged || sig !== prior.Last_Event_Sig) ? 'approaching' : '';
+      else if (['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) alertEvent = (dateChanged || winChanged || (p.kind === 'reschedule' && statusChanged)) ? p.kind : '';
+      else if (p.kind === 'order_confirmation') alertEvent = (dateChanged || winChanged) ? 'scheduled' : '';
+    }
+
+    const fill = {};   // blanks on an existing row that this email can fill (never overwrites a value Brett or an earlier email set)
+    if (!isNew) {
+      if (!prior.Item_Type && p.item_type) fill.Item_Type = p.item_type;
+      if (!prior.New_Make_Model && p.make_model) fill.New_Make_Model = p.make_model;
+      if (!prior.Delivery_Address && p.address) fill.Delivery_Address = p.address;
+      if (prior.Property_ID && place.status === 'matched' && String(place.property.ID) === String(prior.Property_ID)) {   // a row made before the unit / tenant / work order were known: complete it
+        if (!prior.Unit_ID && place.unit_id) fill.Unit_ID = place.unit_id;
+        if (!prior.Tenant_ID && place.tenant_id && (!prior.Unit_ID || String(prior.Unit_ID) === String(place.unit_id))) { fill.Tenant_ID = place.tenant_id; if (prior.Onsite_Contact !== 'tenant') fill.Onsite_Contact = 'tenant'; }
+      }
+      if (!prior.Linked_WO_IDs && woRes.wo_id) fill.Linked_WO_IDs = woRes.wo_id;
+      if (!prior.Property_ID && place.status === 'matched') { fill.Property_ID = String(place.property.ID); if (place.unit_id) fill.Unit_ID = place.unit_id; if (place.tenant_id) { fill.Tenant_ID = place.tenant_id; if (prior.Onsite_Contact !== 'tenant') fill.Onsite_Contact = 'tenant'; } }
+    }
+    const merged = Object.assign({}, prior, fill);
+    const propertyId = isNew ? (place.status === 'matched' ? String(place.property.ID) : '') : (merged.Property_ID || '');
+    const unitId = isNew ? (place.unit_id || '') : (merged.Unit_ID || '');
+    const tenantId = isNew ? (place.tenant_id || '') : (merged.Tenant_ID || '');
+    const matchedPlace = place.status === 'matched' && (isNew || String(place.property.ID) === String(merged.Property_ID));
+
+    const calendarFor = (idForKey) => deliveryCalendarObject({ order: p.order_number || prior.Order_Number, delivery_id: idForKey, item: merged.Item_Type || p.item_type || prior.Item_Type, make: merged.New_Make_Model || p.make_model, date, window: win, address: merged.Delivery_Address || p.address, wo_id: String(merged.Linked_WO_IDs || '').split(',')[0], kind: p.kind, status: newStatus, is_new: isNew || (!prior.Expected_Date && !!date) });
+    const noChange = !isNew && !stale && !alertEvent && !statusChanged && !dateChanged && !winChanged && !Object.keys(fill).length;
+
+    const base = Object.assign(parsedFields, { item_type: merged.Item_Type || p.item_type, make_model: merged.New_Make_Model || p.make_model, expected_date: date, expected_window: win, delivery_address: merged.Delivery_Address || p.address, status: newStatus,
+      property_matched: !!propertyId, property_id: propertyId, unit_id: unitId, tenant_id: tenantId, order_number: p.order_number || prior.Order_Number || '' });
+
+    if (dry) {
+      const cal = (stale || noChange) ? { action: 'none' } : calendarFor(isNew ? 'new' : prior.ID);
+      return R(Object.assign(base, { created: isNew, updated: !isNew && !stale, delivery_id: isNew ? '' : String(prior.ID), reason: stale ? 'stale_email' : (noChange ? 'no_change' : (isNew ? 'would_create' : 'would_update')), detail: [placeNotes.join('; '), anomaly, 'would text Brett: ' + (alertEvent || 'no')].filter(Boolean).join(' | '), wo_id: isNew ? woRes.wo_id : String(prior.Linked_WO_IDs || '').split(',')[0].trim(), calendar: cal, calendar_status: cal.action === 'none' ? 'none' : 'dry_run: would ' + cal.action }));
+    }
+
+    // ── writes ──
+    let keepYes = false;   // Oct 30 2026: a tenant who said yes while the delivery was still all-day keeps that yes when only the window gets set
+    let deliveryId, claim = '', lostClaim = false, woInfo = { wo_id: String(prior.Linked_WO_IDs || '').split(',')[0].trim(), created: false };
+    const noteLine = 'Email (' + p.kind + ', ' + (mailboxStr || 'mailbox ?') + '): ' + subject.slice(0, 100);
+    await ensureDeliveryTab(env);
+    if (isNew) {
+      stage = 'create';
+      const tenantMeets = !!tenantId;
+      const row0 = {
+        Order_Number: p.order_number, Store: store, Item_Type: p.item_type, New_Make_Model: p.make_model, Delivery_Address: p.address, Expected_Date: date, Expected_Window: win,
+        Property_ID: propertyId, Unit_ID: unitId, Tenant_ID: tenantId, Linked_WO_IDs: woRes.wo_id,
+        Onsite_Contact: tenantMeets ? 'tenant' : 'me', Onsite_Contact_Phone: tenantMeets ? '' : adminPhone, Backup_Contact: adminName, Backup_Phone: adminPhone,
+        Delivery_Notes: [DELIVERY_DRIVER_NOTE, noteLine].concat(notes, placeNotes).join('\n').slice(0, 5000),
+        Status: newStatus, Source: 'email-watcher', Message_ID: msgId, Seen_Message_IDs: msgKeys.join(','), Created_Date: new Date().toISOString(), Active: 'TRUE',
+        Last_Event: p.kind, Last_Event_At: recvIso, Last_Event_Sig: sig, Stops_Away: stops == null ? '' : String(stops),
+      };
+      const add = await addRow(env, 'Deliveries', row0);
+      const aj = await add.clone().json();
+      if (add.status !== 200 || !aj || aj.success !== true || !aj.id) throw new Error('Deliveries row did not save: ' + JSON.stringify(aj).slice(0, 120));
+      deliveryId = String(aj.id);
+      invalidateTabCache('Deliveries');
+      const all = await fetchTab(env, 'Deliveries');
+      const mine = all.find(d => String(d.ID) === deliveryId);
+      if (!mine || mine.Message_ID !== msgId) throw new Error('Deliveries row ' + deliveryId + ' did not read back after the write');
+      // Both mailboxes can deliver the same email at the same instant: the LOWEST row id for an order / message wins; the other retires itself.
+      const rivals = all.filter(d => d.Active !== 'FALSE' && String(d.ID) !== deliveryId && ((order && deliveryNormOrder(d.Order_Number) === order) || deliverySawMessage(d, msgKeys)));
+      const winner = rivals.sort((a, b) => deliveryRowNum(a) - deliveryRowNum(b))[0];
+      if (winner && deliveryRowNum(winner) < deliveryRowNum(mine)) {
+        await updateRowVerified(env, 'Deliveries', deliveryId, { Active: 'FALSE', Delivery_Notes: 'Retired automatically: duplicate of delivery ' + winner.ID + ' created at the same moment (two mailboxes got the same email).' });
+        const tok = await deliveryTelemetry(env, t0, true, 'race: retired duplicate delivery ' + deliveryId + ' in favour of ' + winner.ID);
+        return R(Object.assign(base, { duplicate: true, reason: 'race_duplicate', delivery_id: String(winner.ID), telemetry_ok: tok }));
+      }
+      Object.assign(merged, mine);
+      if (propertyId && ['Cancelled', 'Delivered'].indexOf(newStatus) < 0) {
+        stage = 'wo';
+        woInfo = await deliveryEnsureWO(env, mine, p, msgId, adminName);
+        if (woInfo.error) {
+          const tok = await deliveryTelemetry(env, t0, false, 'delivery ' + deliveryId + ' saved but its WO failed: ' + woInfo.error);
+          const s2 = await intakeSmsAdmin(env, deliveryBrettText({ event: 'problem', order: p.order_number, item: p.item_type, address: p.address, note: 'record saved (delivery ' + deliveryId + ') but the work order could not be created' }), '', null);
+          return json({ success: false, error: 'Delivery ' + deliveryId + ' saved but its work order failed: ' + woInfo.error, delivery_id: deliveryId, brett_sms_sent: s2 === 'sent', telemetry_ok: tok, stage }, 500);
+        }
+        if (woInfo.warning) warnings.push(woInfo.warning);
+        merged.Linked_WO_IDs = woInfo.wo_id;
+      }
+    } else {
+      stage = 'update';
+      deliveryId = String(prior.ID);
+      const f = Object.assign({}, fill, { Seen_Message_IDs: deliverySeenAppend(prior, msgKeys) });
+      if (noChange) {
+        Object.assign(f, { Last_Event_At: recvIso, Last_Event_Sig: sig });   // same news again: only remember the email and its time
+      } else if (!stale) {
+        Object.assign(f, { Status: newStatus, Expected_Date: date, Expected_Window: win, Last_Event: p.kind, Last_Event_At: recvIso, Last_Event_Sig: sig, Stops_Away: stops == null ? '' : String(stops) });
+        const nl = [noteLine].concat(notes, placeNotes, anomaly ? ['CHECK: ' + anomaly] : []);
+        if (dateChanged || winChanged) nl.push('Date/window now ' + (date || '?') + (win ? ' ' + win : '') + ' (was ' + (prior.Expected_Date || '?') + (prior.Expected_Window ? ' ' + prior.Expected_Window : '') + ')');
+        // A new date/window makes the tenant's earlier answer out of date: reset it (the new request asks again). A Declined tenant is the on-site contact again.
+        // Exception (Brett, Oct 30 2026): a Confirmed answer given while the delivery had NO window yet (all day), and the date has not moved, still stands when the window gets set: the tenant gets an update text, not a new question.
+        if ((dateChanged || winChanged) && prior.Tenant_RSVP === 'Confirmed' && !dateChanged && !prior.Expected_Window && win && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+          keepYes = true;
+          nl.push('Tenant answer kept (Confirmed before the window was known): the window is now ' + win + ', tenant gets an update text, not a new question');
+        } else if ((dateChanged || winChanged) && prior.Tenant_RSVP && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+          Object.assign(f, { Tenant_RSVP: '', Tenant_RSVP_At: '', Tenant_RSVP_Note: '' });
+          if (prior.Tenant_RSVP === 'Declined' && merged.Tenant_ID) Object.assign(f, { Onsite_Contact: 'tenant', Onsite_Contact_Phone: '' });
+          nl.push('Tenant answer reset (was ' + prior.Tenant_RSVP + ') because the date/window changed');
+        }
+        // Two mailboxes can apply the same news at the same instant: each stamps a claim, and only the last writer alerts.
+        claim = sig + '#' + Math.random().toString(36).slice(2, 10);
+        f.Event_Claim = claim;
+        f.Delivery_Notes = deliveryNoteAppend(prior.Delivery_Notes, nl.join(' | '), recvIso);
+      } else {
+        f.Delivery_Notes = deliveryNoteAppend(prior.Delivery_Notes, 'Older email ignored for status/date (arrived after a newer one): ' + subject.slice(0, 100), recvIso);
+      }
+      try { await updateRowVerified(env, 'Deliveries', deliveryId, f); }
+      catch (e) {
+        // Two mailboxes writing the same row at once can each fail the other's read-back. If the row now carries the very news we were applying, the other run
+        // did the job: this is a duplicate, not an error (anything else is still a loud failure).
+        invalidateTabCache('Deliveries');
+        const r1 = (await fetchTab(env, 'Deliveries')).find(d => String(d.ID) === deliveryId);
+        if (claim && r1 && String(r1.Last_Event_Sig || '') === sig && r1.Event_Claim && r1.Event_Claim !== claim) lostClaim = true; else throw e;
+      }
+      if (claim && !lostClaim) {
+        // Settle, then look again: a run that wrote in the same moment is visible by now, and only the LAST writer alerts (default 600 ms, Config Delivery_Claim_Settle_Ms).
+        const settle = Math.max(0, Math.min(3000, parseInt(cfg.Delivery_Claim_Settle_Ms, 10) >= 0 ? parseInt(cfg.Delivery_Claim_Settle_Ms, 10) : 600));
+        if (settle) await new Promise(r => setTimeout(r, settle));
+        invalidateTabCache('Deliveries');
+        const r2 = (await fetchTab(env, 'Deliveries')).find(d => String(d.ID) === deliveryId);
+        if (r2 && r2.Event_Claim && r2.Event_Claim !== claim && String(r2.Last_Event_Sig || '') === sig) lostClaim = true;   // another run wrote the same news after us: it alerts, we stay quiet
+      }
+      if (merged.Property_ID && !woInfo.wo_id && !stale && ['Cancelled', 'Delivered'].indexOf(newStatus) < 0) {
+        stage = 'wo';
+        woInfo = await deliveryEnsureWO(env, merged, p, msgId, adminName);
+        if (woInfo.error) {
+          const tok = await deliveryTelemetry(env, t0, false, 'delivery ' + deliveryId + ' updated but its WO failed: ' + woInfo.error);
+          return json({ success: false, error: 'Delivery ' + deliveryId + ' updated but its work order failed: ' + woInfo.error, delivery_id: deliveryId, telemetry_ok: tok, stage }, 500);
+        }
+        if (woInfo.warning) warnings.push(woInfo.warning);
+        merged.Linked_WO_IDs = woInfo.wo_id;
+      }
+    }
+
+    // ── Brett's text (one per event; never on a repeat) ──
+    stage = 'brett-sms';
+    let smsRes = '', brettSent = null;
+    const woId = String(merged.Linked_WO_IDs || '').split(',')[0].trim();
+    if (lostClaim) alertEvent = '';
+    if (alertEvent) {
+      const noteBits = [placeNotes.join('; '), anomaly ? 'CHECK: ' + anomaly : '', p.missing.length ? 'missing: ' + p.missing.join(', ') : '', isNew && place.status === 'matched' ? (tenantId ? 'tenant meets, Brett backup' : 'no tenant on file, Brett meets') : '', (tenantId && !date && deliveryNoticeMode(cfg).mode !== 'off' && ['new', 'scheduled', 'window_set', 'reschedule'].indexOf(alertEvent) >= 0) ? 'tenant NOT texted yet: no delivery date' : ''].filter(Boolean).join('; ');
+      const text = deliveryBrettText({ event: alertEvent, order: p.order_number || prior.Order_Number, item: merged.Item_Type || p.item_type, date, window: win, address: merged.Delivery_Address || p.address, wo_id: woId, stops, note: noteBits });
+      smsRes = await intakeSmsAdmin(env, text, woId, matchedPlace ? place.property : null);
+      brettSent = smsRes === 'sent';
+      try { await updateRowVerified(env, 'Deliveries', deliveryId, { Brett_SMS_Status: smsRes }); } catch (e) { warnings.push('could not record the alert result on the delivery: ' + String((e && e.message) || e).slice(0, 100)); }
+    }
+
+    // ── tenant request (config-gated, batched, consent-gated; needs a delivery date) ──
+    stage = 'tenant-notice';
+    let tn = { tenant_sms: 'off', detail: '' };
+    const noticeKinds = ['order_confirmation', 'scheduled', 'window_set', 'reschedule'];
+    const cancelling = newStatus === 'Cancelled' && !isNew && prior.Status !== 'Cancelled';
+    // A Prep email carries no news, but if the tenant has never been asked (it was the first email we saw, or the unit / tenant only became known now) it asks, once.
+    const prepAsk = p.kind === 'prep' && !!date && !merged.Tenant_Notice_Sig;
+    const asking = (noticeKinds.indexOf(p.kind) >= 0 || prepAsk) && newStatus !== 'Cancelled' && newStatus !== 'Delivered' && !frozen;
+    if (!stale && (!noChange || prepAsk) && !lostClaim && (cancelling || asking)) {
+      const prop = propertyId ? properties.find(x => String(x.ID) === String(propertyId)) : null;
+      const tenantObj = tenantId ? tenants.find(t => String(t.ID) === String(tenantId)) : null;
+      const rowNow = Object.assign({}, merged, { Expected_Date: date || merged.Expected_Date || '' });
+      const unitMates = (prop && tenantObj && merged.Unit_ID) ? tenantsForDispatch(tenants, null, { Unit_ID: String(merged.Unit_ID), Property_ID: String(propertyId) }).filter(x => String(x.ID) !== String(tenantObj.ID)) : [];   // co-tenants in the same unit
+      tn = await deliveryTenantNotice(env, { cfg, row: rowNow, deliveryId, place: { property: prop, tenant: prop ? tenantObj : null }, recipients: unitMates, woId, date, win, variant: cancelling ? 'cancel' : (merged.Tenant_Notice_Sent_At ? (keepYes ? 'fyi' : 'changed') : 'request') });
+      if (tn.warn) warnings.push('tenant notice: ' + tn.detail);
+      if (tn.record !== false && tn.tenant_sms !== 'off') {
+        const upd = { Tenant_Notice_Status: (tn.tenant_sms + (tn.detail ? ': ' + tn.detail : '')).slice(0, 200) };
+        if (tn.sig) upd.Tenant_Notice_Sig = tn.sig;
+        if (tn.draft) upd.Tenant_Notice_Draft = tn.draft;
+        if (tn.sent_at) upd.Tenant_Notice_Sent_At = tn.sent_at;
+        try { await updateRowVerified(env, 'Deliveries', deliveryId, upd); } catch (e) { warnings.push('could not record the tenant notice result: ' + String((e && e.message) || e).slice(0, 100)); }
+      }
+    }
+    if (smsRes && smsRes !== 'sent') warnings.push('Brett text not sent: ' + smsRes);
+
+    // ── the calendar event, written by the Hub as Brett (not the Apps Script). A repeat that changes nothing re-tries only a previously FAILED write. ──
+    stage = 'calendar';
+    let cal = (stale || noChange || lostClaim) ? { action: 'none' } : calendarFor(deliveryId);
+    if (cal.action === 'none' && noChange && /^failed|^not_configured/.test(String(merged.Calendar_Status || ''))) cal = calendarFor(deliveryId);
+    const cs = await deliveryCalSync(env, cfg, deliveryId, merged, cal, false);
+    if (cs.failed) warnings.push('calendar: ' + cs.status);
+    if (cal.action !== 'none' && !cs.status.startsWith('staged')) {
+      const cu = { Calendar_Status: cs.status.slice(0, 200) };
+      if (cs.event_id !== String(merged.Calendar_Event_ID || '')) cu.Calendar_Event_ID = cs.event_id;
+      try { await updateRowVerified(env, 'Deliveries', deliveryId, cu); } catch (e) { warnings.push('could not record the calendar result on the delivery: ' + String((e && e.message) || e).slice(0, 100)); }
+    }
+    const telOk = await deliveryTelemetry(env, t0, warnings.length === 0, (isNew ? 'created ' : (stale ? 'stale ' : 'updated ')) + deliveryId + ' ' + (order || '') + ' ' + p.kind + ' -> ' + newStatus + '; brett=' + (smsRes || 'none') + '; tenant=' + tn.tenant_sms + '; wo=' + (woId || '-') + '; cal=' + cs.status.slice(0, 40) + (warnings.length ? '; WARN ' + warnings.join(' / ') : ''));
+    return R(Object.assign(base, {
+      created: isNew, updated: !isNew && !stale && !noChange && !lostClaim, duplicate: noChange || lostClaim, delivery_id: deliveryId, reason: stale ? 'stale_email' : (noChange ? 'no_change' : (lostClaim ? 'concurrent_duplicate' : '')), detail: [placeNotes.join('; '), anomaly ? 'CHECK: ' + anomaly : ''].filter(Boolean).join(' | '),
+      wo_id: woId, wo_created: !!woInfo.created, brett_sms_sent: brettSent, sms_status: smsRes, tenant_sms: tn.tenant_sms, tenant_sms_detail: tn.detail || '', calendar: cal, calendar_status: cs.status, calendar_event_id: cs.event_id || '', telemetry_ok: telOk,
+      needs_attention: warnings.length > 0 || brettSent === false || !telOk,
+    }));
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    const telOk = await deliveryTelemetry(env, t0, false, `error at ${stage}: ${msg}`);
+    let alertFailed = telOk ? '' : 'telemetry row not written';
+    // One alert text + one Error row per message (the Apps Script retries every run: do not spam).
+    try {
+      if (!dry) {
+        await intakeEnsureTab(env);
+        const priorErr = (await fetchTab(env, INTAKE_TAB)).filter(q => q.Message_ID === msgId && q.Status === 'Error');
+        if (!priorErr.length) {
+          const sms = await intakeSmsAdmin(env, deliveryBrettText({ event: 'problem', note: 'delivery email intake error (' + stage + '): ' + msg.slice(0, 120) }), '', null);
+          await intakeAppendRow(env, { Received_At: recvIso, Source: 'Delivery email', Message_ID: msgId, Subject: subject.slice(0, 200), Status: 'Error', Reason: `${stage}: ${msg}`.slice(0, 400), SMS_Status: sms, Raw_Body: String(body.body || '').slice(0, 45000), Processed_At: new Date().toISOString() });
+        }
+      }
+    } catch (e2) { alertFailed = (alertFailed ? alertFailed + '; ' : '') + 'could not write Error row / alert text: ' + String((e2 && e2.message) || e2).slice(0, 200); }
+    return json({ success: false, error: msg, stage, alert_failed: alertFailed }, 500);
+  }
+}
+// ═══ DELIVERY-EMAIL-HANDLER-END ═══
 
 // Monday-anchored week key (YYYY-MM-DD of that week's Monday). Date-only + UTC
 // noon so a Baltimore evening never rolls into the next day's bucket.
@@ -33330,14 +36111,14 @@ async function trashInvoice(env, body) {
 // no outreach/SMS/booking-link yet, that's Phase 2. Tabs self-provision on first
 // write, exact same pattern as Trash Service (ensureTrashTabs) just above.
 // ─────────────────────────────────────────────────────────────────────────────
-const INSP_CUSTOMER_HEADERS = ['ID','Name','Line','Contact_Name','Contact_Phone','Contact_Email','Notes','Active','Created_Date','Book_Token','Key_Address','Key_Pickup_Min'];
+const INSP_CUSTOMER_HEADERS = ['ID','Name','Line','Contact_Name','Contact_Phone','Contact_Email','Notes','Active','Created_Date','Book_Token','Key_Address','Key_Pickup_Min','Hub_Owner_ID'];
 const INSP_PROPERTY_HEADERS = ['ID','Customer_ID','Address','Zip','Type','Unit_Count','Visit_Duration_Min','Notes','Active','Created_Date'];
 const INSP_UNIT_HEADERS     = ['ID','Property_ID','Label','Tenant_Name','Tenant_Phone','Notes','Active','Created_Date'];
 const INSP_AVAIL_HEADERS    = ['ID','Day_Of_Week','Start_Time','End_Time','Active','Created_Date'];
 const INSP_BLACKOUT_HEADERS = ['ID','Type','Date','Date_End','Day_Of_Week','Month_Day','Start_Time','End_Time','Reason','Active','Created_Date'];
 // Phase 2 (Oct 7 2026) booking tabs — see the INSPECTION BOOKING block at the end of this file.
 const INSP_OPEN_BLOCK_HEADERS = ['ID','Customer_ID','Date','Start_Time','End_Time','Note','Active','Created_Date','Book_By_Hours','Book_By','Last_Start','Reopen_Log'];
-const INSP_BOOKING_HEADERS = ['ID','Customer_ID','Manage_Token','Status','Address','Formatted_Address','Lat','Lng','Buildings','Units','Duration_Min','Date','Start_Time','Start_ISO','End_ISO','Drive_Before_Min','Drive_After_Min','Drive_Source','Contact_Name','Contact_Phone','Contact_Email','Notes','Calendar_Event_ID','Decision_Note','Notify_Log','Created_At','Decided_At','Reminded_At','Active','Key_Pickup'];
+const INSP_BOOKING_HEADERS = ['ID','Customer_ID','Manage_Token','Status','Address','Formatted_Address','Lat','Lng','Buildings','Units','Duration_Min','Date','Start_Time','Start_ISO','End_ISO','Drive_Before_Min','Drive_After_Min','Drive_Source','Contact_Name','Contact_Phone','Contact_Email','Notes','Calendar_Event_ID','Decision_Note','Notify_Log','Created_At','Decided_At','Reminded_At','Active','Key_Pickup','Levels','Bedrooms','Bathrooms','Inspection_ID','Hub_Property_ID','Insp_Claimed_At'];
 const INSP_TABS = {
   Insp_Customers: INSP_CUSTOMER_HEADERS,
   Insp_Properties: INSP_PROPERTY_HEADERS,
@@ -34056,6 +36837,9 @@ function normalizePhone(phone) {
   const digits = String(phone).replace(/\D/g, '');
   if (!digits) return '';
   if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+  // D-16 (Oct 23 2026): an explicit "+" with a country code other than 1 (e.g. Cuba +53 with 8 digits = 10 digits in all) is an international number, NOT a US
+  // number missing its "+1". Without this, '+5352123456' became '+15352123456' and was sent to Twilio as if it were American.
+  if (/^\s*\+/.test(String(phone)) && !digits.startsWith('1')) return '+' + digits;
   if (digits.length === 10) return '+1' + digits;
   return '+' + digits;
 }
@@ -34076,11 +36860,18 @@ function formatPhoneDisplay(phone) {
 // WO card list already uses (woCard(), index.html) — doesn't need to be the full description,
 // just enough that two jobs at the same address/trade never read the same. No trade -> falls
 // back to "General" (matches the same default used elsewhere for an unset Trade).
+// Pure. Cuts pulled-in text (a tenant's description, a hold reason) to n characters with a plain "..." (first line only). D-16.
+function smsShort(s, n) {
+  const first = String(s == null ? '' : s).split(/\r?\n/)[0].trim();
+  return first.length > n ? first.slice(0, n).trim() + '...' : first;
+}
 function woJobLabel(wo) {
   const trade = (wo && wo.Trade) || 'General';
   const desc = String((wo && wo.Description) || '').trim();
   if (!desc) return `${trade} job`;
-  const short = desc.length > 60 ? desc.slice(0, 60).trim() + '…' : desc;
+  // D-16 (Oct 23 2026): plain "..." instead of the ellipsis character (which made the whole text bill in 70-character pieces), first line only, 40 characters.
+  const first = desc.split(/\r?\n/)[0].trim();
+  const short = first.length > 40 ? first.slice(0, 40).trim() + '...' : first;
   return `${trade} job (${short})`;
 }
 
@@ -34333,19 +37124,40 @@ function inspEventsToBusy(items) {
   return out;
 }
 
-// ── Google Calendar (service account; calendar shared with the SA, scope=calendar) ─────────
-let __calToken = { key: '', token: '', exp: 0 };
-async function getCalendarAccessToken(env) {
-  const now = Math.floor(Date.now() / 1000), cacheKey = env.GOOGLE_SA_EMAIL || '';
-  if (__calToken.token && __calToken.key === cacheKey && __calToken.exp > now + 60) return __calToken.token;
+// ── Google Calendar (service account; scope=calendar) ─────────
+// Oct 21 2026: opts = { sub, scope }. No sub = the service account itself (calendar shared with it): the original behaviour, still used by the
+// inspection calendar and the inspection guard. With sub = domain-wide delegation: the service account acts as that user (the CLEANING calendar
+// only, Config STR_CAL_IMPERSONATE). The cache key holds service account + sub + scope, so one mode's token is never handed to another.
+let __calTokens = {};
+function calJwtClaim(env, now, opts) {
+  const sub = String((opts && opts.sub) || '').trim(), c = { iss: env.GOOGLE_SA_EMAIL, scope: (opts && opts.scope) || 'https://www.googleapis.com/auth/calendar', aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now };
+  if (sub) c.sub = sub;
+  return c;
+}
+// Plain-English fix when Google answers unauthorized_client / access_denied to the impersonated sign-in (domain-wide delegation not set up yet).
+function calDelegationHelp(env, sub, scope) {
+  const sa = env.GOOGLE_SA_EMAIL || 'the Hub service account';
+  return `Google has not approved the Hub to act as ${sub} yet (domain-wide delegation is not authorized). One-time fix in Google Admin (admin.google.com): Security > Access and data control > API controls > Domain-wide delegation > Manage Domain Wide Delegation > Add new. Client ID: the service account's "Unique ID" (a long number) - Google Cloud console > IAM & Admin > Service Accounts > ${sa} > Details. OAuth scope (copy exactly): ${scope} - then Authorize. Wait a few minutes, then press "Check calendar access" on the cleaning board.`;
+}
+function calBadUserHelp(sub, data) {
+  return `Google would not let the Hub act as ${sub} (${String((data && data.error_description) || 'invalid_grant').slice(0, 120)}). Check that Config STR_CAL_IMPERSONATE is the exact email of a real user in your Google Workspace, then press "Check calendar access" on the cleaning board.`;
+}
+async function getCalendarAccessToken(env, opts) {
+  const now = Math.floor(Date.now() / 1000), cs = calJwtClaim(env, now, opts), cacheKey = [env.GOOGLE_SA_EMAIL || '', cs.sub || '', cs.scope].join('|'), hit = __calTokens[cacheKey];
+  if (hit && hit.exp > now + 60) return hit.token;
   const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-  const claim = b64url(JSON.stringify({ iss: env.GOOGLE_SA_EMAIL, scope: 'https://www.googleapis.com/auth/calendar', aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now }));
+  const claim = b64url(JSON.stringify(cs));
   const sigInput = `${header}.${claim}`, key = await importPrivateKey(env.GOOGLE_SA_KEY);
   const jwt = `${sigInput}.${await signRS256(sigInput, key)}`;
   const resp = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}` });
   const data = await resp.json();
-  if (!data.access_token) throw inspErr('calendar_auth', 'Google Calendar auth failed: ' + JSON.stringify(data).slice(0, 300), 503);
-  __calToken = { key: cacheKey, token: data.access_token, exp: now + 3600 };
+  if (!data.access_token) {
+    const ge = String((data && data.error) || '');
+    if (cs.sub && (ge === 'unauthorized_client' || ge === 'access_denied')) throw inspErr('calendar_delegation_not_authorized', calDelegationHelp(env, cs.sub, cs.scope), 503);
+    if (cs.sub && ge === 'invalid_grant') throw inspErr('calendar_impersonate_bad_user', calBadUserHelp(cs.sub, data), 503);
+    throw inspErr('calendar_auth', 'Google Calendar auth failed: ' + JSON.stringify(data).slice(0, 300), 503);
+  }
+  __calTokens[cacheKey] = { token: data.access_token, exp: now + 3600 };
   return data.access_token;
 }
 function inspCalStaged(env, cfg) { return (env.__STAGING__ ?? isStaging(env)) && String(cfg.INSP_CALENDAR_STAGING_MODE || '').toUpperCase() !== 'LIVE'; }
@@ -34386,6 +37198,7 @@ function inspBookingEventBody(b, pending, approveUrl) {
   const s = Date.parse(b.Start_ISO), e = Date.parse(b.End_ISO);
   const lines = [
     `${b.Units} unit(s) in ${b.Buildings} building(s) — ${b.Duration_Min} min`,
+    `Size: ${inspSizeText(b) || 'not given'}`,
     `Booked by: ${b.Contact_Name || '?'} ${b.Contact_Phone || ''} ${b.Contact_Email || ''}`.trim(),
     b.Notes ? `Notes: ${b.Notes}` : '',
     (b.Drive_Before_Min || b.Drive_After_Min) ? `Drive: ${b.Drive_Before_Min || '-'} min from previous stop / ${b.Drive_After_Min || '-'} min to next (${b.Drive_Source})` : '',
@@ -34907,12 +37720,24 @@ const STR_OFFER_ACTIVE = ['queued', 'pending'];
 const STR_OFFER_BLOCKS = ['declined', 'expired', 'failed', 'cancelled', 'accepted', 'pending', 'queued']; // a cleaner with one of these on a task is not offered it again
 
 function strErr(code, message, status) { const e = new Error(message); e.code = code; e.status = status || 500; return e; }
-function strErrText(e) { return String((e && e.message) || e).slice(0, 300); }
+function strErrText(e) { return String((e && e.message) || e).slice(0, (e && /^calendar_/.test(String(e.code || ''))) ? 900 : 300); } // calendar-access errors carry the exact fix steps, so they are not cut short
 function strBool(v, dflt) { const s = String(v == null ? '' : v).trim().toUpperCase(); if (!s) return !!dflt; return s === 'TRUE' || s === '1' || s === 'YES'; }
 function strInt(v, d, lo, hi) { const n = parseInt(String(v == null ? '' : v).trim(), 10); if (!Number.isFinite(n)) return d; return Math.min(hi, Math.max(lo, n)); }
+// Oct 21 2026: who the Hub acts as on the CLEANING calendar only (the inspection calendar keeps the service account's own login). Config STR_CAL_IMPERSONATE
+// blank = the service account itself, scope calendar (needs the calendar shared with it: not possible on Brett's Google Workspace). An email = domain-wide
+// delegation: the same service account acts as that user (the calendar owner), scope calendar.events, so nothing has to be shared on the calendar.
+const STR_CAL_SCOPE_SHARED = 'https://www.googleapis.com/auth/calendar', STR_CAL_SCOPE_EVENTS = 'https://www.googleapis.com/auth/calendar.events';
+const STR_EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
+function strCalAs(cfg) {
+  const raw = String((cfg && cfg.STR_CAL_IMPERSONATE) || '').trim();
+  if (!raw) return { mode: 'shared', sub: '', scope: STR_CAL_SCOPE_SHARED };
+  return { mode: 'acting_as', sub: raw, scope: STR_CAL_SCOPE_EVENTS, bad: !STR_EMAIL_RE.test(raw) };
+}
+let __strCalAs = strCalAs({}); // strCalFetch has no cfg: strSettings (which every caller goes through for the calendar id) remembers it per request
 function strSettings(cfg) {
-  cfg = cfg || {};
+  cfg = cfg || {}; __strCalAs = strCalAs(cfg);
   return {
+    calAs: String(cfg.STR_CAL_IMPERSONATE || '').trim(),
     engine: strBool(cfg.STR_ENGINE_ENABLED, false), sms: strBool(cfg.STR_SMS_ENABLED, false),
     // Cleaning-only test mode (Oct 14 2026, Brett): DEFAULTS TO TRUE, so a missing/blank key can never text a real cleaner.
     // While TRUE every cleaning text goes to the Hub test phone (TWILIO_TEST_RECIPIENT) with a [TEST - for <name>] prefix,
@@ -35126,6 +37951,10 @@ async function strEnsureTabs(env) {
   const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
   const need = Object.keys(STR_TABS).filter(t => !titles.includes(t));
   if (need.length) await sheetsRequest(env, 'POST', ':batchUpdate', { requests: need.map(t => ({ addSheet: { properties: { title: t } } })) });
+  // Oct 22 2026: ONE batched read of every cleaning tab warms the tab cache, so the nine ensureColumns checks below are cache hits. Each of them used to be
+  // its own whole-tab Google read, so every cold Worker instance spent about 11 of the Hub's 60 reads per minute just to start the cleaning scheduler
+  // (and Cloudflare starts new instances all the time) - that is how the scheduler's own first read kept hitting the quota.
+  await fetchTabs(env, Object.keys(STR_TABS));
   for (const [tab, headers] of Object.entries(STR_TABS)) await ensureColumns(env, tab, headers);
   await ensureColumns(env, 'Vendors', ['Service_Area']);
   __strTabsReady = true;
@@ -35164,6 +37993,13 @@ async function strLog(ctx, taskKey, cleanerId, event, detail) {
 const __strSysAt = {};
 // Failure Brett must see. Never throws; telemetry row first (Success=FALSE), then throttled SMS + email.
 async function strSystemAlert(env, kind, message) {
+  // Oct 22 2026: the shared Sheets read quota ran out under the cleaning scheduler. Recorded as the calm P2 "sheets_quota_busy" row; no text or email
+  // (the next tick retries, and a scheduler that stays unable to run is still the P0 "overdue" condition).
+  if (sheetsQuotaBusyError(message)) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'sheets_quota_busy', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); }
+    catch (te) { /* silent-ok: alert code must not report its own failure (it would loop); the full text goes to the Worker log */ console.error('str alert: quota-busy telemetry failed:', te && te.message, '| original:', kind, message); }
+    return;
+  }
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { console.error('str alert: telemetry failed:', te && te.message, '| original:', kind, message); }
   const now = Date.now();
   if (__strSysAt[kind] && now - __strSysAt[kind] < 30 * 60000) return;
@@ -35205,13 +38041,26 @@ async function strLoad(ctx, fresh) {
 function strRowToTask(r) { return { key: r.Task_Key, kind: r.Kind, date: r.Date, winStart: r.Win_Start || r.Date, winEnd: r.Win_End || r.Date, next: r.Next_Arrival || null, guests: r.Guests || '', status: r.Status, assigned: r.Assigned_Cleaner_ID || '' }; }
 
 // Calendar reads/writes against the CLEANING calendar (not the main inspection calendar).
-async function strCalFetch(env, calId, method, pathAndQuery, body) {
+// Cleaning-calendar API failures in plain English. They never tell Brett to share the calendar (his Google Workspace will not allow edit sharing); the fix is the act-as setting.
+function strCalClassify(status, text, as) {
+  const t = String(text || ''), who = (as && as.sub) || '', via = who ? `(the Hub is acting as ${who})` : '(the Hub is using its own Google login)';
+  const fix = who ? `Check that ${who} owns the cleaning calendar or can edit it.` : 'Turn on the act-as setting: set Config STR_CAL_IMPERSONATE to brett@bmoremanagement.com (cleaning board > Switches > Check calendar access explains the one-time Google admin step).';
+  if (status === 403 && /insufficient.*scope|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(t)) return inspErr('calendar_scope_too_narrow', `Google says the narrow calendar.events permission is not enough for this calendar call ${via}. Tell Claude: the permission must not be widened without a decision.`, 503);
+  if (status === 403 && /rateLimitExceeded|userRateLimitExceeded|quotaExceeded/i.test(t)) return inspErr('calendar_error', 'Google Calendar is rate limiting the Hub right now (403). It is retried on the next scheduler run.', 503);
+  if (status === 404) return inspErr('calendar_not_shared', `Google cannot find the cleaning calendar ${via}. ${fix} Also check that Config STR_GUARD_CLEANING_CAL is the right calendar id.`, 503);
+  if (status === 403 && !/accessNotConfigured|has not been used in project|is disabled/i.test(t)) return inspErr('calendar_no_write_permission', `Google will not let the Hub change the cleaning calendar ${via}. ${fix}`, 503);
+  if (status === 401) return inspErr('calendar_auth', `Google rejected the Hub's calendar login ${via} (401).` + (who ? ' Press "Check calendar access" on the cleaning board.' : ''), 503);
+  return inspClassifyCalError(status, text);
+}
+async function strCalFetch(env, calId, method, pathAndQuery, body, asOverride) {
   __strCalCount++;
-  const token = await getCalendarAccessToken(env);
+  const as = asOverride || __strCalAs; // events endpoints only (list/get/insert/patch/delete), so the narrow calendar.events scope is enough
+  if (as.bad) throw inspErr('calendar_impersonate_invalid', `Config STR_CAL_IMPERSONATE ("${as.sub}") is not an email address, so the cleaning calendar cannot be reached. Fix it on the cleaning board (Switches).`, 503);
+  const token = await getCalendarAccessToken(env, { sub: as.sub, scope: as.scope });
   const resp = await fetch(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calId)}${pathAndQuery}`, { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
   if (resp.status === 204) return {};
   const text = await resp.text();
-  if (!resp.ok) { const err = inspClassifyCalError(resp.status, text); err.message = `Cleaning calendar: ` + err.message; err.httpStatus = resp.status; throw err; }
+  if (!resp.ok) { const err = strCalClassify(resp.status, text, as); err.message = `Cleaning calendar: ` + err.message; err.httpStatus = resp.status; throw err; }
   try { return JSON.parse(text); } catch (e) { throw inspErr('calendar_error', 'Google Calendar returned unreadable JSON', 503); }
 }
 async function strReadCleaningCal(env, cfg, calId, fromDay, toDay) {
@@ -35266,7 +38115,7 @@ async function strRaiseAlert(ctx, a) {
     }
     return open;
   }
-  const fields = { Alert_Key: a.key, Kind: a.kind, Severity: a.severity, Task_Key: a.taskKey || '', Message: a.message, Sms_Text: a.sms, Send_Count: '0', Last_Sent_At: '', Next_Send_At: '', Resolved_At: '', Acked_At: '', Created_At: new Date(ctx.now).toISOString() };
+  const fields = { Alert_Key: a.key, Kind: a.kind, Severity: a.severity, Task_Key: a.taskKey || '', Message: a.message, Sms_Text: a.sms, Send_Count: a.told ? '1' : '0', Last_Sent_At: a.told ? new Date(ctx.now).toISOString() : '', Next_Send_At: '', Resolved_At: '', Acked_At: '', Created_At: new Date(ctx.now).toISOString() };
   const id = await strAddRow(ctx.env, 'STR_Alerts', fields);
   const row = Object.assign({ ID: id }, fields); ctx.st.alerts.push(row); return row;
 }
@@ -35564,15 +38413,27 @@ async function strReconcileCalendar(ctx, feed, views) {
   const run = async (label, fn) => {
     if (ops >= MAX) { d.deferred = (d.deferred || 0) + 1; return; }
     ops++;
-    try { await fn(); d.applied++; } catch (e) { ctx.errors.push({ step: 'calendar_' + label, error: strErrText(e) }); d.failed = (d.failed || 0) + 1; }
+    try { await fn(); d.applied++; } catch (e) { ctx.errors.push({ step: 'calendar_' + label, error: strErrText(e) }); d.failed = (d.failed || 0) + 1; if (STR_CAL_FATAL.includes(e.code)) d.fatal = d.fatal || strErrText(e); }
   };
   for (const e of plan.remove) await run('delete', async () => { try { await strCalFetch(env, S.cleaningCal, 'DELETE', '/events/' + enc(e.id)); } catch (er) { if (er.httpStatus !== 410 && er.httpStatus !== 404) throw er; } });
   for (const w of plan.create) await run('create', async () => { const ev = await strCalFetch(env, S.cleaningCal, 'POST', '/events', strCalBody(w, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not return an event id for ' + w.key); });
   for (const p of plan.patch) await run('patch', async () => { const ev = await strCalFetch(env, S.cleaningCal, 'PATCH', '/events/' + enc(p.ev.id), strCalBody(p.want, INSP_TZ)); if (!ev || !ev.id) throw new Error('Google did not confirm the update for ' + p.want.key); });
+  if (d.fatal) await strCalAccessAlert(ctx, d.fatal); else if (d.applied && !d.failed) await strCalAccessResolve(ctx);
   if (d.failed) await strSystemAlert(env, 'calendar_write', `${d.failed} cleaning-calendar change(s) failed: ${ctx.errors.filter(e => /^calendar_/.test(e.step)).map(e => e.error).slice(0, 2).join(' | ')}`);
   return d;
 }
 
+// A calendar-ACCESS failure stays on the board as a banner until a real calendar write works again (STR_Alerts row cal|access). Brett is already texted/emailed by
+// strSystemAlert (and the telemetry row feeds the failure ledger), so the row is created as already-told (Send_Count 1) and never texts a second time.
+async function strCalAccessAlert(ctx, msg) {
+  try { await strRaiseAlert(ctx, { key: 'cal|access', kind: 'calendar', severity: 'high', told: true, message: 'The cleaning calendar cannot be changed. ' + msg, sms: 'Cleaning calendar blocked: ' + String(msg).slice(0, 200) }); }
+  catch (e) { ctx.errors.push({ step: 'alert_state', error: 'Could not put the calendar warning on the board: ' + strErrText(e) }); }
+}
+async function strCalAccessResolve(ctx) {
+  const open = ctx.st.alerts.find(x => x.Alert_Key === 'cal|access' && !x.Resolved_At); if (!open || ctx.dry) return;
+  try { Object.assign(open, await strSetRow(ctx.env, 'STR_Alerts', open.ID, { Resolved_At: new Date(ctx.now).toISOString() })); }
+  catch (e) { ctx.errors.push({ step: 'alert_resolve', error: 'Could not clear the calendar warning: ' + strErrText(e) }); }
+}
 // ── Checkout-day text (11 AM ET checkout; 9 AM for a pre-arrival clean) ──────────────────────
 async function strCheckoutTexts(ctx, views) {
   const { S } = ctx, today = inspEtDate(ctx.now), out = [];
@@ -35715,6 +38576,7 @@ async function schedRunStrCleaning(env) {
 // ── HTTP handlers ────────────────────────────────────────────────────────────────────────────
 async function strHandleErr(env, e, where) {
   if (e && e.code && e.status && e.status < 500) return json({ ok: false, error: e.code, message: e.message }, e.status);
+  if (sheetsQuotaBusyError(e)) throw e;   // Oct 22 2026: Google's read quota is a "busy, try again" answer (typed 429 + one P2 row from the top-level handler), not "something went wrong, Brett has been told" + a text/email to Brett
   await strSystemAlert(env, 'handler_' + (where || 'error'), `${where || 'handler'} failed: ${strErrText(e)}`); // a real failure: Brett is told (the old "Brett has been notified" message was a lie)
   return json({ ok: false, error: (e && e.code) || 'internal', message: 'Something went wrong on our side and Brett has been told. Please try again in a few minutes.' }, 500);
 }
@@ -35869,7 +38731,7 @@ async function strCleanerIcs(env, url) {
 function strSettingsOut(cfg) {
   const S = strSettings(cfg), g = k => String((cfg && cfg[k]) == null ? '' : cfg[k]);
   return { engine: S.engine, sms: S.sms, sms_test_mode: S.smsTest, cal_write: S.calWrite, digest: S.digest, alert_days: S.alertDays, lookahead_days: S.lookahead, red_block_days: S.redDays, reply_4h_days: S.reply4hDays, reply_2h_days: S.reply2hDays, alert_repeat_hours: S.alertRepeatH, mark_alert_days: S.markAlertDays, prearrival_gap_days: S.preGap, max_pending_per_cleaner: S.maxPending,
-    twilio_enabled: g('TWILIO_ENABLED').toUpperCase() === 'TRUE', twilio_test_mode: g('TWILIO_TEST_MODE').toUpperCase() !== 'FALSE', cleaning_cal_set: !!S.cleaningCal, bookings_set: !!g('STR_GUARD_BOOKING_SOURCES').trim(), assistant: S.assistant, label: S.label };
+    twilio_enabled: g('TWILIO_ENABLED').toUpperCase() === 'TRUE', twilio_test_mode: g('TWILIO_TEST_MODE').toUpperCase() !== 'FALSE', cleaning_cal_set: !!S.cleaningCal, cal_mode: S.calAs ? 'acting_as' : 'shared', cal_as: S.calAs, bookings_set: !!g('STR_GUARD_BOOKING_SOURCES').trim(), assistant: S.assistant, label: S.label };
 }
 function strCleanerOut(c, pool) {
   const p = pool.find(x => String(x.Cleaner_ID) === c.ID) || {};
@@ -35938,19 +38800,66 @@ async function strAdminNewLink(env, body) {
 // POST /str/admin/config {values:{STR_ENGINE_ENABLED:'TRUE', ...}}  — allow-listed keys only
 async function strAdminConfig(env, body) {
   try {
-    const vals = (body && body.values) || {}, sets = {};
+    const vals = (body && body.values) || {}, sets = {}; let actAs = '';
     for (const [k, v] of Object.entries(vals)) {
-      if (STR_CFG_BOOL.includes(k)) { const s = String(v).toUpperCase(); if (s !== 'TRUE' && s !== 'FALSE') return json({ ok: false, error: 'bad_value', message: `${k} must be TRUE or FALSE.` }, 400); sets[k] = s; }
+      if (k === 'STR_CAL_IMPERSONATE') { const s = String(v == null ? '' : v).trim(); if (s && !STR_EMAIL_RE.test(s)) return json({ ok: false, error: 'bad_value', message: 'Who to act as must be an email address like brett@bmoremanagement.com (or blank to go back to the old way).' }, 400); sets[k] = s; actAs = s; }
+      else if (STR_CFG_BOOL.includes(k)) { const s = String(v).toUpperCase(); if (s !== 'TRUE' && s !== 'FALSE') return json({ ok: false, error: 'bad_value', message: `${k} must be TRUE or FALSE.` }, 400); sets[k] = s; }
       else if (STR_CFG_INT[k]) { const n = parseInt(v, 10), [lo, hi] = STR_CFG_INT[k]; if (!Number.isFinite(n) || n < lo || n > hi) return json({ ok: false, error: 'bad_value', message: `${k} must be a whole number from ${lo} to ${hi}.` }, 400); sets[k] = String(n); }
       else return json({ ok: false, error: 'not_allowed', message: `${k} cannot be changed here.` }, 400);
     }
     if (!Object.keys(sets).length) return json({ ok: false, error: 'nothing_to_save', message: 'No settings were sent.' }, 400);
+    if (actAs && !inspCalStaged(env, await fetchConfig(env))) { // never save a setting that would break the calendar: Google must approve acting as this user first
+      try { await getCalendarAccessToken(env, { sub: actAs, scope: STR_CAL_SCOPE_EVENTS }); }
+      catch (e) { await strCalCheckLog(env, e, 'save'); return json({ ok: false, error: e.code || 'calendar_auth', message: 'NOT saved. ' + strErrText(e) }, 409); }
+    }
     for (const [k, v] of Object.entries(sets)) { const r = await setConfigKey(env, { key: k, value: v }), j = await r.json(); if (!j || !j.success) throw strErr('config_write', `Could not save ${k}`); }
     invalidateTabCache('Config');
     const cfg = await fetchConfig(env);
     for (const [k, v] of Object.entries(sets)) if (String(cfg[k] || '') !== v) throw strErr('config_not_landed', `${k} did not save (it reads back as "${cfg[k] || ''}")`);
     return json({ ok: true, settings: strSettingsOut(cfg) });
   } catch (e) { return await strHandleErr(env, e, 'save settings'); }
+}
+// A failed calendar check/save goes to Ops_Telemetry (the failure ledger reads it). No text to Brett: he is looking at the result on the board.
+async function strCalCheckLog(env, e, where) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/calendar_check_' + where, Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 480) }); }
+  catch (te) { console.error('calendar check: telemetry failed:', te && te.message, '| original:', strErrText(e)); }
+}
+// "Check calendar access" (cleaning board): signs in the way the Hub is set up, reads the cleaning calendar and, with write:true, also adds + deletes one
+// 1-minute test event. A pass on reading alone does NOT prove the Hub may change the calendar, and the result says so. Plain-English pass/fail per step.
+async function strCalCheck(env, cfg, opts) {
+  opts = opts || {};
+  const as = strCalAs(cfg), calId = String((cfg && cfg.STR_GUARD_CLEANING_CAL) || '').trim(), steps = [];
+  const add = (step, ok, detail, fix) => { steps.push({ step, ok: !!ok, detail: detail || '', fix: fix || '' }); return !!ok; };
+  const finish = async (extra) => { const bad = steps.find(s => !s.ok), r = Object.assign({ passed: !bad, mode: as.sub ? 'acting_as' : 'shared', as: as.sub, scope: as.scope, wrote: !!opts.write, steps, summary: bad ? (bad.detail + (bad.fix ? ' ' + bad.fix : '')) : '' }, extra || {}); if (bad) await strCalCheckLog(env, new Error(r.summary), 'check'); return r; };
+  add('How the Hub signs in', true, as.sub ? `Acting as ${as.sub} (domain-wide delegation, scope calendar.events).` : "Its own Google login (scope calendar). That can read the cleaning calendar but cannot change it, because your Google Workspace will not let you give it edit access. Turn on the act-as setting.");
+  if (as.bad) { add('Who to act as', false, `"${as.sub}" is not an email address.`, 'Fix Config STR_CAL_IMPERSONATE.'); return await finish(); }
+  if (!calId) { add('Cleaning calendar', false, 'No cleaning calendar id is set.', 'Set it on the Inspection Scheduler page (Open blocks tab, "Cabin cleaning protection") or Config STR_GUARD_CLEANING_CAL.'); return await finish(); }
+  if (inspCalStaged(env, cfg)) { add('Staging', true, 'This is the test server: calendar calls are pretend-only here, so access was NOT really tested.'); return await finish({ stubbed: true }); }
+  try { await getCalendarAccessToken(env, { sub: as.sub, scope: as.scope }); add('Google sign-in', true, as.sub ? `Google approved acting as ${as.sub}.` : "Google accepted the Hub's own login."); }
+  catch (e) { add('Google sign-in', false, strErrText(e), as.sub ? '' : 'Check GOOGLE_SA_EMAIL / GOOGLE_SA_KEY on the Worker.'); return await finish(); }
+  try { const d = await strCalFetch(env, calId, 'GET', '/events?singleEvents=true&maxResults=5&timeMin=' + encodeURIComponent(new Date().toISOString()) + '&fields=items(id)', null, as); add('Read the cleaning calendar', true, `Can read it (${(d.items || []).length} upcoming event(s) on the first page).`); }
+  catch (e) { add('Read the cleaning calendar', false, strErrText(e)); return await finish(); }
+  if (opts.write) {
+    let id = '';
+    try {
+      const t0 = Date.now() + 3 * 86400000, ev = await strCalFetch(env, calId, 'POST', '/events', { summary: 'Ridge Co calendar test (safe to ignore - deleting now)', start: { dateTime: new Date(t0).toISOString(), timeZone: INSP_TZ }, end: { dateTime: new Date(t0 + 60000).toISOString(), timeZone: INSP_TZ }, transparency: 'transparent', extendedProperties: { private: { ridgecoStrTest: '1' } } }, as);
+      if (!ev || !ev.id) throw new Error('Google did not return an id for the test event');
+      id = ev.id; await strCalFetch(env, calId, 'DELETE', '/events/' + encodeURIComponent(id), null, as); id = '';
+      add('Add and remove a test event', true, 'Added one 1-minute test event and removed it again. The Hub can change the cleaning calendar.');
+    } catch (e) { add('Add and remove a test event', false, strErrText(e) + (id ? ` A test event may still be on the calendar (id ${id}); delete it by hand.` : '')); }
+  }
+  return await finish();
+}
+// POST /str/admin/calendar-check {write?: true}
+async function strAdminCalendarCheck(env, body) {
+  try {
+    const cfg = await fetchConfig(env), r = await strCalCheck(env, cfg, { write: !!(body && body.write) });
+    if (r.passed && r.wrote && !r.stubbed) {
+      try { await strEnsureTabs(env); const al = (await fetchTab(env, 'STR_Alerts')).find(a => a.Alert_Key === 'cal|access' && !a.Resolved_At); if (al) await strSetRow(env, 'STR_Alerts', al.ID, { Resolved_At: new Date().toISOString() }); }
+      catch (e) { r.steps.push({ step: 'Clear the old board warning', ok: false, detail: 'Could not clear the old calendar warning: ' + strErrText(e), fix: 'Press Acknowledge on it.' }); r.passed = false; r.summary = r.steps[r.steps.length - 1].detail; }
+    }
+    return json(Object.assign({ ok: true }, r));
+  } catch (e) { return await strHandleErr(env, e, 'calendar check'); }
 }
 // POST /str/admin/assign {task_key, cleaner_id}  (cleaner_id '' = unassign)
 async function strAdminAssign(env, body) {
@@ -36069,7 +38978,7 @@ async function schedRunStrDigest(env) {
 const STR_CHANGE_MAX = 40, STR_TEXT_MAX = 800, STR_MARK_HORIZON = 120, STR_SUB_LIMIT = 40;
 let __strCalCount = 0; // Google Calendar calls made by this isolate (the Sheets ones are counted by sheetsRequest as __sheetsFetchCount)
 const STR_ACTIONS = ['swap', 'assign_range', 'mark'];
-const STR_CAL_FATAL = ['calendar_no_write_permission', 'calendar_not_shared', 'calendar_auth', 'calendar_api_disabled'];
+const STR_CAL_FATAL = ['calendar_no_write_permission', 'calendar_not_shared', 'calendar_auth', 'calendar_api_disabled', 'calendar_delegation_not_authorized', 'calendar_impersonate_bad_user', 'calendar_impersonate_invalid', 'calendar_scope_too_narrow'];
 function strHash(s) { let a = 5381, b = 52711; for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); a = ((a * 33) ^ c) >>> 0; b = ((b * 31) + c) >>> 0; } return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0'); }
 // Text Brett typed: a plain string only. Control characters and runs of whitespace collapse exactly like the stock texts do (strRenderText).
 function strCleanText(s) { return String(s == null ? '' : s).replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim(); }
@@ -36270,7 +39179,7 @@ async function strChangeBuild(ctx, req, feed) {
       const hand = i.cal.hand.map(h => `delete "${h.summary}"`).concat(i.cal.hub_create || i.cal.hub_patch ? [`add an all-day "${i.cal.title}"`] : []);
       if (hand.length) cal.manual.push(`${i.label}: ${hand.join(' and ')}`);
     }
-    cal.note = { off: 'The Hub is NOT allowed to change the cleaning calendar yet (Switches > Cleaning calendar is OFF). The assignment and texts still happen; you will have to fix the calendar by hand (steps below).', staged: 'This is the test server: calendar changes are pretend-only here.', unconfigured: 'No cleaning calendar is set up (Config STR_GUARD_CLEANING_CAL), so the calendar cannot be changed.', write: 'The Hub will change the cleaning calendar and then re-read it to check. If Google refuses (the Hub\'s service account needs "Make changes to events" on that calendar) the swap still goes ahead and you get exact steps to do it by hand.' }[cal.mode];
+    cal.note = { off: 'The Hub is NOT allowed to change the cleaning calendar yet (Switches > Cleaning calendar is OFF). The assignment and texts still happen; you will have to fix the calendar by hand (steps below).', staged: 'This is the test server: calendar changes are pretend-only here.', unconfigured: 'No cleaning calendar is set up (Config STR_GUARD_CLEANING_CAL), so the calendar cannot be changed.', write: 'The Hub will change the cleaning calendar and then re-read it to check. If Google refuses (see Switches > Check calendar access) the swap still goes ahead and you get exact steps to do it by hand.' }[cal.mode];
   }
 
   // ── who gets what text ──
@@ -37184,6 +40093,31 @@ function inspCleanInput(body) {
   return { address, units, buildings };
 }
 
+// Property size asked at booking time (Oct 27 2026). Each of levels / bedrooms / bathrooms is REQUIRED but may be "unknown" (the
+// "I don't know" bypass). For multi-unit properties bedrooms/bathrooms mean "each unit" (one dropdown, never per-unit entry) and may be "vary".
+// It never changes the visit duration (that stays units/buildings based) - it only informs Brett and pre-fills the inspection layout.
+function inspSizeVal(v, kind, multi) {
+  const s = String(v == null ? '' : v).trim().toLowerCase();
+  if (!s) throw inspErr('bad_size', 'Please give the number of levels, bedrooms and bathrooms - or tap “I don’t know” for any you are not sure of.', 400);
+  if (s === 'unknown') return 'unknown';
+  if (s === 'vary') return multi ? 'vary' : 'unknown';
+  const n = Number(s), min = kind === 'levels' ? 1 : (kind === 'bedrooms' ? 0 : 0.5), max = kind === 'levels' ? 6 : 20;
+  const stepOk = kind === 'bathrooms' ? (n * 2) % 1 === 0 : Number.isInteger(n);
+  if (!Number.isFinite(n) || n < min || n > max || !stepOk) throw inspErr('bad_size', `Please check the number of ${kind}.`, 400);
+  return String(n);
+}
+function inspCleanSize(body, units) {
+  const multi = (+units || 1) > 1;
+  return { Levels: inspSizeVal(body && body.levels, 'levels', multi), Bedrooms: inspSizeVal(body && body.bedrooms, 'bedrooms', multi), Bathrooms: inspSizeVal(body && body.bathrooms, 'bathrooms', multi) };
+}
+// One readable line for Brett's approval page / calendar / texts. Blank or "unknown" parts are left out ("" when nothing is known).
+function inspSizeText(b) {
+  const one = (v, s, p) => { v = String(v == null ? '' : v).trim().toLowerCase(); if (!v || v === 'unknown') return ''; if (v === 'vary') return p + ' vary'; return v + ' ' + (Number(v) === 1 ? s : p); };
+  const multi = (+(b && b.Units) || 1) > 1;
+  const bb = [one(b && b.Bedrooms, 'bed', 'beds'), one(b && b.Bathrooms, 'bath', 'baths')].filter(Boolean).join(' / ');
+  return [bb && (multi ? 'each unit: ' + bb : bb), one(b && b.Levels, 'level', 'levels')].filter(Boolean).join(', ');
+}
+
 function inspKeyMin(customer) { const m = Math.floor(+(customer && customer.Key_Pickup_Min)); return Number.isFinite(m) && m > 0 && String((customer && customer.Key_Address) || '').trim() ? Math.min(m, 180) : 0; }
 function inspPackSlackMin(cfg) { const raw = String((cfg && cfg.INSP_PACK_SLACK_MIN) == null ? '' : cfg.INSP_PACK_SLACK_MIN).trim(); if (/^off$/i.test(raw)) return null; const n = parseFloat(raw); return Number.isFinite(n) && n >= 0 ? n : INSP_PACK_SLACK_MIN; }
 function inspBlockWindowEndMs(b) { const l = String(b.Last_Start == null ? '' : b.Last_Start).trim(); const ls = l ? inspEtWallToMs(b.Date, l) : NaN; return Number.isFinite(ls) ? ls : inspEtWallToMs(b.Date, b.End_Time); }
@@ -37287,6 +40221,7 @@ async function inspBookRequest(env, body) {
     const c = await inspCustomerByToken(env, body && body.k);
     if (!c) return json({ ok: false, error: 'invalid_link', message: 'This booking link is not valid.' }, 404);
     const input = inspCleanInput(body); input.freshGuard = true; // cleaning-coverage is re-read live for a real booking
+    const size = inspCleanSize(body, input.units);   // required (with "unknown" bypass) - rejected BEFORE any calendar hold is placed
     const contactName = String(body.contact_name || '').trim().slice(0, 80);
     const contactPhone = body.contact_phone ? normalizePhone(String(body.contact_phone).slice(0, 30)) : '';
     const contactEmail = String(body.contact_email || '').trim().slice(0, 120);
@@ -37313,6 +40248,7 @@ async function inspBookRequest(env, body) {
       Drive_Before_Min: adj.before ? adj.before.min : '', Drive_After_Min: adj.after ? adj.after.min : '', Drive_Source: a.driveSource,
       Contact_Name: contactName, Contact_Phone: contactPhone, Contact_Email: contactEmail, Notes: String(body.notes || '').trim().slice(0, 500),
       Calendar_Event_ID: '', Decision_Note: '', Notify_Log: '', Created_At: nowIso, Decided_At: '', Reminded_At: '', Active: 'TRUE', Key_Pickup: keyNote,
+      Levels: size.Levels, Bedrooms: size.Bedrooms, Bathrooms: size.Bathrooms, Inspection_ID: '', Hub_Property_ID: '', Insp_Claimed_At: '',
     };
     // 1) Reserve the slot on Brett's calendar FIRST. If this fails nothing is booked and the partner is told.
     let ev;
@@ -37345,7 +40281,7 @@ async function inspBookRequest(env, body) {
     // 3b) Keep the day's single "Key pickup" block on the calendar in step with the earliest booking.
     notify.push(...await inspReconcileKeyPickup(env, a.cfg, c, rec.Date));
     // 4) Tell Brett.
-    const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}.${keyNote ? ' Key pickup first: ' + keyNote + '.' : ''} Approve/decline: ${approveUrl}`;
+    const msg = `New inspection request: ${c.Name} — ${input.units}u @ ${a.geo.formatted}, ${inspFmtEt(slot.startMs)}–${inspFmtEtTime(slot.endMs)}. Size: ${inspSizeText(rec) || 'not given'}.${keyNote ? ' Key pickup first: ' + keyNote + '.' : ''} Approve/decline: ${approveUrl}`;
     notify.push(...await inspNotifyBrett(env, a.cfg, 'Inspection request: ' + a.geo.formatted, msg, approveUrl, rec));
     // 4b) Tell the partner their request landed, with the link that lets them check status or cancel later.
     notify.push(...await inspNotifyPartner(env, rec, 'requested'));
@@ -37898,6 +40834,9 @@ async function inspCalendarTest(env, url) {
   const cfg = await fetchConfig(env), steps = [], calId = await inspCalendarId(env, cfg);
   const add = (name, ok, detail, fix) => steps.push({ step: name, ok, detail: detail || '', fix: fix || '' });
   add('Calendar to use', true, calId + (cfg.INSP_CALENDAR_ID ? ' (Config INSP_CALENDAR_ID)' : ' (default)'));
+  const csAs = strCalAs(cfg); // the CLEANING calendar only; the inspection calendar above always uses the service account's own login
+  add('Cleaning calendar: who the Hub acts as', true, csAs.sub ? `Acting as ${csAs.sub} (domain-wide delegation, scope calendar.events). The inspection calendar still uses the service account's own login.` : "The service account's own login (Config STR_CAL_IMPERSONATE is blank). That can read the cleaning calendar but not change it: see Cleaning scheduler > Switches > Check calendar access.");
+  if (csAs.sub && !inspCalStaged(env, cfg)) { try { await getCalendarAccessToken(env, { sub: csAs.sub, scope: csAs.scope }); add('Google sign-in (acting as ' + csAs.sub + ')', true, 'Google approved it.'); } catch (e) { add('Google sign-in (acting as ' + csAs.sub + ')', false, `${e.code}: ${e.message}`, 'Follow the steps in the message.'); } }
   if (inspCalStaged(env, cfg)) { add('Staging', true, 'Calendar calls are stubbed on staging (Config INSP_CALENDAR_STAGING_MODE=LIVE to test for real).'); }
   else {
     try { await getCalendarAccessToken(env); add('Google sign-in (service account)', true, env.GOOGLE_SA_EMAIL); }
@@ -38012,6 +40951,7 @@ function fiScrubDocForReport(doc) {
   if (!doc || typeof doc !== 'object') return doc;
   for (const a of (doc.areas || [])) for (const is of (a.issues || [])) {
     if (!is) continue;
+    delete is.flag_send; delete is.sent;   // 'send to the requester' flags and sent marks are for the phone only (Oct 28 2026), never on the public report
     if (is.ai === true) { for (const k of ['title', 'detail', 'likely_cause', 'recommended_fix']) if (typeof is[k] === 'string') is[k] = fiContractorize(is[k]); }
     else if (is.fix_source === 'suggested' && typeof is.recommended_fix === 'string') is.recommended_fix = fiContractorize(is.recommended_fix);   // catalog / AI-suggested fix text the inspector did not write (older inspections kept the old "Have an electrician" wording)
   }
@@ -38074,6 +41014,39 @@ function fiExtractJson(text) {
   if (a >= 0 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; } }
   return null;
 }
+// Visit details + per-area "No access" (Oct 27 2026). Both are optional and stored on the doc as-is; these only bound their shape/size.
+const FI_ACCESS_REASONS = ['tenant_declined', 'blocked', 'other'];
+const FI_COOP_CHOICES = ['completed', 'not_present', 'limited', 'ended_early'];
+function fiValidateAccess(ac, where, errors) {
+  if (ac === undefined || ac === null) return;
+  if (typeof ac !== 'object' || Array.isArray(ac)) { errors.push(`${where}.access must be an object`); return; }
+  if (ac.reason && !FI_ACCESS_REASONS.includes(ac.reason)) errors.push(`${where}.access.reason invalid`);
+  if (String(ac.note || '').length > 500) errors.push(`${where}.access.note too long (max 500)`);
+}
+function fiValidateVisit(v, errors) {
+  if (v === undefined || v === null) return;
+  if (typeof v !== 'object' || Array.isArray(v)) { errors.push('doc.visit must be an object'); return; }
+  const an = v.animals;
+  if (an !== undefined && an !== null) {
+    if (typeof an !== 'object' || Array.isArray(an)) errors.push('doc.visit.animals must be an object');
+    else if (an.items !== undefined && !Array.isArray(an.items)) errors.push('doc.visit.animals.items must be an array');
+    else if ((an.items || []).length > 10) errors.push('too many animal lines (max 10)');
+    else (an.items || []).forEach((it, i) => {
+      if (!it || typeof it !== 'object') { errors.push(`doc.visit.animals.items[${i}] invalid`); return; }
+      if (String(it.type || '').length > 60) errors.push(`doc.visit.animals.items[${i}].type too long`);
+      const n = Number(it.count);
+      if (it.count !== undefined && it.count !== '' && (!Number.isFinite(n) || n < 0 || n > 999)) errors.push(`doc.visit.animals.items[${i}].count invalid`);
+    });
+  }
+  const ac = v.access_cooperation;
+  if (ac !== undefined && ac !== null) {
+    if (typeof ac !== 'object' || Array.isArray(ac)) errors.push('doc.visit.access_cooperation must be an object');
+    else {
+      if (ac.choice && !FI_COOP_CHOICES.includes(ac.choice)) errors.push('doc.visit.access_cooperation.choice invalid');
+      if (String(ac.note || '').length > 600) errors.push('doc.visit.access_cooperation.note too long (max 600)');
+    }
+  }
+}
 function fiValidateDoc(doc) {
   const errors = [];
   if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { ok: false, errors: ['doc must be an object'] };
@@ -38088,15 +41061,21 @@ function fiValidateDoc(doc) {
       if (!a.name || typeof a.name !== 'string') errors.push(`areas[${i}].name missing`);
       if (a.condition && !FI_CONDITIONS.includes(a.condition)) errors.push(`areas[${i}].condition invalid`);
       fiValidateEquipment(a.equipment, `areas[${i}]`, errors);
+      fiValidateAccess(a.access, `areas[${i}]`, errors);
       if (!Array.isArray(a.issues || [])) errors.push(`areas[${i}].issues must be an array`);
       else if ((a.issues || []).length > 60) errors.push(`areas[${i}] has too many issues (max 60)`);
       else (a.issues || []).forEach((is, j) => {
         if (!is || typeof is !== 'object' || !is.id || !is.title) errors.push(`areas[${i}].issues[${j}] needs id and title`);
-        else { if (!FI_TRADES.includes(is.trade)) errors.push(`areas[${i}].issues[${j}].trade invalid`); if (!FI_SEVERITIES.includes(is.severity)) errors.push(`areas[${i}].issues[${j}].severity invalid`); }
+        else { if (!FI_TRADES.includes(is.trade)) errors.push(`areas[${i}].issues[${j}].trade invalid`); if (!FI_SEVERITIES.includes(is.severity)) errors.push(`areas[${i}].issues[${j}].severity invalid`);
+          if (is.flag_send !== undefined && typeof is.flag_send !== 'boolean') errors.push(`areas[${i}].issues[${j}].flag_send must be true or false`);
+          if (is.sent !== undefined && (!is.sent || typeof is.sent !== 'object' || Array.isArray(is.sent) || typeof is.sent.at !== 'string' || String(is.sent.at).length > 40 || String(is.sent.to || '').length > 120)) errors.push(`areas[${i}].issues[${j}].sent invalid`);
+        }
       });
     });
   }
   fiValidateVoiceNotes(doc.voice_notes, errors);
+  fiValidateVisit(doc.visit, errors);
+  if (doc.booking !== undefined && (!doc.booking || typeof doc.booking !== 'object' || Array.isArray(doc.booking))) errors.push('doc.booking must be an object');
   if (!doc.property || typeof doc.property !== 'object' || !String(doc.property.address || '').trim()) errors.push('doc.property.address required');
   if (doc.owner !== undefined && (!doc.owner || typeof doc.owner !== 'object' || Array.isArray(doc.owner) || String(doc.owner.name || '').length > 160)) errors.push('doc.owner must be an object with a name under 160 characters');
   return { ok: errors.length === 0, errors: errors.slice(0, 10) };
@@ -38143,7 +41122,10 @@ function fiPublishChecks(doc, serverPhotoIds) {
   for (const a of active) {
     if (String(a.pending_text || '').trim()) blocks.push({ code: 'dictation_pending', message: `"${a.name}" has dictation not yet turned into issues (or cleared)`, area: a.name });
   }
-  const skipped = active.filter(a => !a.condition || a.condition === 'not_inspected').map(a => a.name);
+  // "No access" counts as handled (it is reported in its own "Areas not accessed" section); "Other" needs its description.
+  const noAcc = a => !!(a.access && a.access.no_access);
+  for (const a of active) if (noAcc(a) && a.access.reason === 'other' && !String(a.access.note || '').trim()) blocks.push({ code: 'access_reason_missing', message: `Say why "${a.name}" was not accessed (you chose “Other”)`, area: a.name });
+  const skipped = active.filter(a => !noAcc(a) && (!a.condition || a.condition === 'not_inspected')).map(a => a.name);
   if (skipped.length) warnings.push({ code: 'areas_not_inspected', message: `Not marked inspected: ${skipped.slice(0, 12).join(', ')}`, areas: skipped });
   const sm = doc.summary;
   if (sm && sm.fp && sm.fp !== fiFingerprint(doc)) warnings.push({ code: 'summary_stale', message: 'The AI summary is out of date and will be left out of the report' });
@@ -38278,6 +41260,15 @@ async function fiGetInspection(env, url) {
   try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'The saved inspection data could not be read. Do not overwrite it — contact Brett.'); }
   return json({ ok: true, inspection: fiInspHeaderOut(row.o), doc, drive_folder_url: row.o.Drive_Folder_URL || '' });
 }
+// True when the two saved docs differ ONLY in phone-only fields (the 'send to requester' flag / sent mark, and the touch timestamp).
+function fiPublicDocKey(serialized) {
+  try { const d = JSON.parse(serialized); delete d.updated; for (const a of (d.areas || [])) for (const is of (a.issues || [])) { delete is.flag_send; delete is.sent; } return JSON.stringify(d); }
+  catch (e) { return null; }
+}
+function fiOnlyPhoneMarksChanged(prevSerialized, nextSerialized) {
+  const a = fiPublicDocKey(prevSerialized), b = fiPublicDocKey(nextSerialized);
+  return a !== null && b !== null && a === b;
+}
 async function fiSave(env, body) {
   body = body || {};
   const id = String(body.id || '');
@@ -38302,7 +41293,7 @@ async function fiSave(env, body) {
   const hash = await fiSha256(serialized);
   const changed = !row || row.o.Doc_Hash !== hash;
   const wasPublished = !!row && row.o.Status === 'published';
-  const unpublish = wasPublished && changed;
+  const unpublish = wasPublished && changed && !fiOnlyPhoneMarksChanged(fiJoinRow(row.o), serialized);   // marking an item 'sent to the requester' (phone-only) must not hide a published report
   const now = new Date().toISOString();
   const newRev = (row ? Number(row.o.Rev) || 0 : 0) + 1;
   const chunks = fiChunk(serialized);
@@ -38405,6 +41396,7 @@ async function fiReport(env, request, url) {
   delete doc.voice_notes;
   if (doc.property) { delete doc.property.id; delete doc.property.unit_id; }
   if (doc.owner) delete doc.owner.id;
+  delete doc.booking;   // the requester's phone/email and booking notes are internal - never on the public report
   for (const a of (doc.areas || [])) { delete a.pending_text; delete a.dictation; }
   fiScrubDocForReport(doc);
   return json({ ok: true, preview: !published, inspection: Object.assign(fiInspHeaderOut(insp.o), { property_id: '' }), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, rollup: fiTradeRollup(doc) });
@@ -38527,6 +41519,161 @@ async function fiEmailReport(env, request, body) {
   const lt = await fiReadFresh(env, 'FI_Email_Log');
   await fiWriteRow(env, 'FI_Email_Log', lt.headers, { ID: 'em_' + inspRandToken(9), Inspection_ID: id, To_Email: to, Subject: mail.subject, Result: res && res.staged ? 'staged' : 'sent', Sent_At: new Date().toISOString() }, 0);
   return json({ ok: true, sent: !(res && res.staged), staged: !!(res && res.staged), to, subject: mail.subject });
+}
+// ── Urgent items to the requester (Oct 28 2026, Brett) ───────────────────────────────────────────────
+// Brett flags report items (or types a quick list of urgent ones on the phone) and this emails the requester on the linked booking
+// ahead of the report. Preview-first like the report email. The server takes the ITEMS from the saved inspection (never from the
+// request), so what is emailed is exactly what is in the report. Photos are attached from Drive. An optional text goes out ONLY
+// 9am-4pm ET (otherwise email only, nothing is queued). A client send_key makes a retry safe: the same key never sends twice.
+const FI_URGENT_MAX_ITEMS = 20, FI_URGENT_MAX_PHOTOS = 6, FI_URGENT_TEXT_FROM_H = 9, FI_URGENT_TEXT_TO_H = 16;
+const FI_URGENT_SEV_LABEL = { urgent: 'Urgent', high: 'High', medium: 'Medium', low: 'Low', info: 'Note' };
+function fiUrgentTextWindow(ms) {
+  const h = Number(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' }).format(new Date(ms)));
+  return { open: h >= FI_URGENT_TEXT_FROM_H && h < FI_URGENT_TEXT_TO_H, hour: h };
+}
+function fiUrgentCollect(doc, ids) {
+  const items = [], pos = new Map(ids.map((x, i) => [x, i]));
+  for (const a of (doc.areas || [])) {
+    if (a.excluded) continue;
+    for (const is of (a.issues || [])) if (pos.has(is.id)) items.push({ id: is.id, area: String(a.name || ''), title: String(is.title || ''), detail: String(is.detail || ''), severity: is.severity, photo_ids: (is.photo_ids || []).map(String) });
+  }
+  items.sort((x, y) => pos.get(x.id) - pos.get(y.id));
+  const have = new Set(items.map(i => i.id));
+  return { items, missing: ids.filter(i => !have.has(i)) };
+}
+function fiUrgentFirstName(name) { const w = String(name || '').trim().split(/\s+/)[0] || ''; return /^[A-Za-z][A-Za-z'.-]{0,30}$/.test(w) ? w : ''; }
+function fiUrgentAddress(doc) { const p = doc.property || {}; return String(p.address || '').trim() + (p.unit_label ? ' #' + String(p.unit_label).replace(/^#/, '') : ''); }
+// "Photo 2, 3" under an item so the requester can tell which attachment belongs to which item (only photos that are actually attached).
+function fiUrgentPhotoLine(item, photoNums) {
+  const ns = (item.photo_ids || []).map(p => photoNums && photoNums.get(p)).filter(Boolean);
+  return ns.length ? `<div style="margin-top:4px;color:#5b6573;font-size:13px">Photo${ns.length === 1 ? '' : 's'} ${ns.join(', ')} attached</div>` : '';
+}
+function fiBuildUrgentEmail(doc, items, note, who, photoCount, omitted, photoNums) {
+  const addr = fiUrgentAddress(doc), n = items.length;
+  const subject = `${items.some(i => i.severity === 'urgent') ? 'Urgent: ' : ''}${n} item${n === 1 ? '' : 's'} at ${addr} - inspection update`;
+  const rows = items.map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid #e5e9f0"><div style="font-weight:700">${fiHtmlEsc(i.title)}</div><div style="color:#5b6573;font-size:13px">${fiHtmlEsc(i.area)} &middot; ${fiHtmlEsc(FI_URGENT_SEV_LABEL[i.severity] || '')}</div>${i.detail ? `<div style="margin-top:4px">${fiHtmlEsc(i.detail)}</div>` : ''}${fiUrgentPhotoLine(i, photoNums)}</td></tr>`).join('');
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:0 auto;color:#1c2430"><div style="background:#b91c1c;color:#fff;padding:14px 20px;font-size:17px;font-weight:700">Inspection update: ${fiHtmlEsc(addr)}</div><div style="padding:18px 20px;line-height:1.5">`
+    + `<p style="margin:0 0 12px">Hi ${fiHtmlEsc(who || 'there')},</p>`
+    + `<p style="margin:0 0 12px">I found ${n === 1 ? 'an item' : n + ' items'} at this property that need${n === 1 ? 's' : ''} your attention before the full inspection report is ready.</p>`
+    + (note ? `<p style="margin:0 0 12px">${fiHtmlEsc(note).replace(/\n/g, '<br>')}</p>` : '')
+    + `<table style="width:100%;border-collapse:collapse;margin:8px 0 14px">${rows}</table>`
+    + (photoCount ? `<p style="margin:0 0 12px">${photoCount} photo${photoCount === 1 ? ' is' : 's are'} attached.${omitted ? ` ${omitted} more will be in the full report.` : ''}</p>` : '')
+    + `<p style="margin:0">The full report will follow. Reply here with any questions.</p><p style="margin:14px 0 0">Brett<br>Ridge Co</p></div></div>`;
+  return { subject, html };
+}
+function fiUrgentSmsBody(doc, items) {
+  const p = doc.property || {}, street = String(p.address || '').split(',')[0].trim() + (p.unit_label ? ' #' + String(p.unit_label).replace(/^#/, '') : '');   // short on purpose: street only, no city/zip
+  const n = items.length, first = String(items[0].title).replace(/[^\x20-\x7e]/g, '').slice(0, 70);
+  return `Ridge Co: ${n === 1 ? 'urgent inspection item' : n + ' urgent inspection items'} at ${street.replace(/[^\x20-\x7e]/g, '')}: ${first}${n > 1 ? ' (+' + (n - 1) + ' more)' : ''}. Details sent to your email.`;
+}
+async function fiUrgentSend(env, body) {
+  body = body || {};
+  const id = String(body.id || '');
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  const rawIds = Array.from(new Set((Array.isArray(body.issue_ids) ? body.issue_ids : []).map(String)));
+  if (rawIds.some(x => !/^[A-Za-z0-9_-]{3,64}$/.test(x))) return fiErr(400, 'bad_items', 'One of the items has an invalid id. Reload the page and try again.');
+  const ids = rawIds;
+  if (!ids.length) return fiErr(400, 'no_items', 'Choose at least one item to send.');
+  if (ids.length > FI_URGENT_MAX_ITEMS) return fiErr(400, 'too_many', `Send at most ${FI_URGENT_MAX_ITEMS} items at a time.`);
+  const preview = body.preview !== false, alsoText = body.also_text === true;
+  const sendKey = String(body.send_key || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
+  if (!preview && sendKey.length < 8) return fiErr(400, 'no_send_key', 'Reload the page and try again (the send could not be made safe against doubles).');
+  const note = fiStr(body.note, 600).trim();
+  await fiEnsureTabs(env);
+  const { row } = await fiFindInspection(env, id);
+  if (!row) return fiErr(404, 'not_found', 'Inspection not found on the server.');
+  if (Number(body.rev) !== Number(row.o.Rev)) return fiErr(409, 'not_saved', 'This inspection has changes that have not finished saving. Wait for "Saved to server" and try again.');
+  let doc;
+  try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'The saved inspection could not be read.'); }
+  const { items, missing } = fiUrgentCollect(doc, ids);
+  if (missing.length) return fiErr(409, 'item_missing', 'Some of those items are not in the saved inspection yet or were removed. Wait for "Saved to server" and try again.');
+  const contact = (doc.booking && doc.booking.contact) || {};
+  const emailOk = e => /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(e);
+  const to = emailOk(String(contact.email || '').trim()) ? String(contact.email).trim() : (emailOk(String(body.to || '').trim()) ? String(body.to).trim() : '');
+  if (!to) return fiErr(400, 'no_recipient', 'This inspection has no booking contact with an email. Type the email address to send to.', { need_to: true });
+  const phone = normalizePhone(String(contact.phone || '')) || '';
+  const who = fiUrgentFirstName(contact.name);
+  // photos: from the chosen items, in order, capped; each must be fully uploaded
+  const pids = []; for (const it of items) for (const p of it.photo_ids) if (!pids.includes(p)) pids.push(p);
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const prow = new Map(pt.rows.filter(r => r.o.Inspection_ID === id && r.o.Active !== 'FALSE').map(r => [r.o.ID, r.o]));
+  const notUp = pids.filter(p => !prow.has(p));
+  if (notUp.length) return fiErr(409, 'photos_missing', `${notUp.length} photo${notUp.length === 1 ? ' has' : 's have'} not finished uploading. Wait a moment and try again.`);
+  const sendPids = pids.slice(0, FI_URGENT_MAX_PHOTOS), omitted = pids.length - sendPids.length;
+  const photoNums = new Map(sendPids.map((p, i) => [p, i + 1]));
+  const mail = fiBuildUrgentEmail(doc, items, note, who, sendPids.length, omitted, photoNums);
+  const cc = (env.FI_URGENT_CC || 'brett@bmoremanagement.com');
+  const ccList = String(cc).toLowerCase() === to.toLowerCase() ? '' : cc;
+  const win = fiUrgentTextWindow(Date.now());
+  const textInfo = { available: !!phone && win.open, phone_on_file: !!phone, window_open: win.open, window: '9am-4pm ET' };
+  const smsBody = fiUrgentSmsBody(doc, items);
+  if (preview) return json({ ok: true, preview: true, to, cc: ccList, subject: mail.subject, html: mail.html, photo_count: sendPids.length, photos_omitted: omitted, text: Object.assign({ body: smsBody }, textInfo) });
+  // idempotency + in-progress guard: one FI_Email_Log row per send_key, written BEFORE anything is sent
+  // The log id binds the key to WHAT is being sent (the sorted item ids): the same key with different items is a different send, never "already sent".
+  let hh = 2166136261; for (const ch of ids.slice().sort().join(',')) { hh ^= ch.charCodeAt(0); hh = Math.imul(hh, 16777619) >>> 0; }
+  const logId = 'ug_' + sendKey + '_' + hh.toString(16).padStart(8, '0');
+  const nonce = Math.random().toString(36).slice(2, 10);
+  const lt = await fiReadFresh(env, 'FI_Email_Log');
+  const prior = lt.rows.find(r => r.o.ID === logId);
+  const nowIso = () => new Date().toISOString();
+  if (prior && /^sent/.test(prior.o.Result)) return json({ ok: true, already_sent: true, to, result: prior.o.Result, sent_at: prior.o.Sent_At, text: { requested: alsoText, sent: /text:sent|text:staged/.test(prior.o.Result) } });
+  if (prior && /^sending/.test(prior.o.Result)) {
+    const age = Date.now() - Date.parse(prior.o.Sent_At || 0);
+    return fiErr(409, age < 120000 ? 'in_progress' : 'unknown_state', age < 120000 ? 'This send is still being processed. Wait a moment, then check before sending again.' : 'An earlier attempt of this send did not finish, so it may or may not have gone out. Check your inbox (you are copied on every one) before sending again.');
+  }
+  const logRow = (result) => ({ ID: logId, Inspection_ID: id, To_Email: to, Subject: mail.subject, Result: result, Sent_At: nowIso() });
+  await fiWriteRow(env, 'FI_Email_Log', lt.headers, logRow('sending:' + nonce), prior ? prior.rowNum : 0);
+  // claim check: two requests with the same key can both pass the read above. Re-read: only the FIRST row with this id may send; a loser steps aside and says so.
+  const claim = await fiReadFresh(env, 'FI_Email_Log');
+  const mine = claim.rows.filter(r => r.o.ID === logId);
+  if (!mine.length || mine[0].o.Result !== 'sending:' + nonce) {
+    const own = mine.find(r => r.o.Result === 'sending:' + nonce);
+    if (own) { try { await fiWriteRow(env, 'FI_Email_Log', claim.headers, logRow('duplicate-blocked'), own.rowNum); } catch (e2) { console.error('fi urgent log failed:', e2 && e2.message); } }
+    return fiErr(409, 'in_progress', 'The same send is already being processed. Wait a moment, then check before sending again.');
+  }
+  const cur = async () => { const t = await fiReadFresh(env, 'FI_Email_Log'); const r = t.rows.find(x => x.o.ID === logId); return { headers: t.headers, rowNum: r ? r.rowNum : 0 }; };
+  const finish = async (result) => { const c = await cur(); if (!c.rowNum) throw new Error('FI: the send log row for this send went missing'); await fiWriteRow(env, 'FI_Email_Log', c.headers, logRow(result), c.rowNum); };
+  // fetch photo bytes
+  const attachments = [];
+  try {
+    const token = await getAccessToken(env);
+    for (const p of sendPids) {
+      const ph = prow.get(p);
+      const dr = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(ph.Drive_File_ID)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!dr.ok) throw new Error('could not read a photo from Drive (HTTP ' + dr.status + ')');
+      attachments.push({ filename: `photo-${attachments.length + 1}.${/png/i.test(ph.Mime || '') ? 'png' : (/webp/i.test(ph.Mime || '') ? 'webp' : 'jpg')}`, mimeType: ph.Mime || 'image/jpeg', base64Data: bytesToB64(await dr.arrayBuffer()) });
+    }
+  } catch (e) {
+    try { await finish('failed: ' + String((e && e.message) || e).slice(0, 120)); } catch (e2) { console.error('fi urgent log failed:', e2 && e2.message); }
+    return fiErr(502, 'photo_read_failed', 'Nothing was sent. A photo could not be read: ' + String((e && e.message) || e).slice(0, 120) + '. Try again.');
+  }
+  let mres;
+  try { mres = await gmailSendEmailMulti(env, { to, cc: ccList, subject: mail.subject, html: mail.html, attachments }); }
+  catch (e) {
+    try { await finish('failed: ' + String((e && e.message) || e).slice(0, 120)); } catch (e2) { console.error('fi urgent log failed:', e2 && e2.message); }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_urgent_send_error', Skill_Or_Endpoint: '/fi/urgent-send', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (e3) { /* silent-ok: telemetry is best-effort, the caller already gets the error */ }
+    return fiErr(502, 'send_failed', 'The email was NOT sent: ' + String((e && e.message) || e).slice(0, 140));
+  }
+  const staged = !!(mres && mres.staged);
+  // optional text, only inside the window, after the email is safely out
+  const text = { requested: alsoText, sent: false, staged: false, reason: '' };
+  if (alsoText) {
+    if (!win.open) text.reason = 'Texts only go 9am-4pm ET, so this went by email only.';
+    else if (!phone) text.reason = 'There is no phone number on the booking, so this went by email only.';
+    else {
+      try {
+        const r = await sendSMS(env, phone, smsBody, { context: { message_type: 'fi_urgent', recipient_type: 'requester' } });
+        if (r && r.staged) { text.sent = true; text.staged = true; }
+        else if (r && r.sid) text.sent = true;
+        else text.reason = 'The text was not sent' + (r && (r.reason || r.error) ? ': ' + String(r.reason || r.error).slice(0, 120) : '') + '. The email did go out.';
+      } catch (e) { text.reason = 'The text failed (' + String((e && e.message) || e).slice(0, 100) + '). The email did go out.'; }
+      if (!text.sent) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_urgent_text_failed', Skill_Or_Endpoint: '/fi/urgent-send', Success: 'FALSE', Notes: text.reason.slice(0, 200) }); } catch (e3) { /* silent-ok: telemetry is best-effort, the caller sees text.reason */ } }
+    }
+  }
+  const result = (staged ? 'sent-staged' : 'sent') + (alsoText ? (text.sent ? ' text:' + (text.staged ? 'staged' : 'sent') : ' text:not-sent') : '');
+  let logged = true;
+  try { await finish(result); } catch (e) { logged = false; try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_urgent_log_error', Skill_Or_Endpoint: '/fi/urgent-send', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 200) }); } catch (e3) { /* silent-ok: the send itself succeeded and the caller is told logged:false */ } }
+  return json({ ok: true, sent: !staged, staged, to, cc: ccList, subject: mail.subject, photo_count: attachments.length, photos_omitted: omitted, sent_at: nowIso(), logged, text });
 }
 // ═══ Part 2 (Oct 15 2026, after field use): equipment info, brand capture from a website, voice-file transcription + routing, label reading ═══
 // Equipment kinds the phone offers. Keep field lists in sync with field-inspect.html (a unit test compares them).
@@ -39211,6 +42358,197 @@ async function fiPropertyCreate(env, body) {
     }
   }
   return json({ ok: true, property: { id: propId, address, city, type, unit_count: Number(pback.o.Unit_Count) || 1, owner_id: String(owner.ID), owner_name: ownerName }, owner: { id: String(owner.ID), name: ownerName, created: createdOwner }, units: unitsOut });
+}
+
+// ── Approved bookings -> field inspection (Oct 27 2026, Brett) ──────────────────────────────────────────
+// Approved inspection bookings are listed on the phone's New-inspection screen. Tapping one finds (or, only then, creates) the Hub property
+// under the EXISTING owner - never a duplicate owner - hands the phone the requester's contact / size / notes, and claims the booking so it is
+// not offered twice. Linking an inspection that was already started (same endpoint, the phone's own inspection id) works the same way.
+function fiBookingAddrParts(b) {
+  const parts = String(b.Formatted_Address || b.Address || '').split(',').map(s => s.trim());
+  return { street: (parts[0] || '').slice(0, 120), city: (parts[1] || '').slice(0, 60) };
+}
+function fiBookingLabel(b) { return String(b.Formatted_Address || b.Address || '').replace(/,\s*(USA|United States)\s*$/i, '').slice(0, 200); }
+// The Hub owner behind a booking partner: the explicit Insp_Customers.Hub_Owner_ID link first, else an exact company-name match (one hit only).
+function fiBookingOwnerRow(cust, ownerRows) {
+  if (!cust) return null;
+  const hid = String(cust.Hub_Owner_ID || '').trim();
+  if (hid) { const o = ownerRows.find(r => String(r.ID) === hid); if (o) return o; }
+  const want = fiNormName(cust.Name);
+  if (want) { const m = ownerRows.filter(r => fiNormName(fiOwnerName(r)) === want); if (m.length === 1) return m[0]; }
+  return null;
+}
+function fiBookingPropMatches(ap, propRows, own) {
+  const key = qbNormAddress(ap.street), ck = qbNormAddress(ap.city);
+  let m = key ? propRows.filter(p => p.Active !== 'FALSE' && qbNormAddress(p.Address || '') === key) : [];
+  if (m.length > 1 && ck) { const bc = m.filter(p => qbNormAddress(p.City || '') === ck); if (bc.length) m = bc; }
+  if (m.length > 1 && own) { const bo = m.filter(p => String(p.Owner_ID) === String(own.ID)); if (bo.length) m = bo; }
+  return m;
+}
+function fiBookingOut(b, cust, ownerRows, propRows) {
+  const ap = fiBookingAddrParts(b), own = fiBookingOwnerRow(cust, ownerRows), pm = fiBookingPropMatches(ap, propRows, own);
+  const when = b.Start_ISO ? inspFmtEt(Date.parse(b.Start_ISO)) + '–' + inspFmtEtTime(Date.parse(b.End_ISO)) : '';
+  return {
+    id: String(b.ID), customer_id: String(b.Customer_ID || ''), customer_name: cust ? (cust.Name || '') : '', date: b.Date || '', start_time: b.Start_Time || '', when,
+    address: fiBookingLabel(b), street: ap.street, city: ap.city, units: +b.Units || 1, buildings: +b.Buildings || 1,
+    contact: { name: b.Contact_Name || '', phone: b.Contact_Phone || '', email: b.Contact_Email || '' }, notes: b.Notes || '',
+    size: { levels: b.Levels || '', bedrooms: b.Bedrooms || '', bathrooms: b.Bathrooms || '', text: inspSizeText(b) },
+    owner: own ? { id: String(own.ID), name: fiOwnerName(own) } : null,
+    property: pm.length ? { id: String(pm[0].ID), address: pm[0].Address, city: pm[0].City || '' } : null,
+    inspection_id: b.Inspection_ID || '',
+  };
+}
+async function fiBookings(env) {
+  await inspEnsureTabsOnce(env); await fiEnsureTabs(env);
+  const bt = await fiReadFresh(env, 'Insp_Bookings'), it = await fiReadFresh(env, 'FI_Inspections');
+  const cust = await fetchTab(env, 'Insp_Customers'), owners = (await fetchTab(env, 'Owners')).filter(o => o.Active !== 'FALSE'), props = await fetchTab(env, 'Properties');
+  const custById = {}; cust.forEach(c => { custById[String(c.ID)] = c; });
+  const have = new Set(it.rows.filter(r => r.o.Active !== 'FALSE').map(r => r.o.ID));
+  const from = inspEtDate(Date.now() - 21 * 86400000), to = inspEtDate(Date.now() + 120 * 86400000);
+  // Approved, in a sensible window, and not already turned into an inspection. A claim whose inspection never reached the server is offered again.
+  const list = bt.rows.map(r => r.o).filter(b => b.Active !== 'FALSE' && b.Status === 'approved' && b.Date >= from && b.Date <= to && (!b.Inspection_ID || !have.has(b.Inspection_ID)))
+    .sort((x, y) => String(x.Start_ISO).localeCompare(String(y.Start_ISO)));
+  return json({ ok: true, bookings: list.map(b => fiBookingOut(b, custById[String(b.Customer_ID)], owners, props)) });
+}
+async function fiBookingStart(env, body) {
+  body = body || {};
+  const bid = String(body.booking_id || '').trim(), inspId = String(body.inspection_id || '');
+  if (!bid) return fiErr(400, 'bad_request', 'booking_id is required.');
+  if (!FI_ID_RE.test(inspId)) return fiErr(400, 'bad_id', 'inspection_id is missing or malformed.');
+  await inspEnsureTabsOnce(env); await fiEnsureTabs(env);
+  const bt = await fiReadFresh(env, 'Insp_Bookings');
+  const hit = bt.rows.find(r => String(r.o.ID) === bid && r.o.Active !== 'FALSE');
+  if (!hit) return fiErr(404, 'not_found', 'That booking was not found.');
+  const b = hit.o;
+  if (b.Status !== 'approved') return fiErr(409, 'not_approved', `This booking is ${b.Status || 'not approved'}, so it cannot be started.`);
+  if (b.Inspection_ID && b.Inspection_ID !== inspId && (await fiFindInspection(env, b.Inspection_ID)).row) return fiErr(409, 'already_started', 'An inspection was already started from this booking.', { inspection_id: b.Inspection_ID });
+  const cust = (await fetchTab(env, 'Insp_Customers')).find(c => String(c.ID) === String(b.Customer_ID)) || null;
+  const owners = (await fetchTab(env, 'Owners')).filter(o => o.Active !== 'FALSE');
+  const owner = fiBookingOwnerRow(cust, owners), ap = fiBookingAddrParts(b);
+  const propRows = (await fiReadFresh(env, 'Properties')).rows.map(r => r.o);
+  let prop = null, created = false;
+  const savedId = String(b.Hub_Property_ID || '').trim();
+  if (savedId) prop = propRows.find(p => String(p.ID) === savedId && p.Active !== 'FALSE') || null;
+  if (!prop) prop = fiBookingPropMatches(ap, propRows, owner)[0] || null;
+  if (!prop && owner) {
+    const units = +b.Units || 1;
+    const res = await fiPropertyCreate(env, { address: ap.street, city: ap.city, type: units > 1 ? 'multi' : 'house', unit_count: units, owner: { id: String(owner.ID) }, force: true });
+    let rd = null; try { rd = await res.clone().json(); } catch (e) { rd = null; /* silent-ok: a null body becomes the error response just below */ }
+    if (!res.ok || !rd || rd.ok === false || !rd.property) return fiErr(res.status >= 400 ? res.status : 500, (rd && rd.error) || 'property_not_saved', (rd && rd.message) || 'The property could not be added to the Hub, so nothing was linked. Retry.');
+    prop = (await fiReadFresh(env, 'Properties')).rows.map(r => r.o).find(p => String(p.ID) === String(rd.property.id)) || null;
+    if (!prop) return fiErr(500, 'property_not_saved', 'The new property could not be read back from the Hub, so nothing was linked. Retry.');
+    created = true;
+  }
+  const propId = prop ? String(prop.ID) : '';
+  await updateRowVerified(env, 'Insp_Bookings', b.ID, { Inspection_ID: inspId, Hub_Property_ID: propId, Insp_Claimed_At: new Date().toISOString() });
+  const out = fiBookingOut(Object.assign({}, b, { Inspection_ID: inspId }), cust, owners, prop ? [prop] : []);
+  return json({ ok: true, booking: out, property: prop ? { id: propId, address: out.address, street: String(prop.Address || ap.street), city: prop.City || ap.city, unit_count: Number(prop.Unit_Count) || 1 } : null, property_created: created, owner: out.owner, owner_missing: !owner });
+}
+// ── One-time Premier repair (Oct 27 2026, Brett) ─────────────────────────────────────────────────────────
+// Ties a booking partner to its Hub owner and links inspections that were
+// started before the booking could be picked: claims the booking (no inspection edit, so a phone mid-edit never hits a version conflict) and,
+// only when a link says doc:true, fills the inspection's blank owner / property. Additive only: never overwrites a filled cell, never creates
+// an owner and never touches owner phone/email (texts), money or QuickBooks. A dry run (the default) changes nothing; every real write is read back.
+async function fiPremierRepair(env, body) {
+  body = body || {};
+  const dry = body.dry_run !== false;
+  const custId = String(body.customer_id || '').trim(), ownerId = String(body.owner_id || '').trim();
+  const links = Array.isArray(body.links) ? body.links : [];
+  if (!custId || !ownerId) return fiErr(400, 'bad_request', 'customer_id and owner_id are required.');
+  if (links.length > 20) return fiErr(400, 'bad_request', 'At most 20 links at a time.');
+  await inspEnsureTabsOnce(env); await fiEnsureTabs(env);
+  const cust = (await fiReadFresh(env, 'Insp_Customers')).rows.map(r => r.o).find(c => String(c.ID) === custId);
+  const owner = (await fiReadFresh(env, 'Owners')).rows.map(r => r.o).find(o => String(o.ID) === ownerId && o.Active !== 'FALSE');
+  if (!cust) return fiErr(404, 'not_found', 'That booking partner was not found.');
+  if (!owner) return fiErr(404, 'not_found', 'That Hub owner was not found (or is inactive).');
+  const steps = [], step = (what, status, detail) => steps.push({ what, status, detail: detail || '' });
+  // A step that ERRORED (as opposed to a refused conflict) is a failed data write: it reaches the failure log as well as the caller.
+  const done = async (ok) => {
+    const bad = steps.filter(s => s.status === 'error');
+    if (bad.length) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_premier_repair_error', Skill_Or_Endpoint: '/admin/fi-premier-repair', Success: 'FALSE', Notes: bad.map(s => s.what + ': ' + s.detail).join(' | ').slice(0, 200) }); } catch (_) { /* silent-ok: telemetry is best-effort; the steps are returned to the caller below */ } }
+    return json({ ok, dry_run: dry, steps }, ok ? 200 : 409);
+  };
+  // 1. partner -> owner link (blank only)
+  const cur = String(cust.Hub_Owner_ID || '').trim();
+  if (cur && cur !== ownerId) { step('partner_owner_link', 'conflict', 'partner is already linked to owner ' + cur + '; nothing changed'); return done(false); }
+  if (cur) step('partner_owner_link', 'skipped', 'already linked to owner ' + ownerId);
+  else if (dry) step('partner_owner_link', 'planned', 'set Hub_Owner_ID=' + ownerId);
+  else { await updateRowVerified(env, 'Insp_Customers', custId, { Hub_Owner_ID: ownerId }); step('partner_owner_link', 'done', 'Hub_Owner_ID=' + ownerId); }
+  // 1b. ONLY when asked (copy_partner_contact:true, Brett's explicit yes Oct 28): copy the partner's contact phone / email onto the owner, BLANK cells only.
+  // Never touches names, PIN, SMS_* flags, billing or QuickBooks, and sends nothing; it only fills two empty cells, each read back.
+  if (body.copy_partner_contact === true) {
+    const ph = normalizePhone(cust.Contact_Phone || '') || '', em = String(cust.Contact_Email || '').trim();
+    const fill = {};
+    if (ph && !String(owner.Phone || '').trim()) fill.Phone = ph;
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em) && !String(owner.Email || '').trim()) fill.Email = em;
+    const keys = Object.keys(fill);
+    if (!keys.length) step('owner_contact', 'skipped', 'nothing to copy (the partner has no usable phone/email, or the owner already has them)');
+    else if (dry) step('owner_contact', 'planned', 'fill blank owner ' + ownerId + ' ' + keys.join(' + ') + ' from the partner contact');
+    else { await updateRowVerified(env, 'Owners', ownerId, fill); step('owner_contact', 'done', 'filled owner ' + ownerId + ' ' + keys.join(' + ')); }
+  }
+  // 2. inspections <-> bookings (address + date must match)
+  const bt = (await fiReadFresh(env, 'Insp_Bookings')).rows.map(r => r.o);
+  const propRows = (await fiReadFresh(env, 'Properties')).rows.map(r => r.o);
+  for (const lk of links) {
+    const inspId = String(lk && lk.inspection_id || '').trim(), bid = String(lk && lk.booking_id || '').trim(), tag = 'link ' + bid + ' <-> ' + inspId;
+    const b = bt.find(x => String(x.ID) === bid && x.Active !== 'FALSE');
+    const ins = await fiFindInspection(env, inspId);
+    if (!b || !ins.row) { step(tag, 'conflict', !b ? 'booking not found' : 'inspection not found'); continue; }
+    if (ins.dupes > 1) { step(tag, 'conflict', 'duplicate inspection rows'); continue; }
+    const row = ins.row.o, ap = fiBookingAddrParts(b);
+    if (b.Status !== 'approved' || String(b.Customer_ID) !== custId) { step(tag, 'conflict', 'booking is not an approved booking of this partner'); continue; }
+    if (qbNormAddress(ap.street) !== qbNormAddress(fiStreetOf(row.Address)) || String(b.Date) !== String(row.Inspection_Date)) { step(tag, 'conflict', 'address or date does not match (booking ' + ap.street + ' on ' + b.Date + '; inspection ' + fiStreetOf(row.Address) + ' on ' + row.Inspection_Date + ')'); continue; }
+    if (row.Owner_ID && String(row.Owner_ID) !== ownerId) { step(tag, 'conflict', 'inspection already belongs to owner ' + row.Owner_ID); continue; }
+    if (b.Inspection_ID && b.Inspection_ID !== inspId && (await fiFindInspection(env, b.Inspection_ID)).row) { step(tag, 'conflict', 'booking already claimed by ' + b.Inspection_ID); continue; }
+    const claimed = b.Inspection_ID === inspId, needDoc = lk.doc === true && (!row.Owner_ID || !row.Property_ID);
+    if (claimed && !needDoc) { step(tag, 'skipped', 'already linked'); continue; }
+    // Editing a published report would quietly un-publish it (fiSave drafts it on any content change): refuse, never do that by surprise.
+    if (needDoc && row.Status === 'published') { step(tag, 'conflict', 'the inspection is published; editing it would un-publish the report. Nothing changed'); continue; }
+    // Which property will this link end up on? The same choice fiBookingStart makes, checked FIRST so a stranger's property is never attached.
+    let pre = null; const savedId = String(b.Hub_Property_ID || '').trim();
+    if (savedId) pre = propRows.find(p => String(p.ID) === savedId && p.Active !== 'FALSE') || null;
+    if (!pre) { const pm = fiBookingPropMatches(ap, propRows, owner); if (pm.length > 1) { step(tag, 'conflict', pm.length + ' properties match this address; pick one by hand. Nothing changed'); continue; } pre = pm[0] || null; }
+    if (pre && String(pre.Owner_ID || '') !== ownerId) { step(tag, 'conflict', 'property ' + pre.ID + ' (' + pre.Address + ') belongs to owner ' + (pre.Owner_ID || 'none') + ', not ' + ownerId + '. Nothing changed'); continue; }
+    if (row.Property_ID && String(row.Property_ID) !== String(pre ? pre.ID : '')) { step(tag, 'conflict', 'the inspection is on property ' + row.Property_ID + ' but this booking resolves to ' + (pre ? pre.ID : 'a new property') + '. Nothing changed'); continue; }
+    const propNote = pre ? 'property #' + pre.ID + ' (' + pre.Address + ')' : 'creates a new property under owner ' + ownerId;
+    if (dry) { step(tag, 'planned', [claimed ? '' : 'claim booking', needDoc ? 'fill inspection owner/property' : ''].filter(Boolean).join(' + ') + '; ' + propNote); continue; }
+    let propId = String(b.Hub_Property_ID || row.Property_ID || '');
+    if (!claimed) {
+      const res = await fiBookingStart(env, { booking_id: bid, inspection_id: inspId });
+      let rd = null; try { rd = await res.clone().json(); } catch (e) { rd = null; /* silent-ok: a null body becomes the error step just below */ }
+      if (!res.ok || !rd || rd.ok === false) { step(tag, 'error', (rd && rd.message) || 'could not claim the booking'); return done(false); }
+      if (rd.owner && String(rd.owner.id) !== ownerId) { step(tag, 'error', 'the booking resolved to a different owner (' + rd.owner.id + '); stop and check'); return done(false); }
+      propId = rd.property ? String(rd.property.id) : propId;
+    }
+    if (needDoc) {
+      const fresh = await fiFindInspection(env, inspId), o2 = fresh.row.o;
+      let doc = null; try { doc = JSON.parse(fiJoinRow(o2)); } catch (e) { doc = null; /* silent-ok: an unreadable doc becomes the error step just below */ }
+      if (!doc || !doc.property) { step(tag, 'error', 'the inspection could not be read; nothing edited'); return done(false); }
+      if (!doc.owner || !doc.owner.id) doc.owner = { id: ownerId, name: fiOwnerName(owner), source: 'hub' };
+      if (!doc.property.id && propId) { doc.property.id = propId; doc.property.source = 'hub'; }
+      if (!doc.booking) doc.booking = { id: String(b.ID), customer_id: custId, customer_name: cust.Name || '', contact: { name: b.Contact_Name || '', phone: b.Contact_Phone || '', email: b.Contact_Email || '' }, notes: b.Notes || '', size: { levels: b.Levels || '', bedrooms: b.Bedrooms || '', bathrooms: b.Bathrooms || '' }, size_text: inspSizeText(b), units: +b.Units || 1, buildings: +b.Buildings || 1, scheduled: b.Start_ISO ? inspFmtEt(Date.parse(b.Start_ISO)) : (b.Date || '') };
+      const sres = await fiSave(env, { id: inspId, base_rev: Number(o2.Rev) || 0, doc, meta: {} });
+      let sd = null; try { sd = await sres.clone().json(); } catch (e) { sd = null; /* silent-ok: a null body becomes the error step just below */ }
+      if (!sres.ok || !sd || sd.ok === false) { step(tag, 'error', (sd && sd.message) || 'the inspection could not be saved; nothing else changed'); return done(false); }
+      const back = (await fiFindInspection(env, inspId)).row;
+      if (!back || String(back.o.Owner_ID) !== ownerId || (propId && String(back.o.Property_ID) !== propId)) { step(tag, 'error', 'the inspection did not keep its owner/property link'); return done(false); }
+    }
+    step(tag, 'done', [claimed ? '' : 'booking claimed', needDoc ? 'inspection owner/property filled' : ''].filter(Boolean).join(' + '));
+  }
+  return done(!steps.some(s => s.status === 'conflict' || s.status === 'error'));
+}
+// Neutral, factual rewording of the inspector's own note about access / cooperation. Returns a SUGGESTION only - the phone never saves it without Brett's tap.
+const FI_REWORD_SYSTEM = `You rewrite an inspector's short note about access and cooperation during a rental property inspection into neutral, factual, professional wording for the property owner's report.
+Rules: state only what happened (who was or was not present, which areas were declined or blocked, whether the inspection ended early). No words about attitude or emotion (never rude, hostile, tense, unwelcoming, uncooperative, angry). No guesses about reasons, motives, personal circumstances, health, money or lifestyle. No judgement or advice. Do not add any fact that is not in the note. 1 to 3 short sentences, past tense, say "the occupant". If the note is already neutral, change as little as possible. Output a single JSON object {"text":""} and nothing else.`;
+async function fiReword(env, body) {
+  const text = fiStr(body && body.text, 1000).trim();
+  if (!text) return fiErr(400, 'empty', 'Type a note first.');
+  let ai;
+  try { ai = await routeAI(env, { type: 'fi_reword', customerFacing: true, schema: true, system: FI_REWORD_SYSTEM, prompt: `Inspector's note:\n"""\n${text}\n"""\n\nReturn JSON only: {"text":""}`, maxTokens: 400, source: 'field-inspect' }); }
+  catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Rewording is paused (AI credit). Your note is kept exactly as you wrote it.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not reword this. Your note is kept exactly as you wrote it.', { detail: String((e && e.message) || e).slice(0, 200) }); }
+  const parsed = fiExtractJson(ai.result), t = parsed ? fiClean(parsed.text, 600).trim() : '';
+  if (!t) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your note is kept exactly as you wrote it.');
+  return json({ ok: true, text: t });
 }
 
 // ── Drive: Properties root / <address> / Inspection MMDDYYYY ──

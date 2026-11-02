@@ -80,7 +80,7 @@ const sweepBody = grabAsync('processVendorNudges');
   ok(sweepBody.includes('Scheduled_Date'), 'the sweep respects a future Scheduled_Date to go quiet, per Brett\'s stated rule');
 }
 {
-  ok(sweepBody.includes("Remember to add the schedule") && sweepBody.includes("submit your invoice"), 'the status_update nudge coaches the vendor through the actual portal steps (schedule, mark complete, then invoice), not just a bare "any update?" ask');
+  ok(sweepBody.includes("add the schedule in your portal") && sweepBody.includes("mark it Complete") && sweepBody.includes("submit your invoice"), 'the status_update nudge coaches the vendor through the actual portal steps (schedule, mark complete, then invoice), not just a bare "any update?" ask');
 }
 
 const resetBody = grabAsync('resetVendorNudgeClock');

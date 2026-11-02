@@ -6,6 +6,9 @@
 // under test is exactly what the endpoint actually runs, not a re-implementation.
 import './_midday-clock.mjs';
 import fs from 'fs';
+import { D16_BLOCK, D16_GATED, D16_QUEUED } from './_d16-support.mjs';
+const D16_WORLD = D16_BLOCK + '\n' + D16_GATED + '\n' + D16_QUEUED + '\nasync function reportFailure() {}\n';   // D-16: the real cost-control code + a no-op ledger
+
 const wsrc = fs.readFileSync('worker.js', 'utf8');
 
 function grab(src, sig) {
@@ -209,7 +212,7 @@ function build(db, fetchOpts) {
     isTenantCurrentSrc, currentTenantSrc, tenantsForDispatchSrc, isBackgroundWOSrc, isTenantNotifiableSrc,
     smsGateDecisionSrc, smsToggleOnSrc, normalizePhoneSrc, grab(wsrc, 'function tenantMovedOut('),
     msgQueueTabSrc, msgQueueColsSrc, smsInfraStateSrc, ensureSmsInfraSrc,
-    etHourSrc, nyOffsetMinutesSrc, quietHoursConstsSrc, isQuietHoursSrc, nextQuietHoursSrc, sendSMSRawSrc, updateMsgQueueRowSrc, fetchConfigSrc, smsGatedSendSrc,
+    etHourSrc, nyOffsetMinutesSrc, quietHoursConstsSrc, isQuietHoursSrc, nextQuietHoursSrc, D16_WORLD, updateMsgQueueRowSrc, fetchConfigSrc, smsGatedSendSrc,
     grab(wsrc, 'function woJobLabel('), grab(wsrc, 'function propUnitText('), grab(wsrc, 'function formatUnitLabel('),
     'return { woVoid, woUnvoid, woSplit, createWorkOrder, smsGatedSend };',
   ].join('\n');
