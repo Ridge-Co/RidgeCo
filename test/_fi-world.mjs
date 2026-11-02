@@ -18,6 +18,11 @@ export function world() {
   const sheetsRequest = async (env, method, path, body) => {
     h.calls.push(method + ' ' + path);
     if (method === 'GET' && path.startsWith('?fields')) return { sheets: Object.keys(h.tabs).map(title => ({ properties: { title } })) };
+    if (path === '/values:batchUpdate') { // several single-cell writes (Nov 2 2026: attaching originals)
+      if (h.dropBatch) return {};
+      for (const d of body.data) { const mm = d.range.match(/^([A-Za-z_]+)!([A-Z]+)(\d+)$/); const tab = T(mm[1]), n = Number(mm[3]); let ci = 0; for (const ch of mm[2]) ci = ci * 26 + (ch.charCodeAt(0) - 64); ci -= 1; while (tab.rows[n - 2].length <= ci) tab.rows[n - 2].push(''); tab.rows[n - 2][ci] = d.values[0][0]; }
+      return {};
+    }
     if (path === ':batchUpdate') { for (const r of body.requests) T(r.addSheet.properties.title); return {}; }
     let m = path.match(/^\/values\/([A-Za-z_]+)!A(\d+):/);
     if (method === 'PUT' && m) {
@@ -41,6 +46,11 @@ export function world() {
       const tb = T(g[1]); return { values: tb.headers.length ? [tb.headers].concat(tb.rows.filter(Boolean)) : [] };
     }
     g = path.match(/^\/values\/([A-Za-z_]+)!([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+    if (method === 'GET' && g && g[2] === g[4]) { // one column over a row span (Nov 2 2026)
+      let ci = 0; for (const ch of g[2]) ci = ci * 26 + (ch.charCodeAt(0) - 64); ci -= 1;
+      const out = []; for (let n = Number(g[3]); n <= Number(g[5]); n++) { const row = T(g[1]).rows[n - 2]; out.push(row && row[ci] !== undefined && row[ci] !== '' ? [row[ci]] : []); }
+      return { values: out };
+    }
     if (method === 'GET' && g) {
       if (h.sheetsReadError) { const er = h.sheetsReadError(g[1], method, path); if (er) throw er; }
       const row = T(g[1]).rows[Number(g[3]) - 2]; return { values: row ? [row] : [] };
@@ -125,7 +135,7 @@ export function world() {
     ${grab('normalizePhone')}
     ${aiCreditGuardPrelude()}
     ${block}
-    return { fiRoute, fiReadFresh, fiViewLookup, fiPhotoUploadOriginal, __fiViewCache, __fiViewMiss, fiFindInspectionForPhoto, fiInspCacheDrop, fiNormalizeEquipment, fiContractorize, fiScrubDocForReport, fiNormalizeSummary, fiTypeOut, FI_STRUCTURE_SYSTEM, FI_SUMMARY_SYSTEM, FI_ROUTE_SYSTEM, fiOwnerName, fiNormName, fiStreetOf, fiFolderSafe, fiInspFolderName, fiDirectory, fiPropertyCreate, fiDriveFindFolders, fiDriveEnsureFolder, fiWriteCells, fiInspectionFolder, fiFolderOrganize, fiDriveChildIds, fiFindInspection, fiReadFresh, FI_INSP_HEADERS, fiBrandScrape, fiParseBrandHtml, fiColorsFromCss, fiPickBrandColors, fiSafeUrl, fiFetchLimited, fiSniffImage, fiNormalizeEquipment, fiValidateEquipment, fiValidateVoiceNotes, FI_EQUIP_KINDS, fiEquipFields, fiTranscribe, fiTranscribeJson, FI_TRANSCRIBE_SYSTEM, fiAudioMime, fiRouteNotes, fiNormalizeRoute, fiBuildRoutePrompt, fiReadLabel, fiTypesList, fiTypesSave, fiTypesTouch, fiTypeClean, FI_TYPE_SEED, FI_TABS, FI_BRAND_HEADERS, fiBrandContactLine, fiBuildEmail, fiSave, fiPublish, fiReport, fiPhotoUpload, fiPhotoView, fiBrandSave, fiEmailReport, fiStructure, fiSummarize, fiList, fiGetInspection, fiRoute, fiNormalizeIssue, fiNormalizeIssues, fiExtractJson, fiValidateDoc, fiFingerprint, fiTradeRollup, fiPublishChecks, fiSerialize, fiChunk, fiJoinRow, fiBuildStructurePrompt, fiPhotoIds, fiIsAdmin, FI_DATA_CHUNK, fiBookings, fiBookingStart, fiPremierRepair, fiUrgentSend, fiUrgentTextWindow, fiUrgentCollect, fiBuildUrgentEmail, fiUrgentSmsBody, fiOnlyPhoneMarksChanged, fiPublicDocKey, fiReword, fiBookingOut, fiBookingOwnerRow, fiBookingPropMatches, fiBookingAddrParts, fiValidateAccess, fiValidateVisit, inspCleanSize, inspSizeText, FI_REWORD_SYSTEM };
+    return { fiRoute, fiOrigBridge, fiReadFresh, fiViewLookup, fiPhotoUploadOriginal, __fiViewCache, __fiViewMiss, fiFindInspectionForPhoto, fiInspCacheDrop, fiNormalizeEquipment, fiContractorize, fiScrubDocForReport, fiNormalizeSummary, fiTypeOut, FI_STRUCTURE_SYSTEM, FI_SUMMARY_SYSTEM, FI_ROUTE_SYSTEM, fiOwnerName, fiNormName, fiStreetOf, fiFolderSafe, fiInspFolderName, fiDirectory, fiPropertyCreate, fiDriveFindFolders, fiDriveEnsureFolder, fiWriteCells, fiInspectionFolder, fiFolderOrganize, fiDriveChildIds, fiFindInspection, fiReadFresh, FI_INSP_HEADERS, fiBrandScrape, fiParseBrandHtml, fiColorsFromCss, fiPickBrandColors, fiSafeUrl, fiFetchLimited, fiSniffImage, fiNormalizeEquipment, fiValidateEquipment, fiValidateVoiceNotes, FI_EQUIP_KINDS, fiEquipFields, fiTranscribe, fiTranscribeJson, FI_TRANSCRIBE_SYSTEM, fiAudioMime, fiRouteNotes, fiNormalizeRoute, fiBuildRoutePrompt, fiReadLabel, fiTypesList, fiTypesSave, fiTypesTouch, fiTypeClean, FI_TYPE_SEED, FI_TABS, FI_BRAND_HEADERS, fiBrandContactLine, fiBuildEmail, fiSave, fiPublish, fiReport, fiPhotoUpload, fiPhotoView, fiBrandSave, fiEmailReport, fiStructure, fiSummarize, fiList, fiGetInspection, fiRoute, fiNormalizeIssue, fiNormalizeIssues, fiExtractJson, fiValidateDoc, fiFingerprint, fiTradeRollup, fiPublishChecks, fiSerialize, fiChunk, fiJoinRow, fiBuildStructurePrompt, fiPhotoIds, fiIsAdmin, FI_DATA_CHUNK, fiBookings, fiBookingStart, fiPremierRepair, fiUrgentSend, fiUrgentTextWindow, fiUrgentCollect, fiBuildUrgentEmail, fiUrgentSmsBody, fiOnlyPhoneMarksChanged, fiPublicDocKey, fiReword, fiBookingOut, fiBookingOwnerRow, fiBookingPropMatches, fiBookingAddrParts, fiValidateAccess, fiValidateVisit, inspCleanSize, inspSizeText, FI_REWORD_SYSTEM };
   `);
   const env = { WORKER_SECRET: 'sek', HUB_TEST_TOKEN: 'tst', SHEET_ID: 'S', DRIVE_PROPERTIES_ROOT: 'root' };
   return { h, env, ...factory(h, sheetsRequest, ensureColumns, fetch, new Function('return ' + grab('col'))(), new Function('return ' + grab('bytesToB64'))()) };

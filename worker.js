@@ -510,7 +510,7 @@ const _hubWorkerCore = {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage', '/portal-access/backfill', '/admin/fi-premier-repair'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage', '/portal-access/backfill', '/admin/fi-premier-repair', '/admin/fi-originals-bridge'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
           // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
           // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
@@ -1184,6 +1184,7 @@ const _hubWorkerCore = {
         if (path === '/fi/booking/start')         return await fiRoute(env, 'booking-start', () => fiBookingStart(env, body));
         if (path === '/fi/reword')                return await fiRoute(env, 'reword', () => fiReword(env, body));
         if (path === '/admin/fi-premier-repair')  return await fiRoute(env, 'premier-repair', () => fiPremierRepair(env, body));
+        if (path === '/admin/fi-originals-bridge') return await fiRoute(env, 'originals-bridge', () => fiOrigBridge(env, body));
         if (path === '/fi/folder/organize')       return await fiRoute(env, 'folder-organize', () => fiFolderOrganize(env, body));
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
         if (path === '/insp/customer/update')     return await updateRow(env, 'Insp_Customers', body.id, body.fields);
@@ -27142,6 +27143,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report' || path === '/fi/urgent-send') return String((body && body.id) || '').startsWith('TEST-');
   if (path === '/fi/structure' || path === '/fi/summarize' || path === '/fi/route' || path === '/fi/brand/scrape' || path === '/fi/transcribe/json') return true; // AI / read-only: no sheet writes
   if (path === '/fi/reword') return true; // AI only: writes nothing
+  if (path === '/admin/fi-originals-bridge') return String((body && body.inspection_id) || '').startsWith('TEST-'); // Nov 2 2026: staging may only read/attach photos of a TEST- inspection
   if (path === '/admin/fi-premier-repair') { // staging may only repair a TEST- partner's links, to a TEST- inspection
     if (!body || body.dry_run !== false) return true; // a dry run writes nothing
     const _cu = (await fetchTab(env, 'Insp_Customers')).find(c => String(c.ID) === String(body.customer_id));
@@ -42982,6 +42984,146 @@ async function fiReword(env, body) {
 // ── Drive: Properties root / <address> / Inspection MMDDYYYY ──
 // The Properties root is a shared drive on prod but a plain folder on staging; only pass driveId/corpora when it really is a shared drive.
 const fiSharedCache = {};
+// ── Attach full-size originals that already sit in Drive (Nov 2 2026) ──
+// Brett: "i went ahead and uploaded the photos for each inspection under its property file in drive in a folder named full size... do this in the
+// background". The phone flow re-uploads every original (slow); these files are already in Drive, so the server can link them instead.
+// POST /admin/fi-originals-bridge  { action: 'scan' | 'fetch' | 'attach', inspection_id, ... }   (HUB_PROD_WRITE_PATHS: additive only)
+//   scan   -> the "Full size" folder(s) next to the inspection's own Drive folder (files, sizes, capture time) + the inspection's photos and which already have an original
+//   fetch  -> bytes (base64, ~5 MB per call) of Full-size files ('orig') or of the stored ~1600 px copies ('std'), so a matcher can compare them
+//   attach -> pairs [{photo_id, file_id}]: COPIES the Drive file into the inspection folder as <photo_id>_original.<ext> (server-side, no bytes through the Worker),
+//             then records it in the photo's Orig_* cells, read back and verified. Never replaces an existing original; never deletes or moves anything.
+// Only files that sit directly inside a folder named "Full size" next to the inspection's folder can be read or attached.
+const FI_BRIDGE_FETCH_BYTES = 5 * 1024 * 1024, FI_BRIDGE_FETCH_MAX = 12 * 1024 * 1024, FI_BRIDGE_FETCH_IDS = 25, FI_BRIDGE_ATTACH_MAX = 12;
+async function fiBridgeDrive(token, url, init, what) {
+  const h = Object.assign({ Authorization: `Bearer ${token}` }, (init && init.headers) || {});
+  const res = await fetch(url, Object.assign({}, init || {}, { headers: h }));
+  let data = null, parseErr = '';
+  try { data = await res.json(); } catch (e) { parseErr = String((e && e.message) || e).slice(0, 80); }   // reported just below: a Drive reply that is not JSON is a failure
+  if (!res.ok || !data || data.error) throw new Error(`FI originals: ${what} failed (HTTP ${res.status}${data && data.error ? ': ' + String(data.error.message || '').slice(0, 120) : parseErr ? ': ' + parseErr : ''}).`);
+  return data;
+}
+async function fiBridgeList(token, folderId, shared, extraQ) {
+  const out = []; let pageToken = '';
+  for (let i = 0; i < 6; i++) {
+    const params = new URLSearchParams({ q: `'${folderId}' in parents and trashed=false${extraQ || ''}`, fields: 'nextPageToken,files(id,name,mimeType,size,imageMediaMetadata(time,width,height))', pageSize: '1000', supportsAllDrives: 'true', includeItemsFromAllDrives: 'true', ...(shared ? { driveId: shared, corpora: 'drive' } : {}) });
+    if (pageToken) params.set('pageToken', pageToken);
+    const d = await fiBridgeDrive(token, `https://www.googleapis.com/drive/v3/files?${params}`, null, 'listing folder ' + folderId);
+    out.push(...(d.files || [])); pageToken = d.nextPageToken || '';
+    if (!pageToken) return out;
+  }
+  throw new Error('FI originals: folder ' + folderId + ' has more than 6000 files.');
+}
+const FI_BRIDGE_IMG = ['image/jpeg', 'image/png', 'image/webp'];
+async function fiBridgeContext(env, inspId) {
+  const found = await fiFindInspection(env, inspId);
+  if (!found.row) return { err: fiErr(404, 'not_found', 'No such inspection: ' + inspId + '.') };
+  if (!found.row.o.Drive_Folder_ID) return { err: fiErr(409, 'no_folder', 'This inspection has no Drive folder yet, so there is nothing to attach to.') };
+  const root = env.DRIVE_PROPERTIES_ROOT;
+  if (!root) return { err: fiErr(500, 'not_configured', 'DRIVE_PROPERTIES_ROOT is not configured.') };
+  const token = await getAccessToken(env);
+  const shared = await fiDriveSharedRoot(token, root);
+  const folder = { id: found.row.o.Drive_Folder_ID };
+  const meta = await fiBridgeDrive(token, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folder.id)}?fields=id,name,parents&supportsAllDrives=true`, null, 'reading the inspection folder');
+  const propId = (meta.parents || [])[0];
+  if (!propId) return { err: fiErr(409, 'no_property_folder', 'The inspection folder has no parent (property) folder in Drive.') };
+  const sibs = (await fiBridgeList(token, propId, shared, " and mimeType='application/vnd.google-apps.folder'")).filter(f => /^full\s*size$/i.test(String(f.name || '').trim()));
+  let pt = await fiReadFresh(env, 'FI_Photos');
+  if (!FI_ORIG_COLS.every(c => pt.headers.includes(c))) { await ensureColumns(env, 'FI_Photos', FI_PHOTO_HEADERS); pt = await fiReadFresh(env, 'FI_Photos'); }
+  if (!FI_ORIG_COLS.every(c => pt.headers.includes(c))) throw new Error('FI originals: FI_Photos is missing column ' + FI_ORIG_COLS.filter(c => !pt.headers.includes(c)).join(', '));
+  const files = new Map();
+  for (const sf of sibs) for (const f of await fiBridgeList(token, sf.id, shared, '')) if (FI_BRIDGE_IMG.includes(f.mimeType)) files.set(f.id, Object.assign({ folder_id: sf.id }, f));
+  return { found, token, shared, folder, propId, sibs, files, pt };
+}
+async function fiOrigBridge(env, body) {
+  body = body || {};
+  const action = String(body.action || ''), inspId = String(body.inspection_id || '');
+  if (!FI_ID_RE.test(inspId)) return fiErr(400, 'bad_id', 'inspection_id is required.');
+  if (!['scan', 'fetch', 'attach'].includes(action)) return fiErr(400, 'bad_action', 'action must be scan, fetch or attach.');
+  const cx = await fiBridgeContext(env, inspId);
+  if (cx.err) return cx.err;
+  const { token, shared, folder, pt, files } = cx;
+  const mine = pt.rows.filter(r => r.o.Inspection_ID === inspId && r.o.Active !== 'FALSE');
+  if (action === 'scan') {
+    return json({ ok: true, inspection: { id: inspId, status: cx.found.row.o.Status || '', address: cx.found.row.o.Address || '' }, property_folder_id: cx.propId, inspection_folder_id: folder.id,
+      full_folders: cx.sibs.map(f => ({ id: f.id, name: f.name })),
+      originals: [...files.values()].map(f => ({ id: f.id, name: f.name, size: Number(f.size) || 0, mime: f.mimeType, time: (f.imageMediaMetadata && f.imageMediaMetadata.time) || '', w: (f.imageMediaMetadata && f.imageMediaMetadata.width) || 0, h: (f.imageMediaMetadata && f.imageMediaMetadata.height) || 0 })),
+      photos: mine.map(r => ({ id: r.o.ID, has_orig: !!r.o.Orig_Drive_File_ID, bytes: Number(r.o.Bytes) || 0 })) });
+  }
+  if (action === 'fetch') {
+    const kind = body.kind === 'std' ? 'std' : body.kind === 'orig' ? 'orig' : '';
+    const ids = Array.isArray(body.ids) ? body.ids.map(String) : [];
+    if (!kind || !ids.length || ids.length > FI_BRIDGE_FETCH_IDS || !ids.every(i => FI_ID_RE.test(i))) return fiErr(400, 'bad_ids', `kind must be orig or std, with 1-${FI_BRIDGE_FETCH_IDS} ids.`);
+    const out = [], deferred = [], missing = [], tooBig = [], failed = []; let total = 0;
+    for (const id of ids) {
+      let fileId, size, mime;
+      if (kind === 'orig') { const f = files.get(id); if (!f) { missing.push(id); continue; } fileId = id; size = Number(f.size) || 0; mime = f.mimeType; }
+      else { const r = mine.find(x => x.o.ID === id); if (!r || !r.o.Drive_File_ID) { missing.push(id); continue; } fileId = r.o.Drive_File_ID; size = Number(r.o.Bytes) || 0; mime = r.o.Mime || 'image/jpeg'; }
+      if (size > FI_BRIDGE_FETCH_MAX) { tooBig.push({ id, size }); continue; }
+      if (out.length && total + size > FI_BRIDGE_FETCH_BYTES) { deferred.push(id); continue; }
+      const dr = await fetch(`https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!dr.ok) { failed.push({ id, status: dr.status }); continue; }
+      const buf = await dr.arrayBuffer(); total += buf.byteLength;
+      out.push({ id, mime, bytes: buf.byteLength, b64: bytesToB64(buf) });
+    }
+    return json({ ok: !failed.length && !missing.length, kind, files: out, deferred, missing, too_big: tooBig, failed });
+  }
+  // attach
+  const pairs = Array.isArray(body.pairs) ? body.pairs : [];
+  if (!pairs.length || pairs.length > FI_BRIDGE_ATTACH_MAX) return fiErr(400, 'bad_pairs', `pairs must hold 1-${FI_BRIDGE_ATTACH_MAX} entries of {photo_id, file_id}.`);
+  const results = [], writes = [];
+  const named = new Map((await fiBridgeList(token, folder.id, shared, " and name contains '_original'")).map(f => [f.name, f]));
+  const seenFile = new Set(), seenPhoto = new Set(), now = new Date().toISOString();
+  for (const pr of pairs) {
+    const photoId = String((pr && pr.photo_id) || ''), fileId = String((pr && pr.file_id) || '');
+    const res = { photo_id: photoId, file_id: fileId, status: 'error', reason: '' };
+    results.push(res);
+    if (!FI_ID_RE.test(photoId) || !FI_ID_RE.test(fileId)) { res.reason = 'bad_id'; continue; }
+    if (seenPhoto.has(photoId) || seenFile.has(fileId)) { res.reason = 'duplicate_in_request'; continue; }
+    seenPhoto.add(photoId); seenFile.add(fileId);
+    const ph = mine.find(r => r.o.ID === photoId);
+    if (!ph) { res.reason = 'photo_not_found'; continue; }
+    if (ph.o.Orig_Drive_File_ID) { res.status = 'existing'; continue; }
+    const f = files.get(fileId);
+    if (!f) { res.reason = 'file_not_in_full_size_folder'; continue; }
+    const size = Number(f.size) || 0;
+    if (!size || size > FI_MAX_ORIG_BYTES) { res.reason = 'bad_size'; continue; }
+    const ext = f.mimeType === 'image/png' ? 'png' : f.mimeType === 'image/webp' ? 'webp' : 'jpg', name = `${photoId}_original.${ext}`;
+    let copy = named.get(name);
+    if (copy && Number(copy.size) !== size) { res.reason = 'name_conflict'; continue; }
+    if (!copy) {
+      try { copy = await fiBridgeDrive(token, `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/copy?supportsAllDrives=true&fields=id,name,size,mimeType`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, parents: [folder.id] }) }, 'copying the full-size file'); }
+      catch (e) { res.reason = 'copy_failed: ' + String((e && e.message) || e).slice(0, 140); continue; }
+      if (!copy.id || Number(copy.size) !== size) { res.reason = 'copy_size_mismatch'; continue; }
+    }
+    res.copy_id = copy.id; res.bytes = size; res.status = 'pending';
+    writes.push({ res, ph, copyId: copy.id, mime: f.mimeType, bytes: size });
+  }
+  if (writes.length) {
+    // The phone may have attached an original while the copies were being made: look once more right before writing, and never overwrite one.
+    const fresh = await fiReadFresh(env, 'FI_Photos');
+    for (const w of writes.slice()) {
+      const now2 = fresh.rows.find(r => r.o.ID === w.ph.o.ID && r.o.Inspection_ID === inspId && r.o.Active !== 'FALSE');
+      if (!now2 || now2.rowNum !== w.ph.rowNum) { w.res.status = 'error'; w.res.reason = 'row_moved'; writes.splice(writes.indexOf(w), 1); }
+      else if (now2.o.Orig_Drive_File_ID) { w.res.status = 'existing'; writes.splice(writes.indexOf(w), 1); }
+    }
+  }
+  if (writes.length) {
+    const ix = n => pt.headers.indexOf(n), data = [];
+    for (const w of writes) for (const [n, v] of [['Orig_Drive_File_ID', w.copyId], ['Orig_Mime', w.mime], ['Orig_Bytes', w.bytes], ['Orig_At', now]]) data.push({ range: `FI_Photos!${col(ix(n))}${w.ph.rowNum}`, values: [[String(v)]] });
+    await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data });
+    const lo = Math.min(...writes.map(w => w.ph.rowNum)), hi = Math.max(...writes.map(w => w.ph.rowNum)), c = col(ix('Orig_Drive_File_ID'));
+    const back = await sheetsRequest(env, 'GET', `/values/FI_Photos!${c}${lo}:${c}${hi}`);
+    const vals = (back && back.values) || [];
+    for (const w of writes) {
+      const v = (vals[w.ph.rowNum - lo] || [])[0];
+      if (v === w.copyId) w.res.status = 'attached'; else { w.res.status = 'error'; w.res.reason = 'verify_failed'; }
+    }
+    fiViewCacheDropInsp(inspId);
+  }
+  const bad = results.filter(r => r.status === 'error');
+  if (bad.length) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_originals_attach_error', Skill_Or_Endpoint: '/admin/fi-originals-bridge', Success: 'FALSE', Notes: (inspId + ': ' + bad.map(b => b.photo_id + ' ' + b.reason).join(' | ')).slice(0, 200) }); } catch (te) { return json({ ok: false, results, telemetry_error: String((te && te.message) || te).slice(0, 120) }); } }
+  return json({ ok: !bad.length, attached: results.filter(r => r.status === 'attached').length, existing: results.filter(r => r.status === 'existing').length, errors: bad.length, results });
+}
 async function fiDriveSharedRoot(token, root) {
   if (Object.prototype.hasOwnProperty.call(fiSharedCache, root)) return fiSharedCache[root];
   const res = await fetch(`https://www.googleapis.com/drive/v3/drives/${encodeURIComponent(root)}?fields=id`, { headers: { Authorization: `Bearer ${token}` } });
