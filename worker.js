@@ -112,10 +112,37 @@ function __makeWOStatus() {
 const WOStatus = __makeWOStatus();
 const OPEN_WO_STATUSES = WOStatus.sets.ACTIVE;
 const PRIORITY_ORDER   = { urgent:0, high:1, normal:2, low:3 };
-// BUILD_VERSION: bumped on every deploy that changes the Worker OR any portal.
-// Portals poll GET /version and refresh themselves onto new code when this changes
-// (B-093 auto-refresh). Format: YYYY-MM-DD.N  — bump N for same-day redeploys.
-const BUILD_VERSION = '2026-10-28.01-fi-premier-repair-contact';
+// BUILD_VERSION: FROZEN BASE LABEL. DO NOT EDIT IT IN A PR (Oct 21 2026). Every PR used to bump this one line, so any two open PRs
+// conflicted and sessions kept re-cutting branches by hand. The version portals actually see is now stamped by Cloudflare at deploy
+// time: GET /version = buildVersion(env) = this base + '+' + deploy time + '.' + Cloudflare's version id (the `version_metadata`
+// binding in wrangler.toml), so EVERY deploy gets a new version automatically and a PR never needs to touch this line.
+// Portals poll GET /version and refresh themselves onto new code when it changes (B-093 auto-refresh).
+// The Branch policy guard fails a PR into main that changes this line (override: put `allow-build-version-edit: true` in the PR body).
+let __unstampedReported = false;
+// buildVersion(env) -> { version, base, stamped, version_id, deployed_at }. Never throws. If the Cloudflare binding is missing the answer
+// says so ('+unstamped', stamped:false) AND files one failure-ledger row per isolate, because an unstamped Worker would otherwise never
+// make open portals refresh (a silent failure).
+function buildVersion(env) {
+  const m = env && env.CF_VERSION_METADATA;
+  if (m && m.id) {
+    const ts = String(m.timestamp || ''), digits = ts.replace(/\D/g, '').slice(0, 12);
+    return { version: BUILD_VERSION + '+' + (digits || 'x') + '.' + String(m.id).slice(0, 8), base: BUILD_VERSION, stamped: true, version_id: String(m.id), deployed_at: ts || null };
+  }
+  return { version: BUILD_VERSION + '+unstamped', base: BUILD_VERSION, stamped: false, version_id: null, deployed_at: null };
+}
+function buildVersionJson(env, ctx) {
+  const v = buildVersion(env);
+  if (!v.stamped && !__unstampedReported) {
+    __unstampedReported = true;
+    const p = reportFailure(env, { system: 'hub', source: 'worker', where: 'build_version_unstamped', severity: 'P2',
+      message: 'The Worker has no CF_VERSION_METADATA binding, so /version never changes on deploy and open portals will not refresh themselves. Check wrangler.toml [version_metadata].' });
+    if (ctx && ctx.waitUntil) ctx.waitUntil(p);
+  }
+  return json(v.stamped ? v : Object.assign({ warning: 'unstamped: no CF_VERSION_METADATA binding; portals will not auto-refresh on deploy' }, v));
+}
+// BUILD_VERSION: FROZEN base label, do not edit it in a PR (explained in the block above buildVersion()).
+// Portals poll GET /version, which Cloudflare stamps on every deploy, and refresh themselves when that changes (B-093).
+const BUILD_VERSION = '2026-10-30.01-delivery-cotenants-keep-yes';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
@@ -540,7 +567,7 @@ const _hubWorkerCore = {
         if (path === '/failures/open')          return await failOpenList(env, url);
         if (path === '/gemini-context')          return await geminiContext(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
-        if (path === '/version')                return json({ version: BUILD_VERSION });
+        if (path === '/version')                return buildVersionJson(env, ctx);
         if (path === '/watchdog/door-system')   return await doorWatchdogStatus(env);
         if (path === '/read-meter')             return json(await __meterSnapshotAll(env, url)); // Oct 19 2026: who/what is spending the Sheets read quota (in-memory, zero Sheets reads)
         if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
@@ -21592,7 +21619,7 @@ async function selftestCallEndpoint(env, name) {
   const u = (p) => new URL('https://selftest.internal' + p);
   switch (name) {
     case 'health': return await health(env);
-    case 'version': return json({ version: BUILD_VERSION });
+    case 'version': return json({ version: buildVersion(env).version });
     case 'config': return await getConfig(env);
     case 'properties': return await getSheet(env, 'Properties');
     case 'units': return await getSheet(env, 'Units');
@@ -34739,6 +34766,7 @@ function deliveryTenantText(o) {
   const when = [deliveryWindowHuman(o.window), deliveryDateYY(o.date)].filter(Boolean).join(' ');
   let msg;
   if (o.kind === 'cancel') msg = item.charAt(0).toUpperCase() + item.slice(1) + ' delivery is no longer scheduled. No need to be home.';
+  else if (o.kind === 'fyi') msg = 'Update: ' + item + ' delivery' + (when ? ' now ' + when : ' time changed') + '. Thanks for being there, no need to reply.';   // Oct 30 2026 (Brett): the tenant already said yes, so a better window is news, not a new question: no link, no ask
   else if (o.kind === 'changed') msg = 'Delivery changed: ' + item + (when ? ' now ' + when : '') + '. Can you be there? ' + o.link;
   else msg = 'New ' + item + ' ordered.' + (when ? ' Delivery ' + when + '.' : '') + ' Please let us know if you can be there: ' + o.link;
   return deliveryPlainSms(msg, true);
@@ -34956,42 +34984,64 @@ async function deliveryTenantNotice(env, o) {
   if (variant !== 'cancel' && !date) return { tenant_sms: 'skipped', detail: 'no delivery date yet: the tenant is asked when a later email sets the date', no_date: true };
   const sig = variant === 'cancel' ? 'CANCELLED' : (date || '') + '|' + (win || '');
   if (String(row.Tenant_Notice_Sig || '') === sig && /^(queued|sent|draft)/.test(String(row.Tenant_Notice_Status || ''))) return { tenant_sms: 'skipped', detail: 'tenant already told this date/window', record: false };
-  if (!tenant.Phone) return { tenant_sms: 'skipped', detail: 'tenant has no phone on file' };
+  // Oct 30 2026: everyone active in the unit gets the text (co-tenants), not only the one tenant on the delivery row. Same phone twice = once.
+  const people = [tenant].concat((Array.isArray(o.recipients) ? o.recipients : []).filter(x => x && String(x.ID) !== String(tenant.ID)));
+  const seenPhones = {};
+  const list = people.filter(x => { const ph = normalizePhone(x.Phone); if (!ph) return true; if (seenPhones[ph]) return false; seenPhones[ph] = true; return true; });
+  const multi = list.length > 1;
   try {
     const owners = await fetchTab(env, 'Owners');
     const owner = owners.find(w => String(w.ID) === String(place.property.Owner_ID)) || null;
     let queue = [];
     try { queue = await fetchTab(env, MSG_QUEUE_TAB); } catch (e) { if (!isMissingTabError(e)) throw e; }
-    const mine = r => r.Message_Type === 'delivery_tenant_notice' && woId && String(r.WO_ID) === String(woId);
-    const waiting = queue.filter(r => mine(r) && r.Status === 'pending' && r.Send_After);
-    // A newer text replaces one still waiting for its slot: never two texts for one delivery.
-    if (variant !== 'cancel' || waiting.length) for (const q of waiting) {
-      if (nm.mode === 'draft') break;
-      const ok = await updateMessageQueueRow(env, q.ID, { Status: 'skipped', Gate_Snapshot: variant === 'cancel' ? 'delivery cancelled before this request went out' : 'superseded by a newer delivery notice', Send_After: '' });
-      if (ok === false) return { tenant_sms: 'failed', detail: 'could not retire the older waiting notice (queue row ' + q.ID + '), nothing new queued', warn: true };
-    }
-    if (variant === 'cancel') {
-      if (!queue.some(r => mine(r) && r.Status === 'sent')) return { tenant_sms: 'skipped', detail: waiting.length ? 'the request had not gone out yet: it was withdrawn, tenant not texted' : 'tenant was never asked, nothing to cancel' };
-    }
-    const first = !queue.some(r => r.Status === 'sent' && normalizePhone(r.Recipient_Phone) === normalizePhone(tenant.Phone));
     const item = String(row.Item_Type || '').toLowerCase() || 'appliance';
-    const ctx = { first: tenant.First_Name || 'there', assistant: cfg.ASSISTANT_NAME || 'Riley', owner: (owner && (owner.Company || owner.First_Name)) || 'your property owner', item, street: deliveryStreet(row.Delivery_Address), date, window: win };
     let link = '';
-    if (variant !== 'cancel') link = await deliveryShortLink(env, cfg, o.deliveryId || row.ID);
-    let msg;
-    if (variant === 'request' && cfg.Delivery_Tenant_Notice_Text) {
-      msg = deliveryPlainSms(renderTemplate(cfg.Delivery_Tenant_Notice_Text, { FirstName: ctx.first, AssistantName: ctx.assistant, Owner: ctx.owner, Item: item, Street: ctx.street, Address: row.Delivery_Address || '', When: [deliveryShortDate(date), deliveryWindowHuman(win)].filter(Boolean).join(' '), Link: link }), true);
-      if (link && msg.indexOf(link) < 0) msg += ' ' + link;   // a custom template that forgot {Link} must still carry the answer link
-    } else msg = deliveryTenantText(Object.assign({ kind: variant, link }, ctx));
-    if (first) msg = withTenantStopNote(msg);
-    if (nm.mode === 'draft') return { tenant_sms: 'draft', detail: 'draft saved on the delivery (Tenant_Notice_Draft), not sent', sig, draft: msg };
+    if (variant === 'request' || variant === 'changed') link = await deliveryShortLink(env, cfg, o.deliveryId || row.ID);
     const hold = deliveryNoticeHoldUntil(new Date(), variant === 'cancel' ? (row.Expected_Date || date) : date);
-    const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'delivery_tenant_notice', recipient_type: 'tenant', tenant, property: place.property, owner, message_body: msg, holdUntil: hold ? hold.toISOString() : undefined, allowRepeat: true });   // once-per-event is enforced above (Tenant_Notice_Sig + the waiting-row swap + Event_Claim); the D-16 same-text guard must NOT swallow a real second move that reads exactly like an earlier one (Y, back to X, Y again)
+    const sendOne = async (tn) => {
+      const who = String(tn.First_Name || 'tenant');
+      const tag = (x) => Object.assign({ who }, x);
+      if (!tn.Phone) return tag({ state: 'skipped', detail: 'no phone on file' });
+      const ph = normalizePhone(tn.Phone);
+      const mine = r => r.Message_Type === 'delivery_tenant_notice' && woId && String(r.WO_ID) === String(woId) && normalizePhone(r.Recipient_Phone) === ph;
+      const waiting = queue.filter(r => mine(r) && r.Status === 'pending' && r.Send_After);
+      // A newer text replaces one still waiting for its slot: never two texts for one person for one delivery.
+      if (nm.mode !== 'draft') for (const q of waiting) {
+        const ok = await updateMessageQueueRow(env, q.ID, { Status: 'skipped', Gate_Snapshot: variant === 'cancel' ? 'delivery cancelled before this request went out' : 'superseded by a newer delivery notice', Send_After: '' });
+        if (ok === false) return tag({ state: 'failed', detail: 'could not retire the older waiting notice (queue row ' + q.ID + '), nothing new queued', warn: true });
+      }
+      if (variant === 'cancel' && !queue.some(r => mine(r) && r.Status === 'sent')) return tag({ state: 'skipped', detail: waiting.length ? 'the request had not gone out yet: it was withdrawn, tenant not texted' : 'tenant was never asked, nothing to cancel' });
+      const first = !queue.some(r => r.Status === 'sent' && normalizePhone(r.Recipient_Phone) === ph);
+      const ctx = { first: tn.First_Name || 'there', assistant: cfg.ASSISTANT_NAME || 'Riley', owner: (owner && (owner.Company || owner.First_Name)) || 'your property owner', item, street: deliveryStreet(row.Delivery_Address), date, window: win };
+      let msg;
+      if (variant === 'request' && cfg.Delivery_Tenant_Notice_Text) {
+        msg = deliveryPlainSms(renderTemplate(cfg.Delivery_Tenant_Notice_Text, { FirstName: ctx.first, AssistantName: ctx.assistant, Owner: ctx.owner, Item: item, Street: ctx.street, Address: row.Delivery_Address || '', When: [deliveryShortDate(date), deliveryWindowHuman(win)].filter(Boolean).join(' '), Link: link }), true);
+        if (link && msg.indexOf(link) < 0) msg += ' ' + link;   // a custom template that forgot {Link} must still carry the answer link
+      } else msg = deliveryTenantText(Object.assign({ kind: variant, link }, ctx));
+      if (first) msg = withTenantStopNote(msg);
+      if (nm.mode === 'draft') return tag({ state: 'draft', detail: 'draft saved on the delivery (Tenant_Notice_Draft), not sent', draft: msg });
+      const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'delivery_tenant_notice', recipient_type: 'tenant', tenant: tn, property: place.property, owner, message_body: msg, holdUntil: hold ? hold.toISOString() : undefined, allowRepeat: true });   // once-per-event is enforced above (Tenant_Notice_Sig + the waiting-row swap + Event_Claim); the D-16 same-text guard must NOT swallow a real second move that reads exactly like an earlier one (Y, back to X, Y again)
+      if (r && r.sent) return tag({ state: 'sent', detail: 'sent now (delivery is today)', text: msg });
+      if (r && r.held_for_quiet_hours) return tag({ state: 'queued', detail: 'held until ' + r.send_after, send_after: r.send_after, text: msg });
+      if (r && r.send_ok === false) return tag({ state: 'skipped', detail: 'blocked by the text gate: ' + r.gate_snapshot });
+      return tag({ state: 'failed', detail: 'not sent (' + ((r && (r.gate_snapshot || r.warning)) || 'unknown') + ')', warn: true });
+    };
+    const results = [];
+    for (const tn of list) {
+      try { results.push(await sendOne(tn)); }
+      catch (e) { results.push({ who: String(tn.First_Name || 'tenant'), state: 'failed', detail: String((e && e.message) || e).slice(0, 120), warn: true }); }   // one co-tenant failing must not hide the others' results
+    }
     const nowIso = new Date().toISOString();
-    if (r && r.sent) return { tenant_sms: 'sent', detail: 'sent now (delivery is today)', sig, sent_at: nowIso, text: msg };
-    if (r && r.held_for_quiet_hours) return { tenant_sms: 'queued', detail: 'held until ' + r.send_after, sig, send_after: r.send_after, sent_at: nowIso, text: msg };
-    if (r && r.send_ok === false) return { tenant_sms: 'skipped', detail: 'blocked by the text gate: ' + r.gate_snapshot };
-    return { tenant_sms: 'failed', detail: 'not sent (' + ((r && (r.gate_snapshot || r.warning)) || 'unknown') + ')', warn: true };
+    const detail = results.map(x => (multi ? x.who + ': ' : '') + x.detail).join(' | ');
+    const has = s => results.some(x => x.state === s);
+    const warn = results.some(x => x.warn) || undefined;
+    const withText = results.find(x => x.text);
+    const common = { detail, warn };
+    if (has('queued')) return Object.assign(common, { tenant_sms: 'queued', sig, send_after: (results.find(x => x.send_after) || {}).send_after, sent_at: nowIso, text: withText && withText.text });
+    if (has('sent')) return Object.assign(common, { tenant_sms: 'sent', sig, sent_at: nowIso, text: withText && withText.text });
+    if (has('draft')) return Object.assign(common, { tenant_sms: 'draft', sig, draft: results.filter(x => x.draft).map(x => (multi ? x.who + ': ' : '') + x.draft).join('\n') });
+    if (has('failed')) return Object.assign(common, { tenant_sms: 'failed', warn: true });
+    return { tenant_sms: 'skipped', detail };
   } catch (e) { return { tenant_sms: 'failed', detail: String((e && e.message) || e).slice(0, 160), warn: true }; }
 }
 
@@ -35187,10 +35237,12 @@ function deliveryAuthAlert(env, reason, severity, message) { return deliveryLedg
 // reported (failure ledger P1 + the response's calendar_status + the delivery row), never swallowed. On staging the write is a stub.
 const DELIVERY_CAL_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
 const DELIVERY_CAL_KEY_PROP = 'ridgecoDeliveryKey';
-function deliveryCalEventBody(cal) {
+function deliveryCalEventBody(cal, patch) {
   const ev = { summary: cal.title, location: cal.location || '', description: cal.description || '', status: 'confirmed', extendedProperties: { private: { [DELIVERY_CAL_KEY_PROP]: cal.key } } };
-  if (cal.all_day) { ev.start = { date: cal.start_iso }; ev.end = { date: cal.end_iso }; }
-  else { ev.start = { dateTime: cal.start_iso, timeZone: 'America/New_York' }; ev.end = { dateTime: cal.end_iso, timeZone: 'America/New_York' }; }
+  // patch=true (updating an event that may already exist in the OTHER shape): Google merges nested objects on PATCH, so a timed update on a
+  // date-only event would carry BOTH date and dateTime and answer 400 "Invalid start time" (the Oct 29 2026 range delivery). Null the other field out.
+  if (cal.all_day) { ev.start = patch ? { date: cal.start_iso, dateTime: null, timeZone: null } : { date: cal.start_iso }; ev.end = patch ? { date: cal.end_iso, dateTime: null, timeZone: null } : { date: cal.end_iso }; }
+  else { ev.start = Object.assign({ dateTime: cal.start_iso, timeZone: 'America/New_York' }, patch ? { date: null } : {}); ev.end = Object.assign({ dateTime: cal.end_iso, timeZone: 'America/New_York' }, patch ? { date: null } : {}); }
   return ev;
 }
 async function deliveryCalFetch(env, sub, method, pathAndQuery, body) {
@@ -35225,12 +35277,12 @@ async function deliveryCalSync(env, cfg, deliveryId, row, cal, dry) {
       for (const id of ids) { try { await deliveryCalFetch(env, sub, 'DELETE', '/events/' + encodeURIComponent(id)); } catch (e) { if (!gone(e)) throw e; } }
       return { status: 'cancelled', event_id: '' };
     }
-    const body = deliveryCalEventBody(cal);
+    const body = deliveryCalEventBody(cal), patchBody = deliveryCalEventBody(cal, true);
     let id = had, how = 'updated';
-    if (id) { try { await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), body); } catch (e) { if (!gone(e)) throw e; id = ''; } }
+    if (id) { try { await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), patchBody); } catch (e) { if (!gone(e)) throw e; id = ''; } }
     if (!id) {
       const found = await find();
-      if (found.length) { id = found[0]; await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), body); }
+      if (found.length) { id = found[0]; await deliveryCalFetch(env, sub, 'PATCH', '/events/' + encodeURIComponent(id), patchBody); }
       else { const made = await deliveryCalFetch(env, sub, 'POST', '/events', body); id = String(made.id || ''); how = 'created'; if (!id) throw new Error('Google Calendar did not return an event id'); }
     }
     return { status: how, event_id: id };
@@ -35436,6 +35488,7 @@ async function deliveryEmailIntake(env, body) {
     }
 
     // ── writes ──
+    let keepYes = false;   // Oct 30 2026: a tenant who said yes while the delivery was still all-day keeps that yes when only the window gets set
     let deliveryId, claim = '', lostClaim = false, woInfo = { wo_id: String(prior.Linked_WO_IDs || '').split(',')[0].trim(), created: false };
     const noteLine = 'Email (' + p.kind + ', ' + (mailboxStr || 'mailbox ?') + '): ' + subject.slice(0, 100);
     await ensureDeliveryTab(env);
@@ -35489,7 +35542,11 @@ async function deliveryEmailIntake(env, body) {
         const nl = [noteLine].concat(notes, placeNotes, anomaly ? ['CHECK: ' + anomaly] : []);
         if (dateChanged || winChanged) nl.push('Date/window now ' + (date || '?') + (win ? ' ' + win : '') + ' (was ' + (prior.Expected_Date || '?') + (prior.Expected_Window ? ' ' + prior.Expected_Window : '') + ')');
         // A new date/window makes the tenant's earlier answer out of date: reset it (the new request asks again). A Declined tenant is the on-site contact again.
-        if ((dateChanged || winChanged) && prior.Tenant_RSVP && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+        // Exception (Brett, Oct 30 2026): a Confirmed answer given while the delivery had NO window yet (all day), and the date has not moved, still stands when the window gets set: the tenant gets an update text, not a new question.
+        if ((dateChanged || winChanged) && prior.Tenant_RSVP === 'Confirmed' && !dateChanged && !prior.Expected_Window && win && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
+          keepYes = true;
+          nl.push('Tenant answer kept (Confirmed before the window was known): the window is now ' + win + ', tenant gets an update text, not a new question');
+        } else if ((dateChanged || winChanged) && prior.Tenant_RSVP && ['scheduled', 'window_set', 'reschedule'].indexOf(p.kind) >= 0) {
           Object.assign(f, { Tenant_RSVP: '', Tenant_RSVP_At: '', Tenant_RSVP_Note: '' });
           if (prior.Tenant_RSVP === 'Declined' && merged.Tenant_ID) Object.assign(f, { Onsite_Contact: 'tenant', Onsite_Contact_Phone: '' });
           nl.push('Tenant answer reset (was ' + prior.Tenant_RSVP + ') because the date/window changed');
@@ -35554,7 +35611,8 @@ async function deliveryEmailIntake(env, body) {
       const prop = propertyId ? properties.find(x => String(x.ID) === String(propertyId)) : null;
       const tenantObj = tenantId ? tenants.find(t => String(t.ID) === String(tenantId)) : null;
       const rowNow = Object.assign({}, merged, { Expected_Date: date || merged.Expected_Date || '' });
-      tn = await deliveryTenantNotice(env, { cfg, row: rowNow, deliveryId, place: { property: prop, tenant: prop ? tenantObj : null }, woId, date, win, variant: cancelling ? 'cancel' : (merged.Tenant_Notice_Sent_At ? 'changed' : 'request') });
+      const unitMates = (prop && tenantObj && merged.Unit_ID) ? tenantsForDispatch(tenants, null, { Unit_ID: String(merged.Unit_ID), Property_ID: String(propertyId) }).filter(x => String(x.ID) !== String(tenantObj.ID)) : [];   // co-tenants in the same unit
+      tn = await deliveryTenantNotice(env, { cfg, row: rowNow, deliveryId, place: { property: prop, tenant: prop ? tenantObj : null }, recipients: unitMates, woId, date, win, variant: cancelling ? 'cancel' : (merged.Tenant_Notice_Sent_At ? (keepYes ? 'fyi' : 'changed') : 'request') });
       if (tn.warn) warnings.push('tenant notice: ' + tn.detail);
       if (tn.record !== false && tn.tenant_sms !== 'off') {
         const upd = { Tenant_Notice_Status: (tn.tenant_sms + (tn.detail ? ': ' + tn.detail : '')).slice(0, 200) };
