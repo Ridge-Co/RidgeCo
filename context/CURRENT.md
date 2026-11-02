@@ -1,3 +1,7 @@
+# MOBILE TAP TARGETS + WIDE TABLES — Oct 29, 2026 — branch `feat/mobile-tap-targets-oct29` cut from main tip 6499515. HTML only (no worker.js, no BUILD_VERSION change). FEATURE_LOG `[FL-20261029-mobile-tap-targets]`.
+
+## 🟡 Built and tested; PR open for Brett's merge (NOT merged). Customer-facing HTML, so it needs a look on a real phone first. Unit suite 292/292 (same as main); `test/manual-verify-small-fixes-ui.mjs` 122/122 (70 before). Touch-only (same gate as #96): every button/select/tab/nav link/modal close is at least 44px on a phone, wide tables scroll inside their own box, and the Hub header nav on a phone is now one swipeable row (about 70px tall instead of about 320px). Mouse/desktop is unchanged. Not run: a real phone, staging, or the Hub with real data (all mocked).
+
 # PREMIER REPAIR ENDPOINT — Oct 27, 2026 — on `staging` ONLY (PRs #455, #456). BUILD_VERSION `2026-10-27.05-fi-premier-repair-guards`. FEATURE_LOG rule 235.
 
 ## 🟡 Built, staging-verified, independently validated. NOT merged to main. After Brett's go-ahead and the production deploy: run `hub_prod_post /admin/fi-premier-repair` dry run, read every step, then the real run (body in FEATURE_LOG 235). Then verify read-only with `hub_prod_get`. Brett said yes (Oct 28) to copying Josiah's phone/email onto owner #25: send `copy_partner_contact:true` in the same body (blank cells only).
