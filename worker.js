@@ -26398,8 +26398,11 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
   const __cronFast = method === 'GET' && !!(env && env.__CRON__) && !(env && env.__CRON_CRITICAL__);
   const MAX_ATTEMPTS = method === 'GET' ? (__cronFast ? CRON_FAST_ATTEMPTS : 6) : 4;
   const BACKOFF_BASE_MS = method === 'GET' ? (__cronFast ? CRON_FAST_BACKOFF_MS : 500) : 300;
+  let __usedSecond;   // Nov 2 2026: did the previous attempt of THIS read use the second Sheets account? (reads only; writes always use the main one)
   for(let attempt=1;;attempt++){
-    const token=await getAccessToken(env);
+    const __pick = method === 'GET' ? { read: true, prev: __usedSecond } : undefined;
+    const token=await getAccessToken(env, __pick);
+    __usedSecond = !!(__pick && __pick.second);
     const opts={method,headers:{'Authorization':`Bearer ${token}`,'Content-Type':'application/json'}};
     if(body) opts.body=JSON.stringify(body);
     __sheetsFetchCount++;
