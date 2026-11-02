@@ -6163,6 +6163,67 @@ async function setMilestonePendingInfo(env, body) {
   return json({ success: true, id: msId, signature_id: sigId, pending_info: pending, note: pending ? note : '' });
 }
 
+// POST /scope-proposal/milestone/set-amount (admin) { signature_id, milestone_id, customer_amount, reason, preview_only?, set_by? }
+// Nov 2 2026 (WO-1253 / Scope 11): the Final milestone was frozen at the signed $655 and the only way to change what the customer is billed was to regenerate the
+// proposal, which re-sends it for signature. This is a BILLING-ONLY edit of one still-PENDING milestone's customer amount. It sends nothing to the customer (no
+// signature, no email, no text), touches neither QuickBooks nor the vendor side (Vendor_Amount is unchanged), and leaves the signed Scope_Signatures row exactly
+// as signed. The edit is audited on the milestone row (original amount, reason, who, when) and in Ops_Telemetry. A milestone that is already billed is refused.
+async function setMilestoneCustomerAmount(env, body) {
+  const msId = String((body && body.milestone_id) || '').trim();
+  const sigId = String((body && body.signature_id) || '').trim();
+  if (!msId || !sigId) return json({ ok: false, error: 'signature_id and milestone_id required' }, 400);
+  const amount = money2(parseFloat(body.customer_amount));
+  if (!Number.isFinite(amount) || amount <= 0) return json({ ok: false, error: 'customer_amount must be a positive number' }, 400);
+  if (amount > 500000) return json({ ok: false, error: 'customer_amount looks wrong ($' + amount.toFixed(2) + ') - nothing was changed.' }, 400);
+  const reason = String(body.reason || '').trim();
+  if (reason.length < 3) return json({ ok: false, error: 'A reason is required (it is kept on the milestone as the audit note).' }, 400);
+  const previewOnly = body.preview_only === true;
+  const setBy = String(body.set_by || 'Brett').slice(0, 60);
+
+  let sigs, milestones;
+  try {
+    await paymentMilestonesTab(env);
+    [sigs, milestones] = await Promise.all([fetchTab(env, 'Scope_Signatures'), fetchTab(env, 'Payment_Milestones')]);
+  } catch (e) { return json({ ok: false, error: 'Could not read the proposal data, so nothing was changed (' + String((e && e.message) || e).slice(0, 160) + '). Try again in a minute.' }, 502); }
+  const sig = sigs.find(r => String(r.ID) === sigId && String(r.Active || '').toUpperCase() !== 'FALSE');
+  if (!sig) return json({ ok: false, error: 'signature not found' }, 404);
+  const m = milestones.find(x => String(x.ID) === msId && String(x.Signature_ID) === sigId && String(x.Active || '').toUpperCase() !== 'FALSE');
+  if (!m) return json({ ok: false, error: 'Milestone ' + msId + ' not found on signature ' + sigId }, 404);
+  if ((m.Status || 'pending') !== 'pending' || String(m.QB_Invoice_ID || '').trim()) {
+    return json({ ok: false, error: 'The "' + (m.Label || 'milestone') + '" payment is already billed' + (m.QB_Invoice_Number ? ' (invoice ' + m.QB_Invoice_Number + ')' : '') + ', so its amount cannot be edited here. Nothing was changed.' }, 409);
+  }
+  const oldAmount = money2(+m.Customer_Amount || 0);
+  if (Math.abs(amount - oldAmount) < 0.005) return json({ ok: false, error: 'That milestone is already $' + oldAmount.toFixed(2) + '. Nothing was changed.' }, 400);
+
+  const live = milestones.filter(x => String(x.Signature_ID) === sigId && String(x.Active || '').toUpperCase() !== 'FALSE');
+  const newTotal = money2(live.reduce((t, x) => t + (String(x.ID) === msId ? amount : (+x.Customer_Amount || 0)), 0));
+  const signedTotal = money2(+sig.Subtotal || 0);
+  const warnings = [];
+  if (String(m.Pending_Info || '').toUpperCase() === 'TRUE') warnings.push('This milestone is flagged Pending Info (' + (m.Pending_Info_Note || 'no note') + ') - that flag is unchanged.');
+  if (Math.abs(newTotal - signedTotal) > 0.005) warnings.push('All payments on this proposal now add up to $' + newTotal.toFixed(2) + ', not the $' + signedTotal.toFixed(2) + ' the customer signed. The signed record is NOT changed and nothing is sent to the customer.');
+  const vendorSide = money2(+m.Vendor_Amount || 0);
+  const preview = { signature_id: sigId, milestone_id: msId, label: m.Label || '', old_customer_amount: oldAmount, new_customer_amount: amount, change: money2(amount - oldAmount),
+    vendor_amount_unchanged: vendorSide, all_payments_total_after: newTotal, signed_total: signedTotal, reason, sends_nothing_to_customer: true, touches_quickbooks: false };
+  if (previewOnly) return json({ ok: true, preview_only: true, preview, warnings });
+
+  try {
+    await ensureColumns(env, 'Payment_Milestones', ['Original_Customer_Amount', 'Amount_Edit_Reason', 'Amount_Edited_By', 'Amount_Edited_Date']);
+    await updateRowVerified(env, 'Payment_Milestones', msId, {
+      Customer_Amount: String(amount), Calc_Mode: 'flat', Flat_Customer_Amount: String(amount),
+      Original_Customer_Amount: String(m.Original_Customer_Amount || '').trim() || String(oldAmount),
+      Amount_Edit_Reason: reason.slice(0, 500), Amount_Edited_By: setBy, Amount_Edited_Date: new Date().toISOString(),
+    });
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 220);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'milestone_amount_edit_failed', Skill_Or_Endpoint: '/scope-proposal/milestone/set-amount', Success: 'FALSE', Notes: ('sig=' + sigId + ' ms=' + msId + ' ' + msg).slice(0, 480) }); }
+    catch (e2) { return json({ ok: false, error: 'Saving the new amount failed (' + msg + ') and that could not be logged either. Check milestone ' + msId + ' before billing.' }, 500); }
+    return json({ ok: false, error: 'Saving the new amount failed (' + msg + '). The milestone may be unchanged - check it before billing.' }, 500);
+  }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'milestone_amount_edited', Skill_Or_Endpoint: '/scope-proposal/milestone/set-amount', Success: 'TRUE', Notes: ('sig=' + sigId + ' ms=' + msId + ' ' + oldAmount.toFixed(2) + ' -> ' + amount.toFixed(2) + ' by ' + setBy + ': ' + reason).slice(0, 480) }); }
+  catch (e) { warnings.push('The amount was saved, but the audit row could not be written to Ops_Telemetry (' + String((e && e.message) || e).slice(0, 120) + '). The reason is still stored on the milestone.'); }
+  return json({ ok: true, preview, warnings });
+}
+
 async function scopeProposalBillMilestones(env, body) {
   const sigId = body && body.signature_id;
   const milestoneIds = Array.isArray(body && body.milestone_ids) ? body.milestone_ids.map(String) : [];
