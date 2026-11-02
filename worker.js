@@ -13028,6 +13028,102 @@ async function depositClear(env, body) {
   return json({ success: true, wo_id: woId, qb_note: qbNote });
 }
 
+// POST /wo/deposit-link { wo_id, qb_bill_id, vendor_id?, amount?, reason?, preview_only? }
+// Nov 2 2026 (WO-1253): the Hub's deposit record was cleared by mistake while the $200 deposit bill (QuickBooks 7996, $190 after the $10 fee) was already PAID, so
+// QuickBooks kept it (depositClear refuses to delete a paid bill) but the work order no longer knew about it, and the final vendor bill would not have taken the
+// $200 off. /wo/deposit-approve always creates a NEW QuickBooks bill, which would pay the vendor twice. This re-records an EXISTING QuickBooks bill as the deposit.
+// It only READS QuickBooks (never creates, edits, pays or deletes anything there) and refuses unless the bill exists, belongs to this work order's vendor, is not
+// already used by another work order / vendor bill / proposal payment, and fits the vendor's estimate. Deposit_Applied stays FALSE, so woDepositCredit takes it off
+// the final vendor bill automatically, as before.
+async function depositLink(env, body) {
+  const woId = String((body && body.wo_id) || '').trim();
+  const billId = String((body && body.qb_bill_id) || '').trim();
+  if (!woId || !billId) return json({ ok: false, error: 'wo_id and qb_bill_id required' }, 400);
+  if (!/^\d{1,12}$/.test(billId)) return json({ ok: false, error: 'qb_bill_id must be the QuickBooks bill id (digits only).' }, 400);
+  const previewOnly = body.preview_only === true;
+  const reason = String(body.reason || '').trim().slice(0, 300);
+
+  let wos, vendors, estimates, irs, vbs, pms, sigs;
+  try {
+    await paymentMilestonesTab(env); await scopeSigTab(env);   // make sure both tabs exist so a missing tab can never silently skip the "already used" check
+    [wos, vendors, estimates, irs, vbs, pms, sigs] = await Promise.all([
+      fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendors'), fetchTab(env, 'Estimates'), fetchTab(env, 'Invoice_Review'),
+      fetchTab(env, 'Vendor_Bills'), fetchTab(env, 'Payment_Milestones'), fetchTab(env, 'Scope_Signatures'),
+    ]);
+  } catch (e) { return json({ ok: false, error: 'Could not read the Hub data needed to check this bill, so nothing was changed (' + String((e && e.message) || e).slice(0, 160) + '). Try again in a minute.' }, 502); }
+
+  const wo = findWO(wos, woId);
+  if (!wo) return json({ ok: false, error: 'No work order ' + woId + ' found' }, 404);
+  if (wo.Deposit_Amount && parseFloat(wo.Deposit_Amount) > 0) {
+    return json({ ok: false, error: woId + ' already has a $' + parseFloat(wo.Deposit_Amount).toFixed(2) + ' deposit recorded' + (wo.Deposit_QB_Bill_ID ? ' (QuickBooks bill ' + (wo.Deposit_QB_Bill_Number || wo.Deposit_QB_Bill_ID) + ')' : '') + '. Nothing was changed.' }, 409);
+  }
+  const vendorId = String(body.vendor_id || wo.Vendor_ID || '').trim();
+  if (!vendorId) return json({ ok: false, error: 'No vendor on this WO and none passed - vendor_id required' }, 400);
+  const vendor = vendors.find(v => String(v.ID) === vendorId);
+  if (!vendor) return json({ ok: false, error: 'Vendor ' + vendorId + ' not found' }, 404);
+  const vendorQbId = String(vendor.QBO_Vendor_ID || '').trim();
+  if (!vendorQbId) return json({ ok: false, error: 'This vendor has no QuickBooks vendor id on file, so the bill cannot be matched to them. Nothing was changed.' }, 409);
+
+  // The bill must not already belong to something else.
+  const used = [];
+  wos.forEach(w => { if (String(w.ID) !== String(wo.ID) && String(w.Deposit_QB_Bill_ID || '').trim() === billId) used.push('the deposit on ' + (w.WO_ID || w.ID)); });
+  irs.forEach(r => { if (String(r.QB_Bill_ID || '').trim() === billId) used.push('a vendor bill review (' + (r.WO_ID || r.ID) + ')'); });
+  vbs.forEach(r => { if (String(r.QB_Bill_ID || '').trim() === billId) used.push('a Vendor_Bills row (' + (r.WO_ID || r.ID) + ')'); });
+  pms.forEach(r => { if (String(r.QB_Bill_ID || '').trim() === billId) used.push('a proposal payment (' + (r.Label || r.ID) + ')'); });
+  sigs.forEach(r => { if ([r.QB_Bill_ID, r.QB_Final_Bill_ID].some(x => String(x || '').trim() === billId)) used.push('a signed proposal (' + r.ID + ')'); });
+  if (used.length) return json({ ok: false, error: 'QuickBooks bill ' + billId + ' is already used by ' + used.join(', ') + ', so it cannot be recorded as this deposit. Nothing was changed.' }, 409);
+
+  let token, got;
+  try {
+    token = await qbAccessToken(env);
+    got = await qbApi(env, 'bill/' + encodeURIComponent(billId) + '?minorversion=73', 'GET', null, token);
+  } catch (e) { return json({ ok: false, error: 'Could not read QuickBooks, so nothing was changed (' + String((e && e.message) || e).slice(0, 160) + ').' }, 502); }
+  const bill = got && got.Bill;
+  if (!bill) return json({ ok: false, error: 'QuickBooks bill ' + billId + ' was not found (' + (qbFault(got) || 'no detail') + '). Nothing was changed.' }, 404);
+  if (String(bill.VendorRef && bill.VendorRef.value || '') !== vendorQbId) {
+    return json({ ok: false, error: 'QuickBooks bill ' + billId + ' belongs to a different vendor (QuickBooks vendor ' + (bill.VendorRef && bill.VendorRef.value) + ', expected ' + vendorQbId + '). Nothing was changed.' }, 409);
+  }
+  const total = money2(+bill.TotalAmt || 0), balance = money2(+bill.Balance || 0);
+  const lines = Array.isArray(bill.Line) ? bill.Line : [];
+  const gross = money2(lines.reduce((t, l) => t + ((+l.Amount || 0) > 0 ? (+l.Amount || 0) : 0), 0));
+  const fee = money2(gross - total);
+  if (!(gross > 0)) return json({ ok: false, error: 'QuickBooks bill ' + billId + ' has no positive line to treat as the deposit. Nothing was changed.' }, 409);
+  if (fee < -0.005) return json({ ok: false, error: 'QuickBooks bill ' + billId + ' total ($' + total.toFixed(2) + ') is more than its lines ($' + gross.toFixed(2) + '). Nothing was changed.' }, 409);
+  if (body.amount != null && body.amount !== '' && Math.abs(money2(parseFloat(body.amount)) - gross) > 0.005) {
+    return json({ ok: false, error: 'You said the deposit was $' + money2(parseFloat(body.amount)).toFixed(2) + ' but the bill lines add up to $' + gross.toFixed(2) + ' before the fee. Nothing was changed.' }, 409);
+  }
+  const capInfo = woDepositEstimateCap(estimates, woId, wo);
+  const warnings = [];
+  if (capInfo && gross > capInfo.cap + 0.005) return json({ ok: false, error: 'A $' + gross.toFixed(2) + ' deposit is more than the vendor\'s estimate allows (the most is $' + capInfo.cap.toFixed(2) + '). Nothing was changed.' }, 409);
+  if (!capInfo) warnings.push('No estimate is on file for this work order, so the deposit could not be checked against a quote.');
+  if (balance > 0.005) warnings.push('This QuickBooks bill still has $' + balance.toFixed(2) + ' unpaid - pay it in QuickBooks yourself. It comes off the final vendor bill either way.');
+  const paid = total > 0 && balance <= 0.005;
+  const summary = { wo_id: woId, vendor: vendor.Name || vendor.Company || ('Vendor ' + vendorId), qb_bill_id: billId, qb_bill_number: bill.DocNumber || '', qb_bill_date: bill.TxnDate || '',
+    amount: gross.toFixed(2), fee: Math.max(0, fee).toFixed(2), bill_total: total.toFixed(2), bill_balance: balance.toFixed(2), already_paid: paid,
+    estimate_subtotal: capInfo ? capInfo.subtotal : null, creates_or_changes_anything_in_quickbooks: false, warnings };
+  if (previewOnly) return json({ ok: true, success: true, preview: true, ...summary });
+
+  const note = ('Re-linked existing QuickBooks bill ' + (bill.DocNumber || billId) + (reason ? ' - ' + reason : '')).slice(0, 300);
+  const fields = { Deposit_Amount: gross.toFixed(2), Deposit_Vendor_ID: vendorId, Deposit_Approved_Date: String(bill.TxnDate || new Date().toISOString().split('T')[0]),
+    Deposit_Notes: note, Deposit_Applied: 'FALSE', Deposit_QB_Bill_ID: billId, Deposit_QB_Bill_Number: String(bill.DocNumber || ''), Deposit_Fee: Math.max(0, fee).toFixed(2) };
+  try {
+    await ensureColumns(env, 'Work_Orders', ['Deposit_Amount', 'Deposit_Vendor_ID', 'Deposit_Approved_Date', 'Deposit_Notes', 'Deposit_Applied', 'Deposit_QB_Bill_ID', 'Deposit_QB_Bill_Number', 'Deposit_Fee']);
+    await updateWOFields(env, woId, fields);
+    invalidateTabCache('Work_Orders');
+    const back = findWO(await fetchTab(env, 'Work_Orders'), woId);
+    const bad = Object.keys(fields).filter(k => String(back ? (back[k] == null ? '' : back[k]) : '') !== String(fields[k]));
+    if (!back || bad.length) throw new Error('did not keep: ' + (back ? bad.join(', ') : 'no row'));
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 200);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_deposit_link_failed', Skill_Or_Endpoint: '/wo/deposit-link', Success: 'FALSE', Notes: ('wo=' + woId + ' qb_bill=' + billId + ' ' + msg).slice(0, 480) }); }
+    catch (e2) { return json({ ok: false, error: 'Recording the deposit on ' + woId + ' failed (' + msg + ') and that could not be logged either. QuickBooks was not touched. Check the Deposit fields on ' + woId + '.' }, 500); }
+    return json({ ok: false, error: 'Recording the deposit on ' + woId + ' failed (' + msg + '). QuickBooks was not touched. Check the Deposit fields on ' + woId + ' before billing.' }, 500);
+  }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_deposit_linked', Skill_Or_Endpoint: '/wo/deposit-link', Success: 'TRUE', Notes: ('wo=' + woId + ' qb_bill=' + billId + ' gross=' + gross.toFixed(2) + ' fee=' + Math.max(0, fee).toFixed(2) + ' paid=' + paid).slice(0, 480) }); }
+  catch (e) { warnings.push('The deposit was recorded, but the audit row could not be written to Ops_Telemetry (' + String((e && e.message) || e).slice(0, 120) + ').'); }
+  return json({ ok: true, success: true, ...summary });
+}
+
 async function addEstimateVersion(env, body) {
   const woId = body.wo_id; if (!woId) return json({ error: 'wo_id required' }, 400);
   if (!Array.isArray(body.line_items) || !body.line_items.length) return json({ error: 'line_items required' }, 400);
