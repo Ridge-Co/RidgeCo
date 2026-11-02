@@ -42,6 +42,9 @@ export function d16Deps(over) {
     smsReportRegionBlocked: async (env, rowId, check) => { rec.reports.push({ where: 'sms_destination_region', rowId, check }); },
     reportFailure: async (env, o) => { rec.reports.push(o); },
     invalidateTabCache: () => {},
+    // Oct 24 2026 (rule 231): smsGatedSend now also reads the per-property send switches. These are the harness defaults ("no switch is OFF", the
+    // exact behavior before that build); test/property-toggles.test.mjs drives the REAL ones.
+    smsPropertyGateFlags: () => ({}), ppResolveGateProperty: async () => null, propertyOwnerEmailOn: () => true,
   };
   return Object.assign(deps, over && over.extra, { __rec: rec });
 }
