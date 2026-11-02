@@ -42,17 +42,21 @@
   .btn.alt{background:#fff;color:var(--brand)}
   .foot{margin-top:26px;padding-top:12px;border-top:2px solid var(--brand);font-size:13px;color:var(--muted)}
   #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.88);display:none;align-items:center;justify-content:center;z-index:99}
-  #lightbox.open{display:flex} #lightbox img{max-width:96vw;max-height:92vh}
+  #lightbox.open{display:flex;flex-direction:column;gap:10px} #lightbox img{max-width:96vw;max-height:80vh}
+  #lightbox .lbbar{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+  a.btn{display:inline-flex;align-items:center;text-decoration:none}
+  .photos a.ph{display:block;line-height:0}
+  .printonly{display:none}
   .tradeline{display:flex;justify-content:space-between;align-items:center}
   @media print{
     body{background:#fff} .no-print{display:none!important} .wrap{max-width:none;padding:0}
-    .card,.meta{border-color:#ccc} h2{page-break-after:avoid} .photos img{width:130px;height:97px}
+    .card,.meta{border-color:#ccc} h2{page-break-after:avoid} .photos img{width:130px;height:97px} .printonly{display:block;margin:6px 0}
   }
 </style>
 </head>
 <body>
 <div id="root"><div class="msg">Loading report…</div></div>
-<div id="lightbox" onclick="this.classList.remove('open')"><img id="lb-img" alt="photo"></div>
+<div id="lightbox" onclick="if(event.target===this||event.target.id==='lb-img')closeLb()"><img id="lb-img" alt="photo"><div class="lbbar"><a class="btn" id="lb-full" target="_blank" rel="noopener">Open full size</a><a class="btn alt" id="lb-dl">Download</a><button class="btn alt" onclick="closeLb()">Close</button></div></div>
 <script>
 var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
 var Q = new URLSearchParams(location.search), TOKEN = Q.get('r') || '';
@@ -101,13 +105,38 @@ else {
 }
 
 function imgUrl(id){ return WORKER + '/fi/photo/view?r=' + encodeURIComponent(TOKEN) + '&p=' + encodeURIComponent(id); }
+// Full size = the ORIGINAL photo from the phone (nothing re-compressed) when the inspection has it; older photos only exist at the report's standard size and say so.
+function fullUrl(id){ return imgUrl(id) + '&full=1'; }
+function dlUrl(id){ return fullUrl(id) + '&dl=1'; }
+function galleryUrl(){ return new URL('inspection-photos.html?r=' + encodeURIComponent(TOKEN), location.href).href; }
+var FULL = {};                       // photo id -> bytes of its original (only photos that have one)
+var PRINTING = Q.get('print') === '1';
+var IMG_TRIES = 5;
+// Each thumbnail is a link to the full-size photo, so it still works inside a saved PDF; on screen a click opens the viewer first.
 function photoGrid(ids, have){
   var list = (ids||[]).filter(function(p){ return have[p]; });
   var missing = (ids||[]).length - list.length;
   if (!list.length && !missing) return '';
-  return '<div class="photos">' + list.map(function(p){ return '<img src="'+esc(imgUrl(p))+'" alt="Inspection photo" onclick="lb(this.src)" onerror="this.outerHTML=\'<div class=miss>Photo could not be loaded</div>\'">'; }).join('') + (missing ? '<div class="miss">'+missing+' photo'+(missing>1?'s':'')+' not available</div>' : '') + '</div>';
+  return '<div class="photos">' + list.map(function(p){
+    return '<a class="ph" href="'+esc(fullUrl(p))+'" target="_blank" rel="noopener" onclick="return lb(\''+esc(p)+'\')"><img src="'+esc(imgUrl(p))+'" alt="Inspection photo" data-p="'+esc(p)+'" loading="'+(PRINTING?'eager':'lazy')+'" decoding="async" onerror="imgErr(this)"></a>';
+  }).join('') + (missing ? '<div class="miss">'+missing+' photo'+(missing>1?'s':'')+' not available</div>' : '') + '</div>';
 }
-function lb(src){ document.getElementById('lb-img').src = src; document.getElementById('lightbox').classList.add('open'); }
+// A busy server or a weak signal must not leave a hole in the report: try each photo several times, a little later each time, before saying it failed.
+function imgErr(i){
+  var n = Number(i.dataset.n || 0) + 1; i.dataset.n = n;
+  if (n < IMG_TRIES){ setTimeout(function(){ i.src = imgUrl(i.dataset.p) + '&try=' + n; }, 1200 * n); return; }
+  var a = i.parentNode; if (a && a.removeAttribute) a.removeAttribute('onclick');
+  i.outerHTML = '<div class="miss">Photo could not be loaded.<br>Tap to try the full-size photo</div>';
+}
+function lb(id){
+  var im = document.getElementById('lb-img'); im.src = imgUrl(id);
+  var has = Object.prototype.hasOwnProperty.call(FULL, id), f = document.getElementById('lb-full');
+  f.href = fullUrl(id); f.textContent = has ? 'Open full size' : 'Open photo';
+  var d = document.getElementById('lb-dl'); d.href = dlUrl(id); d.textContent = has ? 'Download original' : 'Download';
+  document.getElementById('lightbox').classList.add('open');
+  return false;
+}
+function closeLb(){ document.getElementById('lightbox').classList.remove('open'); }
 function issueHtml(is, area, have, showArea){
   return '<div class="issue '+esc(is.severity)+'"><div class="t"><span class="sev '+esc(is.severity)+'">'+esc(SEV_LABEL[is.severity]||is.severity)+'</span> '+esc(is.title)+'</div>'
     + (showArea ? '<div class="muted">'+esc(area)+'</div>' : '')
@@ -116,8 +145,8 @@ function issueHtml(is, area, have, showArea){
     + (is.recommended_fix ? '<div class="lbl">'+(is.trade==='tenant_action'?'Requested of tenant':'Recommended action')+'</div><div>'+esc(is.recommended_fix)+'</div>' : '')
     + photoGrid(is.photo_ids, have) + '</div>';
 }
-var EQ_KIND = {furnace:'Furnace',boiler:'Boiler',central_ac:'Central A/C',heat_pump:'Heat pump',water_heater:'Water heater',refrigerator:'Refrigerator',range:'Range / oven',dishwasher:'Dishwasher',microwave:'Microwave',washer:'Washer',dryer:'Dryer',disposal:'Garbage disposal',other:'Equipment'};
-var EQ_FIELD = [['brand','Brand'],['model','Model'],['serial','Serial'],['year','Made'],['filter_size','Filter size'],['fuel','Fuel'],['tonnage','Tonnage'],['capacity','Capacity']];
+var EQ_KIND = {furnace:'Furnace',boiler:'Boiler',central_ac:'Central A/C',heat_pump:'Heat pump',water_heater:'Water heater',refrigerator:'Refrigerator',range:'Range / oven',dishwasher:'Dishwasher',microwave:'Microwave',washer:'Washer',dryer:'Dryer',disposal:'Garbage disposal',electrical_panel:'Electrical panel',other:'Equipment'};
+var EQ_FIELD = [['brand','Brand'],['model','Model'],['serial','Serial'],['year','Made'],['filter_size','Filter size'],['fuel','Fuel'],['tonnage','Tonnage'],['capacity','Capacity'],['amperage','Amperage'],['spaces','Breaker spaces']];
 function equipHtml(e, area, have){
   var bits = EQ_FIELD.filter(function(f){ return e[f[0]]; }).map(function(f){ return '<div><span class="lbl" style="display:inline;margin:0 4px 0 0">'+esc(f[1])+'</span>'+esc(e[f[0]])+'</div>'; }).join('');
   return '<div class="issue info" style="border-color:#8a94a3"><div class="t">'+esc((e.name?e.name+' · ':'')+(EQ_KIND[e.kind]||'Equipment'))+' <span class="muted">— '+esc(area)+'</span></div>'+bits+(e.notes?'<div class="muted">'+esc(e.notes)+'</div>':'')+photoGrid(e.photo_ids, have)+'</div>';
@@ -136,7 +165,12 @@ function draw(d){
   var h = '<div class="band">' + (b.logo_data ? '<img src="'+esc(b.logo_data)+'" alt="'+esc(b.name)+' logo">' : '') + '<div><div class="nm">'+esc(b.name)+'</div>'+(b.tagline?'<div class="tg">'+esc(b.tagline)+'</div>':'')+'</div></div><div class="wrap">';
   if (d.preview) h += '<div class="preview no-print"><b>Preview — not published.</b> Only you can see this. Publish it from the Field Inspection app to share the link.</div>';
   if (d.brand_fallback) h += '<div class="preview no-print"><b>Brand missing.</b> The brand chosen for this inspection is no longer available, so the default brand is shown.</div>';
-  h += '<div class="toolbar no-print"><button class="btn" onclick="window.print()">Print / Save as PDF</button><button class="btn alt" onclick="copyLink()" id="cp">Copy link</button></div>';
+  FULL = d.photo_full || {};
+  var nPh = (d.photo_ids||[]).length, nFull = Object.keys(FULL).length;
+  h += '<div class="toolbar no-print"><button class="btn" onclick="printReport()" id="pbtn">Print / Save as PDF</button><button class="btn alt" onclick="copyLink()" id="cp">Copy link</button>'
+    + (nPh ? '<a class="btn alt" href="'+esc(galleryUrl())+'" target="_blank" rel="noopener">View all photos'+(nFull ? ' (full size)' : '')+'</a>' : '') + '</div>';
+  h += '<div id="pbar" class="preview no-print" style="display:none"></div>';
+  if (nPh) h += '<div class="printonly">Full-size photos for this report: <a href="'+esc(galleryUrl())+'">'+esc(galleryUrl())+'</a> (each photo in this document also links to its full-size version).</div>';
   h += '<div class="doc-title">Property Inspection Report</div><div class="muted">'+esc(TYPE_LABEL[doc.type]||'Inspection')+'</div>';
   h += '<div class="meta"><div><span>Property</span>'+esc(doc.property.address)+(doc.property.unit_label?' — '+esc(/^unit\b/i.test(doc.property.unit_label)?doc.property.unit_label:'Unit '+doc.property.unit_label):'')+'</div><div><span>Inspection date</span>'+esc(insp.date||doc.date||'')+'</div><div><span>Inspector</span>'+esc(insp.inspector||doc.inspector||'')+'</div>'+(insp.client_name?'<div><span>Prepared for</span>'+esc(insp.client_name)+'</div>':'')+(ownerOf(doc,insp)&&ownerOf(doc,insp)!==insp.client_name?'<div><span>On behalf of</span>'+esc(ownerOf(doc,insp))+'</div>':'')+'<div><span>Overall condition</span><span class="pill '+esc(doc.overall.condition)+'" style="display:inline-block;font-size:13px;color:inherit;text-transform:none;letter-spacing:0">'+esc(COND_LABEL[doc.overall.condition]||'')+'</span></div></div>';
   if (doc.pre1978) h += '<div class="card" style="border-color:#f0d9a8;background:#fdf9ee"><b>Built before 1978.</b> Paint in homes of this age may contain lead. Any repair that disturbs painted surfaces should follow lead-safe work practices.</div>';
@@ -185,16 +219,37 @@ function draw(d){
   if (na.length) h += '<h2>Areas not accessed</h2><div class="card">'+na.map(function(a){ return '<div style="padding:4px 0"><b>'+esc(a.name)+'</b> — '+esc(accessReasonText(a))+'</div>'; }).join('')+'</div>';
   h += '<div class="foot">'+(b.footer_text?'<div style="white-space:pre-wrap">'+esc(b.footer_text)+'</div>':'')+(contactLine(b)?'<div>'+esc(contactLine(b))+'</div>':'')+(b.address?'<div>'+esc(b.address)+'</div>':'')+'<div style="margin-top:6px">Observations reflect conditions visible on the inspection date and are not a guarantee of future condition.</div></div></div>';
   show(h);
-  if (Q.get('print') === '1') waitImagesThenPrint();
+  if (PRINTING) printReport();
 }
 function copyLink(){
   var u = location.href.replace(/[?&]print=1/, '');
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(u).then(function(){ var b = document.getElementById('cp'); b.textContent = 'Copied ✓'; }).catch(function(){ alert('Could not copy — copy the address from your browser.'); });
   else alert('Copy the address from your browser.');
 }
-function waitImagesThenPrint(){
-  var imgs = Array.prototype.slice.call(document.images);
-  Promise.all(imgs.map(function(i){ return i.complete ? 1 : new Promise(function(r){ i.onload = i.onerror = r; }); })).then(function(){ setTimeout(function(){ window.print(); }, 300); });
+// Printing / saving a PDF: load EVERY photo first (screen view loads them lazily), retry the ones that fail, and never silently print a report with holes in it.
+function photosSettled(){ var imgs = document.querySelectorAll('.photos img'); for (var k = 0; k < imgs.length; k++){ if (!(imgs[k].complete && imgs[k].naturalWidth > 0)) return false; } return true; }
+function printReport(){
+  var bar = document.getElementById('pbar'), btn = document.getElementById('pbtn');
+  document.querySelectorAll('.photos img').forEach(function(i){ if (i.getAttribute('loading') === 'lazy') i.setAttribute('loading', 'eager'); });
+  if (btn) btn.disabled = true;
+  var t0 = Date.now();
+  function say(h){ if (bar){ bar.style.display = 'block'; bar.innerHTML = h; } }
+  function done(){
+    if (btn) btn.disabled = false;
+    var failed = document.querySelectorAll('.photos a.ph .miss').length, stuck = Array.prototype.filter.call(document.querySelectorAll('.photos img'), function(i){ return !(i.complete && i.naturalWidth > 0); }).length;
+    if (failed || stuck){
+      say('<b>' + (failed + stuck) + ' photo' + ((failed + stuck) > 1 ? 's' : '') + ' could not be loaded.</b> This is usually a busy connection. <button class="btn" style="margin-left:6px" onclick="location.reload()">Reload and try again</button> <button class="btn alt" onclick="window.print()">Print anyway</button>');
+      return;
+    }
+    say('All photos loaded.'); setTimeout(function(){ window.print(); }, 300);
+  }
+  (function wait(){
+    var n = document.querySelectorAll('.photos img').length, ok = 0;
+    document.querySelectorAll('.photos img').forEach(function(i){ if (i.complete && i.naturalWidth > 0) ok++; });
+    if (photosSettled() || Date.now() - t0 > 240000) return done();
+    say('Loading photos… ' + ok + ' of ' + n + ' ready. The print window opens when they are all in.');
+    setTimeout(wait, 600);
+  })();
 }
 </script>
 </body>
