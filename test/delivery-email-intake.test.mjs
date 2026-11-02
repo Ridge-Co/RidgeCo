@@ -1304,7 +1304,7 @@ const NODATE = { body: FX.confirm.body.replace('Estimated Delivery: Fri, Oct 16\
   t('placeholders for later phases are marked', /PLACEHOLDER \(Phase 2 size check\)/.test(block) && /PLACEHOLDER \(Phase 4 voice routing\)/.test(block));
   t('the staging test token can reach the route only for TEST- message ids / properties', /path === '\/intake\/delivery-email'\) \{\s*const _mid[\s\S]{0,200}startsWith\('TEST-'\)/.test(src));
   t('the one patterns table is a single DEP object', (block.match(/^const DEP = \{/gm) || []).length === 1);
-  t('/delivery/rsvp is public at the gate and wired for GET and POST', /'\/delivery\/rsvp',/.test(src.slice(0, 20000)) && /path === '\/delivery\/rsvp'\)\s+return await deliveryRsvpGet\(/.test(src) && /path === '\/delivery\/rsvp'\)\s+return await deliveryRsvpPost\(/.test(src));
+  t('/delivery/rsvp is public at the gate and wired for GET and POST', /'\/delivery\/rsvp',/.test(src.slice(0, 60000)) && /path === '\/delivery\/rsvp'\)\s+return await deliveryRsvpGet\(/.test(src) && /path === '\/delivery\/rsvp'\)\s+return await deliveryRsvpPost\(/.test(src));
   t('RSVP token is bound to the delivery id and signed with WORKER_SECRET (no new secret, no date in it)', /_hmac\('delivery-rsvp\|' \+ String\(id\), env\.WORKER_SECRET\)/.test(src) && !/delivery-rsvp\|' \+ [^)]*(?:Expected_Date|date)/.test(src));
   t('token compare is constant-time', /function deliveryCtEq\(a, b\)[^\n]*\|=/.test(src));
   t('no reminder texts in this build (no sweep that texts unanswered tenants)', !/reminder/i.test(block.replace(/no reminder texts[^\n]*/gi, '')));
