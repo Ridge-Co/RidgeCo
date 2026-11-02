@@ -16,3 +16,5 @@
 ## FEATURE_LOG
 **[FL-20261102-fi-attach-drive-originals]** (1) The bridge is additive only: it never overwrites an `Orig_*` cell, never deletes or moves a Drive file, and always re-reads the cells it wrote. (2) It attaches a COPY inside the inspection folder, never a link to the Full size folder, so the link survives the folder being tidied. (3) `fetch` exists only so a matcher can compare pictures; keep it limited to Full-size files and the inspection's own stored copies. (4) Matching still uses the tested fingerprint rule (mutual best, within 48 bits, 16-bit gap); anything not certain is LISTED for Brett, never guessed.
 **Silent-failure check:** every Drive/Sheets error is thrown (fiRoute logs telemetry and answers a typed 500) or returned per file/pair; nothing is skipped quietly; attach re-reads the cells it wrote and reports `verify_failed`; per-pair failures also write one `fi_originals_attach_error` telemetry row and fail the response.
+
+**Staging:** twin #485 merged into `staging`; main PR #484 carries its own checks.
