@@ -25810,6 +25810,121 @@ async function getAccessToken(env, pick) {
   return data.access_token;
 }
 
+// ── Second Sheets identity (Nov 2 2026, ops queue #227) ──────────────────────────────────────────────────────────
+// Google caps Sheets reads at 60/min PER USER (service account) and the whole Hub used ONE account. With a second account, Sheets READS alternate
+// between the two (a rate-limited retry switches to the other one), so the read budget doubles. WRITES always use the main account.
+// The second account is read-only by scope (spreadsheets.readonly) and is set up with ONE Worker secret, GOOGLE_SA2_JSON = the whole key file Google
+// gives you (the JSON that starts with {). Also accepted: only its private key plus GOOGLE_SA2_EMAIL; a key with "\n" typed as text is repaired.
+// Unset = everything works exactly as before. Set but broken (bad paste, Sheet not shared with it) = reads fall back to the main account AND a
+// plain-words ledger row says why (never silent). GET /sheets-identities (admin) tells you which of these it is without showing any secret.
+let __sheetsToken2 = { key: '', token: '', exp: 0 };
+let __sa2Broken = null;        // { until, reason }: after a failure, reads use the main account until `until`
+let __sa2ReportedFor = '';     // the last problem text this instance already reported
+let __readRR = 0;              // alternates the first attempt of each read between the two accounts
+const SA2_RETRY_AFTER_MS = 10 * 60 * 1000;
+function sa2Parse(env) {
+  const raw = env && env.GOOGLE_SA2_JSON;
+  if (raw == null || String(raw).trim() === '') return { absent: true };
+  const s = String(raw).trim();
+  let email = '', pem = '', format = '';
+  if (s[0] === '{') {
+    let j;
+    try { j = JSON.parse(s); } catch (e) { return { ok: false, reason: 'GOOGLE_SA2_JSON starts with { but is not valid JSON (cut off, or edited after pasting?). Paste the whole key file again.' }; }
+    email = String((j && j.client_email) || '').trim(); pem = String((j && j.private_key) || '');
+    format = 'whole key file';
+    if (!email) return { ok: false, reason: 'GOOGLE_SA2_JSON is JSON but has no "client_email" (is it the right file? it should be the service account key file).' };
+    if (!pem) return { ok: false, reason: 'GOOGLE_SA2_JSON is JSON but has no "private_key" (is it the right file? it should be the service account key file).' };
+  } else if (s.indexOf('BEGIN PRIVATE KEY') >= 0) {
+    pem = s; format = 'private key only';
+    email = String((env && env.GOOGLE_SA2_EMAIL) || '').trim();
+    if (!email) return { ok: false, reason: 'GOOGLE_SA2_JSON holds only the private key. Either paste the whole key file instead, or also set GOOGLE_SA2_EMAIL to the second service account\'s email address.' };
+  } else {
+    return { ok: false, reason: 'GOOGLE_SA2_JSON is neither the key file (it should start with {) nor a private key (it should start with -----BEGIN PRIVATE KEY-----). Paste the whole key file again.' };
+  }
+  pem = pem.replace(/\\n/g, '\n');
+  if (pem.indexOf('-----BEGIN PRIVATE KEY-----') < 0 || pem.indexOf('-----END PRIVATE KEY-----') < 0) return { ok: false, reason: 'The private key in GOOGLE_SA2_JSON is missing its -----BEGIN/END PRIVATE KEY----- lines (cut off while pasting?). Paste the whole key file again.' };
+  if (!/@[^@\s]+\.iam\.gserviceaccount\.com$/i.test(email)) return { ok: false, reason: 'The email in GOOGLE_SA2_JSON ("' + email + '") does not look like a service account email (should end in .iam.gserviceaccount.com).' };
+  if (email.toLowerCase() === String((env && env.GOOGLE_SA_EMAIL) || '').trim().toLowerCase()) return { ok: false, reason: 'GOOGLE_SA2_JSON is the SAME service account as the main one (' + email + '). A second, different account is needed to double the quota.' };
+  return { ok: true, email, pem, format };
+}
+// First attempt alternates by counter; a retry always switches to the other account (a 429 on one says nothing about the other's quota).
+function sa2PickSecond(counter, prevUsedSecond) {
+  if (prevUsedSecond === undefined) return counter % 2 === 1;
+  return !prevUsedSecond;
+}
+async function sa2Report(env, reason) {
+  if (__sa2ReportedFor === reason) return;
+  __sa2ReportedFor = reason;
+  try {
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'sheets_second_account', severity: 'P2',
+      message: 'The second Google Sheets account is set up but not working, so reads are using the main account only (the read quota is NOT doubled). ' + reason + ' Check the GOOGLE_SA2_JSON secret on the Worker, and that the Sheet is shared with the second account. GET /sheets-identities shows which.' });
+  } catch (e) { console.error('[sheets-second-account] could not report it (' + ((e && e.message) || e) + '). The problem: ' + reason); }
+}
+async function getAccessToken2(env) {
+  const p = sa2Parse(env);
+  if (!p.ok) throw new Error(p.reason || 'the second Sheets account is not configured');
+  const now = Math.floor(Date.now() / 1000);
+  if (__sheetsToken2.token && __sheetsToken2.key === p.email && __sheetsToken2.exp > now + 60) return __sheetsToken2.token;
+  const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = b64url(JSON.stringify({ iss: p.email, scope: 'https://www.googleapis.com/auth/spreadsheets.readonly', aud: 'https://oauth2.googleapis.com/token', exp: now + 3600, iat: now }));
+  const sigInput = `${header}.${claim}`, key = await importPrivateKey(p.pem);
+  const jwt = `${sigInput}.${await signRS256(sigInput, key)}`;
+  const resp = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}` });
+  const data = await resp.json();
+  if (!data.access_token) throw new Error('Google would not sign in the second account: ' + (data.error_description || data.error || 'no token returned'));
+  __sheetsToken2 = { key: p.email, token: data.access_token, exp: now + 3600 };
+  return data.access_token;
+}
+// Returns a token for the second account when THIS read attempt should use it (and sets pick.second = true), else null (use the main account).
+// Never throws because of the second account: any problem falls back to the main account and is reported.
+async function sa2ReadToken(env, pick) {
+  const p = sa2Parse(env);
+  if (p.absent) return null;
+  if (!p.ok) { await sa2Report(env, p.reason); return null; }
+  if (__sa2Broken && __sa2Broken.until > Date.now()) return null;
+  if (!sa2PickSecond(__readRR++, pick.prev)) return null;
+  try { const tok = await getAccessToken2(env); pick.second = true; return tok; }
+  catch (e) {
+    const reason = (e && e.message) || String(e);
+    __sa2Broken = { until: Date.now() + SA2_RETRY_AFTER_MS, reason };
+    await sa2Report(env, reason);
+    return null;
+  }
+}
+// A read that went out on the second account came back "not allowed / not found" (usually: the Sheet is not shared with it yet). Back off to the main account and say so.
+async function sa2ReadRefused(env, code, msg) {
+  const reason = 'Google refused a read as the second account (' + code + ': ' + String(msg || '').slice(0, 160) + '). Usually the Sheet is not shared with the second account yet.';
+  __sa2Broken = { until: Date.now() + SA2_RETRY_AFTER_MS, reason };
+  await sa2Report(env, reason);
+}
+// GET /sheets-identities (admin): is each account set up, can it sign in, can it read the Sheet. Shows emails and plain-words problems, never a secret.
+async function sheetsIdentitiesReport(env) {
+  const probe = async (label, getTok) => {
+    const r = { label };
+    try { r.token = await getTok(); r.sign_in = 'ok'; } catch (e) { r.sign_in = 'FAILED'; r.problem = (e && e.message) || String(e); return r; }
+    try {
+      const res = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${env.SHEET_ID}?fields=spreadsheetId`, { headers: { Authorization: 'Bearer ' + r.token } });
+      const d = await res.json().catch(() => ({}));
+      if (res.ok && d.spreadsheetId) r.read_sheet = 'ok';
+      else { r.read_sheet = 'FAILED'; r.problem = 'Google answered ' + res.status + ': ' + String((d.error && d.error.message) || '').slice(0, 200) + (res.status === 403 || res.status === 404 ? ' (the Sheet is probably not shared with this account yet)' : ''); }
+    } catch (e) { r.read_sheet = 'FAILED'; r.problem = (e && e.message) || String(e); }
+    delete r.token;
+    return r;
+  };
+  const out = { main: Object.assign({ email: env.GOOGLE_SA_EMAIL || null }, await probe('main', () => getAccessToken(env))) };
+  const p = sa2Parse(env);
+  if (p.absent) out.second = { configured: false, note: 'GOOGLE_SA2_JSON is not set on this Worker, so reads use the main account only.' };
+  else if (!p.ok) out.second = { configured: true, ok: false, problem: p.reason };
+  else {
+    const r = await probe('second', () => getAccessToken2(env));
+    out.second = Object.assign({ configured: true, email: p.email, key_format: p.format, scope: 'spreadsheets.readonly (reads only)' }, r);
+    out.second.ok = r.sign_in === 'ok' && r.read_sheet === 'ok';
+  }
+  out.in_use = !!(out.second && out.second.ok) && !(__sa2Broken && __sa2Broken.until > Date.now());
+  out.recently_backed_off = (__sa2Broken && __sa2Broken.until > Date.now()) ? __sa2Broken.reason : null;
+  return json(out);
+}
+
 async function importPrivateKey(pem) {
   const pemBody=pem.replace(/-----BEGIN PRIVATE KEY-----/,'').replace(/-----END PRIVATE KEY-----/,'').replace(/\s/g,'');
   const der=Uint8Array.from(atob(pemBody),c=>c.charCodeAt(0));
