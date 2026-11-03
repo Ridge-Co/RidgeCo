@@ -90,6 +90,7 @@ var JOBS = [
   { name: 'str_digest_mon',      run: 'hub', day: 'Mon', at: '08:00',         enabled: true, what: 'Emails the cleaners the Milam Ridge cleaning calendar with calendar invites (does nothing until STR_DIGEST_ENABLED is TRUE).' },
   { name: 'str_digest_wed',      run: 'hub', day: 'Wed', at: '08:00',         enabled: true, what: 'Same cleaning email, Wednesday.' },
   { name: 'str_digest_fri',      run: 'hub', day: 'Fri', at: '08:00',         enabled: true, what: 'Same cleaning email, Friday.' },
+  { name: 'overnight_heartbeat',  run: 'hub', at: '06:45',                      enabled: true, what: 'Morning report: which jobs ran / failed / never ran, did the home PC runner finish, what is open on Needs Attention. Emails Brett (never a text).' },
 
   // ── Other Workers (this script calls them; secrets live in Script properties, never in this file) ──
   { name: 'pinterest_sync',      run: 'pinterest',      day: 'Sun', at: '09:00', enabled: true,  what: 'BarrelCo: copies new Pinterest pins into the Google Drive folders (was a weekly GitHub Action).' },

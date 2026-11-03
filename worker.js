@@ -567,6 +567,7 @@ const _hubWorkerCore = {
         if (path === '/cron/status')            return await schedStatusHandler(env);
         if (path === '/ai-credit/status')       return await aiCreditStatusHandler(env);   // Oct 16 2026: is AI reading paused? (admin; GET + secret-free, so the read-only prod token may read it)
         if (path === '/failures/open')          return await failOpenList(env, url);
+        if (path === '/heartbeat/latest')       return await heartbeatLatest(env);   // Nov 3 2026: last overnight heartbeat report (read-only)
         if (path === '/gemini-context')          return await geminiContext(env, url);
         if (path === '/admin/receipts-image-check') return await receiptsImageCheck(env);
         if (path === '/version')                return buildVersionJson(env, ctx);
@@ -18059,6 +18060,7 @@ const SCHED_JOBS = [
   { name: 'str_digest_mon',     kind: 'weekly',   dow: 1, at: '08:00', retry: false, run: (env) => schedRunStrDigest(env) },
   { name: 'str_digest_wed',     kind: 'weekly',   dow: 3, at: '08:00', retry: false, run: (env) => schedRunStrDigest(env) },
   { name: 'str_digest_fri',     kind: 'weekly',   dow: 5, at: '08:00', retry: false, run: (env) => schedRunStrDigest(env) },
+  { name: 'overnight_heartbeat', kind: 'daily',   at: '06:45', retry: false, run: (env) => schedRunOvernightHeartbeat(env) },   // Nov 3 2026: the one morning report (ran / failed / never ran / home PC). Email only, never a text. retry:false - it may already have emailed.
 ];
 
 // Pure. Is this one job due at `now` given its recorded state? Returns { key } or null.
@@ -18713,6 +18715,159 @@ async function smsDeliveryCheckPass(env, deps) {
 }
 async function schedRunSmsDeliveryCheck(env) { return smsDeliveryCheckPass(env); }
 
+// ── OVERNIGHT HEARTBEAT (Nov 3 2026) ────────────────────────────────────────────────────────────────────────────────────
+// One plain report each morning (06:45 ET, Apps Script clock - NO CRON): which scheduled jobs ran, which failed, which never ran or are
+// overdue, whether the home-PC overnight runner finished, and what is open on Needs Attention. NEVER texts (standing rule R-1: no texts for
+// Hub failures). Delivery = an email, plus Config `heartbeat_last` which GET /heartbeat/latest returns (the read-only prod token reaches it,
+// so a build session can read it first thing). Nothing here is swallowed: a step that cannot run is named in the report AND returned as an error.
+const HB_JOB = 'overnight_heartbeat';
+const HB_CFG_KEY = 'heartbeat_last';
+const HB_HOME_API = 'https://api.github.com/repos/brett332/data/contents/home/status.json';
+const HB_HOME_MAX_AGE_H = 30;        // the home runner goes nightly; no finish in 30 h = it missed a night
+const HB_HOME_RUNNING_MAX_H = 8;     // "running" for longer than this = stuck
+function hbAgo(iso, nowMs) {
+  const t = Date.parse(iso || ''); if (isNaN(t)) return 'unknown';
+  const m = Math.max(0, Math.round((nowMs - t) / 60000));
+  return m < 90 ? `${m} min ago` : m < 48 * 60 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} days ago`;
+}
+// Pure. `read` = { ok:true, status:{state,started,finished,last_seen,run,detail,...} } | { ok:false, error }. Returns { state, level, line }.
+// level: 'ok' | 'problem' | 'unknown'. 'unknown' is NOT good news: the report says so in words.
+function hbHomeEvaluate(read, nowMs) {
+  if (!read || !read.ok) return { state: 'unreadable', level: 'unknown', line: `Home PC runner: UNKNOWN - the Hub could not read its status file (${String((read && read.error) || 'no answer').slice(0, 160)}). Check it from a session: brett332/data home/status.json.` };
+  const st = read.status || {};
+  const fin = Date.parse(st.finished || ''), started = Date.parse(st.started || ''), seen = Date.parse(st.last_seen || '');
+  const detail = String(st.detail || '').slice(0, 160);
+  if (st.state === 'running') {
+    if (!isNaN(started) && nowMs - started > HB_HOME_RUNNING_MAX_H * 3600000) return { state: 'stuck', level: 'problem', line: `Home PC runner: STUCK - started ${hbAgo(st.started, nowMs)} and has not finished (last heard ${hbAgo(st.last_seen, nowMs)}).` };
+    return { state: 'running', level: 'ok', line: `Home PC runner: still running (started ${hbAgo(st.started, nowMs)}).` };
+  }
+  if (st.state === 'done') {
+    if (isNaN(fin)) return { state: 'unreadable', level: 'unknown', line: 'Home PC runner: UNKNOWN - status says done but has no finish time.' };
+    if (nowMs - fin > HB_HOME_MAX_AGE_H * 3600000) return { state: 'missed', level: 'problem', line: `Home PC runner: MISSED A NIGHT - last finished ${hbAgo(st.finished, nowMs)} (${st.run || '?'}). The PC may be off or asleep.` };
+    return { state: 'done', level: 'ok', line: `Home PC runner: finished ${hbAgo(st.finished, nowMs)} - ${detail || 'no detail'}.` };
+  }
+  return { state: String(st.state || 'unknown'), level: 'problem', line: `Home PC runner: state "${st.state || '?'}" (last heard ${isNaN(seen) ? 'never' : hbAgo(st.last_seen, nowMs)}) ${detail}`.trim() };
+}
+// Pure. status = schedStatus() output. Returns one row per job: { name, expected, verdict, note }.
+// verdict: ok | seeded | failed | overdue | never | paused | new | off
+function hbJobRows(status, nowMs) {
+  const rows = [], jobs = (status && status.jobs) || {};
+  for (const name of Object.keys(jobs)) {
+    const j = jobs[name] || {};
+    let verdict = 'ok', note = '';
+    if (j.enabled === false) verdict = 'off';
+    else if (j.paused) { verdict = 'paused'; note = j.paused_reason || 'paused'; }
+    else if (j.overdue) { verdict = j.last_ok ? 'overdue' : 'never'; note = j.overdue_reason || ''; }
+    else if (j.last_status && !['ok', 'seeded', 'running', 'partial'].includes(String(j.last_status))) { verdict = 'failed'; note = String(j.last_error || j.last_status).slice(0, 160); }
+    else if (j.grace) { verdict = 'new'; note = j.grace_reason || 'new job, not judged yet'; }
+    else if (j.seeded && !j.last_ok) { verdict = 'seeded'; note = 'marked done at first start, has not run for real yet'; }
+    rows.push({ name, expected: j.expected || '', verdict, note, last_ok_ago: j.last_ok ? hbAgo(j.last_ok, nowMs) : 'never' });
+  }
+  return rows;
+}
+// Pure. in: { status, home (hbHomeEvaluate result), open:{P0,P1,P2}|null, openError, nowMs, etDate }.
+function hbBuildReport(inp) {
+  const nowMs = inp.nowMs, rows = hbJobRows(inp.status, nowMs), st = inp.status || {};
+  const by = (v) => rows.filter(r => r.verdict === v);
+  const bad = rows.filter(r => ['failed', 'overdue', 'never'].includes(r.verdict));
+  const problems = [];
+  if (st.tick_age_min === null || st.tick_age_min === undefined) problems.push('The Apps Script clock has never ticked.');
+  else if (st.tick_age_min > 60) problems.push(`The Apps Script clock has not ticked for ${st.tick_age_min} min - NOTHING scheduled is running.`);
+  for (const r of bad) problems.push(`${r.name}: ${r.verdict === 'never' ? 'NEVER RAN' : r.verdict.toUpperCase()}${r.note ? ' - ' + r.note : ''}`);
+  if (inp.home && inp.home.level === 'problem') problems.push(inp.home.line);
+  const unknowns = [];
+  if (inp.home && inp.home.level === 'unknown') unknowns.push(inp.home.line);
+  if (inp.openError) unknowns.push('Needs Attention count is UNKNOWN: ' + String(inp.openError).slice(0, 140));
+  if (inp.open && inp.open.P0 > 0) problems.push(`${inp.open.P0} urgent (P0) item(s) open on Needs Attention.`);
+  const level = problems.length ? 'problem' : unknowns.length ? 'attention' : 'ok';
+  const ran = rows.filter(r => ['ok', 'seeded', 'new'].includes(r.verdict)).length;
+  const headline = level === 'ok' ? `All clear: ${ran} of ${rows.length - by('off').length} scheduled jobs healthy` : level === 'attention' ? `Mostly fine, ${unknowns.length} thing(s) could not be checked` : `${problems.length} problem(s) need a look`;
+  return { as_of: new Date(nowMs).toISOString(), et_date: inp.etDate, level, headline, problems, unknowns, home: inp.home ? { state: inp.home.state, line: inp.home.line } : null, open: inp.open || null,
+    counts: { jobs: rows.length, ok: by('ok').length, seeded: by('seeded').length, failed: by('failed').length, overdue: by('overdue').length, never: by('never').length, paused: by('paused').length, new: by('new').length, off: by('off').length },
+    jobs: rows.filter(r => r.verdict !== 'ok' && r.verdict !== 'off').map(r => ({ name: r.name, verdict: r.verdict, note: r.note })), tick_age_min: st.tick_age_min === undefined ? null : st.tick_age_min };
+}
+// Pure. { subject, html, text } - text is the same content as plain lines (what a session reads).
+function hbRender(rep) {
+  const esc = (x) => String(x == null ? '' : x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const tag = rep.level === 'ok' ? 'OK' : rep.level === 'attention' ? 'CHECK' : 'PROBLEM';
+  const lines = [`Overnight heartbeat ${rep.et_date} - ${rep.headline}`];
+  if (rep.problems.length) { lines.push('', 'PROBLEMS'); rep.problems.forEach(p => lines.push('- ' + p)); }
+  if (rep.unknowns.length) { lines.push('', 'COULD NOT CHECK'); rep.unknowns.forEach(p => lines.push('- ' + p)); }
+  lines.push('', 'HOME PC', '- ' + (rep.home ? rep.home.line : 'not checked'));
+  const c = rep.counts;
+  lines.push('', 'HUB JOBS', `- ${c.ok} healthy, ${c.failed} failed, ${c.overdue} overdue, ${c.never} never ran, ${c.paused} paused, ${c.new} new, ${c.off} switched off (${c.jobs} total)`);
+  rep.jobs.filter(j => !['failed', 'overdue', 'never'].includes(j.verdict)).forEach(j => lines.push(`- ${j.name}: ${j.verdict}${j.note ? ' - ' + j.note : ''}`));
+  if (rep.open) lines.push('', 'NEEDS ATTENTION', `- open: ${rep.open.P0} urgent, ${rep.open.P1} important, ${rep.open.P2} minor`);
+  const text = lines.join('\n');
+  const html = '<div style="font-family:Arial,sans-serif;font-size:15px;line-height:1.45;max-width:640px">' + lines.map((l, i) => i === 0 ? `<h2 style="margin:0 0 8px">${esc(l)}</h2>` : l === '' ? '' : /^[A-Z ]+$/.test(l) ? `<div style="margin-top:12px;font-weight:bold">${esc(l)}</div>` : `<div>${esc(l)}</div>`).join('') + '<div style="margin-top:14px;color:#666;font-size:12px">No texts are sent for this report. Read it any time at GET /heartbeat/latest.</div></div>';
+  return { subject: `[${tag}] Overnight heartbeat ${rep.et_date}: ${rep.headline}`.slice(0, 200), html, text };
+}
+async function hbFetchHome(env, fetchFn) {
+  try {
+    const hdrs = { 'User-Agent': 'ridgeco-hub', 'Accept': 'application/vnd.github.raw' };
+    if (env && env.GITHUB_READ_TOKEN) hdrs['Authorization'] = 'Bearer ' + env.GITHUB_READ_TOKEN;
+    else return { ok: false, error: 'the Hub has no GITHUB_READ_TOKEN secret, and brett332/data is private' };
+    const r = await (fetchFn || fetch)(HB_HOME_API, { headers: hdrs });
+    if (!r.ok) return { ok: false, error: `GitHub answered HTTP ${r.status}` };
+    let status; try { status = JSON.parse(await r.text()); } catch (e) { return { ok: false, error: 'status file is not valid JSON' }; }
+    if (!status || typeof status !== 'object') return { ok: false, error: 'status file is empty' };
+    return { ok: true, status };
+  } catch (e) { return { ok: false, error: schedErrText(e) }; }
+}
+async function hbOpenCounts(env) {
+  let vals;
+  try { vals = (await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}`)).values || []; }
+  catch (e) { if (isMissingTabError(e)) vals = []; else return { error: schedErrText(e) }; }
+  const open = failRowsToObjects(vals.slice(1), FAIL_LEDGER_COLS, 2).filter(r => r.ID && FAIL_OPEN.indexOf(r.Status) >= 0);
+  return { open: { P0: open.filter(r => r.Severity === 'P0').length, P1: open.filter(r => r.Severity === 'P1').length, P2: open.filter(r => r.Severity === 'P2').length } };
+}
+// The scheduler job. deps (all optional, for tests): nowMs, readConfigRows, fetchHome, openCounts, sendEmail, saveConfig, reportFailure.
+async function schedRunOvernightHeartbeat(env, deps) {
+  deps = deps || {};
+  const errors = [], warnings = []; let no_retry = false;
+  const nowMs = deps.nowMs || Date.now();
+  const fail = (step, e) => { errors.push({ step, error: schedErrText(e) }); };
+  let rows, cfg, parsed;
+  try { rows = await (deps.readConfigRows || ((f) => schedReadConfigRows(env, f)))(true); cfg = configFromValues(rows); parsed = schedParseState(schedCell(rows, SCHED_STATE_KEY)); }
+  catch (e) { fail('read_config', e); return { ok: false, errors, warnings, no_retry, detail: {} }; }
+  if (parsed.error) { fail('scheduler_state', parsed.error); return { ok: false, errors, warnings, no_retry, detail: {} }; }
+  const aiState = aiCreditStateFromRows(rows);
+  const status = schedStatus(parsed.state, new Date(nowMs), schedEffective(parsed.state).jobs, aiState.paused ? (aiState.at || 'paused') : '');
+  const home = hbHomeEvaluate(await (deps.fetchHome || ((e) => hbFetchHome(e)))(env), nowMs);
+  const oc = await (deps.openCounts || hbOpenCounts)(env);
+  const report = hbBuildReport({ status, home, open: oc.open || null, openError: oc.error || '', nowMs, etDate: schedEtParts(new Date(nowMs)).date });
+  const out = hbRender(report);
+  // 1. keep it where sessions can read it (verified by the helper's own error on a failed write)
+  try { await (deps.saveConfig || ((k, v) => failSetConfig(env, k, v)))(HB_CFG_KEY, JSON.stringify(Object.assign({}, report, { text: out.text })).slice(0, 8000)); }
+  catch (e) { fail('save_report', e); }
+  // 2. a problem is also a Needs Attention row (P2 for an unreadable/missed home runner; the report itself is the loud part)
+  if (home.level !== 'ok') {
+    try { const r = await (deps.reportFailure || reportFailure)(env, { system: 'hub', source: 'worker', where: 'heartbeat_home_runner', severity: 'P2', message: home.line.slice(0, 300) }); if (r && r.ok === false) warnings.push('could not record the home-runner problem on Needs Attention: ' + String(r.error || 'dropped').slice(0, 120)); }
+    catch (e) { warnings.push('could not record the home-runner problem on Needs Attention: ' + schedErrText(e)); }
+  }
+  // 3. email (never SMS). quiet-when-clean is opt-in: Config heartbeat_quiet_when_ok = TRUE
+  const quiet = String(cfg.heartbeat_quiet_when_ok || '').toUpperCase() === 'TRUE';
+  let emailed = false;
+  if (report.level !== 'ok' || !quiet) {
+    try {
+      const r = await (deps.sendEmail || gmailSendEmail)(env, { to: cfg.admin_email || SMS_DC_DEFAULT_TO, subject: out.subject, html: out.html });
+      emailed = !!(r && (r.sent || r.staged));
+      if (!emailed) fail('send_email', 'email send returned no confirmation'); else no_retry = true;
+    } catch (e) { fail('send_email', e); }
+  }
+  return { ok: !errors.length, errors, warnings, no_retry, detail: { level: report.level, headline: report.headline, problems: report.problems.length, unknowns: report.unknowns.length, home: home.state, emailed } };
+}
+// GET /heartbeat/latest - the last report as saved by the job (read-only; nothing is written).
+async function heartbeatLatest(env) {
+  let rows;
+  try { rows = await schedReadConfigRows(env, false); } catch (e) { return json({ ok: false, error: 'could not read Config: ' + schedErrText(e) }, 503); }
+  const raw = schedCell(rows, HB_CFG_KEY);
+  if (!raw) return json({ ok: false, error: 'no heartbeat has run yet' }, 404);
+  let rep; try { rep = JSON.parse(raw); } catch (e) { return json({ ok: false, error: 'saved heartbeat is not valid JSON' }, 500); }
+  const ageH = Math.round((Date.now() - Date.parse(rep.as_of || '')) / 360000) / 10;
+  return json(Object.assign({ ok: true, age_hours: isNaN(ageH) ? null : ageH, stale: isNaN(ageH) || ageH > 30 }, rep));
+}
+
 // -- Twilio balance snapshot (D-16 item 5, Oct 23 2026) --
 // Once a day the Hub saves (date, Twilio balance) in the small Twilio_Balance_Log tab, so the daily burn can be read off a column instead of
 // guessed. It adds NO Twilio call of its own: it reuses the balance the daily integrity check (failInvariantsCollect) already fetches and
@@ -18788,6 +18943,7 @@ const SCHED_PF_WHAT = {
   str_digest_mon: 'emails the Milam Ridge cleaners the cleaning calendar with invites (idle until STR_DIGEST_ENABLED is TRUE)',
   str_digest_wed: 'emails the Milam Ridge cleaners the cleaning calendar with invites (idle until STR_DIGEST_ENABLED is TRUE)',
   str_digest_fri: 'emails the Milam Ridge cleaners the cleaning calendar with invites (idle until STR_DIGEST_ENABLED is TRUE)',
+  overnight_heartbeat: 'builds the one morning report: which jobs ran, failed or never ran, whether the home PC runner finished, what is open on Needs Attention; emails Brett (never a text)',
 };
 async function schedPfTab(env, tab) {
   try { return await fetchTab(env, tab); }
