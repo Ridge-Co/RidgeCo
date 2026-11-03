@@ -43536,7 +43536,7 @@ async function fiReport(env, request, url) {
   delete doc.booking;   // the requester's phone/email and booking notes are internal - never on the public report
   for (const a of (doc.areas || [])) { delete a.pending_text; delete a.dictation; }
   fiScrubDocForReport(doc);
-  return json({ ok: true, preview: !published, inspection: Object.assign(fiInspHeaderOut(insp.o), { property_id: '' }), doc, brand: br.brand, brand_fallback: br.fallback, photo_ids: photoIds, photo_full: photoFull, rollup: fiTradeRollup(doc) });
+  return json({ ok: true, preview: !published, inspection: Object.assign(fiInspHeaderOut(insp.o), { property_id: '' }), doc, brand: br.brand, brand_fallback: br.fallback, wo_number: woNumber, wo_lookup_failed: woLookupFailed, photo_ids: photoIds, photo_full: photoFull, rollup: fiTradeRollup(doc) });
 }
 async function fiStructure(env, body) {
   body = body || {};
