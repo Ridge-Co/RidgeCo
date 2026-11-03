@@ -1417,6 +1417,9 @@ function localChecks(doc){
   var sk = active.filter(function(a){ return !(a.access && a.access.no_access) && (!a.condition || a.condition==='not_inspected'); }).map(function(a){return a.name;}); if (sk.length) warns.push('Not marked inspected: '+sk.join(', '));
   var uns = (doc.voice_notes||[]).filter(function(n){ return !n.routed && String(n.transcript||'').trim(); }).length; if (uns) warns.push(uns+' voice note'+(uns>1?'s have':' has')+' not been sorted into areas yet');
   if (S.rec.dirty) blocks.push('Changes are not saved to the server yet');
+  var dc = dupCheck(doc, (S.psz && S.rec && S.psz.id === S.rec.id) ? S.psz.map : {});
+  if (dc.extra) warns.push(dc.extra+' duplicate photo cop'+(dc.extra===1?'y':'ies')+' in this draft — see “Duplicate photos” below for where');
+  var npw = noPhotoWarn(dc); if (npw) warns.push(npw);
   var sm = doc.summary; if (sm && sm.fp && sm.fp !== fpOf(doc)) warns.push('The AI summary is out of date and will be left out of the report');
   if (sm && !sm.accepted) warns.push('The AI summary has not been approved and will be left out of the report');
   return { blocks:blocks, warns:warns };
