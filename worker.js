@@ -43204,6 +43204,19 @@ async function fiList(env) {
   const brands = bt.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiBrandOut(r.o, true));
   return json({ ok: true, inspections: items, brands, report_base: FI_PAGE_BASE });
 }
+// Nov 2 2026: stored size (and original size) of every live photo of one inspection, for the Review screen's duplicate check. One Photos read; sizes only, no file ids.
+async function fiPhotoSizes(env, url) {
+  const id = url.searchParams.get('id') || '';
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  await fiEnsureTabs(env);
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const photos = {};
+  for (const r of pt.rows) {
+    if (r.o.Inspection_ID !== id || r.o.Active === 'FALSE') continue;
+    photos[r.o.ID] = { b: Number(r.o.Bytes) || 0, o: Number(r.o.Orig_Bytes) || 0 };
+  }
+  return json({ ok: true, photos });
+}
 async function fiGetInspection(env, url) {
   const id = url.searchParams.get('id') || '';
   if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
