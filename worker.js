@@ -28182,6 +28182,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/str/c/mark' || path === '/str/c/offer' || path === '/str/c/cancel' || path === '/str/c/supply') { const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => x.Link_Token && x.Link_Token === String((body && body.k) || '')); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
   if (path === '/str/admin/assign') { if (!body || !body.cleaner_id) return true; const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => String(x.ID) === String(body.cleaner_id)); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
   // Admin swap / bulk (Oct 20 2026): a preview writes nothing; a real apply may only name a TEST- cleaner.
+  if (path === '/str/admin/supply/ordered') { const _r = (await fetchTab(env, 'Supply_Requests')).find(x => String(x.Request_ID) === String((body && body.request_id) || '')); return !!_r && String(_r.Requested_By_Name || '').startsWith('TEST-'); }
   if (path === '/str/admin/change/preview') return true;
   if (path === '/str/admin/pending/preview') return true;
   // Pending cleaning (Oct 20 2026): the staging token may only create an inquiry whose note starts with TEST-, and only change an inquiry that has such a note.
