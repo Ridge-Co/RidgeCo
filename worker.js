@@ -45533,6 +45533,7 @@ async function insbCustomerConfig(env, body) {
     ['Bill_To_Name', 'Bill_To_Address', 'InvB_Phone'].forEach(k => txt(k, 160));
     ['Bill_Email_To', 'Bill_Email_Cc', 'AppFolio_Email', 'InvB_Email'].forEach(k => txt(k, 300));
     if (body.Billing_Mode !== undefined) { const v = String(body.Billing_Mode || ''); if (v !== '' && v !== 'wo') errs.push('Billing mode must be blank or "wo".'); f.Billing_Mode = v; }
+    if (body.Invoice_Delivery !== undefined) { const v = String(body.Invoice_Delivery || ''); if (v !== '' && v !== 'qb_only') errs.push('Invoice delivery must be blank (email it) or "qb_only" (create in QuickBooks, do not send).'); f.Invoice_Delivery = v; }
     if (body.Owner_Invoice !== undefined) f.Owner_Invoice = String(body.Owner_Invoice).toUpperCase() === 'TRUE' ? 'TRUE' : 'FALSE';
     if (body.Markup_Pct !== undefined) { const raw = String(body.Markup_Pct == null ? '' : body.Markup_Pct).trim(); if (raw !== '') { const mk = insbMarkup(10000, raw); if (!mk.ok) errs.push(mk.error); else f.Markup_Pct = String(mk.pct); } else f.Markup_Pct = ''; }
     for (const k of ['Bill_Email_To', 'Bill_Email_Cc', 'AppFolio_Email', 'InvB_Email']) if (f[k]) for (const e of insbEmails(f[k])) if (!insbEmailOk(e)) errs.push('"' + e + '" is not a valid email address.');
