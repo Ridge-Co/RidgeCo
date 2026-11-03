@@ -2130,17 +2130,17 @@ function submitStatus(woId, idx) {
     var g = checklistGate(idx);
     if (!g.ok) { showActionMsg(idx, g.msg, 'warn'); return; }
   }
-  // Persist checklist state alongside the status change (best-effort) so reasons are saved.
-  if (window._checklists && window._checklists[idx] && window._checklists[idx].length) {
-    api('/wo/checklist', { method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ wo_id: woId, checklist: checklistState(idx), updated_by: session.vendor_name, updated_by_role: 'vendor' }) }).catch(function(){});
-  }
+  // Save the checklist FIRST (the server re-checks it before accepting Complete), then post the status.
   showActionMsg(idx, 'Saving…', '');
-  api('/status', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ wo_id: woId, status: status, notes: notes, updated_by: session.vendor_name, updated_by_role: 'vendor', vendor_id: session.vendor_id }),
+  persistChecklist(idx).then(function(saved) {
+    if (!saved && status === 'Complete') { showActionMsg(idx, esc(t('Could not save the checklist. Try again.')), 'error'); return null; }
+    return api('/status', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ wo_id: woId, status: status, notes: notes, updated_by: session.vendor_name, updated_by_role: 'vendor', vendor_id: session.vendor_id, lang: LANG }),
+    });
   }).then(function(data) {
+    if (data === null || data === undefined) return;
     if (data.success) {
       showActionMsg(idx, '✓ Status updated to ' + status, 'success');
       // Update badge in card header
