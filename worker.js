@@ -3415,7 +3415,7 @@ async function receiptReconImportStatement(env, body) {
     }
 
     const noteBase = `From ${vendor} statement upload (${sourceFileName || 'uploaded ' + today}).`;
-    const notes = noteBase + (match.confidence === 'possible' ? ' ⚠️ Possibly matches an existing entry within 3 days — check before billing.' : '');
+    const notes = noteBase + (match.confidence === 'possible' ? ' ⚠️ Possibly matches an existing entry within 3 days — check before billing.' : '') + judgeNote;
     try {
       await addRow(env, 'Receipt_Recon_Queue', {
         Source_File_ID: sourceFileId || '', Source_File_URL: sourceFileUrl || '', File_Name: sourceFileName || '',
