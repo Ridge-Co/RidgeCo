@@ -33149,6 +33149,134 @@ function timeEntriesWithUsableNotes(timeEntries, billId) {
     && !String(e.Invoice_Description || '').trim() && String(e.Notes || '').trim());
 }
 
+// ── Work-done wording on customer invoices (Nov 2 2026, Brett: invoice 1774 "still not displaying
+// the work completed") ────────────────────────────────────────────────────────────────────────
+// The WO checklist is the record of what was done. Every item that was NOT given a vendor reason code
+// (na / separate / estimate / access / parts) is listed on the invoice in past tense ("Reattached
+// siding using adhesive"), falling back to "<item> — resolved". Reason-coded items are LEFT OFF and
+// reported back to the sender so the preview can flag them (never claim "resolved" falsely, never
+// print "not done" to the customer without Brett's say). Text that looks like an access code,
+// lockbox or key detail never reaches a customer-facing line.
+function clPastTense(word) {
+  const MAP = {
+    replace: 'Replaced', repair: 'Repaired', install: 'Installed', reattach: 'Reattached', attach: 'Attached',
+    fix: 'Fixed', patch: 'Patched', paint: 'Painted', caulk: 'Caulked', seal: 'Sealed', clean: 'Cleaned',
+    remove: 'Removed', check: 'Checked', test: 'Tested', inspect: 'Inspected', adjust: 'Adjusted',
+    tighten: 'Tightened', secure: 'Secured', clear: 'Cleared', unclog: 'Unclogged', reset: 'Reset',
+    rekey: 'Rekeyed', 're-key': 'Re-keyed', change: 'Changed', swap: 'Swapped', mount: 'Mounted',
+    hang: 'Hung', trim: 'Trimmed', sand: 'Sanded', stain: 'Stained', touch: 'Touched', refinish: 'Refinished',
+    reinstall: 'Reinstalled', rehang: 'Rehung', reconnect: 'Reconnected', connect: 'Connected',
+    disconnect: 'Disconnected', level: 'Leveled', lubricate: 'Lubricated',
+    flush: 'Flushed', drain: 'Drained', service: 'Serviced', add: 'Added', build: 'Built', fill: 'Filled',
+    glue: 'Glued', haul: 'Hauled', dispose: 'Disposed of', pressure: 'Pressure-washed', power: 'Power-washed',
+    wash: 'Washed', mow: 'Mowed', treat: 'Treated', spray: 'Sprayed', tape: 'Taped', texture: 'Textured',
+    prime: 'Primed', grout: 'Grouted', 're-grout': 'Re-grouted', regrout: 'Re-grouted', recaulk: 'Re-caulked',
+    straighten: 'Straightened', realign: 'Realigned', align: 'Aligned', rebuild: 'Rebuilt',
+    open: 'Opened', close: 'Closed', balance: 'Balanced', calibrate: 'Calibrated',
+    program: 'Programmed', update: 'Updated', verify: 'Verified', confirm: 'Confirmed',
+  };
+  return MAP[String(word || '').toLowerCase()] || '';
+}
+
+// True when a customer-facing line looks like it carries an access code / lockbox / key detail.
+function looksLikeAccessDetail(text) {
+  // Reference numbers (WO-1253), street numbers, prices and unit-bearing figures are not codes; strip them before looking for digit runs.
+  const t = String(text || '')
+    .replace(/\b(?:WO|EST|INV|SCOPE|SP|VB|PO)[-\s#]*\d+\b/gi, ' ')
+    .replace(/\$\s*[\d,.]+/g, ' ')
+    .replace(/\b\d{4,}\s+(?:[A-Za-z]+\s+){0,2}(?:st|street|ave|avenue|rd|road|dr|drive|blvd|ln|lane|way|ct|court|pl|place|sq|cfm|btu|psi|gal|gallon|gallons|watt|watts|w|v|lb|lbs)\b/gi, ' ');
+  return /lock\s?box|pass\s?code|password|combination|\bcombo\b|key\s?(?:pad|box|safe)|keypad|\b(?:access|door|gate|alarm|entry|temporary|temp|garage|building|lock)\s+codes?\b|\bcodes?\s*[:=#]|\b(?!(?:19|20)\d\d\b)\d{4,}\b/i.test(t);
+}
+
+// Drops every line of a free-text block that looks like an access detail. '' when nothing is left.
+function sanitizeCustomerText(text) {
+  return String(text || '').split(/\r?\n/).map(l => l.trim()).filter(l => l && !looksLikeAccessDetail(l)).join('\n');
+}
+
+function parseChecklistItems(raw) {
+  let arr = raw;
+  if (typeof raw === 'string') { try { arr = JSON.parse(raw || '[]'); } catch (_) { return []; } }
+  if (!Array.isArray(arr)) return [];
+  return arr.filter(it => it && String(it.t || '').trim()).map(it => ({
+    t: String(it.t).trim(),
+    done: it.done === true || String(it.done).toLowerCase() === 'true',
+    code: String(it.code || '').trim().toLowerCase(),
+    why: String(it.why || '').trim(),
+    d: String(it.d || '').trim(),
+  }));
+}
+
+// "Reattach siding" -> "Reattached siding"; "Kitchen: Replace faucet" -> "Kitchen: Replaced faucet";
+// anything that does not start with a known verb -> "<item> — resolved". An explicit item.d wins.
+function checklistItemPastTense(item) {
+  if (item && item.d) return String(item.d).trim();
+  let text = String((item && item.t) || '').trim().replace(/^[\-•*\d.)\s]+/, '').replace(/[.;:\s]+$/, '');
+  if (!text) return '';
+  let prefix = '';
+  const m = text.match(/^([^:]{1,40}):\s+(.+)$/);
+  if (m) { prefix = m[1] + ': '; text = m[2]; }
+  const first = (text.match(/^[A-Za-z\-]+/) || [''])[0];
+  const rest = text.slice(first.length);
+  const past = clPastTense(first);
+  if (past) return prefix + past + rest;
+  if (/^[A-Za-z\-]+ed\b/.test(text)) return prefix + text.charAt(0).toUpperCase() + text.slice(1);   // already past tense
+  return prefix + text.charAt(0).toUpperCase() + text.slice(1) + ' — resolved';
+}
+
+// What the customer may read about the work. lines = past-tense items to print; excluded = reason-coded
+// items left off (flagged to the sender); withheld = items whose text looked like an access detail.
+function workDoneFromChecklist(raw) {
+  const lines = [], excluded = [], withheld = [];
+  parseChecklistItems(raw).forEach(it => {
+    if (it.code) { excluded.push({ t: it.t, code: it.code, why: it.why }); return; }
+    if (looksLikeAccessDetail(it.t) || looksLikeAccessDetail(it.d)) { withheld.push({ t: it.t }); return; }
+    const line = checklistItemPastTense(it);
+    if (line) lines.push(line);
+  });
+  return { lines, excluded, withheld };
+}
+
+// "Work completed:\n• a\n• b" — '' when no checklist item qualifies.
+function workDoneBlock(wo) {
+  const wd = workDoneFromChecklist(wo && wo.Checklist);
+  return wd.lines.length ? ('Work completed:\n' + wd.lines.map(l => '• ' + l).join('\n')) : '';
+}
+
+// Preview warnings about a checklist-backed invoice (excluded / withheld items).
+function workDoneWarnings(wo) {
+  const wd = workDoneFromChecklist(wo && wo.Checklist);
+  const out = [];
+  const label = { na: 'not applicable', separate: 'separate work order', estimate: 'needs estimate', access: "couldn't access", parts: 'needs parts' };
+  if (wd.excluded.length) out.push('ℹ ' + wd.excluded.length + ' checklist item' + (wd.excluded.length === 1 ? ' is' : 's are') + ' left OFF the invoice because the vendor gave a reason: ' + wd.excluded.map(e => '"' + e.t + '" (' + (label[e.code] || e.code) + ')').join('; ') + '.');
+  if (wd.withheld.length) out.push('⚠ ' + wd.withheld.length + ' checklist item' + (wd.withheld.length === 1 ? '' : 's') + ' left off the invoice because the wording looks like an access code or key detail: ' + wd.withheld.map(e => '"' + e.t + '"').join('; ') + '.');
+  return out;
+}
+
+// Scope.Title is a copy of the WO description (push-to-scope), so a description that held access codes
+// put them on the invoice. A title that looks like an access detail is replaced by the WO reference.
+function scopeSafeTitle(s) {
+  const t = String((s && s.Title) || '').trim();
+  if (t && !looksLikeAccessDetail(t)) return t;
+  return (s && s.WO_ID) ? ('WO ' + s.WO_ID) : 'scope of work';
+}
+
+// Work-completed block for the FINAL scope-proposal invoice, from the linked work order's checklist.
+// Never throws: a read failure or empty checklist becomes a preview warning, not a silent gap.
+async function scopeWorkDoneForInvoice(env, s) {
+  const out = { block: '', warnings: [] };
+  if (!s || !s.WO_ID) { out.warnings.push('ℹ This proposal has no linked work order, so the final invoice cannot list the work completed.'); return out; }
+  try {
+    const wo = findWO(await fetchTab(env, 'Work_Orders'), s.WO_ID);
+    if (!wo) { out.warnings.push('⚠ The linked work order ' + s.WO_ID + ' was not found, so the final invoice cannot list the work completed.'); return out; }
+    out.block = workDoneBlock(wo);
+    workDoneWarnings(wo).forEach(w => out.warnings.push(w));
+    if (!out.block) out.warnings.push('⚠ Work order ' + s.WO_ID + ' has no usable checklist items, so the final invoice will not list the work completed. Add them to the checklist first if the customer should read them.');
+  } catch (e) {
+    out.warnings.push('⚠ Could not read work order ' + s.WO_ID + ' (' + String((e && e.message) || e).slice(0, 120) + '), so the work-completed list is missing from this invoice.');
+  }
+  return out;
+}
+
 function buildLaborDescription(billRow, timeEntries, wo) {
   const billId = String((billRow && billRow.ID) || '').trim();
   const parts = [];
