@@ -43474,6 +43474,7 @@ async function fiReport(env, request, url) {
   if (!summaryOk) delete doc.summary;
   delete doc.dictation_log;
   delete doc.voice_notes;
+  delete doc.photo_meta;   // the phone's file names/sizes (duplicate check) are for the inspector only (Nov 2 2026)
   if (doc.property) { delete doc.property.id; delete doc.property.unit_id; }
   if (doc.owner) delete doc.owner.id;
   delete doc.booking;   // the requester's phone/email and booking notes are internal - never on the public report
