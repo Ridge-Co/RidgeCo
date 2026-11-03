@@ -40350,6 +40350,147 @@ async function strAdminAlertAck(env, body) {
     return json({ ok: true });
   } catch (e) { return await strHandleErr(env, e, 'ack alert'); }
 }
+// ── Cleaner supply requests (Nov 3 2026, Brett) ─────────────────────────────────────────────────────────────────────────────────────────
+// A cleaner taps "request" when something is running low. Each item has ONE open request in Supply_Requests (Status 'requested'); asking again on a
+// later day updates that same row (Times_Requested + Last_Requested_*), so Brett sees how long she has been waiting. Brett marks it 'ordered' on the
+// admin page (Resolved_At / Resolved_By / Order_Ref). There is NO automatic ordering: this is a list, plus an email to Brett per request.
+// Where an item is kept comes from Supply_Items (Stored_Box_No / Stored_Location_ID) + Cabin_Boxes + Cabin_Locations (the sheet mirror of Brett's Drive
+// "Supplies Boxes and Spice Inventory"). Lock codes / combinations are NEVER put on this page (the token link is public).
+const STR_SUP_COLS = ['Request_ID', 'Created_At', 'Property_Key', 'Item_ID', 'Item_Text', 'Qty', 'Requested_By_Cleaner_ID', 'Turnover_Task_Key', 'Status', 'Resolved_At', 'Resolved_By', 'Order_Ref', 'Source', 'Note', 'Requested_By_Name', 'Last_Requested_At', 'Last_Requested_By_Name', 'Times_Requested'];
+const STR_SUP_ORDERED_DAYS = 14, STR_SUP_RELIST_DAYS = 30, STR_SUP_MAX_OPEN = 80;
+let __strSupReady = false;
+async function strSupEnsure(env) {
+  if (__strSupReady) return;
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+  if (!titles.includes('Supply_Requests')) await sheetsRequest(env, 'POST', ':batchUpdate', { requests: [{ addSheet: { properties: { title: 'Supply_Requests' } } }] });
+  await ensureColumns(env, 'Supply_Requests', STR_SUP_COLS);
+  __strSupReady = true;
+}
+async function strSupLoad(env, fresh) {
+  await strSupEnsure(env);
+  if (fresh) invalidateTabCache('Supply_Requests');
+  const [reqs, items, locs, boxes] = await fetchTabs(env, ['Supply_Requests', 'Supply_Items', 'Cabin_Locations', 'Cabin_Boxes']);
+  return { reqs: reqs.filter(r => String(r.Request_ID || '').trim() && (r.Property_Key || STR_PROP) === STR_PROP), items, locs, boxes };
+}
+function strSupDay(iso) { const t = Date.parse(iso || ''); return Number.isFinite(t) ? inspEtDate(t) : ''; }
+function strSupNorm(t) { return String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+function strSupWhere(it, locsById, boxesByNo) {
+  const b = boxesByNo[String(it.Stored_Box_No || '').trim()], l = locsById[String(it.Stored_Location_ID || '').trim()];
+  if (b) return `Box ${b.Box_No}` + (b.Room ? ` (${b.Room})` : '');
+  if (l) return l.Name + (l.Where ? ' - ' + l.Where : '');
+  return '';
+}
+function strSupReqOut(r, today) {
+  const date = strSupDay(r.Created_At), last = strSupDay(r.Last_Requested_At) || date, times = Math.max(1, parseInt(r.Times_Requested, 10) || 1);
+  return { id: String(r.Request_ID), item_id: r.Item_ID || '', text: r.Item_Text || '', by: r.Requested_By_Name || '', date, label: strFmtDate(date), times, last_date: last, last_label: strFmtDate(last), last_by: r.Last_Requested_By_Name || r.Requested_By_Name || '', can_again: last < today, note: r.Note || '', status: r.Status || '' };
+}
+// forAdmin=true adds the order fields; false adds the catalog + "where things are kept" for the cleaner page. Never throws: a failure comes back as {error} (and Brett is told).
+async function strSupBlock(env, now, forAdmin) {
+  try {
+    const d = await strSupLoad(env, false), today = inspEtDate(now);
+    const open = d.reqs.filter(r => r.Status === 'requested').map(r => strSupReqOut(r, today)).sort((a, b) => a.date.localeCompare(b.date) || (parseInt(a.id, 10) - parseInt(b.id, 10)));
+    const cutoff = inspAddDays(today, -STR_SUP_ORDERED_DAYS);
+    const ordered = d.reqs.filter(r => r.Status === 'ordered' && strSupDay(r.Resolved_At) >= cutoff).map(r => Object.assign(strSupReqOut(r, today), { ordered_date: strSupDay(r.Resolved_At), ordered_label: strFmtDate(strSupDay(r.Resolved_At)), order_ref: r.Order_Ref || '' })).sort((a, b) => b.ordered_date.localeCompare(a.ordered_date));
+    if (forAdmin) return { open, ordered };
+    const locsById = {}, boxesByNo = {};
+    for (const l of d.locs) if (strBool(l.Active, true) && strBool(l.Cleaner_Visible, false)) locsById[String(l.Location_ID)] = l;
+    for (const b of d.boxes) if (!b.Property_Key || b.Property_Key === STR_PROP) boxesByNo[String(b.Box_No)] = b;
+    const catalog = d.items.filter(i => strBool(i.Active, true) && String(i.Item_Name || '').trim()).map(i => ({ item_id: i.Item_ID, name: String(i.Item_Name).trim(), category: i.Category || 'Other', where: strSupWhere(i, locsById, boxesByNo) }))
+      .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+    if (!catalog.length) throw strErr('supply_list_empty', 'Supply_Items has no active items (or the tab is missing)');
+    // Where things are kept: names and places only. Lock codes / combinations (Lock_Code, Combination) are deliberately never read here.
+    const places = Object.values(locsById).map(l => ({ name: l.Name, where: l.Where || '', holds: l.Contents || l.Function || '' }))
+      .concat(Object.values(boxesByNo).sort((a, b) => parseInt(a.Box_No, 10) - parseInt(b.Box_No, 10)).map(b => ({ name: `Box ${b.Box_No}` + (b.Room ? ` (${b.Room})` : ''), where: '', holds: b.Contents || '' })));
+    return { open, ordered, catalog, places };
+  } catch (e) {
+    if (sheetsQuotaBusyError(e)) return { error: 'The supply list is busy for a moment. Reload in a minute.' };
+    await strSystemAlert(env, 'supplies_block', `The supply list could not be loaded: ${strErrText(e)}`);
+    return { error: 'The supply list could not be loaded. Brett has been told.' };
+  }
+}
+// Append one Supply_Requests row (same id-race guard as strAddRows; the tab's id column is Request_ID) and re-read to prove it landed.
+async function strSupAdd(env, fields) {
+  invalidateTabCache('Supply_Requests');
+  const data = await sheetsRequest(env, 'GET', '/values/Supply_Requests'), rows = data.values || [[]], headers = rows[0] || [];
+  if (!headers.length) throw strErr('sheet_write', 'Tab Supply_Requests has no header row');
+  const idc = headers.indexOf('Request_ID'); if (idc < 0) throw strErr('sheet_write', 'Supply_Requests has no Request_ID column');
+  const next = rows.slice(1).reduce((m, r) => Math.max(m, parseInt((r && r[idc]) || '0', 10) || 0), 0), ids = [String(next + 1)];
+  const vals = [headers.map(h => h === 'Request_ID' ? ids[0] : (fields[h] !== undefined && fields[h] !== null ? String(fields[h]) : ''))];
+  const resp = await sheetsRequest(env, 'POST', '/values/Supply_Requests:append?valueInputOption=RAW', { values: vals });
+  try { const g = await guardAppendedIds(env, 'Supply_Requests', resp, rows.length, idc, ids); ids[0] = g.ids[0]; }
+  catch (e) { throw strErr('write_not_landed', `A new supply request may share its id with another row: ${strErrText(e)}`); }
+  invalidateTabCache('Supply_Requests');
+  const back = (await fetchTab(env, 'Supply_Requests')).find(r => String(r.Request_ID) === ids[0]);
+  if (!back) throw strErr('write_not_landed', `The new supply request (#${ids[0]}) was not found after saving`);
+  return back;
+}
+async function strSupSet(env, id, fields) {
+  const r = await updateRow(env, 'Supply_Requests', id, fields); let j = null;
+  try { j = await r.json(); } catch (e) { throw strErr('sheet_write', `Could not update supply request #${id}: the save returned an unreadable answer (${strErrText(e)})`); }
+  if (!r.ok || !j || !j.success) throw strErr('sheet_write', `Could not update supply request #${id}: ${(j && j.error) || r.status}`);
+  invalidateTabCache('Supply_Requests');
+  const row = (await fetchTab(env, 'Supply_Requests')).find(x => String(x.Request_ID) === String(id));
+  if (!row) throw strErr('write_not_landed', `Supply request #${id} vanished after saving`);
+  for (const [k, v] of Object.entries(fields)) if (String(row[k] == null ? '' : row[k]) !== String(v == null ? '' : v)) throw strErr('write_not_landed', `Supply request #${id}: ${k} did not save`);
+  return row;
+}
+// POST /str/c/supply {k, item_id | text | request_id}  (public, token-gated). Request an item, or ask again for one still on Brett's list.
+async function strSupplyRequest(env, body) {
+  try {
+    body = body || {};
+    const ctx = await strHandlerCtx(env), c = strFindCleaner(ctx, body.k); if (!c) return STR_BAD_LINK();
+    const d = await strSupLoad(env, true), today = inspEtDate(ctx.now), nowIso = new Date(ctx.now).toISOString(), who = strFirst(c) || c.Name;
+    let itemId = '', text = '';
+    if (body.request_id) { const r0 = d.reqs.find(r => String(r.Request_ID) === String(body.request_id)); if (!r0) return json({ ok: false, error: 'request_not_found', message: 'That request was not found.' }, 404); itemId = r0.Item_ID || ''; text = r0.Item_Text || ''; }
+    else if (body.item_id) {
+      const it = d.items.find(i => String(i.Item_ID) === String(body.item_id) && strBool(i.Active, true));
+      if (!it) return json({ ok: false, error: 'item_not_found', message: 'That item is not on the list any more. Pick another, or choose "Something else".' }, 404);
+      itemId = it.Item_ID; text = String(it.Item_Name).trim();
+    } else {
+      text = String(body.text == null ? '' : body.text).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+      if (text.length < 2 || text.length > 80) return json({ ok: false, error: 'bad_text', message: 'Type what you need (2 to 80 letters).' }, 400);
+      const known = d.items.find(i => strBool(i.Active, true) && strSupNorm(i.Item_Name) === strSupNorm(text)); if (known) { itemId = known.Item_ID; text = String(known.Item_Name).trim(); }
+    }
+    const same = r => (itemId ? String(r.Item_ID) === String(itemId) : (!r.Item_ID && strSupNorm(r.Item_Text) === strSupNorm(text)));
+    const open = d.reqs.find(r => r.Status === 'requested' && same(r)), warnings = []; let row, result, message;
+    if (open) {
+      const o = strSupReqOut(open, today);
+      if (!o.can_again) return json({ ok: true, result: 'already_today', message: `${text} is already on Brett's list for today (requested by ${o.last_by || o.by}).`, supplies: await strSupBlock(env, ctx.now, false) });
+      row = await strSupSet(env, open.Request_ID, { Last_Requested_At: nowIso, Last_Requested_By_Name: who, Times_Requested: String(o.times + 1) });
+      result = 're_requested'; message = `Asked again. Brett has been told you still need ${text}.`;
+      await strLog(ctx, '', c.ID, 'supply_again', `${text} (#${open.Request_ID}, ask ${o.times + 1})`);
+    } else {
+      if (d.reqs.filter(r => r.Status === 'requested').length >= STR_SUP_MAX_OPEN) return json({ ok: false, error: 'list_full', message: "Brett's list is full right now. Text him instead." }, 429);
+      const prev = d.reqs.filter(r => r.Status === 'ordered' && same(r) && strSupDay(r.Resolved_At) >= inspAddDays(today, -STR_SUP_RELIST_DAYS)).sort((a, b) => String(b.Resolved_At).localeCompare(String(a.Resolved_At)))[0];
+      row = await strSupAdd(env, { Created_At: nowIso, Property_Key: STR_PROP, Item_ID: itemId, Item_Text: text, Qty: '', Requested_By_Cleaner_ID: c.ID, Turnover_Task_Key: '', Status: 'requested', Source: 'cleaner page', Note: prev ? `Requested again after it was marked ordered on ${strSupDay(prev.Resolved_At)}` : '', Requested_By_Name: who, Last_Requested_At: nowIso, Last_Requested_By_Name: who, Times_Requested: '1' });
+      result = 'requested'; message = `Requested. Brett has been told you need ${text}.`;
+      await strLog(ctx, '', c.ID, 'supply_requested', `${text} (#${row.Request_ID})`);
+    }
+    // Tell Brett (email only: no text per request). The saved request is the record; a failed email is loud (system alert) and shown to the cleaner as a warning.
+    try {
+      const all = (await fetchTab(env, 'Supply_Requests')).filter(r => r.Status === 'requested' && (r.Property_Key || STR_PROP) === STR_PROP).map(r => strSupReqOut(r, today));
+      const head = result === 're_requested' ? `${who} asked again for ${text} (first requested ${strSupDay(row.Created_At)}, asked ${row.Times_Requested} times). It is still not marked ordered.` : `${who} requested ${text} (${strFmtDate(today)}).`;
+      const lines = [head, `On your supply list now (${all.length}): ` + all.map(o => `${o.text} - ${o.by}, ${o.label}` + (o.times > 1 ? ` (asked ${o.times}x)` : '')).join('; ') + '.', 'Mark items ordered on the cleaning scheduler page (Supplies needed).'];
+      const res = await strSendBrett(env, ctx.cfg, `Supplies: ${who} ${result === 're_requested' ? 'still needs' : 'requested'} ${text}`, head, lines, false);
+      if (!res.ok) { warnings.push("Saved, but Brett's email did not go out. He will see it on his list."); await strSystemAlert(env, 'supply_notify', `Supply request #${row.Request_ID} (${text}) saved but Brett was not emailed: ${res.log.join('; ')}`); }
+    } catch (e) { warnings.push("Saved, but Brett's email did not go out. He will see it on his list."); await strSystemAlert(env, 'supply_notify', `Supply request #${row.Request_ID} saved but the email step failed: ${strErrText(e)}`); }
+    return json({ ok: true, result, message, warnings, supplies: await strSupBlock(env, ctx.now, false) });
+  } catch (e) { return await strHandleErr(env, e, 'supply request'); }
+}
+// POST /str/admin/supply/ordered {request_id, order_ref?}  Brett marks a request as ordered.
+async function strAdminSupplyOrdered(env, body) {
+  try {
+    body = body || {};
+    const ctx = await strHandlerCtx(env), d = await strSupLoad(env, true), r = d.reqs.find(x => String(x.Request_ID) === String(body.request_id));
+    if (!r) return json({ ok: false, error: 'not_found', message: 'That supply request was not found.' }, 404);
+    if (r.Status === 'ordered') return json({ ok: true, result: 'already', message: `${r.Item_Text} was already marked ordered.`, supplies: await strSupBlock(env, ctx.now, true) });
+    const ref = String(body.order_ref == null ? '' : body.order_ref).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 120);
+    await strSupSet(env, r.Request_ID, { Status: 'ordered', Resolved_At: new Date(ctx.now).toISOString(), Resolved_By: 'Brett', Order_Ref: ref });
+    await strLog(ctx, '', '', 'supply_ordered', `${r.Item_Text} (#${r.Request_ID})`);
+    return json({ ok: true, result: 'ordered', message: `${r.Item_Text} marked ordered.`, supplies: await strSupBlock(env, ctx.now, true) });
+  } catch (e) { return await strHandleErr(env, e, 'supply ordered'); }
+}
 // POST /str/admin/run {dry}
 async function strAdminRun(env, body) {
   try { const r = await strTick(env, { dry: !!(body && body.dry) }); return json(Object.assign({ dry: !!(body && body.dry) }, r)); }
