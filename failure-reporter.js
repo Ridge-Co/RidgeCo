@@ -24,6 +24,16 @@
   var page = (location.pathname.split('/').pop() || 'index.html').slice(0, 60);
   var es = /^es\b/i.test((navigator.language || '') + '');
 
+  // Nov 2 2026 (Brett): the red "N problems" badge (and the "something didn't work" notice) are for him on screen ONLY. They must never reach any printed page or saved PDF,
+  // on any Hub page. A print stylesheet hides them everywhere this script runs; the customer-facing report pages do not draw the badge at all.
+  try {
+    var ps = document.createElement('style');
+    ps.setAttribute('data-hub-print-hide', '1');
+    ps.textContent = '@media print{#hub-fail-badge,#hub-fail-toast{display:none!important;visibility:hidden!important}}';
+    (document.head || document.documentElement).appendChild(ps);
+  } catch (e) { try { console.error('[failure-reporter] print style failed', e); } catch (x) { /* no console */ } }
+  var REPORT_PAGE = /(^|\/)(inspection-report|inspection-photos)\.html$/i.test(location.pathname);
+
   window.addEventListener('beforeunload', function () { unloading = true; });
   window.addEventListener('pagehide', function () { unloading = true; });
   // Oct 21 2026: phones and browsers kill in-flight requests when a tab is backgrounded, the screen locks or the page navigates ("Load failed" on
