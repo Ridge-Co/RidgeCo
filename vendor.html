@@ -2159,7 +2159,7 @@ function submitStatus(woId, idx) {
         setTimeout(function(){ loadWorkOrders(); }, 1500);
       }
     } else {
-      showActionMsg(idx, 'Error saving status.', 'error');
+      showActionMsg(idx, esc((data && data.error) || 'Error saving status.'), 'error');
     }
   }).catch(function() {
     showActionMsg(idx, 'Connection error.', 'error');
