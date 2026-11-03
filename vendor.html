@@ -3378,6 +3378,26 @@ var _overageAcknowledged = false; // Sep 23 2026 — set once the vendor confirm
 // (_openBillModalReal, unchanged below) only opens once the gate passes, either immediately or
 // right after the vendor submits the Complete-Your-Info form (same tap).
 function openBillModal(woId, vendorName) {
+  // Nov 2 2026: no invoice until every checklist item is checked off or has a reason (the server enforces this too).
+  var _list = window._wos || [], _ci = -1;
+  for (var _k = 0; _k < _list.length; _k++) { if (String(_list[_k].ID) === String(woId)) { _ci = _k; break; } }
+  if (_ci >= 0) {
+    var _items = window._checklists[_ci];
+    if (!_items) { try { _items = JSON.parse(_list[_ci].Checklist || '[]') || []; } catch (e) { _items = []; } }
+    var _open = (_items || []).filter(function(it) { return !it.done && !it.code; }).length;
+    if (_open) { showActionMsg(_ci, checklistBlockMsg(_open, 'invoice'), 'error'); var _am = document.getElementById('action-msg-' + _ci); if (_am && _am.scrollIntoView) _am.scrollIntoView({block:'center'}); return; }
+    if (window._checklists[_ci] && window._checklists[_ci].length) {
+      persistChecklist(_ci).then(function(saved) {
+        if (!saved) { showActionMsg(_ci, esc(t('Could not save the checklist. Try again.')), 'error'); return; }
+        _openBillModalGated(woId, vendorName);
+      });
+      return;
+    }
+  }
+  _openBillModalGated(woId, vendorName);
+}
+
+function _openBillModalGated(woId, vendorName) {
   var vendorId = (window.session && session.vendor_id) ? String(session.vendor_id) : '';
   if (!vendorId) { _openBillModalReal(woId, vendorName); return; } // no session — fail open rather than block
   api('/vendor-onboarding-status?vendor_id=' + encodeURIComponent(vendorId)).then(function(res) {
