@@ -45570,7 +45570,7 @@ async function insbQueue(env) {
       const aSent = String(r.Invoice_Emailed_At || '').trim() !== '', bSent = String(r.InvB_Emailed_At || '').trim() !== '';
       return { booking: insbPublicBooking(r), needs_completion: r.Status === 'approved' && !done && Number.isFinite(start) && start <= now + 6 * 3600000,
         owner_held: done && !bSent && bst.startsWith('held'), owner_unsent: done && !bSent && bst === 'ready' && aSent, owner_hold: done && !bSent && insbIsHold(bst),
-        invoice_hold: done && !aSent && insbIsHold(ist), needs_attention: done && !aSent && (ist === 'invoiced' || /^creating/.test(ist)) };
+        invoice_hold: done && !aSent && insbIsHold(ist), needs_attention: done && !aSent && !qbOnlyIds.has(String(r.Customer_ID)) && (ist === 'invoiced' || /^creating/.test(ist)) };
     }).filter(x => x.needs_completion || x.owner_held || x.owner_unsent || x.owner_hold || x.invoice_hold || x.needs_attention);
     return json({ ok: true, items: out, customers: cu.filter(x => wo.has(String(x.ID))).map(x => ({ id: x.ID, name: x.Name, markup_pct: x.Markup_Pct || '', appfolio: !!String(x.AppFolio_Email || '').trim() })) });
   } catch (e) { await insbFail(env, 'queue', e.message, ''); return json({ ok: false, error: 'queue_failed', message: e.message }, 500); }
