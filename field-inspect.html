@@ -1462,6 +1462,7 @@ function viewReview(){
   if (!canPrev) h += '<div class="muted">'+(rec.dirty||S.sync.syncing ? 'Waiting for “Saved to server” — the preview shows what is saved.' : 'Save the inspection to the server first.')+'</div>';
   h += '<div class="btns"><button class="btn go" id="pub-btn" onclick="publishNow()"'+((chk.blocks.length||!seen)?' disabled':'')+'>'+(rec.status==='published'?'Step 2 — Re-publish report':'Step 2 — Publish report')+'</button>'+(rec.status==='published'?'<button class="btn danger" onclick="unpublishNow()">Un-publish</button>':'')+'</div></div>';
   if (rec.status==='published') h += publishedCard();
+  h += billingCard();
   return h;
 }
 // ---- Oct 29 2026: fix the publish blockers right where they are listed, and require a preview before anything is published ----
