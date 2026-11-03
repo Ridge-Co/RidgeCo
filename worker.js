@@ -25249,6 +25249,7 @@ async function woSharedRead(env, url){
     tenant_name: e.tenant_name||'', tenant_phone: e.tenant_phone||'', tenant_former: !!e.tenant_former,
     lockboxes: e.lockboxes||[], legacy_lockbox: e.legacy_lockbox||'', access_notes: e.access_notes||'',
     vendor_has_access: !!e.vendor_has_access, Vendor_ID: e.Vendor_ID||'',
+    Checklist: wo.Checklist||'',
   };
   let attachments = [];
   try {
