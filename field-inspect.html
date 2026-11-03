@@ -1532,6 +1532,118 @@ function unpublishNow(){
     .catch(function(e){ release('unpub'); toast('Un-publish failed: '+e.message); });
 }
 function reportUrl(){ return S.reportBase + '/inspection-report.html?r=' + encodeURIComponent(S.rec.token) + (window.__testmode ? '&testmode=1' : ''); }
+// ---- Nov 2 2026: work order number + billing right on the Review screen (preview -> confirm; all money steps are the Hub's /insp/billing/* endpoints) ----
+var BILL_KINDS = [['inspected','Inspected'],['zero_access','Zero access'],['no_charge','No charge']];
+function fiMoney(c){ return '$'+((+c||0)/100).toFixed(2); }
+function loadBilling(id){
+  api('GET','/fi/billing?id='+encodeURIComponent(id)).then(function(r){
+    if (!S.bill || S.bill.id!==id) return;
+    S.bill.loading=false; S.bill.err=''; S.bill.data=r; if (S.view==='review') safeRender();
+  }).catch(function(e){
+    if (!S.bill || S.bill.id!==id) return;
+    S.bill.loading=false; S.bill.err='Could not load the billing state: '+e.message; if (S.view==='review') safeRender();
+  });
+}
+function reloadBilling(){ var r = S.rec; if (!r) return; S.bill = { id:r.id, loading:true, data:null, err:'' }; render(); loadBilling(r.id); }
+function billingCard(){
+  var rec = S.rec; if (!rec || !rec.base_rev) return '';
+  var B = S.bill;
+  if (!B || B.id!==rec.id){ S.bill = B = { id:rec.id, loading:true, data:null, err:'' }; loadBilling(rec.id); }
+  var h = '<div class="card"><b>Work order &amp; billing</b>';
+  if (B.loading) return h+'<div class="muted">Loading…</div></div>';
+  if (B.err) return h+'<div class="banner err">'+esc(B.err)+'</div><div class="btns"><button class="btn sm" onclick="reloadBilling()">Try again</button></div></div>';
+  var d = B.data||{};
+  if (!d.linked) return h+'<div class="banner warn">This inspection is not linked to a booking, so it has no work order number or invoice to track yet. Start inspections from an approved booking, or link it from the Areas screen.</div></div>';
+  var b = d.booking||{}, c = d.customer||{}, id = esc(b.ID), done = !!String(b.Completed_At||'').trim(), wo = b.WO_Number||'', st = String(b.Invoice_Status||'');
+  h += '<div class="muted">'+esc(c.name||'Customer')+' · '+esc(b.Formatted_Address||b.Address||'')+'</div>';
+  if (wo) h += '<div style="margin-top:6px">Work order <b>'+esc(wo)+'</b> <span class="muted">(printed on the report and the invoice)</span></div>';
+  else {
+    h += '<div class="banner warn" style="margin-top:6px"><b>No work order number.</b> The report and invoice carry no reference.';
+    if (!done) h += '<label class="fld">Work order number</label><input id="fb-wo-in" placeholder="e.g. 43945-1"><div class="btns"><button class="btn sm primary" onclick="fbSetWO(\''+id+'\',this)">Save work order number</button></div>';
+    h += '</div>';
+  }
+  if (!c.billing) return h+'<div class="muted" style="margin-top:6px">This customer is not set up for automatic billing.</div></div>';
+  if (!done){
+    h += '<div class="btns"><button class="btn go" onclick="fbOpen()">'+(c.qb_only?'Mark invoiced':'Complete &amp; bill')+'</button></div>';
+    if (c.qb_only) h += '<div class="muted">Creates the QuickBooks invoice. It is <b>not</b> emailed.</div>';
+    return h+fbSheetHtml()+'</div>';
+  }
+  if (st==='none') return h+'<div class="muted" style="margin-top:6px">Completed with no charge — nothing invoiced.</div></div>';
+  var paid = !!String(b.Paid_At||'').trim();
+  h += '<div style="margin-top:8px"><span class="pill ok">Invoiced</span> '+(paid?'<span class="pill ok">Paid '+esc(String(b.Paid_At).slice(0,10))+' ('+esc(b.Paid_Source||'')+')</span>':'<span class="pill warn">Unpaid</span>')+'</div>';
+  h += '<div class="muted">'+(st==='staged'?'Staging test: nothing real was created. ':'QuickBooks invoice <b>#'+esc(b.QB_Invoice_Number||b.QB_Invoice_ID)+'</b> · ')+fiMoney(b.Invoice_Base_Cents)+(c.qb_only?' · not emailed (this customer is invoiced only)':'')+'</div>';
+  if (!c.qb_only && st!=='emailed' && st!=='staged') h += '<div class="banner warn" style="margin-top:6px">Invoice status is “'+esc(st.split('|')[0])+'” — it has not been fully sent. Finish it in the Inspection Scheduler under Approvals.</div>';
+  if (B.msg) h += '<div class="banner '+(B.msgBad?'err':'ok')+'" style="margin-top:6px">'+esc(B.msg)+'</div>';
+  if (!paid){
+    h += '<div class="btns"><button class="btn sm" onclick="fbCheckPaid(this)">Check if paid</button>'+(B.confirmPaid?'<button class="btn sm go" onclick="fbMarkPaid(this)">Yes — mark paid today</button><button class="btn sm ghost" onclick="fbAskPaid(false)">Cancel</button>':'<button class="btn sm" onclick="fbAskPaid(true)">Mark paid</button>')+'</div>';
+    h += '<div class="muted">“Check if paid” reads the invoice balance in QuickBooks (paid when it reaches $0.00).</div>';
+  } else h += '<div class="btns"><button class="btn sm ghost" onclick="fbUndoPaid(this)">Undo paid mark</button></div>';
+  return h+'</div>';
+}
+function fbSheetHtml(){
+  var sh = S.bill && S.bill.sheet; if (!sh) return '';
+  var h = '<div class="card" style="background:var(--chip)"><div class="seg">'+BILL_KINDS.map(function(k){ return '<button class="'+(sh.kind===k[0]?'sel':'')+'" onclick="fbKind(\''+k[0]+'\')">'+k[1]+'</button>'; }).join('')+'</div>';
+  if (sh.kind==='inspected') h += '<label class="fld">Units inspected</label><input id="fb-units" type="number" min="1" max="60" inputmode="numeric" value="'+esc(sh.units)+'" oninput="fbUnits(this.value)">';
+  h += '<div id="fb-preview">'+(sh.html||'<div class="muted">Working out the bill…</div>')+'</div><div id="fb-err">'+(sh.err?'<div class="banner err">'+sh.err+'</div>':'')+'</div>';
+  return h+'<div class="btns"><button class="btn ghost" onclick="fbClose()">Close</button><button class="btn go" id="fb-go" onclick="fbConfirm(this)"'+(sh.canGo&&!sh.busy?'':' disabled')+'>'+esc(sh.goLabel||'Mark invoiced')+'</button></div></div>';
+}
+function fbBooking(){ return S.bill && S.bill.data && S.bill.data.booking; }
+function fbOpen(){ var b = fbBooking(); if (!b) return; S.bill.sheet = { kind:'inspected', units:String(b.Units||1), html:'', err:'', canGo:false, busy:false, seq:0, goLabel:'' }; render(); fbPreview(); }
+function fbClose(){ if (S.bill) S.bill.sheet = null; render(); }
+function fbKind(k){ if (!S.bill || !S.bill.sheet) return; S.bill.sheet.kind = k; S.bill.sheet.html = ''; S.bill.sheet.canGo = false; S.bill.sheet.err = ''; render(); fbPreview(); }
+var fbTimer = null;
+function fbUnits(v){ var sh = S.bill && S.bill.sheet; if (!sh) return; sh.units = v; sh.canGo = false; sh.plan = null; var g = $('fb-go'); if (g) g.disabled = true; clearTimeout(fbTimer); fbTimer = setTimeout(fbPreview, 350); }
+function fbPreview(){
+  var B = S.bill, sh = B && B.sheet, b = fbBooking(); if (!sh || !b) return;
+  var my = ++sh.seq, units = sh.kind==='inspected' ? sh.units : '0', c = B.data.customer||{};
+  function paint(html, can, label){ if (!S.bill || !S.bill.sheet || S.bill.sheet.seq!==my) return; var s = S.bill.sheet; s.html = html; s.canGo = !!can; if (label) s.goLabel = label; var p = $('fb-preview'); if (p) p.innerHTML = html; var g = $('fb-go'); if (g){ g.disabled = !can || s.busy; if (label) g.textContent = label; } }
+  api('POST','/insp/billing/preview',{ id:b.ID, kind:sh.kind, units:units }).then(function(r){
+    var p = r.plan; sh.plan = p; var h = '';
+    if (p.blockers.length) h += '<div class="banner err"><b>Cannot bill yet:</b><br>'+p.blockers.map(esc).join('<br>')+'</div>';
+    if (p.kind==='no_charge') h += '<div class="muted">Marks this booking complete. <b>No invoice.</b></div>';
+    else if (p.base_cents>0){
+      h += '<div class="row"><span>Invoice to '+esc((r.qb&&r.qb.name)||c.name||'customer')+'</span><b>'+fiMoney(p.base_cents)+'</b></div><div class="muted">'+esc(p.base_label||'')+(p.invoice.wo?' · WO '+esc(p.invoice.wo):'')+' · due '+esc(p.invoice.due)+'</div>';
+      if (p.owner && p.owner.enabled) h += '<div class="muted">Owner-facing invoice: '+(p.owner.status==='ready'?esc(p.owner.number)+' · '+fiMoney(p.owner.total_cents):'<b>will be HELD</b> ('+esc(p.owner.status)+')')+'</div>';
+    }
+    if (p.resume) h += '<div class="banner info">This booking already has an invoice. Confirming only finishes what is unfinished.</div>';
+    (p.warnings||[]).forEach(function(w){ h += '<div class="banner" style="margin-top:6px">'+esc(w)+'</div>'; });
+    paint(h, p.ok, p.kind==='no_charge' ? 'Mark complete' : (p.resume ? 'Finish' : (c.qb_only ? 'Mark invoiced' : 'Bill & send')));
+  }).catch(function(e){ paint('<div class="banner err">Could not build the preview: '+esc(e.message)+'</div>', false); });
+}
+function fbConfirm(btn){
+  var B = S.bill, sh = B && B.sheet, b = fbBooking(); if (!sh || !sh.plan || !sh.plan.ok || sh.busy || !b) return;
+  sh.busy = true; btn.disabled = true; btn.textContent = 'Working…';
+  var units = sh.kind==='inspected' ? sh.units : '0';
+  api('POST','/insp/billing/complete',{ id:b.ID, kind:sh.kind, units:units, expected_cents:sh.plan.base_cents, confirm:true }).then(function(r){
+    var steps = (r.steps||[]).join('; ');
+    S.bill.sheet = null; S.bill.msg = 'Done.'+(r.invoice_number?' QuickBooks invoice #'+r.invoice_number+'.':'')+(steps?' '+steps:''); S.bill.msgBad = false;
+    toast('Invoiced'); loadBilling(S.bill.id); render();
+  }).catch(function(e){
+    sh.busy = false; var d = e.data||{};
+    sh.err = '<b>'+(d.invoice_created ? 'The invoice IS in QuickBooks, but: ' : 'Nothing was finished: ')+'</b>'+esc(e.message)+(d.steps&&d.steps.length ? '<br><span class="muted">Done so far: '+d.steps.map(esc).join('; ')+'</span>' : '');
+    if (e.code==='amount_changed'){ sh.err += ' Check the new amount and confirm again.'; fbPreview(); }
+    loadBilling(S.bill.id); render();
+  });
+}
+function fbSetWO(bid, btn){
+  var v = ($('fb-wo-in')||{}).value||''; if (!v.trim()){ toast('Type the work order number first'); return; }
+  if (!claim('fbwo')) return; btn.disabled = true;
+  api('POST','/insp/billing/set-wo',{ id:bid, wo:v }).then(function(){ release('fbwo'); toast('Work order number saved'); reloadBilling(); })
+    .catch(function(e){ release('fbwo'); btn.disabled = false; toast('Not saved: '+e.message); });
+}
+function fbAskPaid(on){ if (S.bill){ S.bill.confirmPaid = !!on; render(); } }
+function fbPaidCall(path, body, btn, okMsg){
+  if (!claim('fbpaid')) return; if (btn) btn.disabled = true;
+  api('POST',path,body).then(function(r){
+    release('fbpaid'); S.bill.confirmPaid = false;
+    var bad = r && r.errors && r.errors.length;
+    S.bill.msg = bad ? 'Could not check: '+r.errors.join('; ') : (typeof okMsg==='function' ? okMsg(r) : okMsg); S.bill.msgBad = !!bad;
+    loadBilling(S.bill.id); render();
+  }).catch(function(e){ release('fbpaid'); if (btn) btn.disabled = false; S.bill.msg = 'Not done: '+e.message+((e.data&&e.data.errors)?' '+e.data.errors.join('; '):''); S.bill.msgBad = true; render(); });
+}
+function fbCheckPaid(btn){ var b = fbBooking(); if (!b) return; fbPaidCall('/insp/billing/check-paid',{ id:b.ID }, btn, function(r){ return r.paid&&r.paid.length ? 'QuickBooks shows this invoice is paid.' : (r.unpaid&&r.unpaid[0] ? 'Not paid yet: QuickBooks balance is '+fiMoney(r.unpaid[0].balance_cents)+'.' : (r.message||'Nothing to check.')); }); }
+function fbMarkPaid(btn){ var b = fbBooking(); if (!b) return; fbPaidCall('/insp/billing/mark-paid',{ id:b.ID, confirm:true }, btn, 'Marked paid.'); }
+function fbUndoPaid(btn){ var b = fbBooking(); if (!b) return; fbPaidCall('/insp/billing/mark-paid',{ id:b.ID, confirm:true, undo:true }, btn, 'Paid mark removed.'); }
 function publishedCard(){
   var url = reportUrl();
   return '<div class="card" style="border-color:var(--accent2)"><b>✅ Published</b><div class="linkbox" id="rep-link">'+esc(url)+'</div>'
