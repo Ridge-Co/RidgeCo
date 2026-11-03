@@ -3432,7 +3432,7 @@ async function receiptReconImportStatement(env, body) {
 
   return json({
     success: true, vendor, vendor_detected: detectedVendor || undefined, total_lines: workingRows.length,
-    matched_confirmed, flagged_possible, inserted, skipped_invalid, remaining, next_offset: nextOffset, errors,
+    matched_confirmed, flagged_possible, judge_confirmed, judge_skipped, inserted, skipped_invalid, remaining, next_offset: nextOffset, errors,
   });
 }
 
