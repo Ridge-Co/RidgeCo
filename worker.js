@@ -277,7 +277,7 @@ const _hubWorkerCore = {
       '/delivery/rsvp',
       // STR cleaner page (Oct 14 2026): public at the gate, but every handler self-verifies the cleaner's own random Link_Token
       // (STR_Cleaners) before reading or writing anything, and never returns another cleaner's phone/email.
-      '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/ics','/fi/report','/fi/photo/view',
+      '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/supply','/str/c/ics','/fi/report','/fi/photo/view',
       // Failure reports from pages and other apps (Oct 16 2026): public so a static page can call it; an anonymous caller can only ever create a capped P2 event (never a text).
       '/failure/report'];
     if (!PUBLIC_PATHS.includes(path)) {
