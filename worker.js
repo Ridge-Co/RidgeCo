@@ -45559,6 +45559,72 @@ async function insbSetWO(env, body) {
     return json({ ok: true, booking: insbPublicBooking(back) });
   } catch (e) { await insbFail(env, 'set_wo', e.message, body && body.id); return json({ ok: false, error: 'save_failed', message: e.message }, 500); }
 }
+// ── Paid tracking + the Field Inspection billing card (Nov 2 2026) ──
+// A QuickBooks invoice that is "Invoiced" (created, not emailed) is paid when its QuickBooks balance reaches 0 (the customer's ACH is booked there), or when a person says so.
+async function insbQbBalance(env, token, invoiceId) {
+  const id = String(invoiceId == null ? '' : invoiceId).replace(/[^0-9]/g, '');
+  if (!id) throw new Error('the booking has no usable QuickBooks invoice id');
+  const d = await qbApi(env, 'invoice/' + id + '?minorversion=73', 'GET', null, token);
+  if (!d || d.Fault || !d.Invoice) throw new Error('QuickBooks did not return invoice ' + id + (d && d.Fault ? ': ' + qbFault(d) : ''));
+  const balance = Number(d.Invoice.Balance), total = Number(d.Invoice.TotalAmt);
+  if (!Number.isFinite(balance) || !Number.isFinite(total)) throw new Error('QuickBooks returned invoice ' + id + ' without a usable balance');
+  return { balance, total, number: String(d.Invoice.DocNumber || '') };
+}
+// POST /insp/billing/check-paid { id? } — reads QuickBooks; stamps Paid_At/Paid_Source=quickbooks on every invoice whose balance is 0. With no id it sweeps up to 40 unpaid invoices.
+async function insbCheckPaid(env, body) {
+  const t0 = Date.now(), errors = [], paid = [], unpaid = [];
+  try {
+    await insbEnsureColumns(env); invalidateTabCache('Insp_Bookings');
+    const one = body && body.id ? String(body.id) : '';
+    let rows = (await fetchTab(env, 'Insp_Bookings')).filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Invoice_ID || '').trim() && !String(r.Paid_At || '').trim() && !/^(staged|none|creating|review)/.test(String(r.Invoice_Status || '')) && (!one || String(r.ID) === one));
+    if (!one) rows = rows.slice(0, 40);
+    if (!rows.length) return json({ ok: true, checked: 0, paid, unpaid, errors, message: 'No unpaid QuickBooks invoice to check.' });
+    if (insbQbStubbed(env)) return json({ ok: false, error: 'qb_unavailable', message: 'QuickBooks is not connected on this Worker, so payment cannot be checked here.' }, 409);
+    const token = await qbAccessToken(env);
+    for (const r of rows) {
+      try {
+        const q = await insbQbBalance(env, token, r.QB_Invoice_ID);
+        if (q.balance === 0 && q.total > 0) {
+          await updateRowVerified(env, 'Insp_Bookings', r.ID, { Paid_At: new Date().toISOString(), Paid_Source: 'quickbooks', Billing_Log: insbLogLine(r, 'paid (QuickBooks balance 0)') });
+          paid.push({ id: r.ID, invoice_number: q.number || r.QB_Invoice_Number });
+        } else unpaid.push({ id: r.ID, invoice_number: q.number || r.QB_Invoice_Number, balance_cents: Math.round(q.balance * 100), total_cents: Math.round(q.total * 100) });
+      } catch (e) { errors.push('Booking ' + r.ID + ': ' + e.message); await insbFail(env, 'check_paid', 'Payment check failed for booking ' + r.ID + ' (invoice ' + (r.QB_Invoice_Number || r.QB_Invoice_ID) + '): ' + e.message, r.ID); }
+    }
+    if (!errors.length) await insbOk(env, 'check_paid', t0, one);
+    return json({ ok: errors.length === 0, checked: rows.length, paid, unpaid, errors }, errors.length ? 502 : 200);
+  } catch (e) { await insbFail(env, 'check_paid', 'Payment check crashed: ' + e.message, body && body.id); return json({ ok: false, error: 'check_failed', message: e.message }, 500); }
+}
+// POST /insp/billing/mark-paid { id, confirm:true, paid_on?:'YYYY-MM-DD', note?, undo? } — manual "paid" (ACH notice, bank deposit). undo:true clears a wrong tap.
+async function insbMarkPaid(env, body) {
+  try {
+    if (!body || body.confirm !== true) return json({ ok: false, error: 'confirm_required', message: 'Send confirm:true (the tap is the confirmation).' }, 400);
+    const L = await insbLoad(env, body.id); if (L.err) return L.err;
+    const b = L.b;
+    if (body.undo === true) {
+      if (!String(b.Paid_At || '').trim()) return json({ ok: true, already: true, booking: insbPublicBooking(b) });
+      const back = await updateRowVerified(env, 'Insp_Bookings', b.ID, { Paid_At: '', Paid_Source: '', Paid_Note: '', Billing_Log: insbLogLine(b, 'paid mark removed') });
+      return json({ ok: true, booking: insbPublicBooking(back) });
+    }
+    if (!String(b.Completed_At || '').trim() || (!String(b.QB_Invoice_ID || '').trim() && String(b.Invoice_Status || '') !== 'staged')) return json({ ok: false, error: 'not_invoiced', message: 'Only an invoiced booking can be marked paid.' }, 409);
+    if (String(b.Paid_At || '').trim()) return json({ ok: true, already: true, booking: insbPublicBooking(b) });
+    const on = String(body.paid_on || '').trim();
+    if (on && (!/^\d{4}-\d{2}-\d{2}$/.test(on) || on > insbTodayEt())) return json({ ok: false, error: 'bad_date', message: 'The paid date must look like 2026-11-02 and cannot be in the future.' }, 400);
+    const note = String(body.note || '').trim().slice(0, 200);
+    const back = await updateRowVerified(env, 'Insp_Bookings', b.ID, { Paid_At: on ? on + 'T12:00:00.000Z' : new Date().toISOString(), Paid_Source: 'manual', Paid_Note: note, Billing_Log: insbLogLine(b, 'marked paid by hand' + (note ? ' (' + note + ')' : '')) });
+    return json({ ok: true, booking: insbPublicBooking(back) });
+  } catch (e) { await insbFail(env, 'mark_paid', 'Mark paid failed: ' + e.message, body && body.id); return json({ ok: false, error: 'mark_paid_failed', message: e.message }, 500); }
+}
+// GET /fi/billing?id=<inspection id> — the booking this inspection came from (found by Insp_Bookings.Inspection_ID, so it works even when the page's own link is missing), its customer and its billing state.
+async function fiBilling(env, url) {
+  const id = String(url.searchParams.get('id') || '');
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  await insbEnsureColumns(env); invalidateTabCache('Insp_Bookings'); invalidateTabCache('Insp_Customers');
+  const b = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.Inspection_ID) === id && String(r.Active || '').toUpperCase() !== 'FALSE');
+  if (!b) return json({ ok: true, linked: false });
+  const c = (await fetchTab(env, 'Insp_Customers')).find(r => String(r.ID) === String(b.Customer_ID));
+  if (!c) return fiErr(404, 'customer_missing', 'The customer on this inspection\'s booking was not found.');
+  return json({ ok: true, linked: true, booking: insbPublicBooking(b), customer: { id: String(c.ID), name: String(c.Name || ''), billing: String(c.Billing_Mode || '') === 'wo', qb_only: String(c.Invoice_Delivery || '') === 'qb_only' } });
+}
 // GET /insp/billing/queue — approved bookings whose start has passed and are not completed, plus held owner invoices. Drives the "Needs billing" card.
 async function insbQueue(env) {
   try {
