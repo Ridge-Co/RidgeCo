@@ -72,6 +72,7 @@ function world(opts = {}) {
     qbFault: r => (r && r.Fault ? 'QBO ' + r.Fault.Error[0].code + ': ' + r.Fault.Error[0].Message : null), qbDupId: () => null,
     qbFindOrCreateCustomer: async (env, owner, name) => { w.custCalls = (w.custCalls || []).concat([{ owner, name }]); return 'C1'; },
     qbLookupExisting: async () => null,
+    fiErr: (status, error, message, extra) => ({ body: Object.assign({ ok: false, error, message }, extra || {}), status }), FI_ID_RE: /^[A-Za-z0-9_-]{6,64}$/,
     isStaging: () => w.staging, fetchConfig: async () => w.config, failSetConfig: async (env, k, v) => { w.config[k] = v; },
     inspEtDate: ms => new Date(ms - 4 * 3600000).toISOString().slice(0, 10), inspAddDays: (new Function(grab('inspAddDays') + '\nreturn inspAddDays;'))(),
     inspRandToken: () => 'T' + (++w.ids), inspAdminBooking: b => { const o = Object.assign({}, b); delete o.Manage_Token; return o; },
