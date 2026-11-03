@@ -1190,7 +1190,7 @@ function renderSupplies(){
   var h = '';
   if(!open.length) h += '<p class="muted">Nothing is waiting to be ordered.</p>';
   open.forEach(function(o){
-    h += '<div class="li"><b>' + esc(o.by || 'A cleaner') + ' requested ' + esc(o.text) + '</b> <span class="muted">' + esc(fmtDay(o.date)) + '</span>'
+    h += '<div class="li" style="padding:12px 0;border-top:1px solid var(--border,#ddd)"><b>' + esc(o.by || 'A cleaner') + ' requested ' + esc(o.text) + '</b> <span class="muted">' + esc(fmtDay(o.date)) + '</span>'
       + (o.times > 1 ? '<div class="msg warn" style="margin-top:6px"><b>Asked ' + esc(o.times) + ' times.</b>Last asked ' + esc(fmtDay(o.last_date)) + (o.last_by ? ' by ' + esc(o.last_by) : '') + '. Still not marked ordered.</div>' : '')
       + (o.note ? '<div class="muted">' + esc(o.note) + '</div>' : '')
       + '<input id="sref-' + esc(o.id) + '" type="text" maxlength="120" placeholder="Where / order # (optional)" aria-label="Order reference for ' + esc(o.text) + '" style="width:100%;margin-top:8px;min-height:44px;font-size:16px;padding:8px 10px;border:1px solid var(--border,#ccc);border-radius:10px">'
