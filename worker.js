@@ -10203,6 +10203,31 @@ async function assignVendor(env, body, internal) {
   return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify, vendor_sms_detail: vendorSmsDetail });
 }
 
+// ── Vendor checklist gate (Nov 2 2026, Brett) ───────────────────────────────────────────────────
+// A vendor cannot mark a job Complete or submit an invoice until every checklist item is ticked or has a
+// reason code. Enforced here (the portal also checks first) so a stale page, a share link, or a direct
+// call cannot get around it. Hub/admin callers are not gated. Message is in the vendor's chosen language.
+function checklistUnresolvedItems(raw) { return parseChecklistItems(raw).filter(it => !it.done && !it.code); }
+
+function checklistGateMessage(count, action, lang) {
+  const n = Number(count) || 0;
+  if (lang === 'es') {
+    return 'Todavía no puede ' + (action === 'invoice' ? 'enviar una factura' : 'marcar este trabajo como completo') + ': ' + n + ' elemento' + (n === 1 ? '' : 's') + ' de la lista de verificación ' + (n === 1 ? 'no está marcado' : 'no están marcados') + '. Marque cada uno como completado, o elija un motivo (no aplica, orden de trabajo aparte, necesita presupuesto, no pude acceder, necesita materiales) para los que no pudo hacer.';
+  }
+  return 'You can\'t ' + (action === 'invoice' ? 'submit an invoice' : 'mark this job complete') + ' yet: ' + n + ' checklist item' + (n === 1 ? ' is' : 's are') + ' not checked off. Check each one off as complete, or pick a reason (not applicable, separate work order, needs estimate, couldn\'t access, needs parts) for any you couldn\'t do.';
+}
+
+// Returns null when the vendor may proceed, else a ready-to-send 409 Response.
+async function checklistGateResponse(env, wo, vendorId, action, hintLang) {
+  const open = checklistUnresolvedItems(wo && wo.Checklist);
+  if (!open.length) return null;
+  let lang = String(hintLang || '').toLowerCase() === 'es' ? 'es' : 'en';
+  if (vendorId) {
+    try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (v && String(v.Language || '').toLowerCase() === 'es') lang = 'es'; } catch (_) {}
+  }
+  return json({ error: checklistGateMessage(open.length, action, lang), code: 'checklist_incomplete', unresolved: open.map(i => i.t), lang }, 409);
+}
+
 async function updateStatus(env, body) {
   const _t0 = Date.now();
   // On Hold now REQUIRES a reason (Sep 14 2026, Brett) — checked before anything is written,
