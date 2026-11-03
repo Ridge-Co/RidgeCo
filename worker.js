@@ -29128,6 +29128,153 @@ async function qbRepairInvoice(env, body) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// ── REPAIR SCOPE-PROPOSAL INVOICES (Nov 2 2026, Brett: invoice 1774 / "any recent") ──────────────────
+// Scope-proposal invoices (milestone, deposit, final balance) are NOT Invoice_Review rows, so the repair above
+// never saw them. This rewrites ONLY the line Descriptions on those invoices: the title is made safe (access
+// codes out) and the FINAL invoice lists the work completed from the linked work order's checklist. Amounts,
+// items, quantities and customer are carried over untouched; the update is refused if the lines would not
+// still add up to the invoice total, and is read back afterwards. A paid invoice is previewed but only
+// rewritten when the caller passes allow_paid (the total and balance are checked unchanged afterwards).
+function scopeRepairNewDescription(kind, ctx, line, lineIndex, milestone, isFinalLine) {
+  const base = ctx.tradeName + ' — ' + ctx.safeTitle + ' — ';
+  let d;
+  if (kind === 'deposit') d = base + 'deposit (' + ctx.addr + ')';
+  else if (kind === 'final_balance') d = base + 'final balance (' + ctx.addr + ')';
+  else d = base + (milestone ? milestone.Label : '') + ' (' + ctx.addr + ')';
+  if (isFinalLine && ctx.block) d += '\n' + ctx.block;
+  return d.slice(0, 4000);
+}
+
+// Pure planner: given the QB invoice + context, returns the new Line array and what changed.
+function scopeRepairPlanLines(kind, ctx, existing, group) {
+  const keep = ((existing && existing.Line) || []).filter(l => l && (l.DetailType === 'SalesItemLineDetail' || l.DetailType === 'DiscountLineDetail'));
+  const sales = keep.filter(l => l.DetailType === 'SalesItemLineDetail');
+  const maxSeq = Math.max.apply(null, (ctx.allMilestones || []).map(m => +m.Sequence || 0).concat([0]));
+  let finalIdx = -1;
+  if (kind === 'final_balance') { sales.forEach((l, i) => { if (Number(l.Amount) > 0) finalIdx = i; }); }
+  else if (kind === 'milestone') {
+    sales.forEach((l, i) => { if (!(Number(l.Amount) > 0)) return; const m = scopeRepairMatchMilestone(l, group, i); if (m && (+m.Sequence || 0) === maxSeq && maxSeq > 0) finalIdx = i; });
+  }
+  const changes = [];
+  const lines = keep.map(l => {
+    if (l.DetailType !== 'SalesItemLineDetail') return l;
+    const i = sales.indexOf(l);
+    if (!(Number(l.Amount) > 0)) return l;                                  // credit / "already invoiced" lines keep their wording
+    const m = kind === 'milestone' ? scopeRepairMatchMilestone(l, group, i) : null;
+    if (kind === 'milestone' && !m) return l;                               // cannot tell which milestone this is: leave it alone
+    const nd = scopeRepairNewDescription(kind, ctx, l, i, m, i === finalIdx);
+    if (nd === String(l.Description || '')) return l;
+    changes.push({ old: String(l.Description || ''), new: nd, amount: Number(l.Amount) || 0 });
+    return Object.assign({}, l, { Description: nd });
+  });
+  return { lines, changes, finalListed: finalIdx >= 0 && !!ctx.block };
+}
+function scopeRepairMatchMilestone(line, group, idx) {
+  const d = String(line.Description || '');
+  const byLabel = (group || []).find(m => m.Label && d.indexOf(' — ' + m.Label + ' (') >= 0);
+  if (byLabel) return byLabel;
+  return (group && group.length === 1) ? group[0] : ((group || [])[idx] || null);
+}
+
+async function qbScopeRepairPlans(env, opts) {
+  const days = Math.max(1, Math.min(180, parseInt(opts.days) || 30));
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  await scopeSigTab(env); await paymentMilestonesTab(env);
+  const [sigs, allMilestones, scopes] = await Promise.all([fetchTab(env, 'Scope_Signatures'), fetchTab(env, 'Payment_Milestones'), fetchTab(env, 'Scopes')]);
+  const live = r => String(r.Active || '').toUpperCase() !== 'FALSE';
+  const cands = {};   // invoice id -> { kind, sig, group }
+  sigs.filter(live).forEach(sig => {
+    const ms = allMilestones.filter(m => m.Signature_ID === String(sig.ID) && live(m));
+    ms.forEach(m => { const id = String(m.QB_Invoice_ID || '').trim(); if (id) { (cands[id] = cands[id] || { kind: 'milestone', sig, group: [] }).group.push(m); } });
+    const dep = String(sig.QB_Invoice_ID || '').trim();
+    if (dep && !cands[dep]) cands[dep] = { kind: 'deposit', sig, group: [] };
+    const fin = String(sig.QB_Final_Invoice_ID || '').trim();
+    if (fin && !cands[fin]) cands[fin] = { kind: 'final_balance', sig, group: [] };
+  });
+  let ids = Object.keys(cands);
+  if (opts.invoiceId) ids = ids.filter(id => id === String(opts.invoiceId));
+  ids.sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0));
+  if (!opts.invoiceId) ids = ids.slice(0, 60);
+  const token = await qbAccessToken(env);
+  const partiesCache = {}, woCache = {};
+  let woRows = null;
+  const plans = [], errors = [];
+  for (const id of ids) {
+    try {
+      const c = cands[id];
+      const got = await qbApi(env, `invoice/${encodeURIComponent(id)}?minorversion=73`, 'GET', null, token);
+      const existing = got && got.Invoice;
+      if (!existing) { errors.push({ invoice_id: id, error: qbFault(got) || 'Could not read the invoice from QuickBooks.' }); continue; }
+      if (!opts.invoiceId && String(existing.TxnDate || '') < cutoff) continue;
+      const s = scopes.find(x => x.ID === c.sig.Scope_ID);
+      if (!s) { errors.push({ invoice_id: id, error: 'Scope ' + c.sig.Scope_ID + ' not found.' }); continue; }
+      const parties = partiesCache[c.sig.ID] || (partiesCache[c.sig.ID] = await scopeSigResolveParties(env, s, c.sig));
+      let wd = woCache[s.ID];
+      if (!wd) { wd = woCache[s.ID] = await scopeWorkDoneForInvoice(env, s); }
+      const ctx = { tradeName: parties.tradeName, addr: parties.addr, safeTitle: scopeSafeTitle(s), block: wd.block, allMilestones: allMilestones.filter(m => m.Signature_ID === String(c.sig.ID) && live(m)) };
+      const plan = scopeRepairPlanLines(c.kind, ctx, existing, c.group);
+      const bal = Number(existing.Balance), tot = Number(existing.TotalAmt || 0);
+      plans.push({ invoice_id: id, doc_number: existing.DocNumber || '', kind: c.kind, scope_id: s.ID, wo_id: s.WO_ID || '', signature_id: c.sig.ID,
+        customer: (existing.CustomerRef && existing.CustomerRef.name) || '', total: tot, balance: isNaN(bal) ? null : bal,
+        paid: isNaN(bal) ? null : Math.abs(bal - tot) > 0.005, txn_date: existing.TxnDate || '',
+        changes: plan.changes, work_listed: plan.finalListed, warnings: wd.warnings.slice(), _lines: plan.lines, _existing: existing });
+    } catch (e) { errors.push({ invoice_id: id, error: String((e && e.message) || e).slice(0, 200) }); }
+  }
+  return { plans, errors, days };
+}
+
+const scopeRepairPublic = p => { const o = Object.assign({}, p); delete o._lines; delete o._existing; return o; };
+
+// GET /qb/repairable-scope?days=N — scope-proposal invoices whose wording would change (nothing is written).
+async function qbRepairableScope(env, url) {
+  try {
+    const r = await qbScopeRepairPlans(env, { days: url && url.searchParams.get('days') });
+    const need = r.plans.filter(p => p.changes.length);
+    return json({ ok: true, days: r.days, count: need.length, checked: r.plans.length, invoices: need.map(scopeRepairPublic), errors: r.errors });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// POST /qb/repair-scope-invoice { invoice_id, apply?, allow_paid? } — preview by default; apply rewrites descriptions only.
+async function qbRepairScopeInvoice(env, body) {
+  try {
+    const invoiceId = String((body && body.invoice_id) || '').trim();
+    if (!invoiceId) return json({ error: 'invoice_id required' }, 400);
+    const apply = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
+    const allowPaid = body.allow_paid === true || String(body.allow_paid).toUpperCase() === 'TRUE';
+    const r = await qbScopeRepairPlans(env, { invoiceId });
+    const plan = r.plans[0];
+    if (!plan) return json({ error: (r.errors[0] && r.errors[0].error) || ('Invoice ' + invoiceId + ' is not a scope-proposal invoice the Hub created.') }, 404);
+    const existing = plan._existing;
+    const sum = plan._lines.reduce((n, l) => n + (Number(l.Amount) || 0), 0);
+    if (Math.abs(sum - Number(existing.TotalAmt || 0)) > 0.005) {
+      return json({ error: 'The invoice lines add up to $' + sum.toFixed(2) + ' but QuickBooks says the invoice is $' + Number(existing.TotalAmt || 0).toFixed(2) + ' (tax or an extra line?). Not touching it.' }, 409);
+    }
+    if (plan.balance === null) return json({ error: 'QuickBooks did not report a balance, so there is no way to tell whether it has been paid. Not touching it.' }, 409);
+    if (!plan.changes.length) return json({ ok: true, applied: false, nothing_to_change: true, invoice: scopeRepairPublic(plan) });
+    if (!apply) return json({ ok: true, applied: false, invoice: scopeRepairPublic(plan) });
+    if (plan.paid && !allowPaid) return json({ error: 'That invoice has a payment against it (balance $' + plan.balance.toFixed(2) + ' of $' + plan.total.toFixed(2) + '). Only the wording would change, but it needs your explicit OK: confirm again with "allow paid".', needs_allow_paid: true, invoice: scopeRepairPublic(plan) }, 409);
+    const token = await qbAccessToken(env);
+    const patch = { Id: invoiceId, SyncToken: existing.SyncToken, sparse: true, Line: plan._lines };
+    const up = await qbApi(env, 'invoice?minorversion=73', 'POST', patch, token);
+    const updated = up && up.Invoice;
+    if (!updated) return json({ error: qbFault(up) || 'QuickBooks refused the update.' }, 500);
+    // Read back: total and balance must be exactly what they were, and the new wording must be what is stored.
+    const back = await qbApi(env, `invoice/${encodeURIComponent(invoiceId)}?minorversion=73`, 'GET', null, token);
+    const b = back && back.Invoice;
+    const problems = [];
+    if (!b) problems.push('could not read the invoice back');
+    else {
+      if (Math.abs(Number(b.TotalAmt || 0) - plan.total) > 0.005) problems.push('total changed from $' + plan.total.toFixed(2) + ' to $' + Number(b.TotalAmt || 0).toFixed(2));
+      if (Math.abs(Number(b.Balance) - plan.balance) > 0.005) problems.push('balance changed from $' + plan.balance.toFixed(2) + ' to $' + Number(b.Balance).toFixed(2));
+      const stored = (b.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail').map(l => l.Description || '').join('\n---\n');
+      const want = plan._lines.filter(l => l.DetailType === 'SalesItemLineDetail').map(l => l.Description || '').join('\n---\n');
+      if (stored !== want) problems.push('the stored wording does not match what was sent');
+    }
+    if (problems.length) return json({ ok: false, applied: true, error: 'Updated, but the read-back check failed: ' + problems.join('; ') + '. Check invoice ' + (updated.DocNumber || invoiceId) + ' in QuickBooks.', invoice: scopeRepairPublic(plan) }, 500);
+    return json({ ok: true, applied: true, verified: true, invoice_id: invoiceId, doc_number: updated.DocNumber || '', changed_lines: plan.changes.length, work_listed: plan.work_listed });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
 // ── WHO DO I NEED TO PAY ─────────────────────────────────────
 // The cash-flow question this business actually runs on: the owner pays the invoice, and
 // THEN the vendor gets paid. Nothing connected those two facts — the invoice was paid in
