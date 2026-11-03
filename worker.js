@@ -732,6 +732,7 @@ const _hubWorkerCore = {
         if (path === '/insp/customers')         return await inspCustomersList(env);
         if (path === '/fi/list')                return await fiRoute(env, 'list', () => fiList(env));
         if (path === '/fi/inspection')          return await fiRoute(env, 'inspection', () => fiGetInspection(env, url));
+        if (path === '/fi/photo-sizes')         return await fiRoute(env, 'photo-sizes', () => fiPhotoSizes(env, url));
         if (path === '/fi/report')              return await fiRoute(env, 'report', () => fiReport(env, request, url));
         if (path === '/fi/photo/view')          return await fiRoute(env, 'photo-view', () => fiPhotoView(env, url));
         if (path === '/fi/issue-types')         return await fiRoute(env, 'issue-types', () => fiTypesList(env));
@@ -43012,6 +43013,15 @@ function fiValidateDoc(doc) {
       });
     });
   }
+  if (doc.photo_meta !== undefined) {   // file name + size of each photo as it came off the phone (duplicate check)
+    const pm = doc.photo_meta;
+    if (!pm || typeof pm !== 'object' || Array.isArray(pm)) errors.push('doc.photo_meta must be an object');
+    else {
+      const ks = Object.keys(pm);
+      if (ks.length > 1500) errors.push('doc.photo_meta has too many entries');
+      else for (const k of ks) { const m = pm[k]; if (!FI_ID_RE.test(k) || !m || typeof m !== 'object' || Array.isArray(m) || typeof m.n !== 'string' || m.n.length > 120 || !Number.isFinite(m.s) || m.s < 0) { errors.push(`doc.photo_meta[${k}] invalid`); break; } }
+    }
+  }
   fiValidateVoiceNotes(doc.voice_notes, errors);
   fiValidateVisit(doc.visit, errors);
   if (doc.booking !== undefined && (!doc.booking || typeof doc.booking !== 'object' || Array.isArray(doc.booking))) errors.push('doc.booking must be an object');
@@ -43202,6 +43212,19 @@ async function fiList(env) {
   const items = t.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiInspHeaderOut(r.o)).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))).slice(0, 100);
   const brands = bt.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiBrandOut(r.o, true));
   return json({ ok: true, inspections: items, brands, report_base: FI_PAGE_BASE });
+}
+// Nov 2 2026: stored size (and original size) of every live photo of one inspection, for the Review screen's duplicate check. One Photos read; sizes only, no file ids.
+async function fiPhotoSizes(env, url) {
+  const id = url.searchParams.get('id') || '';
+  if (!FI_ID_RE.test(id)) return fiErr(400, 'bad_id', 'Inspection id is missing or malformed.');
+  await fiEnsureTabs(env);
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const photos = {};
+  for (const r of pt.rows) {
+    if (r.o.Inspection_ID !== id || r.o.Active === 'FALSE') continue;
+    photos[r.o.ID] = { b: Number(r.o.Bytes) || 0, o: Number(r.o.Orig_Bytes) || 0 };
+  }
+  return json({ ok: true, photos });
 }
 async function fiGetInspection(env, url) {
   const id = url.searchParams.get('id') || '';
@@ -43473,6 +43496,7 @@ async function fiReport(env, request, url) {
   if (!summaryOk) delete doc.summary;
   delete doc.dictation_log;
   delete doc.voice_notes;
+  delete doc.photo_meta;   // the phone's file names/sizes (duplicate check) are for the inspector only (Nov 2 2026)
   if (doc.property) { delete doc.property.id; delete doc.property.unit_id; }
   if (doc.owner) delete doc.owner.id;
   delete doc.booking;   // the requester's phone/email and booking notes are internal - never on the public report

@@ -24,6 +24,16 @@
   var page = (location.pathname.split('/').pop() || 'index.html').slice(0, 60);
   var es = /^es\b/i.test((navigator.language || '') + '');
 
+  // Nov 2 2026 (Brett): the red "N problems" badge (and the "something didn't work" notice) are for him on screen ONLY. They must never reach any printed page or saved PDF,
+  // on any Hub page. A print stylesheet hides them everywhere this script runs; the customer-facing report pages do not draw the badge at all.
+  try {
+    var ps = document.createElement('style');
+    ps.setAttribute('data-hub-print-hide', '1');
+    ps.textContent = '@media print{#hub-fail-badge,#hub-fail-toast{display:none!important;visibility:hidden!important}}';
+    (document.head || document.documentElement).appendChild(ps);
+  } catch (e) { try { console.error('[failure-reporter] print style failed', e); } catch (x) { /* no console */ } }
+  var REPORT_PAGE = /(^|\/)(inspection-report|inspection-photos)\.html$/i.test(location.pathname);
+
   window.addEventListener('beforeunload', function () { unloading = true; });
   window.addEventListener('pagehide', function () { unloading = true; });
   // Oct 21 2026: phones and browsers kill in-flight requests when a tab is backgrounded, the screen locks or the page navigates ("Load failed" on
@@ -43,6 +53,7 @@
       if (!document.body) return;
       var t = document.createElement('div');
       t.setAttribute('role', 'status');
+      t.id = 'hub-fail-toast';
       t.textContent = es ? 'Algo no funcionó. Ya nos avisaron y lo vamos a arreglar.' : "Something didn't work. We've been notified and will fix it.";
       t.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);max-width:92vw;background:#0e1621;color:#fff;font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:10px 14px;border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.35);z-index:2147483000';
       document.body.appendChild(t);
@@ -168,7 +179,7 @@
   // 2. admin badge
   var token = '';
   try { token = localStorage.getItem(AUTH_KEY) || ''; } catch (e) { token = ''; /* storage blocked: no admin badge, reporting still works */ }
-  if (!token || !realFetch || /failures\.html$/.test(location.pathname)) return;
+  if (!token || !realFetch || REPORT_PAGE || /failures\.html$/.test(location.pathname)) return;
   var CACHE_KEY = 'hub_fail_badge_v1';
 
   function paint(n, worst) {

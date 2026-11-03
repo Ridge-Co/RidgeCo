@@ -398,7 +398,7 @@ $('photo-in').addEventListener('change', function(ev){
       var row = { id:id, insp:rec.id, blob:blob, state:'pending', err:'', at:Date.now() };
       return dbPut('photos', row).then(function(){
         blobUrl[id] = URL.createObjectURL(blob); photoState[id] = { state:'pending', err:'' };
-        mut(function(doc){ var a = findArea(doc, tg.areaId); (a.photo_ids = a.photo_ids||[]).push(id); });
+        mut(function(doc){ var a = findArea(doc, tg.areaId); (a.photo_ids = a.photo_ids||[]).push(id); if (f && f.name && f.size) (doc.photo_meta = doc.photo_meta||{})[id] = { n:String(f.name).slice(0,80), s:f.size }; });   // remembered so the duplicate check can compare file name + size
         if (tg.urgent && S.urg && S.urg.photoIds) S.urg.photoIds.push(id);
         return queueOriginal(rec, id, f);
       });
@@ -1318,6 +1318,93 @@ function openSheet(html){ $('sheet').innerHTML = html; $('modal').classList.add(
 function closeSheet(){ $('modal').classList.remove('open'); if (S.visitOpen){ S.visitOpen = false; if (S.view==='insp') render(); } }
 $('modal').addEventListener('click', function(e){ if (e.target === $('modal')) closeSheet(); });
 
+// ---- duplicate photos + issues with no photos (Nov 2 2026, Brett) ----
+// DUP-CHECK-PURE-START
+// Lists photos that appear twice in a draft, with the exact place of every copy, and issues that have no photo. It compares FILE NAME + SIZE (a photo added from now on remembers the phone's
+// file name and size in doc.photo_meta) and, for older photos and anything without a name, the STORED size in bytes - never a byte-for-byte check. It only ever warns; nothing is blocked.
+// sizes: photo id -> { b: stored bytes, o: original bytes or 0 } as the server reports them (may be empty for photos that have not finished uploading).
+function dupKb(n){ n = Number(n) || 0; return n >= 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1, Math.round(n/1024))+' KB'; }
+function dupWhereEquip(e){ var k = e && e.kind; return 'equipment: '+((typeof EQUIP_KINDS !== 'undefined' && EQUIP_KINDS[k] && EQUIP_KINDS[k].label) || k || 'item'); }
+function dupCheck(doc, sizes){
+  sizes = sizes || {}; var meta = (doc && doc.photo_meta) || {};
+  var locs = {}, ids = [];
+  function add(id, a, where){
+    id = String(id); if (!locs[id]){ locs[id] = []; ids.push(id); }
+    if (!locs[id].some(function(l){ return l.areaId === a.id && l.where === where; })) locs[id].push({ areaId:a.id, area:a.name, where:where });
+  }
+  var noPhoto = [];
+  (doc.areas||[]).forEach(function(a){
+    if (a.excluded) return;
+    (a.photo_ids||[]).forEach(function(p){ add(p, a, 'area photos'); });
+    (a.equipment||[]).forEach(function(e){ (e.photo_ids||[]).forEach(function(p){ add(p, a, dupWhereEquip(e)); }); });
+    (a.issues||[]).forEach(function(is, i){
+      (is.photo_ids||[]).forEach(function(p){ add(p, a, 'issue: '+(is.title||'(untitled)')); });
+      if (!(is.photo_ids||[]).length) noPhoto.push({ areaId:a.id, area:a.name, title:is.title||'(untitled)', n:i+1 });
+    });
+  });
+  // group: same name+size, or same stored size (never across two different original sizes)
+  var parent = {}; ids.forEach(function(id){ parent[id] = id; });
+  function find(x){ while (parent[x] !== x){ parent[x] = parent[parent[x]]; x = parent[x]; } return x; }
+  function union(a, b){ a = find(a); b = find(b); if (a !== b) parent[b] = a; }
+  var byName = {}, byBytes = {};
+  ids.forEach(function(id){
+    var m = meta[id], sz = sizes[id];
+    if (m && m.n && m.s) (byName[String(m.n).toLowerCase()+'|'+m.s] = byName[String(m.n).toLowerCase()+'|'+m.s] || []).push(id);
+    if (sz && sz.b) (byBytes[sz.b] = byBytes[sz.b] || []).push(id);
+  });
+  Object.keys(byName).forEach(function(k){ var l = byName[k]; for (var i = 1; i < l.length; i++) union(l[0], l[i]); });
+  Object.keys(byBytes).forEach(function(k){
+    // same stored size: cluster by ORIGINAL size (two different original sizes are two different pictures). A photo with no original yet joins the cluster only when there is
+    // exactly one (or none) - with two different originals in play it could be either, so it is left alone rather than guessed.
+    var l = byBytes[k], oc = {}, zeros = [];
+    l.forEach(function(id){ var o = (sizes[id]||{}).o; if (o) (oc[o] = oc[o] || []).push(id); else zeros.push(id); });
+    var cl = Object.keys(oc).map(function(o){ return oc[o]; });
+    if (cl.length === 1) cl[0] = cl[0].concat(zeros); else if (!cl.length) cl = [zeros];
+    cl.forEach(function(c){ for (var i = 1; i < c.length; i++) union(c[0], c[i]); });
+  });
+  var groups = {}; ids.forEach(function(id){ (groups[find(id)] = groups[find(id)] || []).push(id); });
+  var sets = Object.keys(groups).map(function(k){ return groups[k]; }).filter(function(g){ return g.length > 1; }).map(function(g){
+    var copies = g.map(function(id){ return { id:id, locs:locs[id], name:(meta[id]||{}).n || '', size:(meta[id]||{}).s || 0, bytes:(sizes[id]||{}).b || 0 }; })
+      .sort(function(x, y){ return y.locs.length - x.locs.length || (x.id < y.id ? -1 : 1); });   // the copy used in the most places first: that is the one to keep
+    var named = copies.filter(function(c){ return c.name; })[0];
+    return { name:named ? named.name : '', size:named ? named.size : (copies[0].bytes || 0), copies:copies };
+  }).sort(function(x, y){ return (x.copies[0].locs[0].area < y.copies[0].locs[0].area ? -1 : 1); });
+  return { sets:sets, noPhoto:noPhoto, extra:sets.reduce(function(n, st){ return n + st.copies.length - 1; }, 0) };
+}
+// DUP-CHECK-PURE-END
+function ensurePhotoSizes(){
+  var rec = S.rec; if (!rec || !rec.base_rev) return;
+  var c = S.psz; if (c && c.id === rec.id && (c.loading || c.rev === rec.base_rev)) return;
+  var mine = { id:rec.id, rev:rec.base_rev, loading:true, map:(c && c.id === rec.id && c.map) || {}, err:'' }; S.psz = mine;
+  api('GET','/fi/photo-sizes?id='+encodeURIComponent(rec.id)).then(function(r){ mine.map = r.photos || {}; mine.err = ''; })
+    .catch(function(e){ mine.err = e.message; reportPhoto('field-inspect duplicate check', 'Could not read photo sizes for the duplicate check: '+e.message, rec.id); })
+    .then(function(){ mine.loading = false; if (S.psz === mine && S.view === 'review') render(); });
+}
+function dupCard(doc){
+  ensurePhotoSizes();
+  var c = S.psz && S.psz.id === S.rec.id ? S.psz : null, r = dupCheck(doc, c ? c.map : {});
+  var h = '<div class="card"><b>Duplicate photos'+(r.extra ? ' ('+r.extra+' extra cop'+(r.extra===1?'y':'ies')+')' : '')+'</b>';
+  h += '<div class="muted">Same file name and size, or the same stored size for older photos. Nothing is removed for you and nothing here blocks publishing.</div>';
+  if (c && c.err) h += '<div class="check">⚠️ Could not read the stored photo sizes ('+esc(c.err)+'). Only photos added with a remembered file name can be checked right now.</div>';
+  else if (!c || c.loading) h += '<div class="muted" style="margin-top:6px">Checking…</div>';
+  if (!r.sets.length && c && !c.loading && !c.err) h += '<div class="check">✅ No duplicate photos found.</div>';
+  r.sets.forEach(function(st){
+    h += '<div class="card" style="border-color:var(--warn);margin-top:8px"><div style="display:flex;gap:10px;align-items:flex-start">'
+      +(photoSrc(st.copies[0].id) ? '<img src="'+esc(photoSrc(st.copies[0].id))+'" alt="" style="width:64px;height:64px;object-fit:cover;border-radius:8px;flex:none">' : '')
+      +'<div><b>'+(st.name ? esc(st.name)+' · ' : 'Same photo · ')+esc(dupKb(st.size))+' — '+st.copies.length+' copies</b></div></div>';
+    st.copies.forEach(function(cp, i){
+      h += '<div style="margin-top:6px"><span class="pill'+(i ? '' : ' ok')+'">'+(i ? 'Remove one of these' : 'Keep this one')+'</span>'
+        + cp.locs.map(function(l){ return '<div class="muted">• <a href="#" onclick="openArea(\''+esc(l.areaId)+'\');return false">'+esc(l.area)+'</a> — '+esc(l.where)+'</div>'; }).join('')+'</div>';
+    });
+    h += '</div>';
+  });
+  return h + '</div>';
+}
+function noPhotoWarn(r){
+  if (!r.noPhoto.length) return '';
+  var shown = r.noPhoto.slice(0, 12).map(function(x){ return x.area+': '+x.title; }).join(' · ');
+  return r.noPhoto.length+' issue'+(r.noPhoto.length>1?'s have':' has')+' no photos (fine if that is intended): '+shown+(r.noPhoto.length>12 ? ' · and '+(r.noPhoto.length-12)+' more' : '');
+}
 // ---- review & publish ----
 function localChecks(doc){
   var blocks=[], warns=[], active = doc.areas.filter(function(a){return !a.excluded;});
@@ -1330,6 +1417,9 @@ function localChecks(doc){
   var sk = active.filter(function(a){ return !(a.access && a.access.no_access) && (!a.condition || a.condition==='not_inspected'); }).map(function(a){return a.name;}); if (sk.length) warns.push('Not marked inspected: '+sk.join(', '));
   var uns = (doc.voice_notes||[]).filter(function(n){ return !n.routed && String(n.transcript||'').trim(); }).length; if (uns) warns.push(uns+' voice note'+(uns>1?'s have':' has')+' not been sorted into areas yet');
   if (S.rec.dirty) blocks.push('Changes are not saved to the server yet');
+  var dc = dupCheck(doc, (S.psz && S.rec && S.psz.id === S.rec.id) ? S.psz.map : {});
+  if (dc.extra) warns.push(dc.extra+' duplicate photo cop'+(dc.extra===1?'y':'ies')+' in this draft — see “Duplicate photos” below for where');
+  var npw = noPhotoWarn(dc); if (npw) warns.push(npw);
   var sm = doc.summary; if (sm && sm.fp && sm.fp !== fpOf(doc)) warns.push('The AI summary is out of date and will be left out of the report');
   if (sm && !sm.accepted) warns.push('The AI summary has not been approved and will be left out of the report');
   return { blocks:blocks, warns:warns };
@@ -1354,6 +1444,7 @@ function viewReview(){
   h += '</div>';
   h += summaryCard(doc);
   h += omCard();
+  h += dupCard(doc);
   h += '<div class="card"><b>Before you publish</b>';
   if (!chk.blocks.length && !chk.warns.length) h += '<div class="check">✅ Everything looks ready.</div>';
   chk.blocks.forEach(function(m){ h += '<div class="check">⛔ '+esc(m)+'</div>'; });
