@@ -17338,7 +17338,50 @@ function findRepairableInvoices(days) {
       }).join('') +
       '<div style="color:var(--muted);font-size:10.5px;line-height:1.5">Each keeps its existing invoice, its existing total, and the income account it already posted to — ' +
       'only the wording, the photo link and (where blank) the number change. Anything with a payment against it is left alone. ' +
-      'Turning off Custom transaction numbers in QuickBooks does not retroactively number these, so type the number you want.</div>';
+      'Turning off Custom transaction numbers in QuickBooks does not retroactively number these, so type the number you want.</div>' : '';
+
+    var kindLabel = { milestone: 'milestone', deposit: 'deposit', final_balance: 'final balance' };
+    var scopeHtml = (slist.length || scopeErr) ?
+      '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:10px"><div style="color:var(--warn);font-size:12px;margin-bottom:8px">Scope-proposal invoices: ' + slist.length + ' with wording to fix</div>' +
+      (scopeErr ? '<div style="color:var(--danger);font-size:11px;margin-bottom:6px">' + esc(scopeErr) + '</div>' : '') +
+      slist.map(function(v) {
+        return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:9px;margin-bottom:7px;font-size:11.5px">' +
+          '<div><b>' + esc(v.wo_id || ('Scope ' + v.scope_id)) + '</b> · ' + esc(v.customer || '') + ' · $' + (parseFloat(v.total) || 0).toFixed(2) +
+            (v.doc_number ? ' · invoice #' + esc(v.doc_number) : '') + ' · ' + esc(kindLabel[v.kind] || v.kind) +
+            (v.paid ? ' · <span style="color:var(--warn)">paid</span>' : '') + '</div>' +
+          safeArray(v.warnings).map(function(w) { return '<div style="color:var(--warn);font-size:10.5px;margin-top:2px">' + esc(w) + '</div>'; }).join('') +
+          '<button class="btn small" onclick="repairScopeInvoice(\'' + esc(String(v.invoice_id)) + '\',false)" style="background:var(--surface2);color:var(--text);font-size:10.5px;margin-top:5px">Preview the fix</button>' +
+        '</div>';
+      }).join('') +
+      '<div style="color:var(--muted);font-size:10.5px;line-height:1.5">Only the line wording changes (access codes out; the final invoice lists the work completed). Amounts, items and customer are untouched, and QuickBooks is read back afterwards to confirm.</div></div>' : '';
+
+    if (el) el.innerHTML = daysBtns + regularHtml + scopeHtml;
+  }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
+}
+
+// Preview (apply=false) or apply a scope-proposal invoice rewrite. Nothing is written to QuickBooks until the confirm button.
+function repairScopeInvoice(invoiceId, apply, allowPaid) {
+  var el = document.getElementById('admin-tool-result');
+  if (el && apply) el.textContent = '⏳ Updating QuickBooks…';
+  api('POST', '/qb/repair-scope-invoice', { invoice_id: invoiceId, apply: !!apply, allow_paid: !!allowPaid }).then(function(res) {
+    if (res && res.needs_allow_paid) {
+      if (el) el.innerHTML = '<div style="font-size:11.5px;line-height:1.6;color:var(--warn)">⚠ ' + esc(res.error) + '<br><button class="btn small" onclick="repairScopeInvoice(\'' + esc(invoiceId) + '\',true,true)" style="background:var(--warn);color:#fff;margin-top:7px">Yes, update the wording on this paid invoice</button></div>';
+      return;
+    }
+    if (!res || res.ok === false || res.error) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc((res && res.error) || 'failed') + '</span>'; return; }
+    if (res.applied) {
+      toast('Invoice wording updated in QuickBooks', 'success');
+      if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ Invoice ' + esc(res.doc_number || invoiceId) + ' updated (' + (res.changed_lines || 0) + ' line' + (res.changed_lines === 1 ? '' : 's') + ', verified in QuickBooks). ' +
+        '<button class="btn small" onclick="findRepairableInvoices()" style="background:var(--surface2);color:var(--text);font-size:10.5px;margin-left:6px">Next</button></span>';
+      return;
+    }
+    var inv = res.invoice || {};
+    if (res.nothing_to_change) { if (el) el.innerHTML = '<span style="color:var(--accent2)">✓ Invoice ' + esc(inv.doc_number || invoiceId) + ' already reads correctly.</span>'; return; }
+    if (el) el.innerHTML = '<div style="line-height:1.6;font-size:11.5px">Invoice <b>' + esc(inv.doc_number || invoiceId) + '</b> (' + esc(inv.wo_id || '') + ') — total stays $' + (parseFloat(inv.total) || 0).toFixed(2) + '.' +
+      safeArray(inv.changes).map(function(c) { return '<div style="margin-top:6px;white-space:pre-wrap"><span style="color:var(--muted)">was:</span> ' + esc(c.old) + '<br><span style="color:var(--accent2)">will read:</span> ' + esc(c.new) + '</div>'; }).join('') +
+      safeArray(inv.warnings).map(function(w) { return '<div style="color:var(--warn);margin-top:4px">' + esc(w) + '</div>'; }).join('') +
+      (inv.paid ? '<div style="color:var(--warn);margin-top:4px">This invoice is paid — only the wording changes; you will be asked to confirm once more.</div>' : '') +
+      '<button class="btn small" onclick="repairScopeInvoice(\'' + esc(invoiceId) + '\',true,false)" style="background:var(--accent2);color:#fff;margin-top:7px">Update it in QuickBooks</button></div>';
   }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(e.message) + '</span>'; });
 }
 
