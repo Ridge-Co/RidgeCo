@@ -45564,6 +45564,7 @@ async function insbQueue(env) {
     await insbEnsureColumns(env);
     const [bk, cu] = [await fetchTab(env, 'Insp_Bookings'), await fetchTab(env, 'Insp_Customers')];
     const wo = new Set(cu.filter(x => String(x.Billing_Mode || '') === 'wo').map(x => String(x.ID))), now = Date.now();
+    const qbOnlyIds = new Set(cu.filter(x => String(x.Invoice_Delivery || '') === 'qb_only').map(x => String(x.ID)));
     const rows = bk.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && wo.has(String(r.Customer_ID)));
     const out = rows.map(r => {
       const done = String(r.Completed_At || '') !== '', start = Date.parse(r.Start_ISO), ist = String(r.Invoice_Status || ''), bst = String(r.InvB_Status || '');
