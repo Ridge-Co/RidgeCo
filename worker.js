@@ -37312,6 +37312,7 @@ async function inspBookRequest(env, body) {
       Calendar_Event_ID: '', Decision_Note: '', Notify_Log: '', Created_At: nowIso, Decided_At: '', Reminded_At: '', Active: 'TRUE', Key_Pickup: keyNote,
     };
     // 1) Reserve the slot on Brett's calendar FIRST. If this fails nothing is booked and the partner is told.
+    rec.WO_Number = woNumber;
     let ev;
     try {
       if (inspCalStaged(env, a.cfg)) ev = { id: 'staged-' + inspRandToken(6) };
