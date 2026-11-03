@@ -45317,7 +45317,9 @@ async function insbDeliver(env, b, c, plan, token, steps, warnings, opts) {
     return { ok: false, stage: 'unconfirmed', error: msg };
   }
   const prevA = aHold ? 'invoiced' : String(b.Invoice_Status || ''), prevB = bHold ? 'ready' : String(b.InvB_Status || '');
-  const needA = opts.only !== 'B' && !String(b.Invoice_Emailed_At || '').trim() && (staged || !!String(b.QB_Invoice_ID || '').trim());
+  const qbOnly = String(c.Invoice_Delivery || '') === 'qb_only';   // "Invoiced": the QuickBooks invoice exists, our invoice is never emailed (status stays 'invoiced')
+  if (qbOnly) steps.push('Invoiced only - our invoice was NOT emailed (customer is set to "create in QuickBooks, do not send")');
+  const needA = opts.only !== 'B' && !qbOnly && !String(b.Invoice_Emailed_At || '').trim() && (staged || !!String(b.QB_Invoice_ID || '').trim());
   if (needA && !staged) {
     let pdfA;
     try { pdfA = await insbQbInvoicePdf(env, token, b.QB_Invoice_ID); steps.push('QuickBooks PDF fetched (' + pdfA.length + ' bytes)'); }
