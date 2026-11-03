@@ -1227,6 +1227,8 @@ const _hubWorkerCore = {
         if (path === '/insp/billing/release-owner') return await insbReleaseOwner(env, body);
         if (path === '/insp/billing/customer-config') return await insbCustomerConfig(env, body);
         if (path === '/insp/billing/set-wo')       return await insbSetWO(env, body);
+        if (path === '/insp/billing/mark-paid')    return await insbMarkPaid(env, body);
+        if (path === '/insp/billing/check-paid')   return await insbCheckPaid(env, body);
         if (path === '/insp/customer/book-link')   return await inspBookLinkEnsure(env, body);
         if (path === '/insp/customer/key-pickup')  return await inspCustomerKeyPickup(env, body);
         if (path === '/insp/str-guard/config')     return await inspStrGuardConfigSave(env, body);
