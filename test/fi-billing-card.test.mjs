@@ -14,7 +14,7 @@ const code = html.slice(a, z);
 const calls = [], toasts = [];
 const ctx = {
   S: { view: 'review', rec: { id: 'insp_abc123', base_rev: 3 }, busy: {} }, esc: s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'),
-  api: (m, p, b) => { calls.push({ m, p, b }); return ctx.__next ? ctx.__next(m, p, b) : Promise.resolve({ ok: true }); }, safeRender: () => true, render: () => {}, toast: x => toasts.push(x),
+  api: (m, p, b) => { calls.push({ m, p, b }); if (p.indexOf('/fi/billing') === 0) return Promise.resolve(ctx.S.bill.data); return ctx.__next ? ctx.__next(m, p, b) : Promise.resolve({ ok: true }); }, safeRender: () => true, render: () => {}, toast: x => toasts.push(x),
   claim: k => { if (ctx.S.busy[k]) return false; ctx.S.busy[k] = true; return true; }, release: k => { delete ctx.S.busy[k]; }, $: id => ({ value: ctx.__wo || '' }), setTimeout, clearTimeout, console,
 };
 vm.createContext(ctx); vm.runInContext(code, ctx);
