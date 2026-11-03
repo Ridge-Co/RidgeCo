@@ -789,7 +789,7 @@ const drain = async (L, c, extra) => {
   // DST: spring-forward day, Sunday Mar 8 2026 is EDT after 2am (UTC-4): 10:59Z = 06:59 EDT, 11:00Z = 07:00 EDT
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-03-08T10:59:00Z'));
   const a = await drain(L, c);
-  t('DST (spring-forward day): first tick 06:59 EDT seeds nothing', a.first.body.seeded.length === 0 && a.ran.join() === INTERVAL5.join());
+  t('DST (spring-forward day): first tick 06:59 EDT seeds only the 06:45 heartbeat', a.first.body.seeded.join() === 'overnight_heartbeat' && a.ran.join() === INTERVAL5.join());
   c.v = Date.parse('2026-03-08T11:00:00Z');
   t('DST (spring-forward day): dailies run at 07:00 EDT (11:00Z), not an hour later', (await drain(L, c)).ran.filter(n => DAILY5.includes(n)).length === 7);
   const store2 = makeStore(), L2 = load(store2);
