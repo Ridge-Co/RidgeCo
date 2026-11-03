@@ -482,6 +482,66 @@ async function main() {
     const over = ops2.filter(o => o.t === 'text' && !o.align && o.x + P.insbTextWidth(o.s, o.size, o.bold) > 560.5);
     eq(over.length, 0, 'no text runs past the right margin with a 30-character work order');
   }
+  // 25) "Invoiced" mode (Nov 2 2026): the QuickBooks invoice is created, our invoice is NEVER emailed, and nothing nags about it
+  {
+    const { w, api, env } = world();
+    const cu = w.tabs.Insp_Customers[0], row = () => w.tabs.Insp_Bookings[0];
+    const cfg = await call(api, env, 'insbCustomerConfig', { customer_id: '5', Invoice_Delivery: 'qb_only' }); ok(cfg.body.ok && cu.Invoice_Delivery === 'qb_only', 'customer can be set to invoiced-only');
+    const bad = await call(api, env, 'insbCustomerConfig', { customer_id: '5', Invoice_Delivery: 'sometimes' }); ok(!bad.body.ok && bad.status === 400, 'a made-up delivery value is refused');
+    const pv = await call(api, env, 'insbPreview', { id: '2', kind: 'inspected', units: 1 }); ok(pv.body.plan.qb_only === true && pv.body.plan.warnings.some(x => /NOT emailed/.test(x)), 'the preview says it will not be emailed');
+    const res = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    ok(res.body.ok, 'invoiced ok: ' + JSON.stringify(res.body).slice(0, 300)); eq(w.qbPosts.length, 1, 'one QuickBooks invoice'); eq(w.mails.length, 0, 'NO email of our invoice was sent');
+    eq([row().Invoice_Status, row().QB_Invoice_Number, row().Invoice_Emailed_At || ''], ['invoiced', '1801', ''], 'row says invoiced, never emailed');
+    ok(res.body.steps.some(x => /NOT emailed/.test(x)), 'the result says plainly that it was not emailed');
+    const again = await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true }); ok(again.body.ok && w.qbPosts.length === 1 && w.mails.length === 0, 'a second tap creates nothing and sends nothing');
+    const q = await call(api, env, 'insbQueue', {}); ok(q.body.ok && !q.body.items.some(i => i.needs_attention), 'the Needs-billing card does not nag about the unsent invoice of an invoiced-only customer');
+    cu.Invoice_Delivery = ''; const q2 = await call(api, env, 'insbQueue', {}); ok(q2.body.items.some(i => i.needs_attention), 'the same row DOES nag for a normal (emailed) customer');
+    eq(w.telemetry.filter(x => x.Success === 'FALSE').length, 0, 'no failures logged');
+  }
+  // 26) invoiced-only needs no email address at all (the owner invoice is a separate check)
+  {
+    const { w, api, env } = world();
+    const cu = w.tabs.Insp_Customers[0]; cu.Bill_Email_To = ''; cu.Bill_Email_Cc = ''; cu.Owner_Invoice = 'FALSE';
+    const no = await call(api, env, 'insbPreview', { id: '2', kind: 'inspected', units: 1 }); ok(!no.body.plan.ok && no.body.plan.blockers.some(x => /No billing email/.test(x)), 'a normal customer with no email is blocked');
+    cu.Invoice_Delivery = 'qb_only';
+    const yes = await call(api, env, 'insbPreview', { id: '2', kind: 'inspected', units: 1 }); ok(yes.body.plan.ok, 'an invoiced-only customer needs no email: ' + JSON.stringify(yes.body.plan.blockers));
+    cu.Owner_Invoice = 'TRUE'; const own = await call(api, env, 'insbPreview', { id: '2', kind: 'inspected', units: 1 }); ok(!own.body.plan.ok && own.body.plan.blockers.some(x => /owner-facing invoice has nobody/.test(x)), 'but the owner-facing invoice still needs somebody to go to');
+  }
+  // 27) paid tracking: QuickBooks balance, manual mark, undo, loud failures
+  {
+    const { w, api, env } = world(); const row = () => w.tabs.Insp_Bookings[0];
+    w.tabs.Insp_Customers[0].Invoice_Delivery = 'qb_only';
+    const early = await call(api, env, 'insbMarkPaid', { id: '2', confirm: true }); ok(!early.body.ok && early.body.error === 'not_invoiced' && early.status === 409, 'cannot mark paid before it is invoiced');
+    const none = await call(api, env, 'insbCheckPaid', { id: '2' }); ok(none.body.ok && none.body.checked === 0, 'nothing to check before it is invoiced');
+    await call(api, env, 'insbComplete', { id: '2', kind: 'inspected', units: 1, confirm: true });
+    const nc = await call(api, env, 'insbMarkPaid', { id: '2' }); ok(!nc.body.ok && nc.body.error === 'confirm_required' && !row().Paid_At, 'mark paid needs the confirm');
+    const c1 = await call(api, env, 'insbCheckPaid', { id: '2' }); ok(c1.body.ok && c1.body.checked === 1 && c1.body.unpaid[0].balance_cents === 9500 && !row().Paid_At, 'unpaid invoice stays unpaid and reports the balance');
+    w.qbInvoices[0].Balance = 0;
+    const c2 = await call(api, env, 'insbCheckPaid', { id: '2' }); ok(c2.body.ok && c2.body.paid.length === 1 && row().Paid_Source === 'quickbooks' && /^\d{4}-\d\d-\d\d/.test(row().Paid_At), 'balance 0 in QuickBooks stamps Paid_At (source quickbooks)');
+    const c3 = await call(api, env, 'insbCheckPaid', { id: '2' }); eq(c3.body.checked, 0, 'a paid invoice is not checked again');
+    const un = await call(api, env, 'insbMarkPaid', { id: '2', confirm: true, undo: true }); ok(un.body.ok && !row().Paid_At && !row().Paid_Source, 'undo clears the paid mark');
+    const bd = await call(api, env, 'insbMarkPaid', { id: '2', confirm: true, paid_on: '2999-01-01' }); ok(!bd.body.ok && bd.body.error === 'bad_date', 'a future paid date is refused');
+    const bd2 = await call(api, env, 'insbMarkPaid', { id: '2', confirm: true, paid_on: 'tuesday' }); ok(!bd2.body.ok && bd2.body.error === 'bad_date', 'a junk paid date is refused');
+    const mp = await call(api, env, 'insbMarkPaid', { id: '2', confirm: true, paid_on: '2026-11-02', note: 'ACH notice' }); ok(mp.body.ok && row().Paid_Source === 'manual' && row().Paid_At.startsWith('2026-11-02') && row().Paid_Note === 'ACH notice', 'manual mark paid stamps date, source and note');
+    const mp2 = await call(api, env, 'insbMarkPaid', { id: '2', confirm: true }); ok(mp2.body.ok && mp2.body.already && row().Paid_At.startsWith('2026-11-02'), 'marking an already-paid booking changes nothing');
+    // a QuickBooks failure is loud: error in the result, telemetry row, and NOTHING is stamped
+    row().Paid_At = ''; row().Paid_Source = ''; w.qbInvoices[0].Balance = 0; w.failNext.balance = true;
+    const f1 = await call(api, env, 'insbCheckPaid', { id: '2' }); ok(!f1.body.ok && f1.status === 502 && f1.body.errors.length === 1 && !row().Paid_At, 'a QuickBooks outage is reported and nothing is stamped');
+    ok(w.telemetry.some(x => x.Success === 'FALSE' && /check_paid/.test(x.Skill_Or_Endpoint) && x.Job_Type === 'insp_billing_write'), 'and the failure is in Ops_Telemetry');
+    w.failNext.balance = null; w.qbInvoices[0].Balance = 50;
+    const part = await call(api, env, 'insbCheckPaid', { id: '2' }); ok(part.body.ok && part.body.unpaid[0].balance_cents === 5000 && !row().Paid_At, 'a part-payment is NOT marked paid');
+    // the no-id sweep covers every unpaid invoice and skips staged / no-charge / unfinished ones
+    w.tabs.Insp_Bookings.push({ ID: '9', Customer_ID: '5', Status: 'approved', Active: 'TRUE', QB_Invoice_ID: '77', Invoice_Status: 'staged', Completed_At: '2026-10-01T10:00:00Z' });
+    const sw = await call(api, env, 'insbCheckPaid', {}); eq(sw.body.checked, 1, 'the sweep checks the real unpaid invoice and skips the staged one');
+  }
+  // 28) the FI screen finds its booking by Inspection_ID, and a missing link is a plain "not linked", not an error
+  {
+    const { w, api, env } = world({ booking: { Inspection_ID: 'insp_abc123' } }); w.tabs.Insp_Customers[0].Invoice_Delivery = 'qb_only';
+    const ok1 = await api.fiBilling(env, new URL('https://x.test/fi/billing?id=insp_abc123')); ok(ok1.body.ok && ok1.body.linked && ok1.body.booking.WO_Number === '43945-1' && ok1.body.customer.qb_only === true && ok1.body.customer.billing === true, 'linked booking, work order and customer flags come back');
+    ok(!('Manage_Token' in ok1.body.booking) && !('Billing_Lock' in ok1.body.booking), 'no secrets in the answer');
+    const no = await api.fiBilling(env, new URL('https://x.test/fi/billing?id=insp_zzz999')); ok(no.body.ok && no.body.linked === false, 'an inspection with no booking is "not linked"');
+    const badId = await api.fiBilling(env, new URL('https://x.test/fi/billing?id=a b')); ok(!badId.body.ok && badId.status === 400, 'a malformed id is refused');
+  }
   // 24) severity of the new failure stages
   {
     for (const k of ['qb_unconfirmed', 'qb_duplicate', 'qb_total_mismatch', 'unconfirmed_send', 'email_unconfirmed', 'email_claim', 'email_claim_revert', 'stamp_after_send', 'complete_readback', 'release_readback', 'billing', 'something_new']) eq(P.insbJobType(k), 'insp_billing_money', k + ' ranks as money');
