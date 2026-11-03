@@ -4037,6 +4037,7 @@ async function doActualBillSubmit() {
     Notes: document.getElementById('bill-notes').value,
     Invoice_Description: document.getElementById('bill-invdesc').value,
     Active: 'TRUE',
+    lang: LANG,
   };
 
   fetch(WORKER + '/vendor-bill/add', {
