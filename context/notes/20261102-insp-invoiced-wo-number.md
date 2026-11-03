@@ -12,6 +12,8 @@
 
 **NOT built / not verified:** staging smoke test status is in the PR body. No real QuickBooks record was created and no email sent by this work. **Not done yet:** vendor bill for subcontracted inspections (pay rule unknown), AppFolio email capture + WO matching (step 2), headless-browser accept/submit (steps 3-4), what AppFolio sends when Premier pays by ACH (unknown; check-paid reads QuickBooks, so it needs the deposit booked there). Hub work-order integration is deliberately not entangled with Who To Pay / Invoice_Review.
 
+**Decision (Brett, Nov 2 evening):** merge #496. Subcontractor pay for an inspection starts at **$40 per inspection** for the vendor (his words: "don't know yet but going to start at $40"); it may change, so keep it a setting when the vendor bill is built, not a hard-coded number.
+
 **Guardrails kept:** merge to `main` is Brett's call; WO 43945-1 (Gilmor) is not completed or billed without his explicit word; nothing is created in real QuickBooks without his say-so.
 
 ## FEATURE_LOG
