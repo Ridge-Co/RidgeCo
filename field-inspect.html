@@ -773,6 +773,9 @@ function photoStatusHtml(np){
 // ── model ───────────────────────────────────────────────────────────────────
 function findArea(doc, id){ for (var i=0;i<doc.areas.length;i++) if (doc.areas[i].id===id) return doc.areas[i]; return null; }
 function issueCount(a){ return (a.issues||[]).length; }
+// Nov 2 2026 (Brett): mark issues that have no photos right on the Areas page so they can be found without going back to the preview. Only a marker: nothing here blocks anything.
+function issuesNoPhoto(a){ return (a.issues||[]).filter(function(is){ return !(is.photo_ids||[]).length; }); }
+function noPhotoTotal(doc){ return (doc.areas||[]).filter(function(a){ return !a.excluded; }).reduce(function(n, a){ return n + issuesNoPhoto(a).length; }, 0); }
 function inspectedCount(doc){ var act = doc.areas.filter(function(a){return !a.excluded;}); return { done: act.filter(function(a){ return (a.condition && a.condition!=='not_inspected') || (a.access && a.access.no_access); }).length, total: act.length }; }
 
 // ── views ───────────────────────────────────────────────────────────────────
