@@ -502,6 +502,7 @@ function renderDoc(){
   // job
   h += row(t('Trade'), '<span class="v">'+esc(trTrade(wo.Trade)||'—')+'</span>');
   h += row(t('Job Description'), '<div class="v desc">'+esc(wo.Description||'—')+'</div>');
+  h += clRow(wo);
   if(wo.Scheduled_Date) h += row(t('Scheduled'), '<span class="v">'+esc(wo.Scheduled_Date)+(wo.Scheduled_Window?(' · '+esc(wo.Scheduled_Window)):'')+'</span>');
 
   // photos
@@ -540,6 +541,45 @@ function renderPhotos(){
   return out;
 }
 
+// ── JOB CHECKLIST (Nov 2 2026) ────────────────────────────────
+// Every item must be checked off, or given a reason, before the job can be marked Complete or a bill
+// submitted. The Worker enforces the same rule; this just says so up front, in the vendor's language.
+var CL=[];
+var CL_REASONS=[['na','Not applicable'],['separate','Save for separate work order'],['estimate','Needs an estimate first'],['access',"Couldn't access / blocked"],['parts','Needs parts / materials']];
+function clLoad(wo){ try{ CL=JSON.parse(wo.Checklist||'[]')||[]; }catch(e){ CL=[]; } if(!Array.isArray(CL)) CL=[]; }
+function clOpenCount(){ return CL.filter(function(it){ return !it.done && !it.code; }).length; }
+function clBlockMsg(n,action){
+  var inv=(action==='invoice');
+  if(LANG==='es') return 'Todavía no puede '+(inv?'enviar una factura':'marcar este trabajo como completo')+': '+n+' elemento'+(n===1?'':'s')+' de la lista de verificación '+(n===1?'no está marcado':'no están marcados')+'. Marque cada uno como completado, o elija un motivo (no aplica, orden de trabajo aparte, necesita presupuesto, no pude acceder, necesita materiales) para los que no pudo hacer.';
+  return "You can't "+(inv?'submit an invoice':'mark this job complete')+' yet: '+n+' checklist item'+(n===1?' is':'s are')+" not checked off. Check each one off as complete, or pick a reason (not applicable, separate work order, needs estimate, couldn't access, needs parts) for any you couldn't do.";
+}
+var CL_ES={'Not applicable':'No aplica','Save for separate work order':'Guardar para una orden de trabajo aparte','Needs an estimate first':'Necesita un presupuesto primero',"Couldn't access / blocked":'No pude acceder / bloqueado','Needs parts / materials':'Necesita piezas / materiales','JOB CHECKLIST':'LISTA DE VERIFICACIÓN','Why not done? (pick one)':'¿Por qué no se hizo? (elija uno)','Add a note (optional)':'Agregue una nota (opcional)','Save checklist':'Guardar lista','Checklist saved ✓':'Lista guardada ✓','Could not save the checklist. Try again.':'No se pudo guardar la lista de verificación. Inténtelo de nuevo.','Check off each item as you finish. To complete the job or send a bill, every item must be checked, or marked with a reason if you could not do it.':'Marque cada elemento al terminar. Para completar el trabajo o enviar una factura, todos deben estar marcados, o tener un motivo si no pudo hacerlos.'};
+function clT(s){ return (LANG==='es' && CL_ES[s]!==undefined) ? CL_ES[s] : s; }
+function clRow(wo){
+  clLoad(wo);
+  if(!CL.length) return '';
+  var rows=CL.map(function(it,i){
+    var opts='<option value="">'+esc(clT('Why not done? (pick one)'))+'</option>'+CL_REASONS.map(function(r){ return '<option value="'+r[0]+'"'+(it.code===r[0]?' selected':'')+'>'+esc(clT(r[1]))+'</option>'; }).join('');
+    return '<div style="padding:8px 0;border-bottom:1px solid var(--line,#ddd)">'+
+      '<label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" '+(it.done?'checked':'')+' onchange="clTick('+i+',this.checked)" style="margin-top:3px"><span class="v" style="font-size:14px">'+esc(it.t||'')+'</span></label>'+
+      '<div id="cl-r-'+i+'" style="display:'+(it.done?'none':'block')+';margin:6px 0 0 26px"><select onchange="clReason('+i+',this.value)" style="width:100%;padding:6px">'+opts+'</select>'+
+      '<input type="text" value="'+esc(it.why||'')+'" oninput="clWhy('+i+',this.value)" placeholder="'+esc(clT('Add a note (optional)'))+'" style="width:100%;margin-top:6px;padding:6px"></div></div>';
+  }).join('');
+  return row(clT('JOB CHECKLIST'), '<div class="v" style="font-size:12px;color:var(--muted);margin-bottom:6px">'+esc(clT('Check off each item as you finish. To complete the job or send a bill, every item must be checked, or marked with a reason if you could not do it.'))+'</div>'+rows+
+    '<button class="btn sec" style="margin-top:10px" onclick="clSave()">'+esc(clT('Save checklist'))+'</button><div id="cl-msg" class="sheet-msg"></div>');
+}
+function clTick(i,on){ CL[i].done=on; if(on){ CL[i].code=''; CL[i].why=''; } var r=document.getElementById('cl-r-'+i); if(r) r.style.display=on?'none':'block'; }
+function clReason(i,v){ CL[i].code=v; }
+function clWhy(i,v){ CL[i].why=v; }
+function clSave(){
+  var el=document.getElementById('cl-msg');
+  return post('/wo/shared/checklist',{st:VIEW,wo:WO,checklist:CL}).then(function(res){
+    var ok=!!(res&&res.success);
+    if(el){ el.textContent=ok?clT('Checklist saved ✓'):((res&&(res.error||res.message))||clT('Could not save the checklist. Try again.')); el.className='sheet-msg '+(ok?'ok':'bad'); }
+    return ok;
+  }).catch(function(){ if(el){ el.textContent=clT('Could not save the checklist. Try again.'); el.className='sheet-msg bad'; } return false; });
+}
+
 // ── STATUS ────────────────────────────────────────────────────
 var STATUSES=WOStatus.sets.VENDOR_SETTABLE;
 var _stPick='';
@@ -551,11 +591,14 @@ function openStatus(){
 }
 function saveStatus(){
   if(!_stPick){ msg('st-msg',t('Tap where the job stands right now.'),'bad'); return; }
+  if((_stPick==='Complete'||_stPick==='Pending Invoice') && CL.length && clOpenCount()){ msg('st-msg',clBlockMsg(clOpenCount(),'complete'),'bad'); return; }
   var btn=document.getElementById('st-save'); btn.disabled=true;
-  post('/wo/shared/status',{st:VIEW,wo:WO,status:_stPick,notes:document.getElementById('st-note').value.trim()}).then(function(res){
+  var pre=(CL.length && (_stPick==='Complete'||_stPick==='Pending Invoice')) ? clSave() : Promise.resolve(true);   // the Worker re-checks the saved checklist
+  pre.then(function(saved){ if(!saved) return null; return post('/wo/shared/status',{st:VIEW,wo:WO,status:_stPick,notes:document.getElementById('st-note').value.trim()}); }).then(function(res){
     btn.disabled=false;
+    if(res===null){ msg('st-msg',clT('Could not save the checklist. Try again.'),'bad'); return; }
     if(res && res.success){ msg('st-msg',t('Saved ✓'),'ok'); setTimeout(function(){ close_('ov-status'); reload(); },900); }
-    else msg('st-msg', (res&&res.message)||t('Something went wrong. Try again.'),'bad');
+    else msg('st-msg', (res&&(res.message||res.error))||t('Something went wrong. Try again.'),'bad');
   }).catch(function(){ btn.disabled=false; msg('st-msg',t('Something went wrong. Try again.'),'bad'); });
 }
 
@@ -600,6 +643,7 @@ function shareUpload(file,fileType){
 // ── BILL ──────────────────────────────────────────────────────
 var _btype='hourly', _rc=0, _rpay={}, _rurl={}, _btypeUserPicked=false;
 function openBill(){
+  if(CL.length && clOpenCount()){ var gm=clBlockMsg(clOpenCount(),'invoice'); var cm=document.getElementById('cl-msg'); if(cm){ cm.textContent=gm; cm.className='sheet-msg bad'; cm.scrollIntoView({block:'center'}); } else { alert(gm); } return; }
   _btype='hourly'; _rc=0; _rpay={}; _rurl={}; _btypeUserPicked=false;
   document.getElementById('b-hours').value=''; document.getElementById('b-flat').value='';
   document.getElementById('b-truck-desc').value=''; document.getElementById('b-truck-amt').value='';

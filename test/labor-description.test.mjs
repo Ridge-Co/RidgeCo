@@ -16,7 +16,7 @@ function grab(name) {
   for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) break; } }
   return src.slice(i, j + 1);
 }
-const buildLaborDescription = new Function(grab('englishOnly') + '\n' + grab('isTrueish') + '\n' + grab('laborEntryText') + '\n' + grab('buildLaborDescription') + '\nreturn buildLaborDescription;')();
+const buildLaborDescription = new Function(grab('englishOnly') + '\n' + grab('isTrueish') + '\n' + grab('laborEntryText') + '\n' + ['looksLikeAccessDetail', 'sanitizeCustomerText', 'parseChecklistItems', 'clPastTense', 'checklistItemPastTense', 'workDoneFromChecklist', 'workDoneBlock'].map(grab).join('\n') + '\n' + grab('buildLaborDescription') + '\nreturn buildLaborDescription;')();
 
 const wo = { Invoice_Memo: '', Description: 'Tenant reported leak under sink' };
 

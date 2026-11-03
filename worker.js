@@ -235,7 +235,7 @@ const _hubWorkerCore = {
       // Shareable Work Order (B-117): public at the gate, but every handler self-verifies a
       // signed, WO-scoped share token (HMAC off WORKER_SECRET) before doing anything. The
       // last-4-of-phone gate + per-WO lockout live INSIDE these handlers, not here.
-      '/wo/shared','/wo/shared/unlock','/wo/shared/upload-session','/wo/shared/log-attachment','/wo/shared/status','/wo/shared/bill','/wo/shared/bill-extract','/wo/shared/receipt','/wo/shared/note',
+      '/wo/shared','/wo/shared/unlock','/wo/shared/upload-session','/wo/shared/log-attachment','/wo/shared/status','/wo/shared/bill','/wo/shared/bill-extract','/wo/shared/receipt','/wo/shared/note','/wo/shared/checklist',
       // Live OCR canary (Sept 1 2026): public at the router gate, but selfTestInvoiceExtract
       // self-verifies a dedicated SELFTEST_TOKEN before doing anything — deliberately NOT
       // WORKER_SECRET, which already gates too much (see the security note in CLAUDE.md).
@@ -692,6 +692,7 @@ const _hubWorkerCore = {
         if (path === '/qb/trade-map')           return await qbTradeMap(env);
         if (path === '/qb/unit-audit')          return await qbUnitAudit(env, url);
         if (path === '/qb/repairable')          return await qbRepairable(env, url);
+        if (path === '/qb/repairable-scope')    return await qbRepairableScope(env, url);
         if (path === '/qb/payables')            return await qbPayables(env, url);
         if (path === '/qb/proposal-billing-sweep') return await proposalBillingSweep(env);
         if (path === '/daily-digest')           return await digestResponse(env, url);
@@ -834,6 +835,7 @@ const _hubWorkerCore = {
         if (path === '/selftest/invoice-extract') return await selfTestInvoiceExtract(env, body);
         if (path === '/wo/shared/receipt')        return await woSharedReceipt(env, body);
         if (path === '/wo/shared/note')           return await woSharedNote(env, body);
+        if (path === '/wo/shared/checklist')      return await woSharedChecklist(env, body);
         if (path === '/wo/share-link')            return await woShareLink(env, body);
         if (path === '/wo/share-send')            return await woShareSend(env, body);
         if (path === '/wo/share-revoke')          return await woShareRevoke(env, body);
@@ -1103,6 +1105,7 @@ const _hubWorkerCore = {
         if (path === '/qb/undo-send')             return await qbUndoSend(env, body);
         if (path === '/qb/map')                   return await qbMapEntity(env, body);
         if (path === '/qb/repair-invoice')        return await qbRepairInvoice(env, body);
+        if (path === '/qb/repair-scope-invoice')  return await qbRepairScopeInvoice(env, body);
         if (path === '/qb/sync-payments')         return await qbSyncPayments(env, body);
         if (path === '/scope-deposit/sweep')      return json(await processDepositPaidSweep(env)); // Who To Pay page-open trigger; same auth as /qb/sync-payments
         if (path === '/qb/create-subcustomer')    return await qbCreateSubCustomer(env, body);
@@ -4801,7 +4804,7 @@ async function woPushToScope(env, body) {
     const now = new Date().toISOString();
     const createResp = await addRow(env, 'Scopes', {
       Property_ID: wo.Property_ID || '', Unit_ID: wo.Unit_ID || '', Room: wo.Room || '',
-      Title: ('WO ' + woId + ' — ' + (wo.Description || wo.Trade || 'Scope of work')).slice(0, 120),
+      Title: ('WO ' + woId + ' — ' + ((looksLikeAccessDetail(wo.Description) ? sanitizeCustomerText(wo.Description) : wo.Description) || wo.Trade || 'Scope of work')).slice(0, 120),
       Status: 'draft', Raw_Input: '', Line_Items: '[]', Source_Refs: '[]', Parent_Scope_ID: '',
       WO_ID: woId, Vendor_ID: wo.Vendor_ID || '', Estimate_Number: '', Estimate_Amount: '', Estimate_Notes: '',
       Proposal_Text: '', Created_By: (body && body.created_by) || 'admin', Created_Date: now, Updated_Date: now, Notes: '', Active: 'TRUE',
@@ -6294,8 +6297,14 @@ async function scopeProposalBillMilestones(env, body) {
   }
 
   const labelList = picked.map(m => m.Label).join(' + ');
-  const invoiceDesc = (tradeName + ' — ' + (s.Title || 'scope of work') + ' — ' + labelList + ' (' + addr + ')').slice(0, 4000);
+  const safeTitle = scopeSafeTitle(s);
+  // Nov 2 2026 (invoice 1774): only the FINAL round lists the work completed; deposits/interim invoices stay as they are.
+  const _pickedIdsWd = new Set(picked.map(m => m.ID));
+  const isFinalRound = !sigMilestones.some(m => !_pickedIdsWd.has(m.ID) && (m.Status || 'pending') === 'pending');
+  const workDone = isFinalRound ? await scopeWorkDoneForInvoice(env, s) : { block: '', warnings: [] };
+  const invoiceDesc = (tradeName + ' — ' + safeTitle + ' — ' + labelList + ' (' + addr + ')' + (workDone.block ? '\n' + workDone.block : '')).slice(0, 4000);
   const warnings = [];
+  workDone.warnings.forEach(w => warnings.push(w));
   if (!owner) warnings.push('Owner not resolved from the property — the invoice would create/land on a fallback QB customer.');
   if (billSkipReason) warnings.push(billSkipReason);
   if (billTo.level === 'owner') { const n = qbBillToNote(billTo, prop, unit); if (n) warnings.push(n); }
@@ -6366,8 +6375,8 @@ async function scopeProposalBillMilestones(env, body) {
       catch (e) { return json({ ok: false, error: 'Customer: ' + e.message, warnings }); }
     }
     const invoicePayload = {
-      Line: picked.map(m => ({ DetailType: 'SalesItemLineDetail', Amount: +(+m.Customer_Amount || 0).toFixed(2),
-        Description: (tradeName + ' — ' + (s.Title || 'scope of work') + ' — ' + m.Label + ' (' + addr + ')').slice(0, 4000),
+      Line: picked.map((m, mi) => ({ DetailType: 'SalesItemLineDetail', Amount: +(+m.Customer_Amount || 0).toFixed(2),
+        Description: (tradeName + ' — ' + safeTitle + ' — ' + m.Label + ' (' + addr + ')' + ((workDone.block && mi === picked.length - 1) ? '\n' + workDone.block : '')).slice(0, 4000),
         SalesItemLineDetail: { ItemRef: { value: trade.item }, Qty: 1, UnitPrice: +(+m.Customer_Amount || 0).toFixed(2) } })),
       CustomerRef: { value: customerId }, TxnDate: txnDate,
       CustomerMemo: { value: ('Scope proposal ' + row.Scope_ID + ' — ' + labelList + ' — accepted ' + (row.Signed_Date || '') + ' by ' + row.Signer_Name).slice(0, 1000) },
@@ -6500,7 +6509,7 @@ async function scopeProposalBook(env, body) {
   if (ratio !== 0.5) warnings.push('Deposit is ' + Math.round(ratio * 100) + '% of the signed subtotal (not the usual 50%) — the vendor bill is prorated to match.');
   warnings.push('Invoice is the DEPOSIT only ($' + deposit.toFixed(2) + ' of $' + subtotal.toFixed(2) + '); the vendor bill is the same ' + Math.round(ratio * 100) + '% of the vendor cost ($' + vendorBillAmount.toFixed(2) + ' of $' + vendorCostTotal.toFixed(2) + ').');
 
-  const invoiceDesc = (tradeName + ' — ' + (s.Title || 'scope of work') + ' — deposit (' + addr + ')').slice(0, 4000);
+  const invoiceDesc = (tradeName + ' — ' + scopeSafeTitle(s) + ' — deposit (' + addr + ')').slice(0, 4000);
   // Instant-pay fee (Oct 19 2026) — its own visible negative line, only for instant-pay vendors.
   const cfgAll = await fetchConfig(env);
   const feeCfg = instantFeeConfig(cfgAll);
@@ -6704,7 +6713,9 @@ async function scopeProposalBookFinal(env, body) {
   if (finalAmount <= 0) warnings.push('Nothing appears to remain — subtotal ($' + subtotal.toFixed(2) + ') is not greater than the deposit already invoiced ($' + deposit.toFixed(2) + ').');
   warnings.push('Invoice is the FINAL BALANCE ($' + finalAmount.toFixed(2) + ' of $' + subtotal.toFixed(2) + ', deposit of $' + deposit.toFixed(2) + ' already invoiced separately); the vendor bill is the remaining ' + Math.round((1 - ratio) * 100) + '% of the vendor cost ($' + finalVendorAmount.toFixed(2) + ' of $' + vendorCostTotal.toFixed(2) + ').');
 
-  const invoiceDesc = (tradeName + ' — ' + (s.Title || 'scope of work') + ' — final balance (' + addr + ')').slice(0, 4000);
+  const workDoneFB = await scopeWorkDoneForInvoice(env, s);
+  workDoneFB.warnings.forEach(w => warnings.push(w));
+  const invoiceDesc = (tradeName + ' — ' + scopeSafeTitle(s) + ' — final balance (' + addr + ')' + (workDoneFB.block ? '\n' + workDoneFB.block : '')).slice(0, 4000);
   const cfgAll = await fetchConfig(env);
   const feeCfg = instantFeeConfig(cfgAll);
   feeCfg.warnings.forEach(w => warnings.push(w));
@@ -10202,6 +10213,31 @@ async function assignVendor(env, body, internal) {
   return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify, vendor_sms_detail: vendorSmsDetail });
 }
 
+// ── Vendor checklist gate (Nov 2 2026, Brett) ───────────────────────────────────────────────────
+// A vendor cannot mark a job Complete or submit an invoice until every checklist item is ticked or has a
+// reason code. Enforced here (the portal also checks first) so a stale page, a share link, or a direct
+// call cannot get around it. Hub/admin callers are not gated. Message is in the vendor's chosen language.
+function checklistUnresolvedItems(raw) { return parseChecklistItems(raw).filter(it => !it.done && !it.code); }
+
+function checklistGateMessage(count, action, lang) {
+  const n = Number(count) || 0;
+  if (lang === 'es') {
+    return 'Todavía no puede ' + (action === 'invoice' ? 'enviar una factura' : 'marcar este trabajo como completo') + ': ' + n + ' elemento' + (n === 1 ? '' : 's') + ' de la lista de verificación ' + (n === 1 ? 'no está marcado' : 'no están marcados') + '. Marque cada uno como completado, o elija un motivo (no aplica, orden de trabajo aparte, necesita presupuesto, no pude acceder, necesita materiales) para los que no pudo hacer.';
+  }
+  return 'You can\'t ' + (action === 'invoice' ? 'submit an invoice' : 'mark this job complete') + ' yet: ' + n + ' checklist item' + (n === 1 ? ' is' : 's are') + ' not checked off. Check each one off as complete, or pick a reason (not applicable, separate work order, needs estimate, couldn\'t access, needs parts) for any you couldn\'t do.';
+}
+
+// Returns null when the vendor may proceed, else a ready-to-send 409 Response.
+async function checklistGateResponse(env, wo, vendorId, action, hintLang) {
+  const open = checklistUnresolvedItems(wo && wo.Checklist);
+  if (!open.length) return null;
+  let lang = String(hintLang || '').toLowerCase() === 'es' ? 'es' : 'en';
+  if (vendorId) {
+    try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (v && String(v.Language || '').toLowerCase() === 'es') lang = 'es'; } catch (_) {}
+  }
+  return json({ error: checklistGateMessage(open.length, action, lang), code: 'checklist_incomplete', unresolved: open.map(i => i.t), lang }, 409);
+}
+
 async function updateStatus(env, body) {
   const _t0 = Date.now();
   // On Hold now REQUIRES a reason (Sep 14 2026, Brett) — checked before anything is written,
@@ -10222,6 +10258,10 @@ async function updateStatus(env, body) {
     if (_live.length) return json({ error: addonLiveChildrenMessage(_live, body.wo_id, 'cancel'), open_additional_work: _live }, 409);
   }
   const changedBy = body.updated_by || 'system', changedRole = body.updated_by_role || 'admin';
+  if (changedRole === 'vendor' && (body.status === 'Complete' || body.status === 'Pending Invoice')) {
+    const _gate = await checklistGateResponse(env, wo, body.vendor_id || wo.Vendor_ID, 'complete', body.lang);
+    if (_gate) return _gate;
+  }
   const _repeatStatus = String(wo.Status || '') === String(body.status || '');   // D-16 item 4: the same status posted twice must not re-send the one-off texts
   const fields = { Status: body.status };
   if (body.notes) {
@@ -11264,6 +11304,12 @@ async function addVendorBill(env, body) {
   // same trip charge — so the rest of the bill has to match byte-for-byte before this
   // treats it as a re-submit. An already-reviewed bill never blocks a new one.
   const dupeKey = body.WO_ID || body.wo_id;
+  // Nov 2 2026: a vendor (portal or share link; the Hub sends Entered_By 'hub') cannot submit an invoice while checklist items are unresolved.
+  if (dupeKey && String(body.Entered_By || '').toLowerCase() !== 'hub') {
+    let _gwo = null;
+    try { _gwo = findWO(await fetchTab(env, 'Work_Orders'), dupeKey); } catch (_) { _gwo = null; }
+    if (_gwo) { const _gate = await checklistGateResponse(env, _gwo, body.Vendor_ID || body.vendor_id || _gwo.Vendor_ID, 'invoice', body.lang); if (_gate) return _gate; }
+  }
   if (dupeKey && body.Total) {
     const dupe = await findRecentDuplicate(env, 'Vendor_Bills', {
       WO_ID: dupeKey, Vendor_ID: String(body.Vendor_ID || ''), Total: String(body.Total),
@@ -25215,6 +25261,7 @@ async function woSharedRead(env, url){
     tenant_name: e.tenant_name||'', tenant_phone: e.tenant_phone||'', tenant_former: !!e.tenant_former,
     lockboxes: e.lockboxes||[], legacy_lockbox: e.legacy_lockbox||'', access_notes: e.access_notes||'',
     vendor_has_access: !!e.vendor_has_access, Vendor_ID: e.Vendor_ID||'',
+    Checklist: wo.Checklist||'',
   };
   let attachments = [];
   try {
@@ -25404,6 +25451,34 @@ async function woSharedReceipt(env, body){
     wo_id: auth.wo, amount: body.amount, description: desc, store: body.store||'',
     date: body.date||'', added_by: vendor.Name || vendor.First_Name || 'Vendor', added_by_id: auth.vid||'', role: 'vendor',
   });
+}
+
+// A share-link vendor can only tick items / pick reasons on the checklist that already exists — never add,
+// rename or remove items, and never touch the generated-wording field. Matches items by text.
+function mergeVendorChecklist(existingRaw, incomingRaw) {
+  const existing = parseChecklistItems(existingRaw), incoming = parseChecklistItems(incomingRaw);
+  const byText = {}; incoming.forEach(it => { byText[it.t] = it; });
+  const valid = ['', 'na', 'separate', 'estimate', 'access', 'parts'];
+  return existing.map(it => {
+    const inc = byText[it.t];
+    if (!inc) return it;
+    const done = !!inc.done;
+    return Object.assign({}, it, { done, code: done ? '' : (valid.includes(inc.code) ? inc.code : ''), why: done ? '' : inc.why.slice(0, 300) });
+  });
+}
+
+// PUBLIC (view-token gated): the share-link page's checklist save (the Worker also refuses Complete / a bill while any item is open).
+async function woSharedChecklist(env, body){
+  const auth = await woShareAuth(env, body && body.st, body && (body.wo||body.wo_id));
+  if(!auth) return json({ error:'Unauthorized' }, 401);
+  const wos = await fetchTab(env, 'Work_Orders');
+  const wo = findWO(wos, auth.wo);
+  if(!wo) return json({ error:'WO not found' }, 404);
+  const merged = mergeVendorChecklist(wo.Checklist, body && body.checklist);
+  if (!merged.length) return json({ error:'This work order has no checklist.' }, 400);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v=>v.ID===auth.vid)||{};
+  return await saveChecklist(env, { wo_id: auth.wo, checklist: merged, updated_by: vendor.Name || vendor.First_Name || 'Vendor', updated_by_role: 'vendor' });
 }
 
 // PUBLIC (view-token gated): add a note to THIS WO as the token's vendor.
@@ -29070,6 +29145,153 @@ async function qbRepairInvoice(env, body) {
     return json({ ok: true, applied: true, invoice_id: qbInvId, wo_id: ir.WO_ID,
       doc_number: updated.DocNumber || '', total: updated.TotalAmt,
       photo_linked: !!folderUrl });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// ── REPAIR SCOPE-PROPOSAL INVOICES (Nov 2 2026, Brett: invoice 1774 / "any recent") ──────────────────
+// Scope-proposal invoices (milestone, deposit, final balance) are NOT Invoice_Review rows, so the repair above
+// never saw them. This rewrites ONLY the line Descriptions on those invoices: the title is made safe (access
+// codes out) and the FINAL invoice lists the work completed from the linked work order's checklist. Amounts,
+// items, quantities and customer are carried over untouched; the update is refused if the lines would not
+// still add up to the invoice total, and is read back afterwards. A paid invoice is previewed but only
+// rewritten when the caller passes allow_paid (the total and balance are checked unchanged afterwards).
+function scopeRepairNewDescription(kind, ctx, line, lineIndex, milestone, isFinalLine) {
+  const base = ctx.tradeName + ' — ' + ctx.safeTitle + ' — ';
+  let d;
+  if (kind === 'deposit') d = base + 'deposit (' + ctx.addr + ')';
+  else if (kind === 'final_balance') d = base + 'final balance (' + ctx.addr + ')';
+  else d = base + (milestone ? milestone.Label : '') + ' (' + ctx.addr + ')';
+  if (isFinalLine && ctx.block) d += '\n' + ctx.block;
+  return d.slice(0, 4000);
+}
+
+// Pure planner: given the QB invoice + context, returns the new Line array and what changed.
+function scopeRepairPlanLines(kind, ctx, existing, group) {
+  const keep = ((existing && existing.Line) || []).filter(l => l && (l.DetailType === 'SalesItemLineDetail' || l.DetailType === 'DiscountLineDetail'));
+  const sales = keep.filter(l => l.DetailType === 'SalesItemLineDetail');
+  const maxSeq = Math.max.apply(null, (ctx.allMilestones || []).map(m => +m.Sequence || 0).concat([0]));
+  let finalIdx = -1;
+  if (kind === 'final_balance') { sales.forEach((l, i) => { if (Number(l.Amount) > 0) finalIdx = i; }); }
+  else if (kind === 'milestone') {
+    sales.forEach((l, i) => { if (!(Number(l.Amount) > 0)) return; const m = scopeRepairMatchMilestone(l, group, i); if (m && (+m.Sequence || 0) === maxSeq && maxSeq > 0) finalIdx = i; });
+  }
+  const changes = [];
+  const lines = keep.map(l => {
+    if (l.DetailType !== 'SalesItemLineDetail') return l;
+    const i = sales.indexOf(l);
+    if (!(Number(l.Amount) > 0)) return l;                                  // credit / "already invoiced" lines keep their wording
+    const m = kind === 'milestone' ? scopeRepairMatchMilestone(l, group, i) : null;
+    if (kind === 'milestone' && !m) return l;                               // cannot tell which milestone this is: leave it alone
+    const nd = scopeRepairNewDescription(kind, ctx, l, i, m, i === finalIdx);
+    if (nd === String(l.Description || '')) return l;
+    changes.push({ old: String(l.Description || ''), new: nd, amount: Number(l.Amount) || 0 });
+    return Object.assign({}, l, { Description: nd });
+  });
+  return { lines, changes, finalListed: finalIdx >= 0 && !!ctx.block };
+}
+function scopeRepairMatchMilestone(line, group, idx) {
+  const d = String(line.Description || '');
+  const byLabel = (group || []).find(m => m.Label && d.indexOf(' — ' + m.Label + ' (') >= 0);
+  if (byLabel) return byLabel;
+  return (group && group.length === 1) ? group[0] : ((group || [])[idx] || null);
+}
+
+async function qbScopeRepairPlans(env, opts) {
+  const days = Math.max(1, Math.min(180, parseInt(opts.days) || 30));
+  const cutoff = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+  await scopeSigTab(env); await paymentMilestonesTab(env);
+  const [sigs, allMilestones, scopes] = await Promise.all([fetchTab(env, 'Scope_Signatures'), fetchTab(env, 'Payment_Milestones'), fetchTab(env, 'Scopes')]);
+  const live = r => String(r.Active || '').toUpperCase() !== 'FALSE';
+  const cands = {};   // invoice id -> { kind, sig, group }
+  sigs.filter(live).forEach(sig => {
+    const ms = allMilestones.filter(m => m.Signature_ID === String(sig.ID) && live(m));
+    ms.forEach(m => { const id = String(m.QB_Invoice_ID || '').trim(); if (id) { (cands[id] = cands[id] || { kind: 'milestone', sig, group: [] }).group.push(m); } });
+    const dep = String(sig.QB_Invoice_ID || '').trim();
+    if (dep && !cands[dep]) cands[dep] = { kind: 'deposit', sig, group: [] };
+    const fin = String(sig.QB_Final_Invoice_ID || '').trim();
+    if (fin && !cands[fin]) cands[fin] = { kind: 'final_balance', sig, group: [] };
+  });
+  let ids = Object.keys(cands);
+  if (opts.invoiceId) ids = ids.filter(id => id === String(opts.invoiceId));
+  ids.sort((a, b) => (parseInt(b) || 0) - (parseInt(a) || 0));
+  if (!opts.invoiceId) ids = ids.slice(0, 60);
+  const token = await qbAccessToken(env);
+  const partiesCache = {}, woCache = {};
+  let woRows = null;
+  const plans = [], errors = [];
+  for (const id of ids) {
+    try {
+      const c = cands[id];
+      const got = await qbApi(env, `invoice/${encodeURIComponent(id)}?minorversion=73`, 'GET', null, token);
+      const existing = got && got.Invoice;
+      if (!existing) { errors.push({ invoice_id: id, error: qbFault(got) || 'Could not read the invoice from QuickBooks.' }); continue; }
+      if (!opts.invoiceId && String(existing.TxnDate || '') < cutoff) continue;
+      const s = scopes.find(x => x.ID === c.sig.Scope_ID);
+      if (!s) { errors.push({ invoice_id: id, error: 'Scope ' + c.sig.Scope_ID + ' not found.' }); continue; }
+      const parties = partiesCache[c.sig.ID] || (partiesCache[c.sig.ID] = await scopeSigResolveParties(env, s, c.sig));
+      let wd = woCache[s.ID];
+      if (!wd) { wd = woCache[s.ID] = await scopeWorkDoneForInvoice(env, s); }
+      const ctx = { tradeName: parties.tradeName, addr: parties.addr, safeTitle: scopeSafeTitle(s), block: wd.block, allMilestones: allMilestones.filter(m => m.Signature_ID === String(c.sig.ID) && live(m)) };
+      const plan = scopeRepairPlanLines(c.kind, ctx, existing, c.group);
+      const bal = Number(existing.Balance), tot = Number(existing.TotalAmt || 0);
+      plans.push({ invoice_id: id, doc_number: existing.DocNumber || '', kind: c.kind, scope_id: s.ID, wo_id: s.WO_ID || '', signature_id: c.sig.ID,
+        customer: (existing.CustomerRef && existing.CustomerRef.name) || '', total: tot, balance: isNaN(bal) ? null : bal,
+        paid: isNaN(bal) ? null : Math.abs(bal - tot) > 0.005, txn_date: existing.TxnDate || '',
+        changes: plan.changes, work_listed: plan.finalListed, warnings: wd.warnings.slice(), _lines: plan.lines, _existing: existing });
+    } catch (e) { errors.push({ invoice_id: id, error: String((e && e.message) || e).slice(0, 200) }); }
+  }
+  return { plans, errors, days };
+}
+
+const scopeRepairPublic = p => { const o = Object.assign({}, p); delete o._lines; delete o._existing; return o; };
+
+// GET /qb/repairable-scope?days=N — scope-proposal invoices whose wording would change (nothing is written).
+async function qbRepairableScope(env, url) {
+  try {
+    const r = await qbScopeRepairPlans(env, { days: url && url.searchParams.get('days') });
+    const need = r.plans.filter(p => p.changes.length);
+    return json({ ok: true, days: r.days, count: need.length, checked: r.plans.length, invoices: need.map(scopeRepairPublic), errors: r.errors });
+  } catch (e) { return json({ ok: false, error: e.message }, 500); }
+}
+
+// POST /qb/repair-scope-invoice { invoice_id, apply?, allow_paid? } — preview by default; apply rewrites descriptions only.
+async function qbRepairScopeInvoice(env, body) {
+  try {
+    const invoiceId = String((body && body.invoice_id) || '').trim();
+    if (!invoiceId) return json({ error: 'invoice_id required' }, 400);
+    const apply = body.apply === true || String(body.apply).toUpperCase() === 'TRUE';
+    const allowPaid = body.allow_paid === true || String(body.allow_paid).toUpperCase() === 'TRUE';
+    const r = await qbScopeRepairPlans(env, { invoiceId });
+    const plan = r.plans[0];
+    if (!plan) return json({ error: (r.errors[0] && r.errors[0].error) || ('Invoice ' + invoiceId + ' is not a scope-proposal invoice the Hub created.') }, 404);
+    const existing = plan._existing;
+    const sum = plan._lines.reduce((n, l) => n + (Number(l.Amount) || 0), 0);
+    if (Math.abs(sum - Number(existing.TotalAmt || 0)) > 0.005) {
+      return json({ error: 'The invoice lines add up to $' + sum.toFixed(2) + ' but QuickBooks says the invoice is $' + Number(existing.TotalAmt || 0).toFixed(2) + ' (tax or an extra line?). Not touching it.' }, 409);
+    }
+    if (plan.balance === null) return json({ error: 'QuickBooks did not report a balance, so there is no way to tell whether it has been paid. Not touching it.' }, 409);
+    if (!plan.changes.length) return json({ ok: true, applied: false, nothing_to_change: true, invoice: scopeRepairPublic(plan) });
+    if (!apply) return json({ ok: true, applied: false, invoice: scopeRepairPublic(plan) });
+    if (plan.paid && !allowPaid) return json({ error: 'That invoice has a payment against it (balance $' + plan.balance.toFixed(2) + ' of $' + plan.total.toFixed(2) + '). Only the wording would change, but it needs your explicit OK: confirm again with "allow paid".', needs_allow_paid: true, invoice: scopeRepairPublic(plan) }, 409);
+    const token = await qbAccessToken(env);
+    const patch = { Id: invoiceId, SyncToken: existing.SyncToken, sparse: true, Line: plan._lines };
+    const up = await qbApi(env, 'invoice?minorversion=73', 'POST', patch, token);
+    const updated = up && up.Invoice;
+    if (!updated) return json({ error: qbFault(up) || 'QuickBooks refused the update.' }, 500);
+    // Read back: total and balance must be exactly what they were, and the new wording must be what is stored.
+    const back = await qbApi(env, `invoice/${encodeURIComponent(invoiceId)}?minorversion=73`, 'GET', null, token);
+    const b = back && back.Invoice;
+    const problems = [];
+    if (!b) problems.push('could not read the invoice back');
+    else {
+      if (Math.abs(Number(b.TotalAmt || 0) - plan.total) > 0.005) problems.push('total changed from $' + plan.total.toFixed(2) + ' to $' + Number(b.TotalAmt || 0).toFixed(2));
+      if (Math.abs(Number(b.Balance) - plan.balance) > 0.005) problems.push('balance changed from $' + plan.balance.toFixed(2) + ' to $' + Number(b.Balance).toFixed(2));
+      const stored = (b.Line || []).filter(l => l.DetailType === 'SalesItemLineDetail').map(l => l.Description || '').join('\n---\n');
+      const want = plan._lines.filter(l => l.DetailType === 'SalesItemLineDetail').map(l => l.Description || '').join('\n---\n');
+      if (stored !== want) problems.push('the stored wording does not match what was sent');
+    }
+    if (problems.length) return json({ ok: false, applied: true, error: 'Updated, but the read-back check failed: ' + problems.join('; ') + '. Check invoice ' + (updated.DocNumber || invoiceId) + ' in QuickBooks.', invoice: scopeRepairPublic(plan) }, 500);
+    return json({ ok: true, applied: true, verified: true, invoice_id: invoiceId, doc_number: updated.DocNumber || '', changed_lines: plan.changes.length, work_listed: plan.work_listed });
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
@@ -32947,6 +33169,134 @@ function timeEntriesWithUsableNotes(timeEntries, billId) {
     && !String(e.Invoice_Description || '').trim() && String(e.Notes || '').trim());
 }
 
+// ── Work-done wording on customer invoices (Nov 2 2026, Brett: invoice 1774 "still not displaying
+// the work completed") ────────────────────────────────────────────────────────────────────────
+// The WO checklist is the record of what was done. Every item that was NOT given a vendor reason code
+// (na / separate / estimate / access / parts) is listed on the invoice in past tense ("Reattached
+// siding using adhesive"), falling back to "<item> — resolved". Reason-coded items are LEFT OFF and
+// reported back to the sender so the preview can flag them (never claim "resolved" falsely, never
+// print "not done" to the customer without Brett's say). Text that looks like an access code,
+// lockbox or key detail never reaches a customer-facing line.
+function clPastTense(word) {
+  const MAP = {
+    replace: 'Replaced', repair: 'Repaired', install: 'Installed', reattach: 'Reattached', attach: 'Attached',
+    fix: 'Fixed', patch: 'Patched', paint: 'Painted', caulk: 'Caulked', seal: 'Sealed', clean: 'Cleaned',
+    remove: 'Removed', check: 'Checked', test: 'Tested', inspect: 'Inspected', adjust: 'Adjusted',
+    tighten: 'Tightened', secure: 'Secured', clear: 'Cleared', unclog: 'Unclogged', reset: 'Reset',
+    rekey: 'Rekeyed', 're-key': 'Re-keyed', change: 'Changed', swap: 'Swapped', mount: 'Mounted',
+    hang: 'Hung', trim: 'Trimmed', sand: 'Sanded', stain: 'Stained', touch: 'Touched', refinish: 'Refinished',
+    reinstall: 'Reinstalled', rehang: 'Rehung', reconnect: 'Reconnected', connect: 'Connected',
+    disconnect: 'Disconnected', level: 'Leveled', lubricate: 'Lubricated',
+    flush: 'Flushed', drain: 'Drained', service: 'Serviced', add: 'Added', build: 'Built', fill: 'Filled',
+    glue: 'Glued', haul: 'Hauled', dispose: 'Disposed of', pressure: 'Pressure-washed', power: 'Power-washed',
+    wash: 'Washed', mow: 'Mowed', treat: 'Treated', spray: 'Sprayed', tape: 'Taped', texture: 'Textured',
+    prime: 'Primed', grout: 'Grouted', 're-grout': 'Re-grouted', regrout: 'Re-grouted', recaulk: 'Re-caulked',
+    straighten: 'Straightened', realign: 'Realigned', align: 'Aligned', rebuild: 'Rebuilt',
+    open: 'Opened', close: 'Closed', balance: 'Balanced', calibrate: 'Calibrated',
+    program: 'Programmed', update: 'Updated', verify: 'Verified', confirm: 'Confirmed',
+  };
+  return MAP[String(word || '').toLowerCase()] || '';
+}
+
+// True when a customer-facing line looks like it carries an access code / lockbox / key detail.
+function looksLikeAccessDetail(text) {
+  // Reference numbers (WO-1253), street numbers, prices and unit-bearing figures are not codes; strip them before looking for digit runs.
+  const t = String(text || '')
+    .replace(/\b(?:WO|EST|INV|SCOPE|SP|VB|PO)[-\s#]*\d+\b/gi, ' ')
+    .replace(/\$\s*[\d,.]+/g, ' ')
+    .replace(/\b\d{4,}\s+(?:[A-Za-z]+\s+){0,2}(?:st|street|ave|avenue|rd|road|dr|drive|blvd|ln|lane|way|ct|court|pl|place|sq|cfm|btu|psi|gal|gallon|gallons|watt|watts|w|v|lb|lbs)\b/gi, ' ');
+  return /lock\s?box|pass\s?code|password|combination|\bcombo\b|key\s?(?:pad|box|safe)|keypad|\b(?:access|door|gate|alarm|entry|temporary|temp|garage|building|lock)\s+codes?\b|\bcodes?\s*[:=#]|\b(?!(?:19|20)\d\d\b)\d{4,}\b/i.test(t);
+}
+
+// Drops every line of a free-text block that looks like an access detail. '' when nothing is left.
+function sanitizeCustomerText(text) {
+  return String(text || '').split(/\r?\n/).map(l => l.trim()).filter(l => l && !looksLikeAccessDetail(l)).join('\n');
+}
+
+function parseChecklistItems(raw) {
+  let arr = raw;
+  if (typeof raw === 'string') { try { arr = JSON.parse(raw || '[]'); } catch (_) { return []; } }
+  if (!Array.isArray(arr)) return [];
+  return arr.filter(it => it && String(it.t || '').trim()).map(it => ({
+    t: String(it.t).trim(),
+    done: it.done === true || String(it.done).toLowerCase() === 'true',
+    code: String(it.code || '').trim().toLowerCase(),
+    why: String(it.why || '').trim(),
+    d: String(it.d || '').trim(),
+  }));
+}
+
+// "Reattach siding" -> "Reattached siding"; "Kitchen: Replace faucet" -> "Kitchen: Replaced faucet";
+// anything that does not start with a known verb -> "<item> — resolved". An explicit item.d wins.
+function checklistItemPastTense(item) {
+  if (item && item.d) return String(item.d).trim();
+  let text = String((item && item.t) || '').trim().replace(/^[\-•*\d.)\s]+/, '').replace(/[.;:\s]+$/, '');
+  if (!text) return '';
+  let prefix = '';
+  const m = text.match(/^([^:]{1,40}):\s+(.+)$/);
+  if (m) { prefix = m[1] + ': '; text = m[2]; }
+  const first = (text.match(/^[A-Za-z\-]+/) || [''])[0];
+  const rest = text.slice(first.length);
+  const past = clPastTense(first);
+  if (past) return prefix + past + rest;
+  if (/^[A-Za-z\-]+ed\b/.test(text)) return prefix + text.charAt(0).toUpperCase() + text.slice(1);   // already past tense
+  return prefix + text.charAt(0).toUpperCase() + text.slice(1) + ' — resolved';
+}
+
+// What the customer may read about the work. lines = past-tense items to print; excluded = reason-coded
+// items left off (flagged to the sender); withheld = items whose text looked like an access detail.
+function workDoneFromChecklist(raw) {
+  const lines = [], excluded = [], withheld = [];
+  parseChecklistItems(raw).forEach(it => {
+    if (it.code) { excluded.push({ t: it.t, code: it.code, why: it.why }); return; }
+    if (looksLikeAccessDetail(it.t) || looksLikeAccessDetail(it.d)) { withheld.push({ t: it.t }); return; }
+    const line = checklistItemPastTense(it);
+    if (line) lines.push(line);
+  });
+  return { lines, excluded, withheld };
+}
+
+// "Work completed:\n• a\n• b" — '' when no checklist item qualifies.
+function workDoneBlock(wo) {
+  const wd = workDoneFromChecklist(wo && wo.Checklist);
+  return wd.lines.length ? ('Work completed:\n' + wd.lines.map(l => '• ' + l).join('\n')) : '';
+}
+
+// Preview warnings about a checklist-backed invoice (excluded / withheld items).
+function workDoneWarnings(wo) {
+  const wd = workDoneFromChecklist(wo && wo.Checklist);
+  const out = [];
+  const label = { na: 'not applicable', separate: 'separate work order', estimate: 'needs estimate', access: "couldn't access", parts: 'needs parts' };
+  if (wd.excluded.length) out.push('ℹ ' + wd.excluded.length + ' checklist item' + (wd.excluded.length === 1 ? ' is' : 's are') + ' left OFF the invoice because the vendor gave a reason: ' + wd.excluded.map(e => '"' + e.t + '" (' + (label[e.code] || e.code) + ')').join('; ') + '.');
+  if (wd.withheld.length) out.push('⚠ ' + wd.withheld.length + ' checklist item' + (wd.withheld.length === 1 ? '' : 's') + ' left off the invoice because the wording looks like an access code or key detail: ' + wd.withheld.map(e => '"' + e.t + '"').join('; ') + '.');
+  return out;
+}
+
+// Scope.Title is a copy of the WO description (push-to-scope), so a description that held access codes
+// put them on the invoice. A title that looks like an access detail is replaced by the WO reference.
+function scopeSafeTitle(s) {
+  const t = String((s && s.Title) || '').trim();
+  if (t && !looksLikeAccessDetail(t)) return t;
+  return (s && s.WO_ID) ? ('WO ' + s.WO_ID) : 'scope of work';
+}
+
+// Work-completed block for the FINAL scope-proposal invoice, from the linked work order's checklist.
+// Never throws: a read failure or empty checklist becomes a preview warning, not a silent gap.
+async function scopeWorkDoneForInvoice(env, s) {
+  const out = { block: '', warnings: [] };
+  if (!s || !s.WO_ID) { out.warnings.push('ℹ This proposal has no linked work order, so the final invoice cannot list the work completed.'); return out; }
+  try {
+    const wo = findWO(await fetchTab(env, 'Work_Orders'), s.WO_ID);
+    if (!wo) { out.warnings.push('⚠ The linked work order ' + s.WO_ID + ' was not found, so the final invoice cannot list the work completed.'); return out; }
+    out.block = workDoneBlock(wo);
+    workDoneWarnings(wo).forEach(w => out.warnings.push(w));
+    if (!out.block) out.warnings.push('⚠ Work order ' + s.WO_ID + ' has no usable checklist items, so the final invoice will not list the work completed. Add them to the checklist first if the customer should read them.');
+  } catch (e) {
+    out.warnings.push('⚠ Could not read work order ' + s.WO_ID + ' (' + String((e && e.message) || e).slice(0, 120) + '), so the work-completed list is missing from this invoice.');
+  }
+  return out;
+}
+
 function buildLaborDescription(billRow, timeEntries, wo) {
   const billId = String((billRow && billRow.ID) || '').trim();
   const parts = [];
@@ -32956,8 +33306,12 @@ function buildLaborDescription(billRow, timeEntries, wo) {
     .filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId && laborEntryText(e))
     .sort((a, b) => new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0))
     .forEach(e => parts.push(laborEntryText(e)));
-  if (parts.length) return parts.join('; ');
-  return String((wo && (wo.Invoice_Memo || wo.Description)) || '').trim();
+  // Nov 2 2026: the checklist (what was actually done) follows anything the vendor typed, and replaces
+  // the generic work-order text. That fallback text never carries access codes onto an invoice.
+  const doneBlock = workDoneBlock(wo);
+  if (parts.length) return parts.join('; ') + (doneBlock ? '\n' + doneBlock : '');
+  if (doneBlock) return doneBlock;
+  return sanitizeCustomerText((wo && (wo.Invoice_Memo || wo.Description)) || '');
 }
 
 // True when billable hours exist on this job but NONE of them (nor the bill) said anything the
@@ -34243,6 +34597,8 @@ async function qbSendInvoice(env, body) {
     const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
     const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
+    // Nov 2 2026: checklist items left off (vendor reason code) or withheld (looked like an access code) are flagged here.
+    workDoneWarnings(wo).forEach(w => warnings.push(w));
     // Oct 23 2026 (invoice 1767): say so in the preview when the customer would read only the generic work-order text
     // even though hours were billed, and point at the opt-in that copies the private notes (nothing is copied automatically).
     {
