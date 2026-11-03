@@ -28527,7 +28527,7 @@ async function hubTestWriteAllowed(env, path, body) {
     }
     return true;
   }
-  // Nov 3 2026 STAGING-TEST-ONLY (never to main): lets the staging token exercise the judge() wiring in receiptReconImportStatement end to end.
+  // Nov 3 2026 STAGING-TEST-ONLY (never to main; redeploy re-trigger): lets the staging token exercise the judge() wiring in receiptReconImportStatement end to end.
   // Only a TEST- vendor can reach it, so a statement line can never be matched against (or filed under) a real vendor.
   if (path === '/receipt-recon/import-statement') return !!body && /^TEST-/i.test(String(body.vendor || ''));
   if (path === '/admin/seed-test-receipt') return true; // self-scoped to TEST-PROPERTY-001 internally, staging-only (see seedTestReceipt)
