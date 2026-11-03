@@ -28140,7 +28140,8 @@ async function hubTestWriteAllowed(env, path, body) {
   }
   // Inspection billing (Oct 22 2026): a preview writes nothing; every real step may only touch a booking / customer that is a TEST- customer.
   if (path === '/insp/billing/preview') return true;
-  if (path === '/insp/billing/complete' || path === '/insp/billing/release-owner' || path === '/insp/billing/set-wo') {
+  if (path === '/insp/billing/check-paid' && !(body && body.id)) return false;   // the no-id sweep reads every real invoice: never from the staging test token
+  if (path === '/insp/billing/complete' || path === '/insp/billing/release-owner' || path === '/insp/billing/set-wo' || path === '/insp/billing/mark-paid' || path === '/insp/billing/check-paid') {
     const _bb = (await fetchTab(env, 'Insp_Bookings')).find(x => String(x.ID) === String(body && body.id));
     return !!_bb && await isTestRecord(env, 'Insp_Customers', _bb.Customer_ID);
   }
