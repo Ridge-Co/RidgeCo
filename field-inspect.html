@@ -53,6 +53,7 @@
   .area-row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 4px;border-top:1px solid var(--border);cursor:pointer;min-height:52px}
   .area-row:first-child{border-top:none}
   .area-row.ex{opacity:.5}
+  .nophoto{color:var(--warn);font-weight:700}
   .issue{border-left:5px solid var(--sev-medium);padding:10px 10px 10px 12px;margin:8px 0;background:#fafbfc;border-radius:8px;cursor:pointer}
   .issue.urgent{border-color:var(--sev-urgent)} .issue.high{border-color:var(--sev-high)} .issue.medium{border-color:var(--sev-medium)} .issue.low{border-color:var(--sev-low)} .issue.info{border-color:var(--sev-info)}
   .issue .t{font-weight:700} .issue .f{font-size:13px;color:var(--muted);margin-top:3px}
@@ -773,6 +774,9 @@ function photoStatusHtml(np){
 // ── model ───────────────────────────────────────────────────────────────────
 function findArea(doc, id){ for (var i=0;i<doc.areas.length;i++) if (doc.areas[i].id===id) return doc.areas[i]; return null; }
 function issueCount(a){ return (a.issues||[]).length; }
+// Nov 2 2026 (Brett): mark issues that have no photos right on the Areas page so they can be found without going back to the preview. Only a marker: nothing here blocks anything.
+function issuesNoPhoto(a){ return (a.issues||[]).filter(function(is){ return !(is.photo_ids||[]).length; }); }
+function noPhotoTotal(doc){ return (doc.areas||[]).filter(function(a){ return !a.excluded; }).reduce(function(n, a){ return n + issuesNoPhoto(a).length; }, 0); }
 function inspectedCount(doc){ var act = doc.areas.filter(function(a){return !a.excluded;}); return { done: act.filter(function(a){ return (a.condition && a.condition!=='not_inspected') || (a.access && a.access.no_access); }).length, total: act.length }; }
 
 // ── views ───────────────────────────────────────────────────────────────────
@@ -1956,6 +1960,8 @@ function viewInsp(){
   var vis = doc.areas.filter(function(a){ return !a.excluded; });
   h += '<div class="row" style="margin-top:6px"><h2 style="margin:8px 0">Areas in walk-through order</h2><button class="btn sm" onclick="toggleReorder()">'+(S.reorder?'Done':'↕ Reorder')+'</button></div>';
   if (S.reorder) h += '<div class="card"><div class="muted">Hold and drag the <b>≡</b> handle to move an area, or tap ▲ / ▼. The report follows this order.</div><button class="btn block" style="margin-top:8px" onclick="autoOrderSheet()">✨ Auto-order for a walk-through…</button></div>';
+  var npTot = noPhotoTotal(doc);
+  if (npTot) h += '<div class="muted nophoto-sum" style="margin:0 0 8px"><span class="nophoto">⚠ '+npTot+' issue'+(npTot>1?'s have':' has')+' no photos</span> — marked on the areas below (fine if that is intended).</div>';
   h += '<div class="card" style="padding:4px 12px">'+vis.map(function(a,i){ return areaRow(a, i, vis.length); }).join('')+'</div>';
   var ex = doc.areas.filter(function(a){return a.excluded;});
   if (ex.length){ h += '<h2>Excluded</h2><div class="card" style="padding:4px 12px">'+ex.map(function(a){ return '<div class="area-row ex" onclick="openArea(\''+a.id+'\')"><span>'+esc(a.name)+'</span><span class="muted">tap to include</span></div>'; }).join('')+'</div>'; }
@@ -2037,8 +2043,8 @@ function setAccessReason(v){ var a = curArea(); mut(function(){ a.access = a.acc
 function setAccessNote(v){ var a = curArea(); mut(function(){ a.access = a.access || { no_access:true, reason:'' }; a.access.note = String(v||'').slice(0,500); }); }
 function hasPending(a){ return !!String(a.pending_text||'').trim(); }
 function areaRow(a, i, n){
-  var ni = issueCount(a), ph = (a.photo_ids||[]).length, eq = (a.equipment||[]).length;
-  var sub = (ni?ni+' issue'+(ni>1?'s':''):'no issues')+(ph?' · 📷 '+ph:'')+(eq?' · ⚙ '+eq:'')+(hasPending(a)?' · <span style="color:var(--warn)">dictation not processed</span>':'');
+  var ni = issueCount(a), ph = (a.photo_ids||[]).length, eq = (a.equipment||[]).length, np = issuesNoPhoto(a).length;
+  var sub = (ni?ni+' issue'+(ni>1?'s':''):'no issues')+(ph?' · 📷 '+ph:'')+(eq?' · ⚙ '+eq:'')+(np?' · <span class="nophoto">⚠ '+np+' issue'+(np>1?'s':'')+' without photos</span>':'')+(hasPending(a)?' · <span style="color:var(--warn)">dictation not processed</span>':'');
   if (S.reorder) return '<div class="area-row rr" data-aid="'+a.id+'"><button class="dh" aria-label="Drag to reorder '+esc(a.name)+'" title="Drag to reorder">≡</button><span><b>'+esc(a.name)+'</b><div class="muted">'+esc(groupLabel(a.group))+(groupLabel(a.group)?' · ':'')+sub+'</div></span><span class="mv"><button aria-label="Move up" onclick="moveArea(\''+a.id+'\',-1)"'+(i===0?' disabled':'')+'>▲</button><button aria-label="Move down" onclick="moveArea(\''+a.id+'\',1)"'+(i===n-1?' disabled':'')+'>▼</button></span></div>';
   return '<div class="area-row" data-aid="'+a.id+'" onclick="openArea(\''+a.id+'\')"><span><b>'+esc(a.name)+'</b><div class="muted">'+sub+'</div></span>'+areaPill(a)+'</div>';
 }
@@ -2091,7 +2097,7 @@ function thumbHtml(id, onclick, selected){
   return '<button class="thumb'+(selected?' chk':'')+'" onclick="'+onclick+'" aria-label="photo">'+(src?'<img src="'+esc(src)+'" alt="photo" onerror="this.parentNode.title=\'Photo could not be loaded\';this.style.display=\'none\'">':'')+(st&&st.state!=='done'?'<span class="b">'+(st.state==='error'?'⚠ retry':'⏳')+'</span>':'')+'</button>';
 }
 function issueCard(is){
-  return '<div class="issue '+esc(is.severity)+'" onclick="editIssue(\''+is.id+'\')"><div class="t">'+esc(is.title)+'</div><div class="f"><span class="pill">'+esc(TRADE_LABEL[is.trade]||is.trade)+'</span> <span class="pill">'+esc(SEV_LABEL[is.severity]||is.severity)+'</span>'+(is.issue_type?' <span class="pill type">'+esc(is.issue_type)+'</span>':'')+(is.wo?' <span class="pill new">work order</span>':'')+(is.sent?' <span class="pill ok">sent '+esc(sentWhen(is.sent))+'</span>':(is.flag_send?' <span class="pill warn">to send</span>':''))+'</div>'+(is.recommended_fix?'<div class="f">Fix: '+esc(is.recommended_fix)+'</div>':'')+'</div>';
+  return '<div class="issue '+esc(is.severity)+'" onclick="editIssue(\''+is.id+'\')"><div class="t">'+esc(is.title)+'</div><div class="f"><span class="pill">'+esc(TRADE_LABEL[is.trade]||is.trade)+'</span> <span class="pill">'+esc(SEV_LABEL[is.severity]||is.severity)+'</span>'+(is.issue_type?' <span class="pill type">'+esc(is.issue_type)+'</span>':'')+((is.photo_ids||[]).length?'':' <span class="pill warn">⚠ no photos</span>')+(is.wo?' <span class="pill new">work order</span>':'')+(is.sent?' <span class="pill ok">sent '+esc(sentWhen(is.sent))+'</span>':(is.flag_send?' <span class="pill warn">to send</span>':''))+'</div>'+(is.recommended_fix?'<div class="f">Fix: '+esc(is.recommended_fix)+'</div>':'')+'</div>';
 }
 
 // ---- photos: select, move, remove ----
