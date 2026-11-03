@@ -643,6 +643,7 @@ function shareUpload(file,fileType){
 // ── BILL ──────────────────────────────────────────────────────
 var _btype='hourly', _rc=0, _rpay={}, _rurl={}, _btypeUserPicked=false;
 function openBill(){
+  if(CL.length && clOpenCount()){ var gm=clBlockMsg(clOpenCount(),'invoice'); var cm=document.getElementById('cl-msg'); if(cm){ cm.textContent=gm; cm.className='sheet-msg bad'; cm.scrollIntoView({block:'center'}); } else { alert(gm); } return; }
   _btype='hourly'; _rc=0; _rpay={}; _rurl={}; _btypeUserPicked=false;
   document.getElementById('b-hours').value=''; document.getElementById('b-flat').value='';
   document.getElementById('b-truck-desc').value=''; document.getElementById('b-truck-amt').value='';
