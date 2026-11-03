@@ -4793,7 +4793,7 @@ async function woPushToScope(env, body) {
     const now = new Date().toISOString();
     const createResp = await addRow(env, 'Scopes', {
       Property_ID: wo.Property_ID || '', Unit_ID: wo.Unit_ID || '', Room: wo.Room || '',
-      Title: ('WO ' + woId + ' — ' + (wo.Description || wo.Trade || 'Scope of work')).slice(0, 120),
+      Title: ('WO ' + woId + ' — ' + ((looksLikeAccessDetail(wo.Description) ? sanitizeCustomerText(wo.Description) : wo.Description) || wo.Trade || 'Scope of work')).slice(0, 120),
       Status: 'draft', Raw_Input: '', Line_Items: '[]', Source_Refs: '[]', Parent_Scope_ID: '',
       WO_ID: woId, Vendor_ID: wo.Vendor_ID || '', Estimate_Number: '', Estimate_Amount: '', Estimate_Notes: '',
       Proposal_Text: '', Created_By: (body && body.created_by) || 'admin', Created_Date: now, Updated_Date: now, Notes: '', Active: 'TRUE',
