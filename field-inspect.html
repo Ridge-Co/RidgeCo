@@ -1444,6 +1444,7 @@ function viewReview(){
   h += '</div>';
   h += summaryCard(doc);
   h += omCard();
+  h += dupCard(doc);
   h += '<div class="card"><b>Before you publish</b>';
   if (!chk.blocks.length && !chk.warns.length) h += '<div class="check">✅ Everything looks ready.</div>';
   chk.blocks.forEach(function(m){ h += '<div class="check">⛔ '+esc(m)+'</div>'; });
