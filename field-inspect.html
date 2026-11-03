@@ -398,7 +398,7 @@ $('photo-in').addEventListener('change', function(ev){
       var row = { id:id, insp:rec.id, blob:blob, state:'pending', err:'', at:Date.now() };
       return dbPut('photos', row).then(function(){
         blobUrl[id] = URL.createObjectURL(blob); photoState[id] = { state:'pending', err:'' };
-        mut(function(doc){ var a = findArea(doc, tg.areaId); (a.photo_ids = a.photo_ids||[]).push(id); });
+        mut(function(doc){ var a = findArea(doc, tg.areaId); (a.photo_ids = a.photo_ids||[]).push(id); if (f && f.name && f.size) (doc.photo_meta = doc.photo_meta||{})[id] = { n:String(f.name).slice(0,80), s:f.size }; });   // remembered so the duplicate check can compare file name + size
         if (tg.urgent && S.urg && S.urg.photoIds) S.urg.photoIds.push(id);
         return queueOriginal(rec, id, f);
       });
