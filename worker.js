@@ -235,7 +235,7 @@ const _hubWorkerCore = {
       // Shareable Work Order (B-117): public at the gate, but every handler self-verifies a
       // signed, WO-scoped share token (HMAC off WORKER_SECRET) before doing anything. The
       // last-4-of-phone gate + per-WO lockout live INSIDE these handlers, not here.
-      '/wo/shared','/wo/shared/unlock','/wo/shared/upload-session','/wo/shared/log-attachment','/wo/shared/status','/wo/shared/bill','/wo/shared/bill-extract','/wo/shared/receipt','/wo/shared/note',
+      '/wo/shared','/wo/shared/unlock','/wo/shared/upload-session','/wo/shared/log-attachment','/wo/shared/status','/wo/shared/bill','/wo/shared/bill-extract','/wo/shared/receipt','/wo/shared/note','/wo/shared/checklist',
       // Live OCR canary (Sept 1 2026): public at the router gate, but selfTestInvoiceExtract
       // self-verifies a dedicated SELFTEST_TOKEN before doing anything — deliberately NOT
       // WORKER_SECRET, which already gates too much (see the security note in CLAUDE.md).
