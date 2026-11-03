@@ -502,6 +502,7 @@ function renderDoc(){
   // job
   h += row(t('Trade'), '<span class="v">'+esc(trTrade(wo.Trade)||'—')+'</span>');
   h += row(t('Job Description'), '<div class="v desc">'+esc(wo.Description||'—')+'</div>');
+  h += clRow(wo);
   if(wo.Scheduled_Date) h += row(t('Scheduled'), '<span class="v">'+esc(wo.Scheduled_Date)+(wo.Scheduled_Window?(' · '+esc(wo.Scheduled_Window)):'')+'</span>');
 
   // photos
