@@ -3372,7 +3372,47 @@ async function receiptReconImportStatement(env, body) {
     catch (e) { errors.push('match failed: ' + (e && e.message || e)); match = { confidence: null }; }
 
     if (match.confidence === 'confirmed') { matched_confirmed++; continue; }
-    if (match.confidence === 'possible') flagged_possible++;
+    let judgeNote = '';
+    if (match.confidence === 'possible') {
+      flagged_possible++;
+      const ev = statementJudgeEvidence(match, receipts, queueRows);
+      let whyNot = '';
+      if (judgeOff) whyNot = judgeOff;
+      else if (judged >= JUDGE_MAX_PER_CALL) whyNot = 'per-call verifier limit reached';
+      else if (!ev) whyNot = 'matched record not found to show the verifier';
+      else if (amountCount[amt.toFixed(2)] > 1) whyNot = 'another line on this statement has the same amount';
+      else if (statementWindowCount(normLine, receipts, queueRows) > 1) whyNot = 'more than one existing record fits';
+      if (whyNot) judge_skipped++;
+      else {
+        judged++;
+        try {
+          const verdict = await judge(env, {
+            action: `statement_possible_match_autoconfirm: ${lineVendor} $${amt.toFixed(2)} ${date} ~ ${ev.record} #${ev.id}`.slice(0, 200),
+            intent: 'Confirm that this vendor-statement line is the SAME purchase as the one existing record shown, so the line does not need manual review.',
+            proposedChange: { statement_line: { vendor: lineVendor, date, amount: amt.toFixed(2), reference: normLine.ref, description: String((line && line.description) || '').slice(0, 200) }, existing_record: ev, matched_by: match.type },
+            acceptanceCriteria: [
+              'Same vendor (allowing for store-name formatting differences), the same amount to the cent, and dates within 3 days.',
+              'Nothing in the two records points to a different purchase: a different reference or PO number, a different work order, a refund or negative amount, or a split or repeat charge.',
+              'If the evidence is thin, or the two records disagree on anything that matters, reject.',
+            ],
+            riskClass: 'SAFE',
+            source: 'receiptReconImportStatement',
+          });
+          if (verdict && verdict.verdict === 'approve') { matched_confirmed++; judge_confirmed++; continue; }
+          judgeNote = ' Verifier did not confirm: ' + String((verdict && verdict.reason) || 'no reason given').slice(0, 200);
+          if (verdict && /^judge model call failed/.test(String(verdict.reason || ''))) {
+            judgeOff = 'verifier unavailable this run';
+            errors.push('judge() unavailable, remaining possible matches filed to the manual queue: ' + String(verdict.reason).slice(0, 200));
+          }
+        } catch (e) {
+          judgeOff = 'verifier errored this run';
+          const msg = 'judge() threw on a possible match, filed to the manual queue: ' + (e && e.message || e);
+          errors.push(msg);
+          try { await logTelemetry(env, { Source: 'receiptReconImportStatement', Job_Type: 'statement_judge_error', Skill_Or_Endpoint: 'receiptReconImportStatement', Success: 'FALSE', Notes: msg.slice(0, 200) }); }
+          catch (e2) { errors.push('could not record that judge() failure in telemetry: ' + (e2 && e2.message || e2)); }
+        }
+      }
+    }
 
     const noteBase = `From ${vendor} statement upload (${sourceFileName || 'uploaded ' + today}).`;
     const notes = noteBase + (match.confidence === 'possible' ? ' ⚠️ Possibly matches an existing entry within 3 days — check before billing.' : '');
