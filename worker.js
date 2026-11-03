@@ -6499,7 +6499,7 @@ async function scopeProposalBook(env, body) {
   if (ratio !== 0.5) warnings.push('Deposit is ' + Math.round(ratio * 100) + '% of the signed subtotal (not the usual 50%) — the vendor bill is prorated to match.');
   warnings.push('Invoice is the DEPOSIT only ($' + deposit.toFixed(2) + ' of $' + subtotal.toFixed(2) + '); the vendor bill is the same ' + Math.round(ratio * 100) + '% of the vendor cost ($' + vendorBillAmount.toFixed(2) + ' of $' + vendorCostTotal.toFixed(2) + ').');
 
-  const invoiceDesc = (tradeName + ' — ' + (s.Title || 'scope of work') + ' — deposit (' + addr + ')').slice(0, 4000);
+  const invoiceDesc = (tradeName + ' — ' + scopeSafeTitle(s) + ' — deposit (' + addr + ')').slice(0, 4000);
   // Instant-pay fee (Oct 19 2026) — its own visible negative line, only for instant-pay vendors.
   const cfgAll = await fetchConfig(env);
   const feeCfg = instantFeeConfig(cfgAll);
