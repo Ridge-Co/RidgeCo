@@ -45055,8 +45055,11 @@ function insbPlan(o) {
     }
     if (owner.status === 'ready' && (!String(c.InvB_Phone || '').trim() || !String(c.InvB_Email || '').trim() || !insbAddrLines(c.Bill_To_Address).length)) { owner.status = 'held_no_contact'; warnings.push("Owner-facing invoice is HELD: Premier's address, phone and email lines (shown at the top of that invoice, like their specimen) are not all set."); }
   }
-  if (rec.appfolio) warnings.push('Your invoice goes to the AppFolio Smart Bill Entry inbox only.');
+  const qbOnly = String(c.Invoice_Delivery || '') === 'qb_only';
+  if (qbOnly && billable) warnings.push('Invoiced only: the QuickBooks invoice is created but NOT emailed. Enter it in the customer\'s portal yourself, or let the automation do it.');
+  else if (rec.appfolio) warnings.push('Your invoice goes to the AppFolio Smart Bill Entry inbox only.');
   return {
+    qb_only: qbOnly,
     ok: blockers.length === 0, blockers, warnings, resume, already, kind: cleanKind, units: trip.ok ? trip.units : 0,
     base_cents: trip.ok ? trip.cents : 0, base_label: trip.ok ? trip.note : '', breakdown: trip.ok ? trip.breakdown : [],
     invoice: { date: today, due: today ? inspAddDays(today, INSB_NET_DAYS) : '', wo, description: desc, address: addr },
