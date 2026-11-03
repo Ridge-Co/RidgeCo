@@ -20,7 +20,7 @@ function grab(name) {
   for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) break; } }
   return src.slice(i, j + 1);
 }
-const pure = new Function(grab('englishOnly') + '\n' + grab('isTrueish') + '\n' + grab('laborEntryText') + '\n' + grab('timeEntriesWithUsableNotes') + '\n' + grab('buildLaborDescription') + '\n' + grab('laborDescriptionIsGeneric') + '\n' + grab('hubVisitLaborLines') + '\n' + grab('buildInvoiceLines') +
+const pure = new Function(grab('englishOnly') + '\n' + grab('isTrueish') + '\n' + grab('laborEntryText') + '\n' + ['looksLikeAccessDetail', 'sanitizeCustomerText', 'parseChecklistItems', 'clPastTense', 'checklistItemPastTense', 'workDoneFromChecklist', 'workDoneBlock'].map(grab).join('\n') + '\n' + grab('timeEntriesWithUsableNotes') + '\n' + grab('buildLaborDescription') + '\n' + grab('laborDescriptionIsGeneric') + '\n' + grab('hubVisitLaborLines') + '\n' + grab('buildInvoiceLines') +
   '\nreturn { buildInvoiceLines, buildLaborDescription, laborDescriptionIsGeneric, timeEntriesWithUsableNotes, laborEntryText, hubVisitLaborLines };')();
 const { buildInvoiceLines, buildLaborDescription, laborDescriptionIsGeneric, timeEntriesWithUsableNotes, laborEntryText } = pure;
 
