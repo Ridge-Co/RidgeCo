@@ -4123,7 +4123,27 @@ function hubChecklistHtml(wo){
     var reason=(!it.done&&it.code)?' <span style="color:var(--warn);font-size:10px">— '+esc(CODES[it.code]||it.code)+(it.why?': '+esc(it.why):'')+'</span>':'';
     return '<div style="font-size:12px;padding:3px 0">'+mark+' <span style="'+(it.done?'text-decoration:line-through;color:var(--muted)':'')+'">'+esc(it.t||'')+'</span>'+reason+'</div>';
   }).join('');
-  return '<div style="margin-bottom:14px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">CHECKLIST ('+done+'/'+items.length+' done)</div>'+rows+'</div>';
+  // Nov 2 2026 (Brett): admin-only "Mark all resolved" — ticks every item that has no vendor reason code, so the
+  // invoice can list the work as done. Items with a reason code stay as the vendor left them. Never shown on the vendor pages.
+  var openCount=items.filter(function(i){return !i.done && !i.code;}).length;
+  var markBtn=openCount?'<button class="btn btn-sm" id="cl-markall-btn" style="margin-left:10px;padding:2px 8px;font-size:10px" onclick="markChecklistAllResolved(\''+esc(String((wo&&wo.ID)||''))+'\')">Mark all resolved ('+openCount+')</button>':'';
+  return '<div style="margin-bottom:14px"><div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">CHECKLIST ('+done+'/'+items.length+' done)'+markBtn+'</div>'+rows+'</div>';
+}
+function markChecklistAllResolved(woId){
+  var w=safeArray(state.workorders).find(function(x){return x.ID===woId;});
+  if(!w){ toast('Work order not found — reload and try again','error'); return; }
+  var items=[]; try{ items=JSON.parse(w.Checklist||'[]')||[]; }catch(e){ items=[]; }
+  var n=0;
+  items.forEach(function(it){ if(!it.done && !it.code){ it.done=true; it.code=''; it.why=''; n++; } });
+  if(!n){ toast('Nothing to mark — every item is already resolved or has a reason','info'); return; }
+  var btn=document.getElementById('cl-markall-btn'); if(btn){ btn.disabled=true; btn.textContent='Saving…'; }
+  var val=JSON.stringify(items);
+  api('POST','/wo/checklist',{wo_id:woId, checklist:val, updated_by:'Admin', updated_by_role:'admin', note:'Mark all resolved ('+n+' items)'}).then(function(res){
+    if(!res || res.error || !res.success){ throw new Error((res&&res.error)||'Checklist was not saved'); }
+    w.Checklist=val;
+    toast(n+' checklist item'+(n===1?'':'s')+' marked resolved','success');
+    openWODetail(woId);
+  }).catch(function(e){ logError('Mark all resolved',e.message); toast('Error: '+e.message,'error'); if(btn){ btn.disabled=false; btn.textContent='Mark all resolved'; } });
 }
 // Turn stored checklist JSON back into editable text (one item per line).
 function checklistToText(json){
