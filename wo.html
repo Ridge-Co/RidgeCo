@@ -591,11 +591,14 @@ function openStatus(){
 }
 function saveStatus(){
   if(!_stPick){ msg('st-msg',t('Tap where the job stands right now.'),'bad'); return; }
+  if((_stPick==='Complete'||_stPick==='Pending Invoice') && CL.length && clOpenCount()){ msg('st-msg',clBlockMsg(clOpenCount(),'complete'),'bad'); return; }
   var btn=document.getElementById('st-save'); btn.disabled=true;
-  post('/wo/shared/status',{st:VIEW,wo:WO,status:_stPick,notes:document.getElementById('st-note').value.trim()}).then(function(res){
+  var pre=(CL.length && (_stPick==='Complete'||_stPick==='Pending Invoice')) ? clSave() : Promise.resolve(true);   // the Worker re-checks the saved checklist
+  pre.then(function(saved){ if(!saved) return null; return post('/wo/shared/status',{st:VIEW,wo:WO,status:_stPick,notes:document.getElementById('st-note').value.trim()}); }).then(function(res){
     btn.disabled=false;
+    if(res===null){ msg('st-msg',clT('Could not save the checklist. Try again.'),'bad'); return; }
     if(res && res.success){ msg('st-msg',t('Saved ✓'),'ok'); setTimeout(function(){ close_('ov-status'); reload(); },900); }
-    else msg('st-msg', (res&&res.message)||t('Something went wrong. Try again.'),'bad');
+    else msg('st-msg', (res&&(res.message||res.error))||t('Something went wrong. Try again.'),'bad');
   }).catch(function(){ btn.disabled=false; msg('st-msg',t('Something went wrong. Try again.'),'bad'); });
 }
 
