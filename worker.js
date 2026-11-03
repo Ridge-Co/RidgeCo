@@ -44947,7 +44947,7 @@ async function fiFolderOrganize(env, body) {
 // All money is whole CENTS in the pure functions below (test/insp-billing.test.mjs); dollars only appear at the QuickBooks / PDF edge.
 // Nothing fails silently: every step's result is inspected, every failure is a Telemetry row (-> Needs Attention) AND is in the response.
 const INSB_BOOKING_COLS = ['WO_Number','Completed_At','Completion_Kind','Units_Billed','Invoice_Base_Cents','Invoice_Status','QB_Invoice_ID','QB_Invoice_Number','Invoice_Emailed_At','Invoice_Emailed_To','InvB_Number','InvB_Markup_Pct','InvB_Cents','InvB_Status','InvB_Emailed_At','Billing_Lock','Billing_Log','Paid_At','Paid_Source','Paid_Note'];
-const INSB_CUSTOMER_COLS = ['Billing_Mode','Owner_Invoice','QBO_Customer_ID','Bill_To_Name','Bill_To_Address','Bill_Email_To','Bill_Email_Cc','AppFolio_Email','Markup_Pct','InvB_Phone','InvB_Email'];
+const INSB_CUSTOMER_COLS = ['Billing_Mode','Owner_Invoice','QBO_Customer_ID','Bill_To_Name','Bill_To_Address','Bill_Email_To','Bill_Email_Cc','AppFolio_Email','Markup_Pct','InvB_Phone','InvB_Email','Invoice_Delivery'];   // Invoice_Delivery: '' = email our invoice, 'qb_only' = create it in QuickBooks but never email it (customer portals like AppFolio: entered there by hand / automation)
 const INSB_RATE_CENTS = [9500, 8500, 7500, 7500];      // unit 1, 2, 3, 4
 const INSB_RATE_5PLUS_CENTS = 6500;                   // unit 5 and above
 const INSB_ZERO_ACCESS_CENTS = 8500;
