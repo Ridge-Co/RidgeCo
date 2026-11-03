@@ -1240,6 +1240,8 @@ const _hubWorkerCore = {
         if (path === '/str/c/mark')                return await strCleanerMark(env, body);
         if (path === '/str/c/offer')               return await strOfferRespond(env, body);
         if (path === '/str/c/cancel')              return await strCleanerCancel(env, body);
+        if (path === '/str/c/supply')              return await strSupplyRequest(env, body);
+        if (path === '/str/admin/supply/ordered')  return await strAdminSupplyOrdered(env, body);
         if (path === '/str/admin/cleaner/save')    return await strAdminCleanerSave(env, body);
         if (path === '/str/admin/cleaner/new-link') return await strAdminNewLink(env, body);
         if (path === '/str/admin/config')          return await strAdminConfig(env, body);
