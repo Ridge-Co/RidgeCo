@@ -1959,6 +1959,8 @@ function viewInsp(){
   var vis = doc.areas.filter(function(a){ return !a.excluded; });
   h += '<div class="row" style="margin-top:6px"><h2 style="margin:8px 0">Areas in walk-through order</h2><button class="btn sm" onclick="toggleReorder()">'+(S.reorder?'Done':'↕ Reorder')+'</button></div>';
   if (S.reorder) h += '<div class="card"><div class="muted">Hold and drag the <b>≡</b> handle to move an area, or tap ▲ / ▼. The report follows this order.</div><button class="btn block" style="margin-top:8px" onclick="autoOrderSheet()">✨ Auto-order for a walk-through…</button></div>';
+  var npTot = noPhotoTotal(doc);
+  if (npTot) h += '<div class="muted nophoto-sum" style="margin:0 0 8px"><span class="nophoto">⚠ '+npTot+' issue'+(npTot>1?'s have':' has')+' no photos</span> — marked on the areas below (fine if that is intended).</div>';
   h += '<div class="card" style="padding:4px 12px">'+vis.map(function(a,i){ return areaRow(a, i, vis.length); }).join('')+'</div>';
   var ex = doc.areas.filter(function(a){return a.excluded;});
   if (ex.length){ h += '<h2>Excluded</h2><div class="card" style="padding:4px 12px">'+ex.map(function(a){ return '<div class="area-row ex" onclick="openArea(\''+a.id+'\')"><span>'+esc(a.name)+'</span><span class="muted">tap to include</span></div>'; }).join('')+'</div>'; }
