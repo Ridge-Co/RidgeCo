@@ -11294,6 +11294,12 @@ async function addVendorBill(env, body) {
   // same trip charge — so the rest of the bill has to match byte-for-byte before this
   // treats it as a re-submit. An already-reviewed bill never blocks a new one.
   const dupeKey = body.WO_ID || body.wo_id;
+  // Nov 2 2026: a vendor (portal or share link; the Hub sends Entered_By 'hub') cannot submit an invoice while checklist items are unresolved.
+  if (dupeKey && String(body.Entered_By || '').toLowerCase() !== 'hub') {
+    let _gwo = null;
+    try { _gwo = findWO(await fetchTab(env, 'Work_Orders'), dupeKey); } catch (_) { _gwo = null; }
+    if (_gwo) { const _gate = await checklistGateResponse(env, _gwo, body.Vendor_ID || body.vendor_id || _gwo.Vendor_ID, 'invoice', body.lang); if (_gate) return _gate; }
+  }
   if (dupeKey && body.Total) {
     const dupe = await findRecentDuplicate(env, 'Vendor_Bills', {
       WO_ID: dupeKey, Vendor_ID: String(body.Vendor_ID || ''), Total: String(body.Total),
