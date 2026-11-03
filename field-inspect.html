@@ -2041,7 +2041,7 @@ function setAccessNote(v){ var a = curArea(); mut(function(){ a.access = a.acces
 function hasPending(a){ return !!String(a.pending_text||'').trim(); }
 function areaRow(a, i, n){
   var ni = issueCount(a), ph = (a.photo_ids||[]).length, eq = (a.equipment||[]).length, np = issuesNoPhoto(a).length;
-  var sub = (ni?ni+' issue'+(ni>1?'s':''):'no issues')+(ph?' · 📷 '+ph:'')+(eq?' · ⚙ '+eq:'')+(np?' · <span class="nophoto">⚠ '+(np===ni?(ni===1?'issue has':'none of the issues have'):np+' of '+ni+' issues have')+' no photo'+(np>1?'s':'')+'</span>':'')+(hasPending(a)?' · <span style="color:var(--warn)">dictation not processed</span>':'');
+  var sub = (ni?ni+' issue'+(ni>1?'s':''):'no issues')+(ph?' · 📷 '+ph:'')+(eq?' · ⚙ '+eq:'')+(np?' · <span class="nophoto">⚠ '+np+' issue'+(np>1?'s':'')+' without photos</span>':'')+(hasPending(a)?' · <span style="color:var(--warn)">dictation not processed</span>':'');
   if (S.reorder) return '<div class="area-row rr" data-aid="'+a.id+'"><button class="dh" aria-label="Drag to reorder '+esc(a.name)+'" title="Drag to reorder">≡</button><span><b>'+esc(a.name)+'</b><div class="muted">'+esc(groupLabel(a.group))+(groupLabel(a.group)?' · ':'')+sub+'</div></span><span class="mv"><button aria-label="Move up" onclick="moveArea(\''+a.id+'\',-1)"'+(i===0?' disabled':'')+'>▲</button><button aria-label="Move down" onclick="moveArea(\''+a.id+'\',1)"'+(i===n-1?' disabled':'')+'>▼</button></span></div>';
   return '<div class="area-row" data-aid="'+a.id+'" onclick="openArea(\''+a.id+'\')"><span><b>'+esc(a.name)+'</b><div class="muted">'+sub+'</div></span>'+areaPill(a)+'</div>';
 }
