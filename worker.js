@@ -692,6 +692,7 @@ const _hubWorkerCore = {
         if (path === '/qb/trade-map')           return await qbTradeMap(env);
         if (path === '/qb/unit-audit')          return await qbUnitAudit(env, url);
         if (path === '/qb/repairable')          return await qbRepairable(env, url);
+        if (path === '/qb/repairable-scope')    return await qbRepairableScope(env, url);
         if (path === '/qb/payables')            return await qbPayables(env, url);
         if (path === '/qb/proposal-billing-sweep') return await proposalBillingSweep(env);
         if (path === '/daily-digest')           return await digestResponse(env, url);
