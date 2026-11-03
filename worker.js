@@ -43516,6 +43516,10 @@ async function fiReport(env, request, url) {
   let doc;
   try { doc = JSON.parse(fiJoinRow(insp.o)); } catch (e) { return fiErr(500, 'corrupt_doc', 'This report could not be loaded.'); }
   const br = await fiResolveBrand(env, insp.o.Brand_ID);
+  // The work order number (the customer's own reference, e.g. Premier's AppFolio WO) comes from the booking this inspection was started from. A failed lookup is logged, never hidden.
+  let woNumber = '', woLookupFailed = false;
+  try { const bk = (await fetchTab(env, 'Insp_Bookings')).find(x => String(x.Inspection_ID) === String(insp.o.ID) && String(x.Active || '').toUpperCase() !== 'FALSE'); woNumber = bk ? insbNormWO(bk.WO_Number) : ''; }
+  catch (e) { woLookupFailed = true; await insbFail(env, 'report_wo', 'The report for inspection ' + insp.o.ID + ' could not look up its work order number: ' + e.message, insp.o.ID); }
   const pt = await fiReadFresh(env, 'FI_Photos');
   const have = new Set(pt.rows.filter(x => x.o.Inspection_ID === insp.o.ID && x.o.Active !== 'FALSE').map(x => x.o.ID));
   const photoIds = fiPhotoIds(doc).filter(p => have.has(p));
