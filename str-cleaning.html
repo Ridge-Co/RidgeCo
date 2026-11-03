@@ -1180,6 +1180,28 @@ function digestDry(btn){
   }); });
 }
 
+/* ---------- supplies needed (Nov 3 2026) ---------- */
+function renderSupplies(){
+  var sp = S.supplies, el = $('sup-list');
+  if(!sp){ $('m-sup').textContent = ''; el.innerHTML = '<div class="msg err" role="alert">This server did not send the supply list. Reload the page.</div>'; return; }
+  if(sp.error){ $('m-sup').textContent = ''; el.innerHTML = '<div class="msg err" role="alert"><b>Could not load the supply list.</b>' + esc(sp.error) + '</div>'; return; }
+  var open = sp.open || [], ord = sp.ordered || [];
+  $('m-sup').textContent = open.length ? open.length + ' to order' : 'nothing waiting';
+  var h = '';
+  if(!open.length) h += '<p class="muted">Nothing is waiting to be ordered.</p>';
+  open.forEach(function(o){
+    h += '<div class="li"><b>' + esc(o.by || 'A cleaner') + ' requested ' + esc(o.text) + '</b> <span class="muted">' + esc(fmtDay(o.date)) + '</span>'
+      + (o.times > 1 ? '<div class="msg warn" style="margin-top:6px"><b>Asked ' + esc(o.times) + ' times.</b>Last asked ' + esc(fmtDay(o.last_date)) + (o.last_by ? ' by ' + esc(o.last_by) : '') + '. Still not marked ordered.</div>' : '')
+      + (o.note ? '<div class="muted">' + esc(o.note) + '</div>' : '')
+      + '<input id="sref-' + esc(o.id) + '" type="text" maxlength="120" placeholder="Where / order # (optional)" aria-label="Order reference for ' + esc(o.text) + '" style="width:100%;margin-top:8px;min-height:44px;font-size:16px;padding:8px 10px;border:1px solid var(--border,#ccc);border-radius:10px">'
+      + '<button class="btn sm primary" style="margin-top:8px" data-act="sup-ordered" data-id="' + esc(o.id) + '">Mark ordered</button></div>';
+  });
+  if(ord.length) h += '<h4>Ordered in the last 14 days</h4>' + ord.map(function(o){
+    return '<div class="li">' + esc(o.text) + ' <span class="muted">requested by ' + esc(o.by || '?') + ' ' + esc(fmtDay(o.date)) + ', ordered ' + esc(fmtDay(o.ordered_date)) + (o.order_ref ? ' (' + esc(o.order_ref) + ')' : '') + '</span></div>';
+  }).join('');
+  el.innerHTML = h;
+}
+
 /* ---------- log ---------- */
 function renderLog(){
   var l = S.log || [];
