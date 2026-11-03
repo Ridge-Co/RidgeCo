@@ -3143,6 +3143,43 @@ function statementLineMatch(line, existingReceipts, existingQueueRows) {
   return { confidence: null };
 }
 
+// ── judge() on statement "possible" matches (queue #55; B-211's first real call site; Nov 3 2026) ──────────
+// A 'possible' match is a heuristic guess (same amount, within 3 days, vendor roughly the same). Before it is trusted, judge() gets a
+// fresh verdict. Two PURE helpers decide WHAT judge() is shown and WHEN it is not asked at all:
+//   statementJudgeEvidence - the matched record's own data (store/date/amount/work order...), never just its id: a verifier that cannot see
+//     the existing receipt can only guess, and a rubber-stamp here would silently drop a statement line that is a different purchase.
+//   statementWindowCount - how many existing records fit the same amount and +-3 day window. More than one means a yes/no cannot say WHICH
+//     one this line is, so it goes to Brett's manual queue without a model call (fail closed).
+function statementJudgeEvidence(match, receipts, queueRows) {
+  if (!match) return null;
+  const has = v => v !== undefined && v !== null && v !== '';
+  if (has(match.receipt_id)) {
+    const r = (receipts || []).find(x => String(x.ID) === String(match.receipt_id));
+    return r ? { record: 'receipt', id: r.ID, store: r.Store || '', date: r.Date || '', amount: r.Amount || '', work_order: r.WO_ID || '', description: String(r.Description || '').slice(0, 200) } : null;
+  }
+  if (has(match.queue_id)) {
+    const r = (queueRows || []).find(x => String(x.ID) === String(match.queue_id));
+    return r ? { record: 'receipt_queue_row', id: r.ID, status: r.Status || '', vendor: r.Vendor || '', date: r.Receipt_Date || '', amount: r.Total || '', work_order: r.Confirmed_WO_ID || '', po_reference: r.PO_Reference || '', invoice_number: r.Invoice_Number || '' } : null;
+  }
+  return null;
+}
+function statementWindowCount(line, receipts, queueRows) {
+  const amt = (Number(line && line.amount) || 0).toFixed(2);
+  const d = new Date(String((line && line.date) || '') + 'T00:00:00Z');
+  if (isNaN(d)) return 0;
+  const from = d.getTime() - 3 * 86400000, to = d.getTime() + 3 * 86400000;
+  const inWin = s => { const t = new Date(String(s || '') + 'T00:00:00Z').getTime(); return !isNaN(t) && t >= from && t <= to; };
+  let n = 0;
+  for (const r of (receipts || [])) { if (r.Active === 'FALSE') continue; if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue; if (inWin(r.Date)) n++; }
+  for (const r of (queueRows || [])) {
+    if ((r.Status || 'pending') === 'pending') continue;
+    if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+    if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+    if (inWin(r.Receipt_Date)) n++;
+  }
+  return n;
+}
+
 // POST /receipt-recon/scan (also called by the daily cron) — pull new files from the inbox
 // folder, OCR + reconcile each one, append to the confirm-first queue. Never writes a Receipt.
 async function receiptReconScan(env, body) {
