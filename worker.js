@@ -6703,7 +6703,9 @@ async function scopeProposalBookFinal(env, body) {
   if (finalAmount <= 0) warnings.push('Nothing appears to remain — subtotal ($' + subtotal.toFixed(2) + ') is not greater than the deposit already invoiced ($' + deposit.toFixed(2) + ').');
   warnings.push('Invoice is the FINAL BALANCE ($' + finalAmount.toFixed(2) + ' of $' + subtotal.toFixed(2) + ', deposit of $' + deposit.toFixed(2) + ' already invoiced separately); the vendor bill is the remaining ' + Math.round((1 - ratio) * 100) + '% of the vendor cost ($' + finalVendorAmount.toFixed(2) + ' of $' + vendorCostTotal.toFixed(2) + ').');
 
-  const invoiceDesc = (tradeName + ' — ' + (s.Title || 'scope of work') + ' — final balance (' + addr + ')').slice(0, 4000);
+  const workDoneFB = await scopeWorkDoneForInvoice(env, s);
+  workDoneFB.warnings.forEach(w => warnings.push(w));
+  const invoiceDesc = (tradeName + ' — ' + scopeSafeTitle(s) + ' — final balance (' + addr + ')' + (workDoneFB.block ? '\n' + workDoneFB.block : '')).slice(0, 4000);
   const cfgAll = await fetchConfig(env);
   const feeCfg = instantFeeConfig(cfgAll);
   feeCfg.warnings.forEach(w => warnings.push(w));
