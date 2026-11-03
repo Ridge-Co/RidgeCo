@@ -27,7 +27,9 @@ ok(silent.length === 0, 'every catch in the block rethrows, returns, pushes a wa
 const helpers = [
   grabLine('const TENANT_STOP_NOTE'), grab('function withTenantStopNote('),
   grab('function isTenantCurrent('), grab('function tenantsForDispatch('), grab('function formatUnitLabel('),
-  grab('function smsGateDecision('), grabLine('const smsToggleOn'), grab('function tenantMovedOut('), grab('function normalizePhone('),
+  grab('function smsGateDecision('), grabLine('const smsToggleOn'),
+  // Oct 24 2026 (per-property switches): the gate now also reads the property's own audience switches.
+  w.slice(w.indexOf('const PROPERTY_TOGGLES = ['), w.indexOf('];\n', w.indexOf('const PROPERTY_TOGGLES = [')) + 3), grabLine('const propToggleDef'), grabLine('const propToggleRaw'), grab('function propToggleOn('), grab('function smsPropertyGateFlags('), grab('function tenantMovedOut('), grab('function normalizePhone('),
   grab('function nyOffsetMinutes('), grab('function etHour('), grabLine('const QUIET_HOURS_START_ET'), grabLine('const QUIET_HOURS_END_ET'), grab('function isQuietHoursNow('),
   grab('function findWO('), grab('function isMissingTabError('), grabLine('const HUB_URL'), grabLine('const _tenc'),
   grab('function _b64urlBytes('), grab('function _b64urlToBytes('), grab('async function _hmac('), grab('async function makeSessionToken('), grab('async function verifySessionToken('),
@@ -416,6 +418,8 @@ async function sentWorld(extra) {
   await A.api.fixAnswer(A.env, { t: A.token, choice: 'dry' });
   const l = D(await A.api.followupList(A.env, url('/followup/list')));
   ok(l.ok && l.count === 1 && l.followups[0].needs_action === true && l.followups[0].suggestion.action === 'create_cosmetic_wo' && !('Token_Hash' in l.followups[0]), 'list: needs action, suggestion, no token hash', l.followups[0]);
+  // Tokens carry whole-second iat/exp and no nonce, so a link minted in the same wall-clock second as the first one can be byte-identical. Cross a second boundary so "a NEW link" is a real assertion, not a race.
+  await new Promise(r => setTimeout(r, 1100));
   const link = D(await A.api.followupLink(A.env, { id: '1' }, url('/x'))); const t2 = decodeURIComponent(link.link.split('t=')[1].split('&')[0]);
   ok(link.ok && t2 !== A.token && D(await A.api.fixPage(A.env, url('/fix/page', { t: t2 }))).ok && D(await A.api.fixPage(A.env, url('/fix/page', { t: A.token }))).ok, 'copy-link-again mints a new link; the first one still works until the same window ends');
   const cl = D(await A.api.followupClose(A.env, { id: '1', next_wo_id: '1300' })); ok(cl.ok && A.tabs.WO_Followups[0].Status === 'Closed' && A.tabs.WO_Followups[0].Next_WO_ID === '1300', 'closing links the follow-on WO');

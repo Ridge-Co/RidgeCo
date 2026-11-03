@@ -2,6 +2,7 @@
 // safe test phone while the global TWILIO_TEST_MODE stays OFF. Runs the REAL smsGatedSend out of worker.js.
 import fs from 'fs';
 import assert from 'node:assert';
+import { d16Deps } from './_d16-support.mjs';
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 function grab(name) {
   let i = src.indexOf('function ' + name + '(');
@@ -28,6 +29,7 @@ function makeGate(cfg) {
     translateForVendorDetailed: async () => ({ translated: false }),
     MSG_QUEUE_TAB: 'Message_Queue', MSG_QUEUE_COLS: QCOLS,
   };
+  Object.assign(deps, d16Deps());   // D-16: the sanitizer, duplicate / nudge guards and SMS_Logs writer smsGatedSend now uses
   const names = Object.keys(deps);
   return { fn: new Function(...names, grab('smsGatedSend') + '\nreturn smsGatedSend;')(...names.map(k => deps[k])), state };
 }

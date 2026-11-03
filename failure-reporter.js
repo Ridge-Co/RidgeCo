@@ -24,6 +24,16 @@
   var page = (location.pathname.split('/').pop() || 'index.html').slice(0, 60);
   var es = /^es\b/i.test((navigator.language || '') + '');
 
+  // Nov 2 2026 (Brett): the red "N problems" badge (and the "something didn't work" notice) are for him on screen ONLY. They must never reach any printed page or saved PDF,
+  // on any Hub page. A print stylesheet hides them everywhere this script runs; the customer-facing report pages do not draw the badge at all.
+  try {
+    var ps = document.createElement('style');
+    ps.setAttribute('data-hub-print-hide', '1');
+    ps.textContent = '@media print{#hub-fail-badge,#hub-fail-toast{display:none!important;visibility:hidden!important}}';
+    (document.head || document.documentElement).appendChild(ps);
+  } catch (e) { try { console.error('[failure-reporter] print style failed', e); } catch (x) { /* no console */ } }
+  var REPORT_PAGE = /(^|\/)(inspection-report|inspection-photos)\.html$/i.test(location.pathname);
+
   window.addEventListener('beforeunload', function () { unloading = true; });
   window.addEventListener('pagehide', function () { unloading = true; });
   // Oct 21 2026: phones and browsers kill in-flight requests when a tab is backgrounded, the screen locks or the page navigates ("Load failed" on
@@ -43,6 +53,7 @@
       if (!document.body) return;
       var t = document.createElement('div');
       t.setAttribute('role', 'status');
+      t.id = 'hub-fail-toast';
       t.textContent = es ? 'Algo no funcionó. Ya nos avisaron y lo vamos a arreglar.' : "Something didn't work. We've been notified and will fix it.";
       t.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);max-width:92vw;background:#0e1621;color:#fff;font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:10px 14px;border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.35);z-index:2147483000';
       document.body.appendChild(t);
@@ -118,7 +129,7 @@
             try {
               if (unloading || recentlyHidden()) return;
               realFetch(WORKER + '/version', { cache: 'no-store' }).then(function (r) {
-                if (r && r.status < 500) { try { console.warn('[failure-reporter] one request failed but the Hub answers; not reported:', path); } catch (w) { /* console unavailable */ } return; }
+                if (r && r.status < 500) { try { console.warn('[failure-reporter] one request failed but the Hub answers; not reported:', path); } catch (w) { /* silent-ok: console may be unavailable in locked-down webviews */ } return; }
                 if (report('api ' + path, msg + ' (Hub check: HTTP ' + (r && r.status) + ')')) toast();
               }, function (probeErr) {
                 if (unloading || recentlyHidden()) return;
@@ -133,8 +144,34 @@
   }
 
   // 3. manual reporting from catch blocks
+  // Oct 22 2026: a page's own catch block that says "could not reach the Hub (Failed to fetch)" (failures.html load) is the same kind of one-off
+  // connection blip as 1c, and it was reported straight away - so Needs Attention showed a "problem" every time a phone woke up with no signal.
+  // A message that is only a network failure now gets the same two checks as 1c (offline / tab hidden or leaving = not a Hub failure; otherwise ask the
+  // Hub with GET /version after 3 s and report only if it does not answer). Every other message is reported at once, as before.
+  var NETWORK_ONLY = /^(?:could not reach the Hub(?:\s*\([^)]*\))?|network error calling [^:]*:\s*(?:Failed to fetch|Load failed|NetworkError[^:]*)|Failed to fetch|Load failed|NetworkError[^:]*)\.?\s*$/i;
+  function reportAfterHubCheck(where, msg, extra) {
+    try {
+      if (navigator.onLine === false) return false;
+      if (unloading || recentlyHidden()) return false;
+      setTimeout(function () {
+        try {
+          if (unloading || recentlyHidden() || navigator.onLine === false) return;
+          realFetch(WORKER + '/version', { cache: 'no-store' }).then(function (r) {
+            if (r && r.status < 500) { try { console.warn('[failure-reporter] a request failed but the Hub answers; not reported:', where); } catch (w) { /* silent-ok: console may be unavailable in locked-down webviews */ } return; }
+            if (report(where, msg + ' (Hub check: HTTP ' + (r && r.status) + ')', extra)) toast();
+          }, function (probeErr) {
+            if (unloading || recentlyHidden()) return;
+            if (report(where, msg + ' (and the Hub did not answer a check: ' + (probeErr && probeErr.message || probeErr) + ')', extra)) toast();
+          });
+        } catch (x2) { consoleErr('[failure-reporter] hub check failed', x2); if (report(where, msg, extra)) toast(); }
+      }, 3000);
+      return true;
+    } catch (x) { consoleErr('[failure-reporter] network check failed', x); return report(where, msg, extra); }
+  }
   window.hubReportFailure = function (where, message, extra) {
-    var did = report(where || 'caught', message && message.message ? message.message : message, extra);
+    var msg = message && message.message ? message.message : message;
+    if (realFetch && typeof msg === 'string' && NETWORK_ONLY.test(msg.replace(/^\s+/, ''))) return reportAfterHubCheck(where || 'caught', msg, extra);
+    var did = report(where || 'caught', msg, extra);
     if (did) toast();
     return did;
   };
@@ -142,7 +179,7 @@
   // 2. admin badge
   var token = '';
   try { token = localStorage.getItem(AUTH_KEY) || ''; } catch (e) { token = ''; /* storage blocked: no admin badge, reporting still works */ }
-  if (!token || !realFetch || /failures\.html$/.test(location.pathname)) return;
+  if (!token || !realFetch || REPORT_PAGE || /failures\.html$/.test(location.pathname)) return;
   var CACHE_KEY = 'hub_fail_badge_v1';
 
   function paint(n, worst) {

@@ -49,6 +49,9 @@
   .li .fields{display:grid;grid-template-columns:120px 110px 1fr;gap:6px;}
   .li .fields .full{grid-column:1/-1;}
   .li .fields input{width:100%;}
+  /* Oct 27 2026 (Brett): Description + Note are multi-line text areas that grow to fit what is typed, not one cramped line. */
+  .li .fields textarea{width:100%;box-sizing:border-box;line-height:1.45;resize:vertical;overflow:hidden;min-height:72px;}
+  .li .fields textarea.f-note{min-height:48px;}
   .li .fields label{display:block;font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:1px;}
   .li .del{grid-column:2;justify-self:end;}
   .li.addon{border-color:#166534;background:#f0f8f2;}
@@ -82,6 +85,8 @@
   .owner-note{font-size:11px;line-height:1.5;padding:8px 10px;border-radius:var(--radius);margin-bottom:10px;}
   .owner-note.ok{background:#eaf6ee;color:var(--accent2);}
   .owner-note.warn{background:#fdf2e2;color:#9a6b00;}
+  .owner-note.err{background:#fdecea;color:#b42318;}
+  .owner-note a{color:inherit;font-weight:700;display:inline-block;min-height:44px;line-height:44px;}
   .toolbtns{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;}
   .status{font-size:11px;min-height:14px;margin-top:6px;}
   pre.doc{white-space:pre-wrap;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;font-size:12px;line-height:1.5;font-family:var(--font);}
@@ -94,6 +99,17 @@
 /* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch screens or Android/iOS zoom the page on focus. Mouse/desktop density unchanged. */
 @media (hover:none) and (pointer:coarse){
   input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=image]),select,textarea{font-size:16px !important}
+}
+</style>
+<style id="mobile-tap-targets">
+/* Ops_Build_Queue #111 (Oct 29 2026): tap targets >=44px + scrollable wide tables on touch phones only (same gate as mobile-input-font, so mouse/desktop density is unchanged).
+   min-height/min-width only (never a fixed height) so labels wrap instead of overflowing; !important so page rules like .btn.small{min-height:34px} cannot win. Documented exceptions: checkboxes/radios/file inputs and plain text links inside a sentence. */
+@media (hover:none) and (pointer:coarse){
+  button,input[type=button],input[type=submit],select,summary,.btn,.btn-sm,.filter-btn,#rc-navbar a{min-height:44px !important}
+  button,input[type=button],input[type=submit],.btn,.btn-sm,.filter-btn,#rc-navbar a{min-width:44px !important}
+  .modal-close{font-size:1.6rem;line-height:1;margin:-8px -10px -8px 0}
+  div.tab{min-height:44px !important;min-width:44px;display:flex;align-items:center;justify-content:center}
+  .table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
 }
 </style>
 </head>
@@ -277,7 +293,7 @@
   <!-- 7. PROPOSAL -->
   <div class="section" id="sec-proposal">
     <div class="section-title">7 · Payment schedule &amp; customer proposal</div>
-    <div class="sub" style="margin-bottom:6px;">Set this before generating the proposal — the schedule below is what gets printed into the payment terms and signed. Change any % and the other milestones rebalance automatically so the total stays 100% (type a different number in them if you want another split).</div>
+    <div class="sub" style="margin-bottom:6px;">Set this before generating the proposal — the schedule below is what gets printed into the payment terms and signed. Type a % and the NEXT milestone down absorbs the difference, so the total stays 100%. A number you typed stays put (the Deposit never moves unless you change it yourself); only milestones you haven't touched take up the slack.</div>
     <div class="row" style="gap:6px;flex-wrap:wrap;">
       <button class="btn small" onclick="applySchedulePreset('third')">1/3 (default)</button>
       <button class="btn small secondary" onclick="applySchedulePreset('quarter')">1/4</button>
@@ -319,11 +335,12 @@
         <button class="btn small secondary" onclick="copyLink()" style="margin-top:6px;">📋 Copy link</button>
         <button class="btn small" onclick="revokeAndRelink()" style="margin-top:6px;">🔁 Kill old link &amp; get a new one</button>
       </div>
+      <div id="send-sms-preview" style="margin-top:10px;" aria-live="polite"></div>
       <div class="row" style="margin-top:10px;border-top:1px dashed var(--border);padding-top:10px;">
         <button class="btn" onclick="sendEstimateEmail()">📧 Send estimate to owner</button>
         <button class="btn secondary hide" id="gmail-reconnect-btn" onclick="reconnectGmail()">🔑 Reconnect Gmail</button>
       </div>
-      <label class="sub" style="display:block;margin-top:6px;"><input type="checkbox" id="send-override-quiet"> Also text the owner right now even if it's after 8pm (overrides quiet hours). The email always goes either way; the text is held until 8am if this is unchecked and it's late.</label>
+      <label class="sub" style="display:block;margin-top:6px;"><input type="checkbox" id="send-override-quiet" onchange="refreshSendSmsPreview()"> Also text the owner right now even if it's after 8pm (overrides quiet hours). The email always goes either way; the text is held until 8am if this is unchecked and it's late.</label>
       <div id="send-status" class="status"></div>
       <div id="gmail-reconnect-note" class="sub hide" style="margin-top:4px;">Opens Google in a new tab — sign in as the Ridge Co sender, allow sending, then come back and tap Send again.</div>
       <div id="send-sent-note"></div>
@@ -354,8 +371,21 @@ function applySchedulePreset(which){
   else if(which==='custom' && !scheduleState.milestones.length) scheduleState.milestones=scheduleDefault();
   renderSchedule();
 }
-function addScheduleRow(){ scheduleState.milestones.push({label:'Milestone', percent:0, trigger:'manual', vendor_paid:true, calc_mode:'percent', flat_customer_amount:null}); renderSchedule(); }
-function removeScheduleRow(i){ scheduleState.milestones.splice(i,1); renderSchedule(); }
+// Adding a milestone (Oct 27 2026): starts at 0% so NOTHING already set moves; it goes in just before the
+// Completion/Final row (not after it) so Final stays last.
+function addScheduleRow(){
+  var ms=scheduleState.milestones, row={label:'Milestone', percent:0, trigger:'manual', vendor_paid:true, calc_mode:'percent', flat_customer_amount:null};
+  if(ms.length>1 && ms[ms.length-1].trigger==='completion') ms.splice(ms.length-1,0,row); else ms.push(row);
+  scheduleState.note=''; renderSchedule();
+}
+// Removing a milestone hands its % to the next milestone down (the one that takes its place), so the
+// total stays 100% without touching anything else.
+function removeScheduleRow(i){
+  var ms=scheduleState.milestones, gone=+ms[i].percent||0;
+  ms.splice(i,1); scheduleState.note='';
+  if(ms.length){ var t=ms[Math.min(i,ms.length-1)]; t.percent=Math.round(((+t.percent||0)+gone)*100)/100; }
+  renderSchedule();
+}
 // Per-milestone vendor-pay + calc mode (Sep 28 2026, WO→Scope conversion, FEATURE_LOG rule 199).
 // vendor_paid (default true): unchecked = nothing is billed to the vendor for THIS milestone; its
 // vendor share rolls forward onto the next vendor-paid milestone (or the last one if none), never
@@ -378,24 +408,42 @@ function updateScheduleField(i,field,val){
   else m[field] = val;
   renderScheduleTotal();
 }
-// Auto-rebalance (Oct 13 2026, Brett: "when I change the payment schedule, the other milestones did not
-// recalculate"): after editing one milestone's %, the OTHER milestones share what is left of 100%,
-// in proportion to what they had (equal shares if they were all 0). The row you typed is never touched.
-// Updates the other rows' boxes in place so the field you are typing in keeps focus.
+// Cascade (Oct 27 2026, Brett: "the moment I added a milestone it became impossible to keep the deposit the
+// same or the final ... hold the first at the listed amount unless I change it, then add the next amount to
+// the next part ... force 100% as a cascade, not whack-a-mole"). Replaces the Oct 13 proportional rebalance,
+// which rescaled EVERY other row on every keystroke.
+// Rules: a % you type is "locked" (m.locked) and never moves again on its own; the first row is held from the start. Other untouched rows are the only
+// ones that take up slack, nearest row BELOW the edited one first, then (if there is none) the nearest row
+// above. If every row is locked, the neighbour below (or above, for the last row) is unlocked and absorbs
+// it so the total is always forced to 100%. Computed from the locked total, not from running deltas, so
+// typing "5" -> "50" -> "500" -> back to "50" always lands on the same answer.
 function rebalanceSchedule(editedIdx){
-  var ms=scheduleState.milestones;
-  var others=[]; ms.forEach(function(m,j){ if(j!==editedIdx) others.push(j); });
-  if(!others.length) return;
-  var remaining=Math.max(0, 100-(+ms[editedIdx].percent||0));
-  var sumOthers=others.reduce(function(s,j){ return s+(+ms[j].percent||0); },0);
-  var running=0;
-  others.forEach(function(j,k){
-    var v;
-    if(k===others.length-1) v=Math.round((remaining-running)*100)/100;           // last other row absorbs rounding
-    else v=Math.round((sumOthers>0 ? remaining*(+ms[j].percent||0)/sumOthers : remaining/others.length)*100)/100;
-    if(v<0) v=0;
-    ms[j].percent=v; running+=v;
-  });
+  var ms=scheduleState.milestones; if(!ms[editedIdx]) return;
+  var r2=function(x){ return Math.round(x*100)/100; };
+  scheduleState.note='';
+  ms[editedIdx].locked=true;
+  // The first row (the Deposit) counts as held at its listed amount from the start, until you change it.
+  var held=function(j){ return ms[j].locked===true || (j===0 && ms[j].locked!==false); };
+  var free=[]; ms.forEach(function(m,j){ if(!held(j)) free.push(j); });
+  if(!free.length){
+    var plug = editedIdx<ms.length-1 ? editedIdx+1 : editedIdx-1;
+    if(plug<0) return;                                   // single milestone: nothing to balance against
+    ms[plug].locked=false; free=[plug];
+    scheduleState.note=' · "'+(ms[plug].label||'Milestone')+'" adjusted to keep 100% (every other row was already set)';
+  }
+  var lockedSum=0; ms.forEach(function(m,j){ if(held(j)) lockedSum+=(+m.percent||0); });
+  var target=Math.max(0, r2(100-lockedSum));
+  var cur=r2(free.reduce(function(s,j){ return s+(+ms[j].percent||0); },0));
+  var D=r2(target-cur);
+  var order=free.filter(function(j){ return j>editedIdx; }).concat(free.filter(function(j){ return j<editedIdx; }).reverse());
+  if(D>0) ms[order[0]].percent=r2((+ms[order[0]].percent||0)+D);
+  else if(D<0){
+    var need=-D;
+    for(var k=0;k<order.length && need>0.0001;k++){
+      var j=order[k], have=+ms[j].percent||0, take=Math.min(need,have);
+      ms[j].percent=r2(have-take); need=r2(need-take);
+    }
+  }
   var host=document.getElementById('schedule-rows');
   var boxes=(host&&host.querySelectorAll)?host.querySelectorAll('input[data-pct]'):[];
   for(var b=0;b<boxes.length;b++){ if(b!==editedIdx && ms[b]) boxes[b].value=ms[b].percent; }
@@ -436,6 +484,7 @@ function renderScheduleTotal(){
   var cls = 'info';
   if(Math.abs(total-100)>0.1){ msg+=' — must equal 100% to save'; cls='err'; }
   else if(upfront > scheduleState.maxUpfrontPct+0.001){ msg += ' · ⚠ '+upfront.toFixed(2)+'% upfront is above the '+scheduleState.maxUpfrontPct+'% MD deposit cap — not blocked, your call, but confirm before sending'; cls='warn'; }
+  if(scheduleState.note && cls!=='err') msg += scheduleState.note;
   setStatus('schedule-total', msg, cls);
 }
 async function saveSchedule(){
@@ -681,6 +730,7 @@ function renderEditor(){
   loadScopePhotos();
   loadSignatureIfSigned();
   renderSendStatus();
+  refreshSendSmsPreview();
 }
 // Editable at any time (Brett: "need to be able to edit title after creation and at any time"),
 // not just at scope-creation. Same /scope/update path saveItems()/saveProposalText() already use.
@@ -920,13 +970,18 @@ function renderItems(){
         '<div><label>Area</label><input class="f-area" value="'+esc(it.area)+'"></div>'+
         '<div><label>Trade</label><input class="f-trade" value="'+esc(it.trade)+'"></div>'+
         '<div><label>Qty</label><input class="f-qty" value="'+esc(it.qty)+'"></div>'+
-        '<div class="full"><label>Description</label><input class="f-desc" value="'+esc(it.description)+'"></div>'+
-        '<div class="full"><label>Note — private; never shown to the customer (like vendor cost above)</label><input class="f-note" value="'+esc(it.note)+'"></div>'+
+        '<div class="full"><label>Description</label><textarea class="f-desc" rows="'+rowsFor(it.description,4)+'" oninput="autoGrow(this)">\n'+esc(it.description)+'</textarea></div>'+
+        '<div class="full"><label>Note — private; never shown to the customer (like vendor cost above)</label><textarea class="f-note" rows="'+rowsFor(it.note,2)+'" oninput="autoGrow(this)">\n'+esc(it.note)+'</textarea></div>'+
         '<div class="full">'+variantsBlock(it)+'</div>'+
         '<button class="btn small danger del" onclick="removeItem(this)">Remove item</button>'+
       '</div></div>';
   }).join('');
+  wrap.querySelectorAll('textarea.f-desc,textarea.f-note').forEach(autoGrow);
 }
+// Oct 27 2026: size a multi-line field to its content. rowsFor() is the starting guess (works even while the
+// section is hidden and scrollHeight is 0); autoGrow() then fits it exactly once it is visible and on every keystroke.
+function rowsFor(txt,min){ var n=String(txt||'').split('\n').reduce(function(a,l){ return a+Math.max(1,Math.ceil(l.length/85)); },0); return Math.min(16,Math.max(min,n)); }
+function autoGrow(t){ if(!t) return; t.style.height='auto'; var h=t.scrollHeight; t.style.height=h>0?(h+2)+'px':''; }
 function addVariant(btn){
   var wrap=btn.closest('.variants'); var rows=wrap.querySelector('.variant-rows');
   var existing=rows.querySelectorAll('.vrow');
@@ -1222,7 +1277,7 @@ function renderCustomerPreview(items, schedule){
   };
   var itemHtml=function(it,plus){
     var vs=it.variants||[];
-    var h='<div class="pv-item"><b>'+esc(it.description||'')+'</b>';
+    var h='<div class="pv-item"><b style="white-space:pre-line;">'+esc(it.description||'')+'</b>';
     if(vs.length>1){ h+='<div style="font-size:11px;color:var(--muted);">Customer picks ONE:</div>'+vs.map(function(v){ return '<div class="pv-opt"><span>○ '+esc(v.label||'Option')+'</span><span>'+(plus?'+':'')+money(v.price)+'</span></div>'; }).join(''); }
     else if(vs[0]){ h+='<div class="pv-opt"><span></span><span>'+(plus?'+':'')+money(vs[0].price)+'</span></div>'; }
     return h+'</div>';
@@ -1301,9 +1356,16 @@ async function sendEstimateEmail(){
   var email=(st.owner&&st.owner.Email||'').trim();
   if(!st.complete || !email){ setStatus('send-status','⚠ No billing-ready owner email on file — confirm the payor in step 6 first.','err'); return; }
   var already=(s.Sent_Date||'').trim();
+  // Oct 24 2026: ask the real gate BEFORE sending, so a text that will be held or blocked is said out loud instead of discovered later.
+  setStatus('send-status','Checking whether the owner text will go out…');
+  var pv=await proposalSmsPreview();
+  setStatus('send-status','');
+  var textWillGo = !!(pv && pv.will_send);
   var confirmMsg = already
     ? 'This was already sent to '+email+' on '+new Date(already).toLocaleDateString()+'. Send it again?'
-    : 'Send this estimate to '+email+'? (The owner also gets a short text saying it was emailed.)';
+    : 'Send this estimate to '+email+'?'+(textWillGo?' (The owner also gets a short text saying it was emailed.)':'');
+  if(pv && pv._error) confirmMsg+='\n\n⚠ Could not check whether the owner text will go out ('+pv._error+'). The email will still send.';
+  else if(pv && !pv.resend && !pv.will_send) confirmMsg+='\n\n'+(pv.will_send_later?'⏳ ':'⚠ ')+pv.headline+(pv.will_send_later?'':' The email will still go.');
   if(!confirm(confirmMsg)) return;
   if(window._proposalSending) return;   // double-tap guard; the server also refuses a re-send within a minute
   window._proposalSending=true;
@@ -1320,8 +1382,56 @@ async function sendEstimateEmail(){
     setStatus('send-status','✅ emailed '+r.sent_to+(r.sms&&r.sms.note?' · '+(smsBad?'⚠ ':'')+r.sms.note:''),smsBad?'err':'ok');
     showGmailReconnect(false);
     renderSendStatus();
+    var _pvEl=document.getElementById('send-sms-preview'); if(_pvEl) _pvEl.innerHTML=smsOutcomeHtml(r.sms);   // the REAL outcome, not a prediction
   }catch(e){ setStatus('send-status','⚠ '+e.message,'err'); showGmailReconnect(isGmailAuthError(e.message)); }
   finally{ window._proposalSending=false; if(_sb) _sb.disabled=false; }
+}
+// Oct 24 2026 (FEATURE_LOG rule 231): the owner heads-up text. BEFORE sending, GET /sms/gate-preview runs the same gate the real sender uses (read-only, it
+// never sends). AFTER sending, the server's real outcome is shown, with the reason and a link to the property's Settings when a property switch is the cause.
+function propSettingsLink(pid){ return 'index.html?property='+encodeURIComponent(pid)+'&tab=settings'; }
+async function proposalSmsPreview(){
+  var s=state.current; if(!s||!s.Property_ID) return null;
+  if((parseInt(s.Send_Count||'0',10)||0)>0) return { resend:true };   // only the first send texts the owner (server rule)
+  var ov=document.getElementById('send-override-quiet');
+  try{ return await get('/sms/gate-preview?recipient_type=owner&window=proposal&property_id='+encodeURIComponent(s.Property_ID)+(ov&&ov.checked?'&bypass_quiet=1':'')); }
+  catch(e){ return { _error:e.message }; }
+}
+function smsFixLinks(reasons, pid, link){
+  var h='', rs=reasons||[];
+  if(rs.some(function(r){ return r.fix && r.fix.target==='property'; })) h+=' <a href="'+esc(link||propSettingsLink(pid))+'" target="_blank" rel="noopener">Open this property\'s Settings →</a>';
+  if(rs.some(function(r){ return r.code==='customer_off'; })) h+=' The owner account has texts switched OFF (Owners sheet, SMS_Enabled).';
+  if(rs.some(function(r){ return r.code==='global_off'; })) h+=' Texting is switched OFF Hub-wide (Config TWILIO_ENABLED).';
+  if(rs.some(function(r){ return r.code==='no_phone'; })) h+=' Add a phone number to the owner account.';
+  return h;
+}
+function smsPreviewHtml(pv){
+  if(!pv) return '';
+  var s=state.current;
+  if(pv.resend) return '<div class="owner-note ok" style="font-size:13px">ℹ Resend: the owner is not texted again (only the first send texts them). The email goes.</div>';
+  if(pv._error) return '<div class="owner-note warn" style="font-size:13px">⚠ Could not check whether the owner text will go out ('+esc(pv._error)+'). The email will still send, and the real text outcome is shown after.</div>';
+  var cls=pv.will_send?'ok':(pv.will_send_later?'warn':'err'), icon=pv.will_send?'✅':(pv.will_send_later?'⏳':'⚠');
+  var h='<div class="owner-note '+cls+'" style="font-size:13px">'+icon+' <b>'+esc(pv.headline)+'</b>';
+  (pv.notes||[]).forEach(function(n){ h+=' '+esc(n); });
+  if(!pv.will_send && !pv.will_send_later) h+=' The email will still go.'+smsFixLinks(pv.reasons, s&&s.Property_ID, pv.settings_link);
+  return h+'</div>';
+}
+async function refreshSendSmsPreview(){
+  var el=document.getElementById('send-sms-preview'); if(!el) return;
+  var s=state.current; if(!s){ el.innerHTML=''; return; }
+  el.innerHTML='<div class="sub">Checking whether the owner text will go out…</div>';
+  var pv=await proposalSmsPreview();
+  if(state.current!==s) return;
+  el.innerHTML=smsPreviewHtml(pv);
+}
+function smsOutcomeHtml(sms){
+  if(!sms) return '';
+  var s=state.current, st=sms.status;
+  if(st==='not_attempted') return '<div class="owner-note ok" style="font-size:13px">ℹ '+esc(sms.note||'No text on a resend.')+'</div>';
+  var cls=st==='sent'?'ok':(st==='held'?'warn':'err'), icon=st==='sent'?'✅':(st==='held'?'⏳':'⚠');
+  var label={sent:'Owner texted',held:'Text HELD, it goes out later',blocked:'Text NOT sent: blocked by an SMS switch',failed:'Text FAILED',no_phone:'Text NOT sent: no owner phone on file',skipped_seen:'Text skipped: they had already opened the estimate'}[st]||('Text: '+st);
+  var h='<div class="owner-note '+cls+'" style="font-size:13px">'+icon+' <b>'+esc(label)+'</b>'+(sms.note?' — '+esc(sms.note):'');
+  if(st==='blocked' && s && s.Property_ID) h+=' <a href="'+esc(propSettingsLink(s.Property_ID))+'" target="_blank" rel="noopener">Open this property\'s Settings →</a>';
+  return h+'</div>';
 }
 function smsStatusLine(s){
   var st=(s.Owner_SMS_Status||'').trim(); if(!st) return '';

@@ -1,6 +1,7 @@
 // Hub Improvements (Oct 14 2026): proposal read status (pixel + page-view log) and the owner heads-up text
 // (8pm-8am ET hold, per-send override, skip if the owner already opened it). Run: node test/proposal-read-status-owner-sms.test.mjs
 import fs from 'fs'; import assert from 'node:assert';
+import { d16Deps, d16Queue } from './_d16-support.mjs';
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 const grabAny = (kw, name) => { const i = src.indexOf(kw + name + '('); if (i < 0) throw new Error('missing ' + name); let d = 0, j = src.indexOf('{', src.indexOf(')', i)); for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) break; } } return src.slice(i, j + 1); };
 const grab = n => grabAny('function ', n), grabAsync = n => grabAny('async function ', n);
@@ -78,7 +79,7 @@ const gate = (over) => { const st = { updates: [], raw: [], posts: [] }; const d
   updateMessageQueueRow: async (e, id, f) => { st.updates.push({ id, f }); }, sendSMSRaw: async (e, to, msg) => { st.raw.push({ to, msg }); return { sid: 'SM1' }; },
   logMessageAudit: async () => {}, smsGateDecision: new Function(grab('smsGateDecision') + '\nreturn smsGateDecision;')(),
   smsToggleOn: v => String(v == null ? '' : v).toUpperCase() !== 'FALSE', translateForVendorDetailed: async () => ({}),
-  etHour: () => 12, MSG_QUEUE_TAB: 'Message_Queue', MSG_QUEUE_COLS: QCOLS }, over || {});
+  etHour: () => 12, MSG_QUEUE_TAB: 'Message_Queue', MSG_QUEUE_COLS: QCOLS }, over || {}); Object.assign(deps, d16Deps());
   return { st, deps, fn: new Function(...Object.keys(deps), grabAsync('smsGatedSend') + '\nreturn smsGatedSend;')(...Object.values(deps)) }; };
 const owner = { ID: '3', First_Name: 'Pat', Phone: '4105550142' };
 const base = { message_type: 'owner_proposal_ready', recipient_type: 'owner', owner, message_body: 'hi', property: { ID: '50' }, quietWindow: { start: 20, end: 8 }, skip_if_seen: 'scope:7' };
@@ -118,7 +119,7 @@ const release = (rows, scopes, over) => { const st = { updates: [], raw: [], sta
   MSG_QUEUE_TAB: 'Message_Queue', smsToggleOn: v => String(v == null ? '' : v).toUpperCase() !== 'FALSE',
   smsGateDecision: new Function(grab('smsGateDecision') + '\nreturn smsGateDecision;')(),
   sendSMSRaw: async (e, to, m) => { st.raw.push(to); return { sid: 'S' }; }, updateMessageQueueRow: async (e, id, f) => { st.updates.push({ id, f }); },
-  proposalSeenByOwner: H.proposalSeenByOwner, proposalStampSms: async (e, id, s) => { st.stamps.push([id, s]); }, logTelemetry: async (e, r) => { st.tele.push(r); } }, over || {});
+  proposalSeenByOwner: H.proposalSeenByOwner, proposalStampSms: async (e, id, s) => { st.stamps.push([id, s]); }, logTelemetry: async (e, r) => { st.tele.push(r); } }, over || {}); Object.assign(deps, d16Deps(), d16Queue(deps));
   return { st, fn: new Function(...Object.keys(deps), grabAsync('processQuietHoursQueue') + '\nreturn processQuietHoursQueue;')(...Object.values(deps)) }; };
 const dueRow = (id, skip) => ({ ID: id, Status: 'pending', Send_After: '2026-01-01T12:00:00Z', Recipient_Type: 'owner', Recipient_Phone: '+14105550142', Property_ID: '50', Message_Body: 'hi', Skip_If_Seen: skip || '' });
 {

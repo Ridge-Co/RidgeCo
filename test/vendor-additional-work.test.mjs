@@ -322,7 +322,7 @@ t('qbSendInvoice reads Estimates for the gate', /'Time_Entries','Estimates',\s*\
 
 // ── D. owner-notice email gates ──────────────────────────────────────────────────
 {
-  const gate = new Function(grab('smsGateDecision') + grab('addonEmailGate') + '\nreturn addonEmailGate;')();
+  const gate = new Function('const propertyOwnerEmailOn = () => true;\n' + grab('smsGateDecision') + grab('addonEmailGate') + '\nreturn addonEmailGate;')();
   const cfgOn = { TWILIO_ENABLED: 'TRUE', TWILIO_TEST_MODE: 'FALSE' };
   t('email gate: all gates open + live mode -> allowed', gate({ cfg: cfgOn, property: {}, owner: { Notify_Method: 'sms' } }).ok === true);
   t('email gate: Global OFF blocks', gate({ cfg: { TWILIO_ENABLED: 'FALSE', TWILIO_TEST_MODE: 'FALSE' }, property: {}, owner: {} }).ok === false);

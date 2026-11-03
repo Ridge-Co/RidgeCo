@@ -55,6 +55,17 @@
   input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=image]),select,textarea{font-size:16px !important}
 }
 </style>
+<style id="mobile-tap-targets">
+/* Ops_Build_Queue #111 (Oct 29 2026): tap targets >=44px + scrollable wide tables on touch phones only (same gate as mobile-input-font, so mouse/desktop density is unchanged).
+   min-height/min-width only (never a fixed height) so labels wrap instead of overflowing; !important so page rules like .btn.small{min-height:34px} cannot win. Documented exceptions: checkboxes/radios/file inputs and plain text links inside a sentence. */
+@media (hover:none) and (pointer:coarse){
+  button,input[type=button],input[type=submit],select,summary,.btn,.btn-sm,.filter-btn,#rc-navbar a{min-height:44px !important}
+  button,input[type=button],input[type=submit],.btn,.btn-sm,.filter-btn,#rc-navbar a{min-width:44px !important}
+  .modal-close{font-size:1.6rem;line-height:1;margin:-8px -10px -8px 0}
+  div.tab{min-height:44px !important;min-width:44px;display:flex;align-items:center;justify-content:center}
+  .table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+}
+</style>
 </head>
 <body>
 <!-- RC-NAV: shared back-to-Hub + tools jump bar (Aug 20, 2026) -->
@@ -247,6 +258,7 @@ function load(){
             +'<span>'+money(m.customer_amount)+'</span>'
             +'<span class="chip '+(billed?'booked':(flagged?'gap':'signed'))+'" style="margin-left:2px">'+(billed?('billed'+(m.qb_invoice_number?(' #'+esc(m.qb_invoice_number)):'')):(flagged?'⏳ pending info':'pending'))+'</span>'
             +(!billed?('<a href="#" onclick="toggleMilestonePendingInfo(\''+esc(r.id)+'\',\''+esc(m.id)+'\','+(flagged?'true':'false')+');return false;" style="color:'+(flagged?'var(--red)':'var(--blue)')+';font-size:11px;font-weight:700;text-decoration:none;margin-left:6px">'+(flagged?'Clear':'Flag')+'</a>'):'')
+            +(!billed?('<a href="#" onclick="editMilestoneAmount(\''+esc(r.id)+'\',\''+esc(m.id)+'\','+Number(m.customer_amount||0)+');return false;" style="color:var(--blue);font-size:11px;font-weight:700;text-decoration:none;margin-left:6px">Edit amount</a>'):'')
             +'</label>'
             +(flagged?('<div class="sub" style="margin:-2px 0 6px 24px">⏳ '+esc(m.pending_info_note||'Needs info before billing.')+'</div>'):'');
         });
@@ -383,7 +395,7 @@ function confirmBook(btn){
   }).catch(function(e){btn.disabled=false;btn.textContent='Confirm — create in QuickBooks';toast('Error: '+e.message);});
 }
 function closeModal(){document.getElementById('modal').classList.remove('open');cur=null;curMs=null;curAdjust=null;}
-function confirmModalAction(btn){ if(modalMode==='milestones') confirmMilestoneBill(btn); else if(modalMode==='adjust') confirmAdjust(btn); else confirmBook(btn); }
+function confirmModalAction(btn){ if(modalMode==='milestones') confirmMilestoneBill(btn); else if(modalMode==='adjust') confirmAdjust(btn); else if(modalMode==='msamount') confirmMsAmount(btn); else confirmBook(btn); }
 
 // ── Vendor-bill adjustment (Sep 18 2026) ────────────────────────────────────
 // One-off dollar correction to an already-booked deposit or final vendor bill — built for the
@@ -463,6 +475,52 @@ function toggleMilestonePendingInfo(sigId,msId,currentlyFlagged){
   api('POST','/scope-proposal/milestone/set-pending-info',{signature_id:sigId,milestone_id:msId,pending_info:true,note:note}).then(function(r){
     if(r&&r.success){toast('Flagged — needs info before billing');load();} else toast('Could not flag: '+((r&&r.error)||'?'));
   });
+}
+// Nov 2 2026: billing-only edit of a still-pending milestone's customer amount (WO-1253). Sends NOTHING to the customer, touches NOTHING in QuickBooks, and
+// leaves the signed proposal as signed; the old amount and the reason are kept on the milestone. Preview first, then confirm.
+var curMsAmt=null;
+function editMilestoneAmount(sigId,msId,current){
+  var amtStr=prompt('New amount to bill the customer for this payment?\n\nIt is now $'+Number(current||0).toFixed(2)+'. This only changes what you bill: nothing is sent to the customer and the signed proposal is not changed.');
+  if(amtStr===null)return;
+  var amount=parseFloat(amtStr);
+  if(!isFinite(amount)||amount<=0){toast('Enter an amount greater than 0');return;}
+  var reason=prompt('One line - why is the amount changing? (kept on the payment as a note)');
+  if(reason===null||!reason.trim()){toast('A reason is required');return;}
+  reason=reason.trim();
+  curMsAmt={sigId:sigId,msId:msId,amount:amount,reason:reason};
+  modalMode='msamount';
+  document.getElementById('m-title').textContent='Preview - change the amount you bill';
+  document.getElementById('m-body').innerHTML='<p class="muted"><span class="spin"></span> Checking...</p>';
+  document.getElementById('m-confirm').classList.add('hide');
+  var mc=document.getElementById('m-cancel');mc.textContent='Cancel';mc.classList.remove('hide');
+  var mu=document.getElementById('m-undo');mu.classList.add('hide');
+  document.getElementById('modal').classList.add('open');
+  api('POST','/scope-proposal/milestone/set-amount',{signature_id:sigId,milestone_id:msId,customer_amount:amount,reason:reason,preview_only:true}).then(function(r){
+    if(!r||!r.ok||!r.preview){document.getElementById('m-body').innerHTML='<div class="warn">'+esc((r&&r.error)||'Could not build preview')+'</div>';return;}
+    var p=r.preview,h='';
+    h+='<div class="line"><span>'+esc(p.label||'Payment')+' - billed to customer now</span><span>'+money(p.old_customer_amount)+'</span></div>';
+    h+='<div class="total"><span>New amount to bill</span><span>'+money(p.new_customer_amount)+'</span></div>';
+    h+='<div class="sub" style="margin-top:8px">Reason: '+esc(p.reason)+'<br>Vendor side stays '+money(p.vendor_amount_unchanged)+'. Nothing is sent to the customer. QuickBooks is not touched until you bill this payment.</div>';
+    (r.warnings||[]).forEach(function(w){h+='<div class="warn" style="margin-top:8px">'+esc(w)+'</div>';});
+    document.getElementById('m-body').innerHTML=h;
+    var b=document.getElementById('m-confirm');b.classList.remove('hide');b.textContent='Confirm - change the amount';b.disabled=false;
+  }).catch(function(e){document.getElementById('m-body').innerHTML='<div class="warn">'+esc(e.message)+'</div>';});
+}
+function confirmMsAmount(btn){
+  if(!curMsAmt)return;
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span> Saving...';
+  api('POST','/scope-proposal/milestone/set-amount',{signature_id:curMsAmt.sigId,milestone_id:curMsAmt.msId,customer_amount:curMsAmt.amount,reason:curMsAmt.reason}).then(function(r){
+    if(r&&r.ok){
+      var h='<p style="font-weight:700;color:var(--green)">Saved - this payment now bills '+money(r.preview.new_customer_amount)+'</p>';
+      (r.warnings||[]).forEach(function(w){h+='<div class="warn" style="margin-top:8px">'+esc(w)+'</div>';});
+      document.getElementById('m-body').innerHTML=h;
+      btn.classList.add('hide');document.getElementById('m-cancel').textContent='Close';
+      toast('Amount updated');curMsAmt=null;load();
+    } else {
+      btn.disabled=false;btn.textContent='Confirm - change the amount';
+      document.getElementById('m-body').innerHTML+='<div class="warn">'+esc((r&&r.error)||'Failed')+'</div>';
+    }
+  }).catch(function(e){btn.disabled=false;btn.textContent='Confirm - change the amount';toast('Error: '+e.message);});
 }
 function previewMilestoneBill(sigId){
   var ids=msSelections[sigId]||[];

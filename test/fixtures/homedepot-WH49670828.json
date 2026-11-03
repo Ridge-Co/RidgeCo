@@ -1,0 +1,14 @@
+{
+ "note": "Real Home Depot emails for order WH49670828, read from the info@ mailbox on 2026-10-27 (Gmail plain-text view, not raw MIME). Only the sender is a header; the store address text is the customer's own.",
+ "from": "The Home Depot <HomeDepotPro@order.homedepot.com>",
+ "confirmed": {
+  "subject": "Order confirmed. We're processing your order now!",
+  "received_at": "2026-10-26T16:35:00Z",
+  "body": "Order # WH49670828\n\nOrder Date: Oct 26, 2026\n\nThanks, Jennifer, we're working hard to get your order ready.\n\nWe'll send your tracking details soon and notify you of any other updates.\n\nManage Order\nOrder Details\nDeliver to Brett Lambert:\n115 W 29th St, Apt 2,\nBaltimore, MD 21218\n\nJob / PO Number:\nWO 1237 115 W 29th St Apt 2\n\nCustomer Phone Number:\n410-259-2314\n\nDelivery Instructions:\n\"Call 30 minutes ahead, I am not at the property but work in the city\"\nDelivery\nOCT\n30\n\nEstimated Delivery\n\nFri, Oct 30\n\nDelivery Window Pending\n\nFRIGIDAIRE\n\n30 in. 5 Burner Freestanding Gas Range in Stainless Steel with Quick Boil and Even Baking Technology\n\nSKU #1015322476\nInternet #341304656\n\nQty: 1\n\n$789.00\n\nParts & Service\n\nHaul Away Your Old Appliance\n\n$50.00\n\nNat Gas Cooking Parts Kit\n\n$39.98\n\nNaturalgas Range Install\n\n$159.00\nOrder Summary\nOrder Subtotal  $1037.98\nDelivery  $39.00\nDiscounts  -$211.00\nTaxes  $37.08\nTotal  $903.06\nPayment: -- 7442\nPrep for Successful Installation: measure spaces and doorways, clear the way, have an adult present to sign and advise on the installation, empty and unplug the old appliance, locate water/gas shut-offs."
+ },
+ "prep": {
+  "subject": "Prep for Appliance Delivery! - Order # WH49670828",
+  "received_at": "2026-10-27T10:00:00Z",
+  "body": "Order # WH49670828\n\nOrder Date: Oct 26, 2026\n\nGet ready for your appliance, Jennifer!\n\nReview the Successful Installation tips below for a smooth delivery!\n\nLook for a Delivery Scheduled email next, confirming your 4-hour appliance delivery window.\n\nOrder Details\nDeliver to Brett Lambert:\n115 W 29th St,\nBaltimore, MD 21218\n\nJob / PO Number:\nWO 1237 115 W 29th St Apt 2\n\nCustomer Phone Number:\n410-259-2314\n\nDelivery Instructions:\n\"Call 30 minutes ahead, I am not at the property but work in the city\"\nDelivery\nOCT\n30\n\nEstimated Delivery\n\nFri, Oct 30\n\nDelivery Window Pending\n\nFRIGIDAIRE\n\n30 in. 5 Burner Freestanding Gas Range in Stainless Steel with Quick Boil and Even Baking Technology\n\nSKU #1015322476\nInternet #341304656\n\nQty: 1\n\n$612.68\n\nParts & Service\n\nHaul Away Your Old Appliance  $50.00\nNat Gas Cooking Parts Kit  $42.38\nNaturalgas Range Install  $159.00"
+ }
+}

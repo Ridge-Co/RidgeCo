@@ -3,6 +3,7 @@
 // as message-queue.test.mjs) and runs them against a stubbed Anthropic fetch and stubbed Sheets deps.
 import fs from 'fs';
 import assert from 'node:assert';
+import { d16Deps } from './_d16-support.mjs';
 import { aiCreditGuardPrelude } from './_ai-credit-guard.mjs';   // the REAL AI-credit-pause block (anthropicMessages, aiFailOpenNote, ...)
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
@@ -140,6 +141,7 @@ function makeGate(overrides) {
     MSG_QUEUE_TAB: 'Message_Queue',
     MSG_QUEUE_COLS: QCOLS,
   }, overrides || {});
+  Object.assign(deps, d16Deps());   // D-16 helpers smsGatedSend now uses
   const names = Object.keys(deps);
   const fn = new Function(...names, grab('smsGatedSend') + '\nreturn smsGatedSend;')(...names.map(k => deps[k]));
   return { fn, state, deps };
@@ -209,12 +211,12 @@ const vendorEs = { ID: '9', Name: 'Alex Perez', Phone: '4105551212', Language: '
   ok(sms.includes("kind === 'vendor' && !opts.already_localized") && sms.includes('translateForVendorDetailed'), 'smsGatedSend translates for vendor recipients unless already_localized');
   ok(sms.indexOf('translateForVendorDetailed') < sms.indexOf("sheetsRequest(env, 'POST', `/values/${MSG_QUEUE_TAB}:append"), 'translation happens BEFORE the queue write');
   ok(!/sendSMSRaw\(env, deliveredTo, opts\.message_body\)/.test(sms), 'the raw send uses the (possibly translated) body, not opts.message_body');
-  ok(/MSG_QUEUE_COLS = \[[^\]]*'Original_Body','Translated_To'(?:,'Skip_If_Seen')?\]/.test(src), 'Message_Queue gets Original_Body + Translated_To (ensureColumns adds them to the live tab)');
+  ok(/MSG_QUEUE_COLS = \[[^\]]*'Original_Body','Translated_To'(?:,'Skip_If_Seen')?(?:,'Error_Code','Error_Reason')?\]/.test(src), 'Message_Queue gets Original_Body + Translated_To (ensureColumns adds them to the live tab)');
   ok(/WO_AUDIT_MSG_COLS = \[[^\]]*'Original_Body', 'Translated_To'\]/.test(src), 'WO_Audit gets Original_Body + Translated_To');
   const assign = src.slice(src.indexOf("message_type: 'vendor_job_assigned'") - 200, src.indexOf("message_type: 'vendor_job_assigned'") + 260);
   ok(assign.includes('already_localized: true'), 'assignVendor (hand-built bilingual) is marked already_localized');
   const pin = grab('sendPinMessage');
-  ok(pin.includes('translateForVendorDetailed(env, vendorRec, message)') && pin.includes('sendSMS(env, phone, outMessage)'), 'PIN/welcome-style direct sendSMS to a vendor is translated');
+  ok(pin.includes('translateForVendorDetailed(env, vendorRec, message)') && pin.includes('sendSMS(env, phone, outMessage,'), 'PIN/welcome-style direct sendSMS to a vendor is translated');
   const un = grab('unapproveEstimate'), ap = grab('approveEstimate');
   ok(un.includes('translateForVendorDetailed(env, vendor, msgEn)'), 'estimate unapprove hold text to the vendor is translated');
   ok(ap.includes('notifyVendorTemplated(') && grab('sendTemplatedSms').includes('smsGatedSend(env, opts)') && !/already_localized/.test(grab('sendTemplatedSms')), 'estimate approve text goes via the templated smsGatedSend path (translated by the gate hook, not marked already_localized)');

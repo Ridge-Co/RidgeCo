@@ -319,3 +319,7 @@ Branch `feat/str-cleaning-scheduler` (rebased on main twice; staging is reset to
 - Result: COMPLETE in exactly 12 slices (the daily cap) at 00:31 UTC; 108 stored rows written + verified, 0 failed, 46 WOs auto-closed Invoiced -> Paid (backlog from the job never completing since the cron move; each has a WO audit row), deposit-paid sweep ran. `/cron/status` overdue list is EMPTY.
 - Why so slow: about 4 WO closes per slice (each close = paced Sheets reads + write), and the 30 s slice includes the QuickBooks payables read. Tomorrow's run should be 1-2 slices. If a backlog ever returns: raise `QB_SYNC_SLICE_MS` or batch the WO status writes (not built).
 - Progress row `qb_sync_progress` (Config row 45) holds Oct 14's finished pass; a new ET day starts fresh automatically.
+
+## Checkpoint - Oct 23 2026 (evening) invoice 1767 detail fix
+- Brett: owner said invoice 1767 (WO-1169, $638.75) lacked detail; he wanted the invoice corrected, the cause fixed going forward, and a draft reply to the owner. Fix is on `fix/invoice-labor-detail-oct23`, merged to staging (PR #440, staging serves `.04-invoice-labor-detail`), NOT on main. FEATURE_LOG rule 230, CURRENT.md top section.
+- Waiting on Brett: merge to main yes/no; then he runs "Fix Invoices Already in QuickBooks" for 1767 and resends from QuickBooks; then sends the Gmail draft to the owner (standalone draft, not threaded).

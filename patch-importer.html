@@ -37,6 +37,19 @@
   input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=image]),select,textarea{font-size:16px !important}
 }
 </style>
+<style id="mobile-tap-targets">
+/* Ops_Build_Queue #111 (Oct 29 2026): tap targets >=44px + scrollable wide tables on touch phones only (same gate as mobile-input-font, so mouse/desktop density is unchanged).
+   min-height/min-width only (never a fixed height) so labels wrap instead of overflowing; !important so page rules like .btn.small{min-height:34px} cannot win. Documented exceptions: checkboxes/radios/file inputs and plain text links inside a sentence. */
+@media (hover:none) and (pointer:coarse){
+  button,input[type=button],input[type=submit],select,summary,.btn,.btn-sm,.filter-btn,#rc-navbar a{min-height:44px !important}
+  button,input[type=button],input[type=submit],.btn,.btn-sm,.filter-btn,#rc-navbar a{min-width:44px !important}
+  .modal-close{font-size:1.6rem;line-height:1;margin:-8px -10px -8px 0}
+  div.tab{min-height:44px !important;min-width:44px;display:flex;align-items:center;justify-content:center}
+  .table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  *:has(> table):not(body):not(html){overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .row>input{min-width:0}
+}
+</style>
 </head>
 <body>
 <!-- RC-NAV: shared back-to-Hub + tools jump bar (Aug 20, 2026) -->
@@ -100,7 +113,7 @@
   <div class="section-title">MISSING DATA TO IMPORT</div>
   <p style="color:var(--muted);font-size:11px;margin-bottom:12px">The following units and tenants are missing from your Sheet. All property IDs are confirmed from your Sheet.</p>
   
-  <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px">
+  <div class="table-wrap"><table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:12px">
     <thead><tr>
       <th style="text-align:left;padding:6px 8px;font-size:10px;color:var(--muted);border-bottom:1px solid var(--border)">Property ID</th>
       <th style="text-align:left;padding:6px 8px;font-size:10px;color:var(--muted);border-bottom:1px solid var(--border)">Address</th>
@@ -115,7 +128,7 @@
       <tr><td style="padding:6px 8px;border-bottom:1px solid var(--border)">12</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">926 N Calvert St</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">No units in ClickUp</td><td style="padding:6px 8px;border-bottom:1px solid var(--border)">None</td></tr>
       <tr><td style="padding:6px 8px">13</td><td style="padding:6px 8px">20 E Eager St</td><td style="padding:6px 8px">—</td><td style="padding:6px 8px;color:var(--warn)">Missing: James(1), Abby(2), Kelsey(3) (units already exist)</td></tr>
     </tbody>
-  </table>
+  </table></div>
 
   <div style="display:flex;gap:8px">
     <button class="btn success" onclick="runPatch()">Run Patch Import</button>

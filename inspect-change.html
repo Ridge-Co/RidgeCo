@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="test-login.js"></script>
+<script src="failure-reporter.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Inspection Time Change — Ridge Co</title>
+<style>
+  :root{--bg:#f4f5f7;--surface:#fff;--border:#dfe3e8;--text:#1c2430;--muted:#5d6877;--accent:#1d4ed8;--ok:#1a7f4b;--danger:#c0392b;--warn:#7a5b12}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{overflow-x:hidden}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);font-size:16px;line-height:1.45}
+  header{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 16px}
+  header h1{font-size:18px;margin:0} header .sub{color:var(--muted);font-size:13px;margin-top:2px}
+  main{max-width:560px;margin:0 auto;padding:14px 14px 60px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px}
+  .addr{font-weight:700;font-size:17px;word-break:break-word}
+  .day{color:var(--muted);font-size:14px;margin-top:2px}
+  .times{margin-top:8px;font-size:16px}.old{color:var(--muted);text-decoration:line-through}.arrow{margin:0 6px;color:var(--muted)}.new{font-weight:700}
+  .btn{display:block;width:100%;min-height:48px;margin-top:12px;padding:12px;border:none;border-radius:10px;background:var(--accent);color:#fff;font-size:16px;font-weight:600;cursor:pointer}
+  .btn.ok{background:var(--ok)} .btn.ghost{background:var(--surface);color:var(--text);border:1px solid var(--border)}
+  .btn:disabled{opacity:.55}
+  .banner{border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:15px}
+  .banner.err{background:#fdecea;border:1px solid #f3b9b3;color:#8a1f14}
+  .banner.warn{background:#fdf3e0;border:1px solid #f0d9a8;color:var(--warn)}
+  .banner.good{background:#e7f6ec;border:1px solid #b7e0c5;color:#14532d}
+  .muted{color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<header><h1>Inspection time change</h1><div class="sub">Ridge Co Property Management</div></header>
+<main id="main"><div class="card"><p class="muted">Loading&hellip;</p></div></main>
+<script>
+var Q=new URLSearchParams(location.search);
+// ?api= may only point at the staging Worker (pre-merge testing); anything else is ignored.
+var WORKER=/^https:\/\/maintenance-hub-staging\.[a-z0-9-]+\.workers\.dev$/.test(Q.get('api')||'')?Q.get('api'):'https://maintenance-hub.brett-2f8.workers.dev';
+var C=Q.get('c')||'', B=Q.get('b')||'', WANT_RESCHED=Q.get('reschedule')==='1';
+var data=null, busy=false;
+function $(id){return document.getElementById(id);}
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function call(method,path,body){
+  var o={method:method,headers:{'Content-Type':'application/json'}}; if(body) o.body=JSON.stringify(body);
+  return fetch(WORKER+path,o).then(function(r){return r.json().catch(function(){return {ok:false,error:'bad_response',message:'The server sent an unreadable answer (HTTP '+r.status+').'};}).then(function(j){j._http=r.status;return j;});});
+}
+function set(h){$('main').innerHTML=h;}
+function banner(kind,msg){return '<div class="banner '+kind+'">'+esc(msg)+'</div>';}
+function fail(where,e){ try{ if(window.hubReportFailure) window.hubReportFailure(where,e); }catch(x){ console.error('report failed',x); } }   // silent-ok: reporter is best-effort; the page already shows the error
+function netFail(where,e){ fail(where,e); set(banner('err','We could not reach the server ('+e.message+'). Please check your connection and try again in a minute.')); }
+function card(c){
+  var h='<div class="card"><div class="addr">'+esc(c.address)+'</div><div class="day">'+esc(c.day)+'</div>';
+  if(c.state==='applied') h+='<div class="times"><span class="old">'+esc(c.old)+'</span><span class="arrow">&rarr;</span><span class="new">'+esc(c.new)+'</span></div>'+banner('good','Approved. This is now the confirmed time.').replace('class="banner','style="margin-top:10px" class="banner');
+  else {
+    h+='<div class="times"><span class="old">'+esc(c.old)+'</span><span class="arrow">&rarr;</span><span class="new">'+esc(c.new)+'</span></div>';
+    if(c.state==='waiting') h+='<div class="muted" style="margin-top:6px">Waiting for your answer. Nothing changes until you approve.</div>';
+    else if(c.state==='working') h+=banner('warn','This is being applied right now. Refresh in a moment.');
+    else if(c.state==='failed') h+=banner('err','We could not finish this one. Brett has been told and will follow up.');
+    else if(c.state==='reschedule_requested') h+=banner('warn','A different time was requested. Brett has been told.');
+    else if(c.state==='expired') h+=banner('warn','This link has expired'+(c.expired_reason?' ('+c.expired_reason+')':'')+'. Please contact Brett.');
+    else h+=banner('warn','This change is no longer waiting for an answer.');
+  }
+  return h+'</div>';
+}
+function render(){
+  var ch=data.changes, waiting=ch.filter(function(c){return c.can_act;});
+  var h='';
+  if(data.mode==='one'){
+    h+=ch.map(card).join('');
+    if(waiting.length){
+      if(WANT_RESCHED) h+='<div class="card"><p>Ask Brett for a different time for this inspection? He will be told right away, and you can pick a new time on the next page. The current booking stays as it is until then.</p><button class="btn" id="resched" type="button" onclick="resched()">Yes, I need a different time</button><button class="btn ghost" type="button" onclick="WANT_RESCHED=false;render()">No, go back</button></div>';
+      else h+='<button class="btn ok" id="approve" type="button" onclick="approve()">Approve this time</button><button class="btn ghost" type="button" onclick="WANT_RESCHED=true;render()">I need a different time</button>';
+    }
+  } else {
+    h+='<div class="banner warn">'+esc(String(ch.length))+' inspection time'+(ch.length===1?'':'s')+' changed. Nothing changes until you approve.</div>'+ch.map(card).join('');
+    if(waiting.length) h+='<button class="btn ok" id="approve" type="button" onclick="approve()">Approve '+(waiting.length===1?'this time':'all '+waiting.length)+'</button><div class="muted" style="margin-top:8px">Need a different time for one of them? Use the "different time" link next to it in the email.</div>';
+  }
+  set(h);
+}
+function approve(){
+  if(busy) return; busy=true; var b=$('approve'); b.disabled=true; b.textContent='Approving…';
+  call('POST','/insp-change/approve',C?{c:C}:{b:B}).then(function(r){
+    busy=false;
+    if(r.error==='invalid_link'){ set(banner('err',r.message)); return; }
+    if(r.results){ set(banner(r.ok?'good':'warn',r.message||'')+r.results.map(function(c){return card(c)+(c.message?'<div class="muted" style="margin:-6px 4px 12px">'+esc(c.message)+'</div>':'');}).join('')); }
+    else set(banner('err',r.message||'Something went wrong. Brett has been told and will follow up.'));
+    if(!r.ok) fail('inspect-change.approve',new Error(r.error||'approve incomplete'));
+  }).catch(function(e){ busy=false; netFail('inspect-change.approve',e); });
+}
+function resched(){
+  if(busy) return; busy=true; var b=$('resched'); b.disabled=true; b.textContent='Telling Brett…';
+  call('POST','/insp-change/reschedule',{c:C}).then(function(r){
+    busy=false;
+    if(r.ok&&r.manage_url) set(banner('good',r.message||'Brett has been told.')+'<div class="card"><p>Next, pick a new time. You will cancel this booking and book a new one on the next page.</p><a class="btn" style="text-decoration:none;text-align:center" href="'+esc(r.manage_url)+'">Pick a new time</a></div>');
+    else { set(banner(r.error==='not_waiting'?'warn':'err',r.message||'Something went wrong. Brett has been told and will follow up.')+(r.manage_url?'<div class="card"><a class="btn" style="text-decoration:none;text-align:center" href="'+esc(r.manage_url)+'">View this booking</a></div>':'')); if(!r.ok&&r.error!=='not_waiting') fail('inspect-change.reschedule',new Error(r.error||'reschedule failed')); }
+  }).catch(function(e){ busy=false; netFail('inspect-change.reschedule',e); });
+}
+(function(){
+  if(!C&&!B){ set(banner('err','This link is missing its code. Please use the link in the email from Ridge Co.')); return; }
+  call('GET','/insp-change/info?'+(C?'c='+encodeURIComponent(C):'b='+encodeURIComponent(B))).then(function(r){
+    if(!r.ok){ set(banner('err',r.message||'This link is no longer valid.')); if(r._http>=500) fail('inspect-change.info',new Error(r.error||'info failed')); return; }
+    data=r; render();
+  }).catch(function(e){ netFail('inspect-change.info',e); });
+})();
+</script>
+</body>
+</html>

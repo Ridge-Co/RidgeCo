@@ -76,7 +76,7 @@ function load(store, over) {
     alertAdminOnFailure: async (env, k, m) => { alerts.push({ k, m }); return { skipped: true }; },
     setConfigKey: async (env, b) => { store.setCfg(b.key, b.value); return { ok: true }; },
     json: (b, s) => ({ body: b, status: s || 200 }),
-    __cronEnv: (e) => e, __meterCronEnv: (e) => e,
+    failStatusForScheduler: async () => ({}), __cronEnv: (e) => e, __meterCronEnv: (e) => e, __cronLast429At: () => (over.last429 ? over.last429() : 0), CRON_QUOTA_COOLDOWN_MS: 150000,
     doorWatchdogCron: async () => ({ ok: true }),
     processQuietHoursQueue: async () => ({ checked: 0, results: [] }),
     processPendingNotifications: async () => ({ status: 200, clone() { return this; }, async json() { return { processed: 0 }; } }),
@@ -102,7 +102,7 @@ function load(store, over) {
   };
   Object.assign(stubs, over.stubs || {});
   const names = Object.keys(stubs);
-  const fn = new Function(...names, blockSrc + '\nreturn { schedTokenOk, schedEtParts, schedJobDue, schedDueJobs, schedStatus, schedStampFirstSeen, schedGrace, schedParseState, schedRunNext, schedRunHandler, schedStatusHandler, schedHealthSummary, schedUnexpectedCloudflareCron, schedBadness, schedApplyOverrides, schedEffective, schedExpected, SCHED_JOBS, SCHED_STAGING_SAFE_JOBS };');
+  const fn = new Function(...names, blockSrc + '\nreturn { schedTokenOk, schedEtParts, schedJobDue, schedDueJobs, schedStatus, schedStampFirstSeen, schedGrace, schedParseState, schedRunNext, schedRunHandler, schedStatusHandler, schedHealthSummary, schedUnexpectedCloudflareCron, schedBadness, schedApplyOverrides, schedEffective, schedExpected, schedCooldownPlan, schedCooldownNext, SCHED_JOBS, SCHED_STAGING_SAFE_JOBS };');
   return Object.assign(fn(...names.map(n => stubs[n])), { telemetry, alerts, stubs });
 }
 const S0 = () => ({ v: 1, claim_until: '', claim_id: '', claim_job: '', last_tick: '', jobs: {} });
@@ -113,7 +113,7 @@ const primeState = (store) => { store.tabs.get('Config').push(['Scheduler_State'
 // registry shape
 {
   const names = P.SCHED_JOBS.map(j => j.name);
-  t('registry priority order', JSON.stringify(names) === JSON.stringify(['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep', 'ai_credit_probe', 'daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'review_mon', 'review_wed', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_thu', 'hub_impr_daily', 'str_digest_mon', 'str_digest_wed', 'str_digest_fri']), names);
+  t('registry priority order', JSON.stringify(names) === JSON.stringify(['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep', 'insp_shift_reminders', 'ai_credit_probe', 'daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'twilio_balance_log', 'review_mon', 'review_wed', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_thu', 'hub_impr_daily', 'str_digest_mon', 'str_digest_wed', 'str_digest_fri']), names);
   t('registry names unique', new Set(names).size === names.length);
   const dw = P.SCHED_JOBS.find(j => j.name === 'door_watchdog'), sw = P.SCHED_JOBS.find(j => j.name === 'sweep');
   t('15-minute jobs gate at >=14 min', dw.every_min === 14 && sw.every_min === 14);
@@ -175,20 +175,20 @@ t('ar_report_mon waits for 09:00 ET', due('ar_report_mon', {}, '2026-10-12T12:59
 // priority order with everything due
 {
   const names = P.schedDueJobs(S0(), iso('2026-10-12T14:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);
-  t('priority order when everything is due (Monday 10am ET): daily/weekly jobs first, then the 15-minute jobs, array order inside each', names.join() === 'daily_digest,daily_receipts,daily_receipts_post,daily_turnover,daily_qb_sync,sms_delivery_check,review_mon,ar_report_mon,hub_impr_mon,hub_impr_daily,str_digest_mon,door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning,followup_sweep', names.join());
+  t('priority order when everything is due (Monday 10am ET): daily/weekly jobs first, then the 15-minute jobs, array order inside each', names.join() === 'daily_digest,daily_receipts,daily_receipts_post,daily_turnover,daily_qb_sync,sms_delivery_check,twilio_balance_log,review_mon,ar_report_mon,hub_impr_mon,hub_impr_daily,str_digest_mon,door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning,followup_sweep,insp_shift_reminders', names.join());
   // Oct 14 2026 incident: the six 15-minute jobs filled every tick's time share, so no daily/weekly job ever ran. A due daily
   // job must now come BEFORE every due interval job, and interval jobs still run once the dailies are done or backing off.
   const wed = P.schedDueJobs(S0(), iso('2026-10-14T19:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);   // Wed 3pm ET, nothing has ever run
-  const firstInterval = wed.findIndex(n => ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep'].includes(n));
-  t('Wed 3pm, nothing ever run: every daily/weekly job is ahead of every interval job', firstInterval === wed.length - 7 && wed.slice(0, firstInterval).every(n => !['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep'].includes(n)) && wed.includes('review_wed') && wed.includes('str_digest_wed'), wed.join());
-  const done = S0(); for (const n of ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'hub_impr_daily', 'review_wed', 'str_digest_wed']) done.jobs[n] = { last_key: '2026-10-14', last_status: 'ok', last_ok: '2026-10-14T19:00:00.000Z', last_end: '2026-10-14T19:00:00.000Z' };
+  const firstInterval = wed.findIndex(n => ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep', 'insp_shift_reminders'].includes(n));
+  t('Wed 3pm, nothing ever run: every daily/weekly job is ahead of every interval job', firstInterval === wed.length - 8 && wed.slice(0, firstInterval).every(n => !['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep', 'insp_shift_reminders'].includes(n)) && wed.includes('review_wed') && wed.includes('str_digest_wed'), wed.join());
+  const done = S0(); for (const n of ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'twilio_balance_log', 'hub_impr_daily', 'review_wed', 'str_digest_wed']) done.jobs[n] = { last_key: '2026-10-14', last_status: 'ok', last_ok: '2026-10-14T19:00:00.000Z', last_end: '2026-10-14T19:00:00.000Z' };
   const after = P.schedDueJobs(done, iso('2026-10-14T19:05:00Z'), P.SCHED_JOBS, {}).map(d => d.name);
-  t('once the daily/weekly jobs are done the interval jobs run in their usual order', after.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning,followup_sweep', after.join());
+  t('once the daily/weekly jobs are done the interval jobs run in their usual order', after.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning,followup_sweep,insp_shift_reminders', after.join());
   const backoff = S0(); backoff.jobs.daily_qb_sync = { attempts: { key: '2026-10-14', n: 1 }, last_end: '2026-10-14T19:00:00.000Z', last_start: '2026-10-14T18:59:00.000Z', last_status: 'failed' };
   const bo = P.schedDueJobs(backoff, iso('2026-10-14T19:05:00Z'), P.SCHED_JOBS, {}).map(d => d.name);
   t('a failed daily job in its retry back-off does not block anything (not due until the gap passes)', !bo.includes('daily_qb_sync') && bo.includes('str_cleaning'), bo.join());
   const early = P.schedDueJobs(S0(), iso('2026-10-14T09:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);   // Wed 05:00 EDT: only the interval jobs
-  t('before 7am ET only the 15-minute jobs are due', early.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning,followup_sweep', early.join());
+  t('before 7am ET only the 15-minute jobs are due', early.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning,followup_sweep,insp_shift_reminders', early.join());
   t('only[] restricts', P.schedDueJobs(S0(), iso('2026-10-12T14:00:00Z'), P.SCHED_JOBS, { only: ['sweep'] }).map(d => d.name).join() === 'sweep');
 }
 // schedStatus overdue logic
@@ -196,8 +196,8 @@ t('ar_report_mon waits for 09:00 ET', due('ar_report_mon', {}, '2026-10-12T12:59
   const now = iso('2026-10-12T16:00:00Z');   // Monday 12:00 ET
   const mins = (m) => new Date(now.getTime() - m * 60000).toISOString();
   const fresh = S0(); fresh.last_tick = mins(3);
-  for (const n of ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep']) fresh.jobs[n] = { last_start: mins(5), last_end: mins(4), last_ok: mins(4), last_status: 'ok' };
-  for (const n of ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check']) fresh.jobs[n] = { last_start: mins(300), last_end: mins(299), last_ok: mins(299), last_key: '2026-10-12', last_status: 'ok' };
+  for (const n of ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep', 'insp_shift_reminders']) fresh.jobs[n] = { last_start: mins(5), last_end: mins(4), last_ok: mins(4), last_status: 'ok' };
+  for (const n of ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'twilio_balance_log']) fresh.jobs[n] = { last_start: mins(300), last_end: mins(299), last_ok: mins(299), last_key: '2026-10-12', last_status: 'ok' };
   for (const n of ['review_mon', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_daily', 'str_digest_mon']) fresh.jobs[n] = { last_end: mins(200), last_ok: mins(200), last_key: '2026-10-12', last_status: 'ok' };
   const s = P.schedStatus(fresh, now, P.SCHED_JOBS);
   t('status: healthy scheduler has no overdue jobs', s.overdue.length === 0 && s.tick_age_min === 3, s.overdue);
@@ -628,6 +628,32 @@ for (const N of [2, 5, 8]) {
   const s = stateOf(store), st = L.schedStatus(s, new Date(c.v), jobs);
   t('...but they are loudly overdue with the error in /cron/status', st.overdue.join() === 'noretry,after_send' && /smtp 500/.test(st.jobs.noretry.overdue_reason), st);
 }
+// 2l-bis (Oct 22 2026, Needs Attention #2/#3): a job whose ONLY errors are Google's shared Sheets READ quota is a calm P2 "sheets_quota_busy" row, not a P0
+// "scheduler_job" failure that texts Brett. Anything else (including a mix) is unchanged: P0 scheduler_job + admin alert.
+{
+  const Q = (tab) => `Sheets API error on GET /values/${tab}: Quota exceeded for quota metric 'Read requests' and limit 'Read requests per minute per user' of service 'sheets.googleapis.com' for consumer 'project_number:664428332384'.`;
+  const runOne = async (errors, extra) => {
+    const store = primeState(makeStore()), L = load(store), c = clock(Date.parse('2026-10-12T14:00:00Z')), log = [];
+    const jobs = mkJobs(log, [['q', 'interval', { run: async () => ({ ok: false, errors }) }]]);
+    const r = await L.schedRunNext({}, null, fast(c, { jobs, only: ['q'], force: true }));
+    return { r, L, store };
+  };
+  const a = await runOne([{ step: 'pending_notifications', error: Q('Notification_Queue') }, { step: 'vendor_nudges', error: Q('Vendor_Requests') }]);
+  t('quota-only job failure: still recorded as failed and retried (state says failed)', a.r.body.job_ok === false && stateOf(a.store).jobs.q.last_status === 'failed', a.r.body);
+  t('quota-only job failure: the answer says quota_busy and keeps the error text', a.r.body.quota_busy === true && /Quota exceeded/.test(a.r.body.error));
+  t('quota-only job failure: ONE telemetry row, Job_Type sheets_quota_busy (a P2 in the ledger), naming the job', a.L.telemetry.length === 1 && a.L.telemetry[0].Job_Type === 'sheets_quota_busy' && a.L.telemetry[0].Skill_Or_Endpoint === 'scheduler/q' && a.L.telemetry[0].Success === 'FALSE', a.L.telemetry);
+  t('quota-only job failure: nobody is paged (alertAdminOnFailure never called)', a.L.alerts.length === 0 && !a.r.body.admin_alerted, a.L.alerts);
+  const b = await runOne([{ step: 'pending_notifications', error: Q('Notification_Queue') }, { step: 'vendor_nudges', error: 'Sheets API error on GET /values/Vendor_Requests: injected sheets failure' }]);
+  t('mixed (one quota + one real error): NOT treated as quota - P0 scheduler_job row and the admin alert', b.r.body.quota_busy !== true && b.L.telemetry[0].Job_Type === 'scheduler_job' && b.L.alerts.length === 1, { tel: b.L.telemetry, alerts: b.L.alerts });
+  const c2 = await runOne([{ step: 'job', error: 'Cannot read properties of undefined' }]);
+  t('a real bug: unchanged - P0 scheduler_job row, admin alert', c2.L.telemetry[0].Job_Type === 'scheduler_job' && c2.L.telemetry[0].Skill_Or_Endpoint === 'q' && c2.L.alerts.length === 1);
+  const d = await runOne([{ step: 'x', error: Q('Config').replace('on GET', 'on POST') }]);
+  t('a WRITE that hit quota is a real failure (not "busy"): P0 scheduler_job + alert', d.L.telemetry[0].Job_Type === 'scheduler_job' && d.L.alerts.length === 1);
+  const e = await runOne([]);
+  t('ok:false with no errors listed is still a plain failure (not "quota")', e.L.telemetry[0].Job_Type === 'scheduler_job' && e.r.body.quota_busy !== true);
+  const ok = await (async () => { const store = primeState(makeStore()), L = load(store), c = clock(Date.parse('2026-10-12T14:00:00Z')); const jobs = mkJobs([], [['q', 'interval']]); const r = await L.schedRunNext({}, null, fast(c, { jobs, only: ['q'], force: true })); return { r, L }; })();
+  t('happy path: nothing recorded, nobody paged', ok.r.body.job_ok === true && ok.L.telemetry.length === 0 && ok.L.alerts.length === 0);
+}
 // 2m only / force / unknown / dry
 {
   const store = makeStore(), L = load(store), c = clock(T0), log = [];
@@ -684,8 +710,8 @@ for (const N of [2, 5, 8]) {
 
 // 2o FIRST-EVER TICK: no duplicates. With a blank Scheduler_State, daily/weekly jobs whose slot already passed today (ET) are
 // SEEDED as done (the old crons / a person already ran them), 15-minute jobs run at once, and later slots run normally.
-const DAILY5 = ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check'];   // (name kept; it is now six dailies, all at 07:00 ET)
-const INTERVAL5 = ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep'];
+const DAILY5 = ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'twilio_balance_log'];   // (name kept; it is now seven dailies, all at 07:00 ET)
+const INTERVAL5 = ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep', 'insp_shift_reminders'];
 // Drain one "tick" the way the Apps Script does: call until more=false. Returns { ran, first } (first = the first response).
 const drain = async (L, c, extra) => {
   const ran = []; let first = null;
@@ -706,9 +732,9 @@ const drain = async (L, c, extra) => {
   const s = stateOf(store);
   t('seeded jobs carry last_key = today (ET), last_status seeded, last_seeded:true and NO forged last_ok / last_start', ['daily_digest', 'review_mon', 'ar_report_mon'].every(n => s.jobs[n].last_key === '2026-10-12' && s.jobs[n].last_status === 'seeded' && s.jobs[n].last_seeded === true && !s.jobs[n].last_ok && !s.jobs[n].last_start), s.jobs.daily_digest);
   t('review_wed (Wednesday job) is not seeded on a Monday (it only gets the grace stamp)', !s.jobs.review_wed || (!s.jobs.review_wed.last_key && !s.jobs.review_wed.last_seeded), s.jobs.review_wed);
-  t('state records the seeding summary', s.seeded && s.seeded.jobs.length === 11 && !!s.seeded.at);
+  t('state records the seeding summary', s.seeded && s.seeded.jobs.length === 12 && !!s.seeded.at);
   const st = L.schedStatus(s, new Date(c.v), L.SCHED_JOBS);
-  t('/cron/status shows seeded jobs as seeded, not overdue; top-level seeded summary present', st.seeded && st.seeded.jobs.length === 11 && st.jobs.daily_digest.seeded === true && st.jobs.daily_digest.last_ok === null && !st.overdue.includes('daily_digest') && !st.overdue.includes('review_mon'), st.overdue);
+  t('/cron/status shows seeded jobs as seeded, not overdue; top-level seeded summary present', st.seeded && st.seeded.jobs.length === 12 && st.jobs.daily_digest.seeded === true && st.jobs.daily_digest.last_ok === null && !st.overdue.includes('daily_digest') && !st.overdue.includes('review_mon'), st.overdue);
   c.v += 20 * 60000;
   const b = await drain(L, c);
   t('second tick does NOT reseed (no seeded / first_run fields) and the dailies stay quiet', b.first.body.seeded === undefined && b.first.body.first_run === undefined && b.ran.every(n => INTERVAL5.includes(n)), b);
@@ -765,7 +791,7 @@ const drain = async (L, c, extra) => {
   const a = await drain(L, c);
   t('DST (spring-forward day): first tick 06:59 EDT seeds nothing', a.first.body.seeded.length === 0 && a.ran.join() === INTERVAL5.join());
   c.v = Date.parse('2026-03-08T11:00:00Z');
-  t('DST (spring-forward day): dailies run at 07:00 EDT (11:00Z), not an hour later', (await drain(L, c)).ran.filter(n => DAILY5.includes(n)).length === 6);
+  t('DST (spring-forward day): dailies run at 07:00 EDT (11:00Z), not an hour later', (await drain(L, c)).ran.filter(n => DAILY5.includes(n)).length === 7);
   const store2 = makeStore(), L2 = load(store2);
   t('DST (spring-forward day): a first tick at 07:30 EDT seeds the five dailies + the 07:30 Hub Improvements check', (await drain(L2, clock(Date.parse('2026-03-08T11:30:00Z')))).first.body.seeded.join() === [...DAILY5, 'hub_impr_daily'].join());
 }
@@ -774,7 +800,7 @@ const drain = async (L, c, extra) => {
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z'));
   store.tabs.get('Config').push(['Scheduler_State', '   ']);
   const a = await drain(L, c);
-  t('blank Scheduler_State cell (row present) is a first run too', a.first.body.first_run === true && a.first.body.seeded.length === 11);
+  t('blank Scheduler_State cell (row present) is a first run too', a.first.body.first_run === true && a.first.body.seeded.length === 12);
 }
 {
   // jobs added to the registry LATER keep catch-up: existing state, no entry for the new job -> it runs
@@ -790,7 +816,7 @@ const drain = async (L, c, extra) => {
   // dry run on a blank state: reports first_run + would_seed, writes NOTHING, claims NOTHING
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z'));
   const r = await L.schedRunNext({}, null, fast(c, { dry: true }));
-  t('dry run on blank state: first_run true, would_seed lists the ten, due is only the interval jobs', r.body.dry === true && r.body.first_run === true && r.body.would_seed.length === 11 && r.body.due.join() === INTERVAL5.join(), r.body);
+  t('dry run on blank state: first_run true, would_seed lists the ten, due is only the interval jobs', r.body.dry === true && r.body.first_run === true && r.body.would_seed.length === 12 && r.body.due.join() === INTERVAL5.join(), r.body);
   t('dry run wrote nothing (no POST, no Scheduler_State) and a real tick afterwards is still a first run', !store.calls.some(x => x.startsWith('POST')) && !store.cfg().Scheduler_State && (await L.schedRunNext({}, null, fast(c, {}))).body.first_run === true);
 }
 {
@@ -1094,7 +1120,7 @@ globalThis.setTimeout = _realSetTimeout;
   t('no leftover cronSweepLogged / cron-branch dispatch in worker.js', !/cronSweepLogged/.test(wsrc) && !/cron === '/.test(wsrc));
   // every registry job points at a real function
   const names = [...blockSrc.matchAll(/run: \(env(?:[^)]*)\) => (\w+)\(/g)].map(m => m[1]);
-  t('every registry entry maps to a defined job function', names.length === 23 && names.every(n => new RegExp('async function ' + n + '\\(').test(wsrc)), names);
+  t('every registry entry maps to a defined job function', names.length === 25 && names.every(n => new RegExp('async function ' + n + '\\(').test(wsrc)), names);
   // the scheduler block never swallows
   t('scheduler block has no empty/underscore catch', !/catch\s*\(\s*_?\s*\)\s*\{\s*\}/.test(blockSrc) && !/catch\s*\(\s*_\s*\)/.test(blockSrc) && !/\.catch\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/.test(blockSrc));
   const ver = /const BUILD_VERSION = '([^']+)'/.exec(wsrc)[1];
@@ -1106,6 +1132,90 @@ globalThis.setTimeout = _realSetTimeout;
   t('maybeRunDailySelftest: catch-up form (skips only BEFORE 7am), keeps its once-per-day guard, no swallowed read error', /etHour\(\) < 7/.test(self) && !/etHour\(\) !== 7/.test(self) && /already ran today/.test(self) && /if \(!isMissingTabError\(e\)\) throw e/.test(self));
   const est = wsrc.slice(wsrc.indexOf('async function processEstimateReminders('), wsrc.indexOf('async function processEstimateReminders(') + 600);
   t('processEstimateReminders: no longer requires the exact 8am hour', !/!== 8/.test(est) && /h < 8 \|\| h >= 18/.test(est));
+}
+
+// ───────────────────── Oct 23 2026: Sheets-quota COOLDOWN (retry-storm fix, Needs Attention #10) ─────────────────────
+const QUOTA_ERR = 'Sheets API error on GET /values/Work_Orders: Quota exceeded for quota metric \'Read requests\' and limit \'Read requests per minute per user\'';
+{
+  // pure helpers
+  const J = [{ name: 'door', critical: true }, { name: 'x' }];
+  const dueAll = [{ name: 'x', key: 'k' }, { name: 'door', key: 'k' }];
+  const p0 = P.schedCooldownPlan({}, 1000, dueAll, J, false);
+  t('cooldown plan: no marker -> not cooling, everything runs', p0.cooling === false && p0.runnable.length === 2 && p0.held.length === 0);
+  const p1 = P.schedCooldownPlan({ quota_hot_until: new Date(5000).toISOString() }, 1000, dueAll, J, false);
+  t('cooldown plan: future marker -> only the critical job runs, the rest are held by name', p1.cooling === true && p1.runnable.map(d => d.name).join() === 'door' && p1.held.join() === 'x', p1);
+  t('cooldown plan: an expired marker does not cool', P.schedCooldownPlan({ quota_hot_until: new Date(500).toISOString() }, 1000, dueAll, J, false).cooling === false);
+  t('cooldown plan: a forced run is never held', P.schedCooldownPlan({ quota_hot_until: new Date(5000).toISOString() }, 1000, dueAll, J, true).runnable.length === 2);
+  t('cooldown plan: a corrupt marker is ignored, not fatal', P.schedCooldownPlan({ quota_hot_until: 'garbage' }, 1000, dueAll, J, false).cooling === false);
+  t('cooldown next: throttled -> now+cooldown', P.schedCooldownNext('', 1000, true, 150000) === new Date(151000).toISOString());
+  t('cooldown next: a throttled run never SHORTENS a longer marker', P.schedCooldownNext(new Date(900000).toISOString(), 1000, true, 150000) === new Date(900000).toISOString());
+  t('cooldown next: calm run keeps a future marker', P.schedCooldownNext(new Date(5000).toISOString(), 1000, false, 150000) === new Date(5000).toISOString());
+  t('cooldown next: calm run clears an expired marker', P.schedCooldownNext(new Date(500).toISOString(), 1000, false, 150000) === '');
+  t('door_watchdog is the (only) critical job in the registry', P.SCHED_JOBS.filter(j => j.critical).map(j => j.name).join() === 'door_watchdog');
+
+  // FAULT INJECTION: a job hits the quota -> cooldown starts, it is a calm P2 row (not a P0 page), critical job still runs, others wait, then resume
+  const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
+  let xFails = true;
+  const jobs = [
+    { name: 'x', kind: 'interval', every_min: 14, run: async () => { log.push('x'); return xFails ? { ok: false, errors: [{ step: 'job', error: QUOTA_ERR }] } : { ok: true, errors: [] }; } },
+    { name: 'door', kind: 'interval', every_min: 1, critical: true, run: async () => { log.push('door'); return { ok: true, errors: [] }; } },
+    { name: 'y', kind: 'interval', every_min: 1, run: async () => { log.push('y'); return { ok: true, errors: [] }; } },
+  ];
+  const r1 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  const hot1 = stateOf(store).quota_hot_until;
+  t('storm: the throttled job is reported quota_busy, not a page', r1.body.ran === 'x' && r1.body.job_ok === false && r1.body.quota_busy === true && !r1.body.admin_alerted && L.alerts.length === 0, r1.body);
+  t('storm: a calm P2 sheets_quota_busy telemetry row, no P0 scheduler_job row', L.telemetry.some(r => r.Job_Type === 'sheets_quota_busy' && r.Success === 'FALSE') && !L.telemetry.some(r => r.Job_Type === 'scheduler_job'), L.telemetry);
+  t('storm: Scheduler_State now holds quota_hot_until = now + 150 s, and the run reports it', hot1 === new Date(T0 + 150000).toISOString() && r1.body.quota_hot_until === hot1, hot1);
+  c.v += 10000;
+  const r2 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('cooling: the door-critical job still runs on the very next tick', r2.body.ran === 'door' && r2.body.job_ok === true && log.join() === 'x,door', r2.body);
+  t('cooling: the other due job is held and named in the answer', r2.body.quota_cooldown && r2.body.quota_cooldown.held.join() === 'y' && r2.body.quota_cooldown.until === hot1, r2.body);
+  t('cooling: a calm critical run does NOT clear or shorten the marker', stateOf(store).quota_hot_until === hot1);
+  c.v += 10000;
+  const r3 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('cooling: nothing else starts, no read-heavy job runs, more=false so the Apps Script loop stops', r3.body.ran === null && r3.body.more === false && log.join() === 'x,door' && r3.body.quota_cooldown.held.join() === 'y', r3.body);
+  t('cooling: the heartbeat is still written (the dead-man switch sees a live clock)', stateOf(store).last_tick === new Date(c.v).toISOString());
+  // /cron/status uses the real clock (like its claim field), so put a marker that is really in the future into the state
+  const realFuture = new Date(Date.now() + 90000).toISOString();
+  const stNow = stateOf(store); stNow.quota_hot_until = realFuture; store.setCfg('Scheduler_State', JSON.stringify(stNow));
+  const stat = await L.schedStatusHandler({});
+  t('cooling: /cron/status shows the cooldown', stat.body && stat.body.quota_cooldown_until === realFuture, stat.body && stat.body.quota_cooldown_until);
+  stNow.quota_hot_until = hot1; store.setCfg('Scheduler_State', JSON.stringify(stNow));
+  const stat2 = await L.schedStatusHandler({});
+  t('cooldown over: /cron/status shows no cooldown', stat2.body && stat2.body.quota_cooldown_until === undefined);
+  const forced = await L.schedRunNext({}, null, fast(c, { jobs, only: ['y'], force: true }));
+  t('cooling: a forced run of a held job is allowed', forced.body.ran === 'y' && forced.body.job_ok === true && log.join() === 'x,door,y', forced.body);
+  c.v += 150000;
+  xFails = false;
+  const r4 = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('cooldown over: held jobs run again on the first tick after it', r4.body.ran && ['door', 'y'].includes(r4.body.ran) && !r4.body.quota_cooldown, r4.body);
+  t('cooldown over: a calm run drops the expired marker from the state', stateOf(store).quota_hot_until === undefined);
+}
+{
+  // a job that SUCCEEDS but took a real 429 on the way still starts the cooldown (the signal is the 429, not the failure)
+  const store = primeState(makeStore()); let n429 = 0;
+  const L = load(store, { last429: () => n429 }), c = clock(T0), log = [];
+  const jobs = [{ name: 'x', kind: 'interval', every_min: 14, run: async () => { n429 = c.v; log.push('x'); return { ok: true, errors: [] }; } }];
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('429 seen but job ok: still ok, cooldown set', r.body.job_ok === true && !r.body.quota_busy && !!stateOf(store).quota_hot_until, [r.body, stateOf(store)]);
+}
+{
+  // a door-critical job failing on the quota EXTENDS the marker (never shortens), and is still a quota-busy row
+  const store = primeState(makeStore()), L = load(store), c = clock(T0);
+  const jobs = [{ name: 'door', kind: 'interval', every_min: 1, critical: true, run: async () => ({ ok: false, errors: [{ step: 'job', error: QUOTA_ERR }] }) }];
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('critical job on the quota: cooldown set, calm row, no page', r.body.quota_busy === true && L.alerts.length === 0 && stateOf(store).quota_hot_until === new Date(T0 + 150000).toISOString(), r.body);
+}
+{
+  // happy path reports nothing; a NON-quota failure is still a loud P0 and starts no cooldown
+  const store = primeState(makeStore()), L = load(store), c = clock(T0), log = [];
+  const jobs = mkJobs(log, [['a', 'interval'], ['b', 'interval']]);
+  const r = await L.schedRunNext({}, null, fast(c, { jobs }));
+  t('happy path: no marker, no cooldown field, no telemetry', !stateOf(store).quota_hot_until && !r.body.quota_cooldown && L.telemetry.length === 0, [r.body, L.telemetry]);
+  const store2 = primeState(makeStore()), L2 = load(store2), c2 = clock(T0);
+  const bad = [{ name: 'a', kind: 'interval', every_min: 14, run: async () => ({ ok: false, errors: [{ step: 'job', error: 'boom: not a quota problem' }] }) }];
+  const rb = await L2.schedRunNext({}, null, fast(c2, { jobs: bad }));
+  t('a real (non-quota) failure stays a P0 scheduler_job row + admin alert and starts NO cooldown', L2.telemetry.some(r => r.Job_Type === 'scheduler_job') && L2.alerts.length === 1 && !stateOf(store2).quota_hot_until && !rb.body.quota_busy, [L2.telemetry, L2.alerts]);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
