@@ -18059,6 +18059,7 @@ const SCHED_JOBS = [
   { name: 'str_digest_mon',     kind: 'weekly',   dow: 1, at: '08:00', retry: false, run: (env) => schedRunStrDigest(env) },
   { name: 'str_digest_wed',     kind: 'weekly',   dow: 3, at: '08:00', retry: false, run: (env) => schedRunStrDigest(env) },
   { name: 'str_digest_fri',     kind: 'weekly',   dow: 5, at: '08:00', retry: false, run: (env) => schedRunStrDigest(env) },
+  { name: 'overnight_heartbeat', kind: 'daily',   at: '06:45', retry: false, run: (env) => schedRunOvernightHeartbeat(env) },   // Nov 3 2026: the one morning report (ran / failed / never ran / home PC). Email only, never a text. retry:false - it may already have emailed.
 ];
 
 // Pure. Is this one job due at `now` given its recorded state? Returns { key } or null.
