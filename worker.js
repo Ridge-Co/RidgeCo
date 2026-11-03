@@ -832,6 +832,7 @@ const _hubWorkerCore = {
         if (path === '/selftest/invoice-extract') return await selfTestInvoiceExtract(env, body);
         if (path === '/wo/shared/receipt')        return await woSharedReceipt(env, body);
         if (path === '/wo/shared/note')           return await woSharedNote(env, body);
+        if (path === '/wo/shared/checklist')      return await woSharedChecklist(env, body);
         if (path === '/wo/share-link')            return await woShareLink(env, body);
         if (path === '/wo/share-send')            return await woShareSend(env, body);
         if (path === '/wo/share-revoke')          return await woShareRevoke(env, body);
