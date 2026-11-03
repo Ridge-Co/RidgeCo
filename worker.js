@@ -3170,12 +3170,17 @@ function statementWindowCount(line, receipts, queueRows) {
   const from = d.getTime() - 3 * 86400000, to = d.getTime() + 3 * 86400000;
   const inWin = s => { const t = new Date(String(s || '') + 'T00:00:00Z').getTime(); return !isNaN(t) && t >= from && t <= to; };
   let n = 0;
-  for (const r of (receipts || [])) { if (r.Active === 'FALSE') continue; if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue; if (inWin(r.Date)) n++; }
+  const counted = new Set();
+  for (const r of (receipts || [])) { if (r.Active === 'FALSE') continue; if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue; if (inWin(r.Date)) { n++; counted.add(String(r.ID)); } }
   for (const r of (queueRows || [])) {
     if ((r.Status || 'pending') === 'pending') continue;
     if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
     if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
-    if (inWin(r.Receipt_Date)) n++;
+    if (!inWin(r.Receipt_Date)) continue;
+    // A confirmed queue row and the Receipts row it created are ONE purchase (found on the Nov 3 staging run: every receipt that went
+    // through the reconciler counted twice, so judge() would have been skipped on all of them). Count the pair once.
+    if (r.Confirmed_Receipt_ID && counted.has(String(r.Confirmed_Receipt_ID))) continue;
+    n++;
   }
   return n;
 }
