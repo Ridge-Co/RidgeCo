@@ -6365,8 +6365,8 @@ async function scopeProposalBillMilestones(env, body) {
       catch (e) { return json({ ok: false, error: 'Customer: ' + e.message, warnings }); }
     }
     const invoicePayload = {
-      Line: picked.map(m => ({ DetailType: 'SalesItemLineDetail', Amount: +(+m.Customer_Amount || 0).toFixed(2),
-        Description: (tradeName + ' — ' + (s.Title || 'scope of work') + ' — ' + m.Label + ' (' + addr + ')').slice(0, 4000),
+      Line: picked.map((m, mi) => ({ DetailType: 'SalesItemLineDetail', Amount: +(+m.Customer_Amount || 0).toFixed(2),
+        Description: (tradeName + ' — ' + safeTitle + ' — ' + m.Label + ' (' + addr + ')' + ((workDone.block && mi === picked.length - 1) ? '\n' + workDone.block : '')).slice(0, 4000),
         SalesItemLineDetail: { ItemRef: { value: trade.item }, Qty: 1, UnitPrice: +(+m.Customer_Amount || 0).toFixed(2) } })),
       CustomerRef: { value: customerId }, TxnDate: txnDate,
       CustomerMemo: { value: ('Scope proposal ' + row.Scope_ID + ' — ' + labelList + ' — accepted ' + (row.Signed_Date || '') + ' by ' + row.Signer_Name).slice(0, 1000) },
