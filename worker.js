@@ -33286,8 +33286,12 @@ function buildLaborDescription(billRow, timeEntries, wo) {
     .filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId && laborEntryText(e))
     .sort((a, b) => new Date(a.Start_DateTime || a.Created_Date || 0) - new Date(b.Start_DateTime || b.Created_Date || 0))
     .forEach(e => parts.push(laborEntryText(e)));
-  if (parts.length) return parts.join('; ');
-  return String((wo && (wo.Invoice_Memo || wo.Description)) || '').trim();
+  // Nov 2 2026: the checklist (what was actually done) follows anything the vendor typed, and replaces
+  // the generic work-order text. That fallback text never carries access codes onto an invoice.
+  const doneBlock = workDoneBlock(wo);
+  if (parts.length) return parts.join('; ') + (doneBlock ? '\n' + doneBlock : '');
+  if (doneBlock) return doneBlock;
+  return sanitizeCustomerText((wo && (wo.Invoice_Memo || wo.Description)) || '');
 }
 
 // True when billable hours exist on this job but NONE of them (nor the bill) said anything the
