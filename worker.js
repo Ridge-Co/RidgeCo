@@ -3350,9 +3350,16 @@ async function receiptReconImportStatement(env, body) {
   const nextOffset = offset + toProcess.length;
   const remaining = Math.max(0, workingRows.length - nextOffset);
 
-  let matched_confirmed = 0, flagged_possible = 0, inserted = 0, skipped_invalid = 0;
+  let matched_confirmed = 0, flagged_possible = 0, inserted = 0, skipped_invalid = 0, judge_confirmed = 0, judge_skipped = 0;
   const errors = [];
   const today = new Date().toISOString().split('T')[0];
+  // judge() on 'possible' matches (queue #55). Each judged line costs an AI call plus two telemetry writes (routeAI's and judge's own), and this
+  // route already writes up to 100 rows per call, so judging is capped per call; everything past the cap, and everything judge() cannot be
+  // trusted on this run, goes to the manual queue exactly as before (fail closed).
+  const JUDGE_MAX_PER_CALL = 5;
+  let judged = 0, judgeOff = '';
+  const amountCount = {};
+  for (const l of workingRows) { const a = (Number(l && l.amount) || 0).toFixed(2); amountCount[a] = (amountCount[a] || 0) + 1; }
 
   for (const line of toProcess) {
     const amt = Number(line && line.amount);
