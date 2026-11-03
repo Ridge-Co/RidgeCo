@@ -81,6 +81,15 @@
   .task.pend.mine{border-left-color:var(--ok)}
   .pill.pend{background:var(--warn-bg);color:var(--warn-t);border:1px dashed #d98a00}
   .nb{margin-top:8px;font-size:15px}
+  .inp{display:block;width:100%;min-height:52px;margin-top:6px;padding:10px 12px;border:2px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text);font:inherit;font-size:17px}
+  .inp[hidden]{display:none}
+  .inp:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+  .sup-lbl{display:block;margin-top:12px;font-size:15px;font-weight:600}
+  .sup-row{border-top:1px solid var(--border);padding:12px 0}
+  .sup-row:first-of-type{border-top:0}
+  .sup-row b{font-weight:700}
+  .sup-det summary{cursor:pointer;font-weight:700;min-height:44px;display:flex;align-items:center}
+  .sup-det ul{margin:6px 0 0;padding-left:20px} .sup-det li{margin:6px 0}
   .full{max-width:420px;margin:18vh auto 0;text-align:center;padding:0 24px;font-size:20px;font-weight:600}
 </style>
 </head>
@@ -96,7 +105,8 @@ var WORKER=/^https:\/\/maintenance-hub-staging\.[a-z0-9-]+\.workers\.dev$/.test(
 var K=Q.get('k')||'', OFFER=Q.get('offer')||'', BACKUP=/^\d{4}-\d{2}-\d{2}$/.test(Q.get('backup')||'')?Q.get('backup'):'', HL_DATE=Q.get('date')||'';
 var ET='America/New_York';
 var S={data:null, loading:true, loadErr:'', fatal:false, seq:0, marksInflight:0, scrolled:false,
-  offerRes:{}, offerBusy:{}, offerErr:{}, pendRes:{}, bk:{}, rowMsg:{}, markBusy:{}, confirmKey:'', cancelBusy:''};
+  offerRes:{}, offerBusy:{}, offerErr:{}, pendRes:{}, bk:{}, rowMsg:{}, markBusy:{}, confirmKey:'', cancelBusy:'',
+  sup:{sel:'', text:'', busy:false, msg:null, rowBusy:{}, rowMsg:{}}};
 
 function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 function $(id){return document.getElementById(id);}
@@ -178,7 +188,7 @@ function render(){
     if(!S.loadErr) h+='<div class="card"><p class="muted" style="margin:0">Loading your schedule…</p></div>';
     main.innerHTML=h; return;
   }
-  h+=offersHtml(d)+pendingAsksHtml(d)+backupTopHtml(d)+pendingListHtml(d)+scheduleHtml(d)+calendarHtml(d)+soonHtml(d);
+  h+=offersHtml(d)+pendingAsksHtml(d)+backupTopHtml(d)+pendingListHtml(d)+suppliesHtml(d)+scheduleHtml(d)+calendarHtml(d)+soonHtml(d);
   main.innerHTML=h;
   window.scrollTo(0,y);
   if(fid){var n=main.querySelector('[data-fid="'+fid.replace(/"/g,'')+'"]'); if(n&&!n.disabled) n.focus({preventScroll:true});}
@@ -322,6 +332,70 @@ function calendarHtml(d){
     +(ok?'<a class="btn" href="'+esc(d.ics_url)+'" download="cleaning.ics">Add to my calendar</a><p class="muted">Adds the dates you’re cleaning and any you marked as backup.</p>'
         :'<div class="msg warn">The calendar link isn’t available right now. Try again later.</div>')+'</div>';
 }
+// ── supplies (Nov 3 2026) ───────────────────────────────────
+// Cleaners tell Brett when something is running low. One shared list: "Gina requested AA batteries · Nov 3". Brett marks things ordered; if she still
+// does not have it on a later visit she taps "request again". No lock codes or combinations are ever shown here.
+function supWhereFor(id){var c=arr(((S.data||{}).supplies||{}).catalog).filter(function(x){return String(x.item_id)===String(id);})[0];return c&&c.where?'Kept: '+c.where:'';}
+function suppliesHtml(d){
+  var s=d.supplies; if(!s||typeof s!=='object') return '';
+  if(s.error) return '<section class="card"><div class="eyebrow">Supplies</div><div class="msg err" role="alert">'+esc(s.error)+'</div><button class="btn small" data-act="retry">Try again</button></section>';
+  var u=S.sup, openIds={}; arr(s.open).forEach(function(o){if(o.item_id) openIds[o.item_id]=1;});
+  var h='<section class="card" id="sup"><div class="eyebrow">Supplies</div><h2>Running low on something?</h2>'
+    +'<p class="muted" style="margin:4px 0 0">Pick it and tap Request. Brett is emailed and it goes on his list.</p>'
+    +'<label class="sup-lbl" for="sup-sel">What do you need?</label><select class="inp" id="sup-sel" data-fid="sup-sel"><option value="">Choose…</option>';
+  var cat='';
+  arr(s.catalog).forEach(function(c){
+    if(c.category!==cat){if(cat) h+='</optgroup>'; h+='<optgroup label="'+esc(c.category)+'">'; cat=c.category;}
+    h+='<option value="'+esc(c.item_id)+'"'+(u.sel===c.item_id?' selected':'')+'>'+esc(c.name)+(openIds[c.item_id]?' (already requested)':'')+'</option>';
+  });
+  if(cat) h+='</optgroup>';
+  h+='<option value="__other"'+(u.sel==='__other'?' selected':'')+'>Something else…</option></select>'
+    +'<div class="muted" id="sup-where" style="margin-top:6px">'+esc(u.sel&&u.sel!=='__other'?supWhereFor(u.sel):'')+'</div>'
+    +'<input class="inp" id="sup-text" data-fid="sup-text" maxlength="80" placeholder="Type what you need" aria-label="What do you need?" value="'+esc(u.text)+'"'+(u.sel==='__other'?'':' hidden')+'>'
+    +(u.msg?'<div class="msg '+esc(u.msg.kind)+'" role="'+(u.msg.kind==='err'?'alert':'status')+'">'+esc(u.msg.text)+'</div>':'')
+    +'<button class="btn" data-act="sup-req" data-fid="sup-req"'+(u.busy?' disabled':'')+'>'+(u.busy?'Sending…':'Request')+'</button></section>';
+  var open=arr(s.open);
+  h+='<section class="card"><div class="eyebrow">On Brett’s list</div>';
+  if(!open.length) h+='<p class="muted" style="margin:0">Nothing is waiting to be ordered.</p>';
+  open.forEach(function(o){
+    var again=o.times>1?'<div class="muted">Asked again '+esc(o.last_label)+(o.last_by?' by '+esc(o.last_by):'')+' ('+esc(o.times)+' times)</div>':'', rm=u.rowMsg[o.id], busy=!!u.rowBusy[o.id];
+    h+='<div class="sup-row"><div><b>'+esc(o.by||'Someone')+'</b> requested <b>'+esc(o.text)+'</b></div><div class="muted">'+esc(o.label)+'</div>'+again
+      +(rm?'<div class="msg '+esc(rm.kind)+'" role="'+(rm.kind==='err'?'alert':'status')+'">'+esc(rm.text)+'</div>':'')
+      +(o.can_again?'<button class="btn ghost small" data-act="sup-again" data-id="'+esc(o.id)+'" data-fid="sa|'+esc(o.id)+'"'+(busy?' disabled':'')+'>'+(busy?'Sending…':'Still need it — ask again')+'</button>':'<div class="muted">Asked today</div>')+'</div>';
+  });
+  h+='</section>';
+  var ord=arr(s.ordered);
+  if(ord.length){
+    h+='<section class="card"><div class="eyebrow">Recently ordered</div>';
+    ord.forEach(function(o){
+      var rm=u.rowMsg[o.id], busy=!!u.rowBusy[o.id];
+      h+='<div class="sup-row"><div><b>'+esc(o.text)+'</b> — ordered '+esc(o.ordered_label)+'</div>'
+        +(rm?'<div class="msg '+esc(rm.kind)+'" role="'+(rm.kind==='err'?'alert':'status')+'">'+esc(rm.text)+'</div>':'')
+        +'<button class="btn ghost small" data-act="sup-again" data-id="'+esc(o.id)+'" data-fid="sa|'+esc(o.id)+'"'+(busy?' disabled':'')+'>'+(busy?'Sending…':'Still don’t have it — request again')+'</button></div>';
+    });
+    h+='</section>';
+  }
+  var pl=arr(s.places);
+  if(pl.length) h+='<details class="card sup-det"><summary>Where things are kept</summary><ul>'+pl.map(function(p){return '<li><b>'+esc(p.name)+'</b>'+(p.where?' — '+esc(p.where):'')+(p.holds?'<div class="muted">'+esc(p.holds)+'</div>':'')+'</li>';}).join('')+'</ul></details>';
+  return h;
+}
+function supDone(res,rowId){
+  if(res&&res.supplies&&S.data) S.data.supplies=res.supplies;
+  var kind=(res&&arr(res.warnings).length)?'warn':'good', text=(res&&res.message)||'Saved.';
+  if(res&&arr(res.warnings).length) text+=' '+res.warnings.join(' ');
+  if(rowId){S.sup.rowMsg[rowId]={kind:kind,text:text};} else {S.sup.msg={kind:kind,text:text};S.sup.sel='';S.sup.text='';}
+}
+function onSupRequest(){
+  var u=S.sup, body={k:K};
+  if(!u.sel){u.msg={kind:'err',text:'Choose what you need first.'};render();return;}
+  if(u.sel==='__other'){var t=String(u.text||'').trim(); if(t.length<2){u.msg={kind:'err',text:'Type what you need.'};render();return;} body.text=t;} else body.item_id=u.sel;
+  u.busy=true; u.msg=null; render();
+  api('POST','/str/c/supply',body).then(function(res){u.busy=false;supDone(res,'');render();},function(e){u.busy=false;u.msg={kind:'err',text:failText(e,'Couldn’t send that')};render();});
+}
+function onSupAgain(id){
+  var u=S.sup; u.rowBusy[id]=true; delete u.rowMsg[id]; render();
+  api('POST','/str/c/supply',{k:K,request_id:id}).then(function(res){delete u.rowBusy[id];supDone(res,id);render();},function(e){delete u.rowBusy[id];u.rowMsg[id]={kind:'err',text:failText(e,'Couldn’t send that')};render();});
+}
 function soonHtml(d){
   var l=arr(d.coming_soon); if(!l.length) return '';
   return '<h3 class="month">Coming soon</h3><div class="soon" aria-label="Coming soon">'+l.map(function(x){
@@ -415,7 +489,16 @@ $('main').addEventListener('click',function(ev){
   else if(a==='cancel-ask'){S.confirmKey=b.getAttribute('data-key');setRow(S.confirmKey,[]);render();}
   else if(a==='cancel-no'){S.confirmKey='';render();}
   else if(a==='cancel-yes') onCancel(b.getAttribute('data-key'));
+  else if(a==='sup-req') onSupRequest();
+  else if(a==='sup-again') onSupAgain(b.getAttribute('data-id'));
 });
+$('main').addEventListener('change',function(ev){
+  var t=ev.target; if(!t||t.id!=='sup-sel') return;
+  S.sup.sel=t.value; S.sup.msg=null;
+  var w=$('sup-where'), x=$('sup-text'); if(w) w.textContent=(t.value&&t.value!=='__other')?supWhereFor(t.value):'';
+  if(x){x.hidden=t.value!=='__other'; if(!x.hidden) x.focus();}
+});
+$('main').addEventListener('input',function(ev){var t=ev.target; if(t&&t.id==='sup-text') S.sup.text=t.value;});
 
 if(!K){S.fatal=true;render();}
 else loadPage();

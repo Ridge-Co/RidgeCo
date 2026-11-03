@@ -179,6 +179,13 @@
     <div id="loaderr"></div>
     <div id="alerts"></div>
 
+    <details class="sec" id="sec-sup" open>
+      <summary>Supplies needed <span class="meta" id="m-sup"></span></summary>
+      <div class="body">
+        <p class="muted">What the cleaners say is running low. Mark an item ordered once you have ordered it; if a cleaner still lacks it on a later visit she can ask again, and it shows here with how many times.</p>
+        <div id="sup-list"><p class="muted">Loading…</p></div>
+      </div>
+    </details>
     <details class="sec" id="sec-pend" open>
       <summary>Pending (not booked) <span class="meta" id="m-pend"></span></summary>
       <div class="body">
@@ -359,7 +366,7 @@ function loadState(){
     if(e.code === 'unauthorized'){ authFailed(); return; }
     var stale = S ? ' What you see below may be out of date.' : '';
     $('loaderr').innerHTML = '<div class="msg err" role="alert"><b>Could not load the latest information.</b>' + esc(errText(e)) + esc(stale) + '<br><button class="btn" data-act="retry">Try again</button></div>';
-    if(!S){ $('cover').className = 'cover bad'; $('cover').textContent = "Can't load - coverage is NOT being shown"; ['pend-list','turn-list','clean-list','sw-body','log-list'].forEach(function(id){ $(id).innerHTML = '<p class="muted">Not loaded.</p>'; }); }
+    if(!S){ $('cover').className = 'cover bad'; $('cover').textContent = "Can't load - coverage is NOT being shown"; ['sup-list','pend-list','turn-list','clean-list','sw-body','log-list'].forEach(function(id){ $(id).innerHTML = '<p class="muted">Not loaded.</p>'; }); }
   }).then(function(){ loading = false; });
 }
 function safeRender(){
@@ -367,7 +374,7 @@ function safeRender(){
   catch(e){ $('loaderr').innerHTML = '<div class="msg err" role="alert"><b>This page hit a problem showing the information.</b>' + esc(errText(e)) + '<br><button class="btn" data-act="retry">Try again</button></div>'; }
 }
 function render(){
-  renderTop(); renderAlerts(); renderPending(); renderTurnovers(); renderCleaners(); renderSwitches(); renderLog();
+  renderTop(); renderAlerts(); renderSupplies(); renderPending(); renderTurnovers(); renderCleaners(); renderSwitches(); renderLog();
   $('soon').textContent = (S.coming_soon && S.coming_soon.length) ? 'Coming soon: ' + S.coming_soon.join(' · ') : '';
 }
 
@@ -1173,6 +1180,28 @@ function digestDry(btn){
   }); });
 }
 
+/* ---------- supplies needed (Nov 3 2026) ---------- */
+function renderSupplies(){
+  var sp = S.supplies, el = $('sup-list');
+  if(!sp){ $('m-sup').textContent = ''; el.innerHTML = '<div class="msg err" role="alert">This server did not send the supply list. Reload the page.</div>'; return; }
+  if(sp.error){ $('m-sup').textContent = ''; el.innerHTML = '<div class="msg err" role="alert"><b>Could not load the supply list.</b>' + esc(sp.error) + '</div>'; return; }
+  var open = sp.open || [], ord = sp.ordered || [];
+  $('m-sup').textContent = open.length ? open.length + ' to order' : 'nothing waiting';
+  var h = '';
+  if(!open.length) h += '<p class="muted">Nothing is waiting to be ordered.</p>';
+  open.forEach(function(o){
+    h += '<div class="li"><b>' + esc(o.by || 'A cleaner') + ' requested ' + esc(o.text) + '</b> <span class="muted">' + esc(fmtDay(o.date)) + '</span>'
+      + (o.times > 1 ? '<div class="msg warn" style="margin-top:6px"><b>Asked ' + esc(o.times) + ' times.</b>Last asked ' + esc(fmtDay(o.last_date)) + (o.last_by ? ' by ' + esc(o.last_by) : '') + '. Still not marked ordered.</div>' : '')
+      + (o.note ? '<div class="muted">' + esc(o.note) + '</div>' : '')
+      + '<input id="sref-' + esc(o.id) + '" type="text" maxlength="120" placeholder="Where / order # (optional)" aria-label="Order reference for ' + esc(o.text) + '" style="width:100%;margin-top:8px;min-height:44px;font-size:16px;padding:8px 10px;border:1px solid var(--border,#ccc);border-radius:10px">'
+      + '<button class="btn sm primary" style="margin-top:8px" data-act="sup-ordered" data-id="' + esc(o.id) + '">Mark ordered</button></div>';
+  });
+  if(ord.length) h += '<h4>Ordered in the last 14 days</h4>' + ord.map(function(o){
+    return '<div class="li">' + esc(o.text) + ' <span class="muted">requested by ' + esc(o.by || '?') + ' ' + esc(fmtDay(o.date)) + ', ordered ' + esc(fmtDay(o.ordered_date)) + (o.order_ref ? ' (' + esc(o.order_ref) + ')' : '') + '</span></div>';
+  }).join('');
+  el.innerHTML = h;
+}
+
 /* ---------- log ---------- */
 function renderLog(){
   var l = S.log || [];
@@ -1192,6 +1221,10 @@ document.addEventListener('click', function(ev){
   else if(a === 'refresh' || a === 'retry') loadState();
   else if(a === 'flash-x') $('flash').innerHTML = '';
   else if(a === 'filter'){ filterMode = el.getAttribute('data-v'); if(S) renderTurnovers(); }
+  else if(a === 'sup-ordered'){
+    var ref = $('sref-' + id);
+    busy(el, 'Saving…', api('POST', '/str/admin/supply/ordered', { request_id: id, order_ref: ref ? ref.value : '' })).then(function(r){ toast(r.message || 'Marked ordered'); loadState(); }, function(e){ if(e.code === 'unauthorized') authFailed(); else flash('Could not mark that ordered: ' + errText(e)); });
+  }
   else if(a === 'ack'){
     busy(el, 'Working…', api('POST', '/str/admin/alert/ack', { id: id })).then(function(){ toast('Acknowledged'); loadState(); }, function(e){ if(e.code === 'unauthorized') authFailed(); else flash('Could not acknowledge the alert: ' + errText(e)); });
   }

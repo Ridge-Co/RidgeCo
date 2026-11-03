@@ -277,7 +277,7 @@ const _hubWorkerCore = {
       '/delivery/rsvp',
       // STR cleaner page (Oct 14 2026): public at the gate, but every handler self-verifies the cleaner's own random Link_Token
       // (STR_Cleaners) before reading or writing anything, and never returns another cleaner's phone/email.
-      '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/ics','/fi/report','/fi/photo/view',
+      '/str/c/page','/str/c/mark','/str/c/offer','/str/c/cancel','/str/c/supply','/str/c/ics','/fi/report','/fi/photo/view',
       // Failure reports from pages and other apps (Oct 16 2026): public so a static page can call it; an anonymous caller can only ever create a capped P2 event (never a text).
       '/failure/report'];
     if (!PUBLIC_PATHS.includes(path)) {
@@ -1240,6 +1240,8 @@ const _hubWorkerCore = {
         if (path === '/str/c/mark')                return await strCleanerMark(env, body);
         if (path === '/str/c/offer')               return await strOfferRespond(env, body);
         if (path === '/str/c/cancel')              return await strCleanerCancel(env, body);
+        if (path === '/str/c/supply')              return await strSupplyRequest(env, body);
+        if (path === '/str/admin/supply/ordered')  return await strAdminSupplyOrdered(env, body);
         if (path === '/str/admin/cleaner/save')    return await strAdminCleanerSave(env, body);
         if (path === '/str/admin/cleaner/new-link') return await strAdminNewLink(env, body);
         if (path === '/str/admin/config')          return await strAdminConfig(env, body);
@@ -28266,9 +28268,10 @@ async function hubTestWriteAllowed(env, path, body) {
     return { ok: true };
   }
   if (path === '/str/admin/cleaner/new-link') { const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => String(x.ID) === String(body && body.id)); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
-  if (path === '/str/c/mark' || path === '/str/c/offer' || path === '/str/c/cancel') { const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => x.Link_Token && x.Link_Token === String((body && body.k) || '')); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
+  if (path === '/str/c/mark' || path === '/str/c/offer' || path === '/str/c/cancel' || path === '/str/c/supply') { const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => x.Link_Token && x.Link_Token === String((body && body.k) || '')); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
   if (path === '/str/admin/assign') { if (!body || !body.cleaner_id) return true; const _c = (await fetchTab(env, 'STR_Cleaners')).find(x => String(x.ID) === String(body.cleaner_id)); return !!_c && String(_c.Name || '').startsWith('TEST-'); }
   // Admin swap / bulk (Oct 20 2026): a preview writes nothing; a real apply may only name a TEST- cleaner.
+  if (path === '/str/admin/supply/ordered') { const _r = (await fetchTab(env, 'Supply_Requests')).find(x => String(x.Request_ID) === String((body && body.request_id) || '')); return !!_r && String(_r.Requested_By_Name || '').startsWith('TEST-'); }
   if (path === '/str/admin/change/preview') return true;
   if (path === '/str/admin/pending/preview') return true;
   // Pending cleaning (Oct 20 2026): the staging token may only create an inquiry whose note starts with TEST-, and only change an inquiry that has such a note.
@@ -40120,7 +40123,7 @@ function strFindCleaner(ctx, k) {
   return c && String(c.Active).toUpperCase() !== 'FALSE' ? c : null;
 }
 const STR_BAD_LINK = () => json({ ok: false, error: 'bad_link', message: 'This link is not valid any more. Ask Brett for a new one.' }, 404);
-const STR_COMING_SOON = ['Supplies requests', 'Cleaning checklists', 'Recurring tasks', 'Guest-condition report'];
+const STR_COMING_SOON = ['Cleaning checklists', 'Recurring tasks', 'Guest-condition report'];
 
 // GET /str/c/page?k=TOKEN[&offer=ID][&backup=YYYY-MM-DD]  (public, token-gated)
 async function strCleanerPage(env, url) {
@@ -40137,7 +40140,7 @@ async function strCleanerPage(env, url) {
     }).filter(Boolean);
     const bd = String(url.searchParams.get('backup') || ''), bt = /^\d{4}-\d{2}-\d{2}$/.test(bd) ? views.find(v => v.date === bd && v.coveredAny && String(v.assigned) !== c.ID) : null;
     const pending = strPendingForCleaner(ctx, c, today);
-    return json({ ok: true, cleaner: { name: c.Name, first: strFirst(c), language: c.Language }, property: ctx.S.label, today, pending, server_time: new Date(ctx.now).toISOString(), tasks, offers, backup_prompt: bt ? { date: bt.date, label: strFmtDate(bt.date, true) } : null, ics_url: `${new URL(url).origin}/str/c/ics?k=${encodeURIComponent(c.Token)}`, coming_soon: STR_COMING_SOON });
+    return json({ ok: true, cleaner: { name: c.Name, first: strFirst(c), language: c.Language }, property: ctx.S.label, today, pending, server_time: new Date(ctx.now).toISOString(), tasks, offers, backup_prompt: bt ? { date: bt.date, label: strFmtDate(bt.date, true) } : null, ics_url: `${new URL(url).origin}/str/c/ics?k=${encodeURIComponent(c.Token)}`, supplies: await strSupBlock(env, ctx.now, false), coming_soon: STR_COMING_SOON });
   } catch (e) { return await strHandleErr(env, e, 'cleaner page'); }
 }
 
@@ -40276,8 +40279,8 @@ async function strAdminState(env) {
       backups: strBackupPicture(v, act, ctx.st.marks, v.status === 'covered' ? v.assigned : ''), uncovered_alert: !v.coveredAny && strDaysBetween(today, v.date) <= ctx.S.alertDays }));
     if (feed) for (const t of strBuildTasks(feed.stays, today, ctx.S)) if (!stored.has(t.key)) tasks.push({ key: t.key, kind: t.kind, date: t.date, label: strFmtDate(t.date), days_out: strDaysBetween(today, t.date), next_arrival: t.next || '', next_label: t.next ? strNextDate(t.date, t.next) : '', guests: t.guests, status: 'new', covered: false, via: '', assigned_id: '', assigned_name: '', note: 'not picked up by the scheduler yet', offers: [], backups: { can: [], out: [], unknown: [] }, uncovered_alert: false });
     tasks.sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
-    const log = (await fetchTab(env, 'STR_Log')).slice(-40).reverse();
-    return json({ ok: true, build: BUILD_VERSION, today, settings: strSettingsOut(ctx.cfg), feed_error: feedError, feed_ok: !!feed, pending: strPendingBoard(ctx, act), cleaners: ctx.st.cleaners.map(c => strCleanerOut(c, ctx.st.pool)).sort((a, b) => (a.priority || 999) - (b.priority || 999)), tasks, alerts: ctx.st.alerts.filter(a => !a.Resolved_At && a.Kind !== 'info').map(a => ({ id: a.ID, kind: a.Kind, severity: a.Severity, message: a.Message, sent: parseInt(a.Send_Count, 10) || 0, last_sent: a.Last_Sent_At, acked: !!a.Acked_At, created: a.Created_At })), log: log.map(l => ({ time: l.Timestamp, task: l.Task_Key, cleaner: (ctx.st.cmap[l.Cleaner_ID] || {}).Name || '', event: l.Event, detail: l.Detail })), unfinished_changes: ctx.st.changes.filter(c => c.Status === 'applying').map(c => ({ plan_id: c.Plan_ID, summary: c.Summary, stage: c.Stage, started: c.Created_At })), parked_texts: ctx.st.outbox.filter(o => o.Status === 'parked' || o.Status === 'sending').map(o => ({ id: o.ID, cleaner: (ctx.st.cmap[o.Cleaner_ID] || {}).Name || o.Cleaner_ID, kind: o.Kind, not_before: o.Not_Before, status: o.Status, dates: strOutboxDates(o) })), coming_soon: STR_COMING_SOON });
+    const log = (await fetchTab(env, 'STR_Log')).slice(-40).reverse(), supplies = await strSupBlock(env, ctx.now, true);
+    return json({ ok: true, build: BUILD_VERSION, today, supplies, settings: strSettingsOut(ctx.cfg), feed_error: feedError, feed_ok: !!feed, pending: strPendingBoard(ctx, act), cleaners: ctx.st.cleaners.map(c => strCleanerOut(c, ctx.st.pool)).sort((a, b) => (a.priority || 999) - (b.priority || 999)), tasks, alerts: ctx.st.alerts.filter(a => !a.Resolved_At && a.Kind !== 'info').map(a => ({ id: a.ID, kind: a.Kind, severity: a.Severity, message: a.Message, sent: parseInt(a.Send_Count, 10) || 0, last_sent: a.Last_Sent_At, acked: !!a.Acked_At, created: a.Created_At })), log: log.map(l => ({ time: l.Timestamp, task: l.Task_Key, cleaner: (ctx.st.cmap[l.Cleaner_ID] || {}).Name || '', event: l.Event, detail: l.Detail })), unfinished_changes: ctx.st.changes.filter(c => c.Status === 'applying').map(c => ({ plan_id: c.Plan_ID, summary: c.Summary, stage: c.Stage, started: c.Created_At })), parked_texts: ctx.st.outbox.filter(o => o.Status === 'parked' || o.Status === 'sending').map(o => ({ id: o.ID, cleaner: (ctx.st.cmap[o.Cleaner_ID] || {}).Name || o.Cleaner_ID, kind: o.Kind, not_before: o.Not_Before, status: o.Status, dates: strOutboxDates(o) })), coming_soon: STR_COMING_SOON });
   } catch (e) { return await strHandleErr(env, e, 'admin state'); }
 }
 function strPhone10(p) { const n = normalizePhone(p); return /^\+1\d{10}$/.test(n) ? n : ''; }
@@ -40438,6 +40441,147 @@ async function strAdminAlertAck(env, body) {
     await strSetRow(env, 'STR_Alerts', a.ID, { Acked_At: new Date(ctx.now).toISOString() }); await strLog(ctx, a.Task_Key, '', 'alert_acked', a.Alert_Key);
     return json({ ok: true });
   } catch (e) { return await strHandleErr(env, e, 'ack alert'); }
+}
+// ── Cleaner supply requests (Nov 3 2026, Brett) ─────────────────────────────────────────────────────────────────────────────────────────
+// A cleaner taps "request" when something is running low. Each item has ONE open request in Supply_Requests (Status 'requested'); asking again on a
+// later day updates that same row (Times_Requested + Last_Requested_*), so Brett sees how long she has been waiting. Brett marks it 'ordered' on the
+// admin page (Resolved_At / Resolved_By / Order_Ref). There is NO automatic ordering: this is a list, plus an email to Brett per request.
+// Where an item is kept comes from Supply_Items (Stored_Box_No / Stored_Location_ID) + Cabin_Boxes + Cabin_Locations (the sheet mirror of Brett's Drive
+// "Supplies Boxes and Spice Inventory"). Lock codes / combinations are NEVER put on this page (the token link is public).
+const STR_SUP_COLS = ['Request_ID', 'Created_At', 'Property_Key', 'Item_ID', 'Item_Text', 'Qty', 'Requested_By_Cleaner_ID', 'Turnover_Task_Key', 'Status', 'Resolved_At', 'Resolved_By', 'Order_Ref', 'Source', 'Note', 'Requested_By_Name', 'Last_Requested_At', 'Last_Requested_By_Name', 'Times_Requested'];
+const STR_SUP_ORDERED_DAYS = 14, STR_SUP_RELIST_DAYS = 30, STR_SUP_MAX_OPEN = 80;
+let __strSupReady = false;
+async function strSupEnsure(env) {
+  if (__strSupReady) return;
+  const meta = await sheetsRequest(env, 'GET', '?fields=sheets.properties.title');
+  const titles = (meta.sheets || []).map(s => s.properties && s.properties.title).filter(Boolean);
+  if (!titles.includes('Supply_Requests')) await sheetsRequest(env, 'POST', ':batchUpdate', { requests: [{ addSheet: { properties: { title: 'Supply_Requests' } } }] });
+  await ensureColumns(env, 'Supply_Requests', STR_SUP_COLS);
+  __strSupReady = true;
+}
+async function strSupLoad(env, fresh) {
+  await strSupEnsure(env);
+  if (fresh) invalidateTabCache('Supply_Requests');
+  const [reqs, items, locs, boxes] = await fetchTabs(env, ['Supply_Requests', 'Supply_Items', 'Cabin_Locations', 'Cabin_Boxes']);
+  return { reqs: reqs.filter(r => String(r.Request_ID || '').trim() && (r.Property_Key || STR_PROP) === STR_PROP), items, locs, boxes };
+}
+function strSupDay(iso) { const t = Date.parse(iso || ''); return Number.isFinite(t) ? inspEtDate(t) : ''; }
+function strSupNorm(t) { return String(t || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+function strSupWhere(it, locsById, boxesByNo) {
+  const b = boxesByNo[String(it.Stored_Box_No || '').trim()], l = locsById[String(it.Stored_Location_ID || '').trim()];
+  if (b) return `Box ${b.Box_No}` + (b.Room ? ` (${b.Room})` : '');
+  if (l) return l.Name + (l.Where ? ' - ' + l.Where : '');
+  return '';
+}
+function strSupReqOut(r, today) {
+  const date = strSupDay(r.Created_At), last = strSupDay(r.Last_Requested_At) || date, times = Math.max(1, parseInt(r.Times_Requested, 10) || 1);
+  return { id: String(r.Request_ID), item_id: r.Item_ID || '', text: r.Item_Text || '', by: r.Requested_By_Name || '', date, label: strFmtDate(date), times, last_date: last, last_label: strFmtDate(last), last_by: r.Last_Requested_By_Name || r.Requested_By_Name || '', can_again: last < today, note: r.Note || '', status: r.Status || '' };
+}
+// forAdmin=true adds the order fields; false adds the catalog + "where things are kept" for the cleaner page. Never throws: a failure comes back as {error} (and Brett is told).
+async function strSupBlock(env, now, forAdmin) {
+  try {
+    const d = await strSupLoad(env, false), today = inspEtDate(now);
+    const open = d.reqs.filter(r => r.Status === 'requested').map(r => strSupReqOut(r, today)).sort((a, b) => a.date.localeCompare(b.date) || (parseInt(a.id, 10) - parseInt(b.id, 10)));
+    const cutoff = inspAddDays(today, -STR_SUP_ORDERED_DAYS);
+    const ordered = d.reqs.filter(r => r.Status === 'ordered' && strSupDay(r.Resolved_At) >= cutoff).map(r => Object.assign(strSupReqOut(r, today), { ordered_date: strSupDay(r.Resolved_At), ordered_label: strFmtDate(strSupDay(r.Resolved_At)), order_ref: r.Order_Ref || '' })).sort((a, b) => b.ordered_date.localeCompare(a.ordered_date));
+    if (forAdmin) return { open, ordered };
+    const locsById = {}, boxesByNo = {};
+    for (const l of d.locs) if (strBool(l.Active, true) && strBool(l.Cleaner_Visible, false)) locsById[String(l.Location_ID)] = l;
+    for (const b of d.boxes) if (!b.Property_Key || b.Property_Key === STR_PROP) boxesByNo[String(b.Box_No)] = b;
+    const catalog = d.items.filter(i => strBool(i.Active, true) && String(i.Item_Name || '').trim()).map(i => ({ item_id: i.Item_ID, name: String(i.Item_Name).trim(), category: i.Category || 'Other', where: strSupWhere(i, locsById, boxesByNo) }))
+      .sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+    if (!catalog.length) throw strErr('supply_list_empty', 'Supply_Items has no active items (or the tab is missing)');
+    // Where things are kept: names and places only. Lock codes / combinations (Lock_Code, Combination) are deliberately never read here.
+    const places = Object.values(locsById).map(l => ({ name: l.Name, where: l.Where || '', holds: l.Contents || l.Function || '' }))
+      .concat(Object.values(boxesByNo).sort((a, b) => parseInt(a.Box_No, 10) - parseInt(b.Box_No, 10)).map(b => ({ name: `Box ${b.Box_No}` + (b.Room ? ` (${b.Room})` : ''), where: '', holds: b.Contents || '' })));
+    return { open, ordered, catalog, places };
+  } catch (e) {
+    if (sheetsQuotaBusyError(e)) return { error: 'The supply list is busy for a moment. Reload in a minute.' };
+    await strSystemAlert(env, 'supplies_block', `The supply list could not be loaded: ${strErrText(e)}`);
+    return { error: 'The supply list could not be loaded. Brett has been told.' };
+  }
+}
+// Append one Supply_Requests row (same id-race guard as strAddRows; the tab's id column is Request_ID) and re-read to prove it landed.
+async function strSupAdd(env, fields) {
+  invalidateTabCache('Supply_Requests');
+  const data = await sheetsRequest(env, 'GET', '/values/Supply_Requests'), rows = data.values || [[]], headers = rows[0] || [];
+  if (!headers.length) throw strErr('sheet_write', 'Tab Supply_Requests has no header row');
+  const idc = headers.indexOf('Request_ID'); if (idc < 0) throw strErr('sheet_write', 'Supply_Requests has no Request_ID column');
+  const next = rows.slice(1).reduce((m, r) => Math.max(m, parseInt((r && r[idc]) || '0', 10) || 0), 0), ids = [String(next + 1)];
+  const vals = [headers.map(h => h === 'Request_ID' ? ids[0] : (fields[h] !== undefined && fields[h] !== null ? String(fields[h]) : ''))];
+  const resp = await sheetsRequest(env, 'POST', '/values/Supply_Requests:append?valueInputOption=RAW', { values: vals });
+  try { const g = await guardAppendedIds(env, 'Supply_Requests', resp, rows.length, idc, ids); ids[0] = g.ids[0]; }
+  catch (e) { throw strErr('write_not_landed', `A new supply request may share its id with another row: ${strErrText(e)}`); }
+  invalidateTabCache('Supply_Requests');
+  const back = (await fetchTab(env, 'Supply_Requests')).find(r => String(r.Request_ID) === ids[0]);
+  if (!back) throw strErr('write_not_landed', `The new supply request (#${ids[0]}) was not found after saving`);
+  return back;
+}
+async function strSupSet(env, id, fields) {
+  const r = await updateRow(env, 'Supply_Requests', id, fields); let j = null;
+  try { j = await r.json(); } catch (e) { throw strErr('sheet_write', `Could not update supply request #${id}: the save returned an unreadable answer (${strErrText(e)})`); }
+  if (!r.ok || !j || !j.success) throw strErr('sheet_write', `Could not update supply request #${id}: ${(j && j.error) || r.status}`);
+  invalidateTabCache('Supply_Requests');
+  const row = (await fetchTab(env, 'Supply_Requests')).find(x => String(x.Request_ID) === String(id));
+  if (!row) throw strErr('write_not_landed', `Supply request #${id} vanished after saving`);
+  for (const [k, v] of Object.entries(fields)) if (String(row[k] == null ? '' : row[k]) !== String(v == null ? '' : v)) throw strErr('write_not_landed', `Supply request #${id}: ${k} did not save`);
+  return row;
+}
+// POST /str/c/supply {k, item_id | text | request_id}  (public, token-gated). Request an item, or ask again for one still on Brett's list.
+async function strSupplyRequest(env, body) {
+  try {
+    body = body || {};
+    const ctx = await strHandlerCtx(env), c = strFindCleaner(ctx, body.k); if (!c) return STR_BAD_LINK();
+    const d = await strSupLoad(env, true), today = inspEtDate(ctx.now), nowIso = new Date(ctx.now).toISOString(), who = strFirst(c) || c.Name;
+    let itemId = '', text = '';
+    if (body.request_id) { const r0 = d.reqs.find(r => String(r.Request_ID) === String(body.request_id)); if (!r0) return json({ ok: false, error: 'request_not_found', message: 'That request was not found.' }, 404); itemId = r0.Item_ID || ''; text = r0.Item_Text || ''; }
+    else if (body.item_id) {
+      const it = d.items.find(i => String(i.Item_ID) === String(body.item_id) && strBool(i.Active, true));
+      if (!it) return json({ ok: false, error: 'item_not_found', message: 'That item is not on the list any more. Pick another, or choose "Something else".' }, 404);
+      itemId = it.Item_ID; text = String(it.Item_Name).trim();
+    } else {
+      text = String(body.text == null ? '' : body.text).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+      if (text.length < 2 || text.length > 80) return json({ ok: false, error: 'bad_text', message: 'Type what you need (2 to 80 letters).' }, 400);
+      const known = d.items.find(i => strBool(i.Active, true) && strSupNorm(i.Item_Name) === strSupNorm(text)); if (known) { itemId = known.Item_ID; text = String(known.Item_Name).trim(); }
+    }
+    const same = r => (itemId ? String(r.Item_ID) === String(itemId) : (!r.Item_ID && strSupNorm(r.Item_Text) === strSupNorm(text)));
+    const open = d.reqs.find(r => r.Status === 'requested' && same(r)), warnings = []; let row, result, message;
+    if (open) {
+      const o = strSupReqOut(open, today);
+      if (!o.can_again) return json({ ok: true, result: 'already_today', message: `${text} is already on Brett's list for today (requested by ${o.last_by || o.by}).`, supplies: await strSupBlock(env, ctx.now, false) });
+      row = await strSupSet(env, open.Request_ID, { Last_Requested_At: nowIso, Last_Requested_By_Name: who, Times_Requested: String(o.times + 1) });
+      result = 're_requested'; message = `Asked again. Brett has been told you still need ${text}.`;
+      await strLog(ctx, '', c.ID, 'supply_again', `${text} (#${open.Request_ID}, ask ${o.times + 1})`);
+    } else {
+      if (d.reqs.filter(r => r.Status === 'requested').length >= STR_SUP_MAX_OPEN) return json({ ok: false, error: 'list_full', message: "Brett's list is full right now. Text him instead." }, 429);
+      const prev = d.reqs.filter(r => r.Status === 'ordered' && same(r) && strSupDay(r.Resolved_At) >= inspAddDays(today, -STR_SUP_RELIST_DAYS)).sort((a, b) => String(b.Resolved_At).localeCompare(String(a.Resolved_At)))[0];
+      row = await strSupAdd(env, { Created_At: nowIso, Property_Key: STR_PROP, Item_ID: itemId, Item_Text: text, Qty: '', Requested_By_Cleaner_ID: c.ID, Turnover_Task_Key: '', Status: 'requested', Source: 'cleaner page', Note: prev ? `Requested again after it was marked ordered on ${strSupDay(prev.Resolved_At)}` : '', Requested_By_Name: who, Last_Requested_At: nowIso, Last_Requested_By_Name: who, Times_Requested: '1' });
+      result = 'requested'; message = `Requested. Brett has been told you need ${text}.`;
+      await strLog(ctx, '', c.ID, 'supply_requested', `${text} (#${row.Request_ID})`);
+    }
+    // Tell Brett (email only: no text per request). The saved request is the record; a failed email is loud (system alert) and shown to the cleaner as a warning.
+    try {
+      const all = (await fetchTab(env, 'Supply_Requests')).filter(r => r.Status === 'requested' && (r.Property_Key || STR_PROP) === STR_PROP).map(r => strSupReqOut(r, today));
+      const head = result === 're_requested' ? `${who} asked again for ${text} (first requested ${strSupDay(row.Created_At)}, asked ${row.Times_Requested} times). It is still not marked ordered.` : `${who} requested ${text} (${strFmtDate(today)}).`;
+      const lines = [head, `On your supply list now (${all.length}): ` + all.map(o => `${o.text} - ${o.by}, ${o.label}` + (o.times > 1 ? ` (asked ${o.times}x)` : '')).join('; ') + '.', 'Mark items ordered on the cleaning scheduler page (Supplies needed).'];
+      const res = await strSendBrett(env, ctx.cfg, `Supplies: ${who} ${result === 're_requested' ? 'still needs' : 'requested'} ${text}`, head, lines, false);
+      if (!res.ok) { warnings.push("Saved, but Brett's email did not go out. He will see it on his list."); await strSystemAlert(env, 'supply_notify', `Supply request #${row.Request_ID} (${text}) saved but Brett was not emailed: ${res.log.join('; ')}`); }
+    } catch (e) { warnings.push("Saved, but Brett's email did not go out. He will see it on his list."); await strSystemAlert(env, 'supply_notify', `Supply request #${row.Request_ID} saved but the email step failed: ${strErrText(e)}`); }
+    return json({ ok: true, result, message, warnings, supplies: await strSupBlock(env, ctx.now, false) });
+  } catch (e) { return await strHandleErr(env, e, 'supply request'); }
+}
+// POST /str/admin/supply/ordered {request_id, order_ref?}  Brett marks a request as ordered.
+async function strAdminSupplyOrdered(env, body) {
+  try {
+    body = body || {};
+    const ctx = await strHandlerCtx(env), d = await strSupLoad(env, true), r = d.reqs.find(x => String(x.Request_ID) === String(body.request_id));
+    if (!r) return json({ ok: false, error: 'not_found', message: 'That supply request was not found.' }, 404);
+    if (r.Status === 'ordered') return json({ ok: true, result: 'already', message: `${r.Item_Text} was already marked ordered.`, supplies: await strSupBlock(env, ctx.now, true) });
+    const ref = String(body.order_ref == null ? '' : body.order_ref).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, 120);
+    await strSupSet(env, r.Request_ID, { Status: 'ordered', Resolved_At: new Date(ctx.now).toISOString(), Resolved_By: 'Brett', Order_Ref: ref });
+    await strLog(ctx, '', '', 'supply_ordered', `${r.Item_Text} (#${r.Request_ID})`);
+    return json({ ok: true, result: 'ordered', message: `${r.Item_Text} marked ordered.`, supplies: await strSupBlock(env, ctx.now, true) });
+  } catch (e) { return await strHandleErr(env, e, 'supply ordered'); }
 }
 // POST /str/admin/run {dry}
 async function strAdminRun(env, body) {
