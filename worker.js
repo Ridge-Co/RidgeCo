@@ -25441,6 +25441,34 @@ async function woSharedReceipt(env, body){
   });
 }
 
+// A share-link vendor can only tick items / pick reasons on the checklist that already exists — never add,
+// rename or remove items, and never touch the generated-wording field. Matches items by text.
+function mergeVendorChecklist(existingRaw, incomingRaw) {
+  const existing = parseChecklistItems(existingRaw), incoming = parseChecklistItems(incomingRaw);
+  const byText = {}; incoming.forEach(it => { byText[it.t] = it; });
+  const valid = ['', 'na', 'separate', 'estimate', 'access', 'parts'];
+  return existing.map(it => {
+    const inc = byText[it.t];
+    if (!inc) return it;
+    const done = !!inc.done;
+    return Object.assign({}, it, { done, code: done ? '' : (valid.includes(inc.code) ? inc.code : ''), why: done ? '' : inc.why.slice(0, 300) });
+  });
+}
+
+// PUBLIC (view-token gated): the share-link page's checklist save (the Worker also refuses Complete / a bill while any item is open).
+async function woSharedChecklist(env, body){
+  const auth = await woShareAuth(env, body && body.st, body && (body.wo||body.wo_id));
+  if(!auth) return json({ error:'Unauthorized' }, 401);
+  const wos = await fetchTab(env, 'Work_Orders');
+  const wo = findWO(wos, auth.wo);
+  if(!wo) return json({ error:'WO not found' }, 404);
+  const merged = mergeVendorChecklist(wo.Checklist, body && body.checklist);
+  if (!merged.length) return json({ error:'This work order has no checklist.' }, 400);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v=>v.ID===auth.vid)||{};
+  return await saveChecklist(env, { wo_id: auth.wo, checklist: merged, updated_by: vendor.Name || vendor.First_Name || 'Vendor', updated_by_role: 'vendor' });
+}
+
 // PUBLIC (view-token gated): add a note to THIS WO as the token's vendor.
 async function woSharedNote(env, body){
   const auth = await woShareAuth(env, body && body.st, body && (body.wo||body.wo_id));
