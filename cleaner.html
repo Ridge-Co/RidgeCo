@@ -489,7 +489,16 @@ $('main').addEventListener('click',function(ev){
   else if(a==='cancel-ask'){S.confirmKey=b.getAttribute('data-key');setRow(S.confirmKey,[]);render();}
   else if(a==='cancel-no'){S.confirmKey='';render();}
   else if(a==='cancel-yes') onCancel(b.getAttribute('data-key'));
+  else if(a==='sup-req') onSupRequest();
+  else if(a==='sup-again') onSupAgain(b.getAttribute('data-id'));
 });
+$('main').addEventListener('change',function(ev){
+  var t=ev.target; if(!t||t.id!=='sup-sel') return;
+  S.sup.sel=t.value; S.sup.msg=null;
+  var w=$('sup-where'), x=$('sup-text'); if(w) w.textContent=(t.value&&t.value!=='__other')?supWhereFor(t.value):'';
+  if(x){x.hidden=t.value!=='__other'; if(!x.hidden) x.focus();}
+});
+$('main').addEventListener('input',function(ev){var t=ev.target; if(t&&t.id==='sup-text') S.sup.text=t.value;});
 
 if(!K){S.fatal=true;render();}
 else loadPage();
