@@ -6287,8 +6287,14 @@ async function scopeProposalBillMilestones(env, body) {
   }
 
   const labelList = picked.map(m => m.Label).join(' + ');
-  const invoiceDesc = (tradeName + ' — ' + (s.Title || 'scope of work') + ' — ' + labelList + ' (' + addr + ')').slice(0, 4000);
+  const safeTitle = scopeSafeTitle(s);
+  // Nov 2 2026 (invoice 1774): only the FINAL round lists the work completed; deposits/interim invoices stay as they are.
+  const _pickedIdsWd = new Set(picked.map(m => m.ID));
+  const isFinalRound = !sigMilestones.some(m => !_pickedIdsWd.has(m.ID) && (m.Status || 'pending') === 'pending');
+  const workDone = isFinalRound ? await scopeWorkDoneForInvoice(env, s) : { block: '', warnings: [] };
+  const invoiceDesc = (tradeName + ' — ' + safeTitle + ' — ' + labelList + ' (' + addr + ')' + (workDone.block ? '\n' + workDone.block : '')).slice(0, 4000);
   const warnings = [];
+  workDone.warnings.forEach(w => warnings.push(w));
   if (!owner) warnings.push('Owner not resolved from the property — the invoice would create/land on a fallback QB customer.');
   if (billSkipReason) warnings.push(billSkipReason);
   if (billTo.level === 'owner') { const n = qbBillToNote(billTo, prop, unit); if (n) warnings.push(n); }
