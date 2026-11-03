@@ -45013,7 +45013,8 @@ function insbRecipients(cust) {
   const people = insbEmails(cust.Bill_Email_To), cc = insbEmails(cust.Bill_Email_Cc), af = insbEmails(cust.AppFolio_Email);
   for (const e of [].concat(people, cc, af)) if (!insbEmailOk(e)) problems.push('"' + e + '" is not a valid email address.');
   if (af.length > 1) problems.push('Only one AppFolio Smart Bill Entry address is allowed (got ' + af.length + ').');
-  if (!people.length && !af.length) problems.push('No billing email is set for this customer.');
+  const qbOnly = String(cust.Invoice_Delivery || '') === 'qb_only';   // our invoice is never emailed, so an empty address list is not a problem (the owner invoice has its own check in insbPlan)
+  if (!people.length && !af.length && !qbOnly) problems.push('No billing email is set for this customer.');
   const appfolio = af[0] || '';
   // The owner-facing invoice must never reach the AppFolio inbox (it would be keyed in as a second bill).
   if (appfolio && [].concat(people, cc).some(e => e.toLowerCase() === appfolio.toLowerCase())) problems.push('The AppFolio address is also in the people list or Cc. Remove it there: the owner-facing invoice must not go to AppFolio.');
