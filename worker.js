@@ -18790,6 +18790,7 @@ const SCHED_PF_WHAT = {
   str_digest_mon: 'emails the Milam Ridge cleaners the cleaning calendar with invites (idle until STR_DIGEST_ENABLED is TRUE)',
   str_digest_wed: 'emails the Milam Ridge cleaners the cleaning calendar with invites (idle until STR_DIGEST_ENABLED is TRUE)',
   str_digest_fri: 'emails the Milam Ridge cleaners the cleaning calendar with invites (idle until STR_DIGEST_ENABLED is TRUE)',
+  overnight_heartbeat: 'builds the one morning report: which jobs ran, failed or never ran, whether the home PC runner finished, what is open on Needs Attention; emails Brett (never a text)',
 };
 async function schedPfTab(env, tab) {
   try { return await fetchTab(env, tab); }
