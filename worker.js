@@ -43013,6 +43013,15 @@ function fiValidateDoc(doc) {
       });
     });
   }
+  if (doc.photo_meta !== undefined) {   // file name + size of each photo as it came off the phone (duplicate check)
+    const pm = doc.photo_meta;
+    if (!pm || typeof pm !== 'object' || Array.isArray(pm)) errors.push('doc.photo_meta must be an object');
+    else {
+      const ks = Object.keys(pm);
+      if (ks.length > 1500) errors.push('doc.photo_meta has too many entries');
+      else for (const k of ks) { const m = pm[k]; if (!FI_ID_RE.test(k) || !m || typeof m !== 'object' || Array.isArray(m) || typeof m.n !== 'string' || m.n.length > 120 || !Number.isFinite(m.s) || m.s < 0) { errors.push(`doc.photo_meta[${k}] invalid`); break; } }
+    }
+  }
   fiValidateVoiceNotes(doc.voice_notes, errors);
   fiValidateVisit(doc.visit, errors);
   if (doc.booking !== undefined && (!doc.booking || typeof doc.booking !== 'object' || Array.isArray(doc.booking))) errors.push('doc.booking must be an object');
