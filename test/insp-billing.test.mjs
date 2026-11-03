@@ -57,6 +57,11 @@ function world(opts = {}) {
         if (w.failNext.invoiceAfterCreate) { w.failNext.invoiceAfterCreate = null; throw new Error('timeout talking to QuickBooks'); }   // QuickBooks DID create it, but the answer never arrived
         return w.invoiceByReq[rid];
       }
+      if (method === 'GET' && /^invoice\/\d+/.test(p)) {   // balance lookup for paid tracking
+        if (w.failNext.balance) throw new Error('QuickBooks is down');
+        const inv = w.qbInvoices.find(i => String(i.Id) === p.split('?')[0].split('/')[1]);
+        return inv ? { Invoice: Object.assign({ Balance: inv.TotalAmt }, inv) } : { Fault: { Error: [{ code: '610', Message: 'Object Not Found' }] } };
+      }
       if (p.startsWith('query?') && decodeURIComponent(p).includes('from Invoice')) { if (w.failNext.invoiceQuery) throw new Error('QuickBooks is down'); return { QueryResponse: { Invoice: w.qbInvoices.slice() } }; }
       if (p.startsWith('query?')) { if (decodeURIComponent(p).includes("Type = 'Service'")) return { QueryResponse: { Item: opts.noServiceItem ? [] : [{ Id: '5', IncomeAccountRef: { value: '321' } }] } }; return { QueryResponse: { Item: [] } }; }
       if (p.startsWith('item/40')) return opts.noItem40 ? { Fault: { Error: [{ code: '610', Message: 'Object Not Found' }] } } : { Item: { Id: '40', IncomeAccountRef: { value: '198' } } };
