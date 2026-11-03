@@ -2234,11 +2234,27 @@ function toggleChecklistItem(idx, i, checked) {
 function setChecklistReason(idx, i, code) { window._checklists[idx][i].code = code; }
 function setChecklistWhy(idx, i, val) { window._checklists[idx][i].why = val; }
 function checklistState(idx) { return JSON.stringify(window._checklists[idx] || []); }
-function checklistGate(idx) {
+function checklistGate(idx, action) {
   var items = window._checklists[idx]; if (!items || !items.length) return { ok: true };
   var unresolved = items.filter(function(it) { return !it.done && !it.code; });
-  if (unresolved.length) return { ok: false, msg: 'Check off every item, or pick a reason for the ones you couldn\'t do (' + unresolved.length + ' left).' };
+  if (unresolved.length) return { ok: false, msg: checklistBlockMsg(unresolved.length, action || 'complete') };
   return { ok: true };
+}
+// Same wording as the Worker's checklistGateMessage (the server enforces this too), in the vendor's chosen language.
+function checklistBlockMsg(n, action) {
+  var inv = action === 'invoice';
+  if (LANG === 'es') {
+    return 'Todavía no puede ' + (inv ? 'enviar una factura' : 'marcar este trabajo como completo') + ': ' + n + ' elemento' + (n === 1 ? '' : 's') + ' de la lista de verificación ' + (n === 1 ? 'no está marcado' : 'no están marcados') + '. Marque cada uno como completado, o elija un motivo (no aplica, orden de trabajo aparte, necesita presupuesto, no pude acceder, necesita materiales) para los que no pudo hacer.';
+  }
+  return 'You can\'t ' + (inv ? 'submit an invoice' : 'mark this job complete') + ' yet: ' + n + ' checklist item' + (n === 1 ? ' is' : 's are') + ' not checked off. Check each one off as complete, or pick a reason (not applicable, separate work order, needs estimate, couldn\'t access, needs parts) for any you couldn\'t do.';
+}
+// Saves the on-screen checklist and resolves true/false, so the server-side gate sees what the vendor just ticked.
+function persistChecklist(idx) {
+  var woId = (window._wos && window._wos[idx]) ? window._wos[idx].ID : null;
+  if (!woId || !window._checklists[idx] || !window._checklists[idx].length) return Promise.resolve(true);
+  return api('/wo/checklist', { method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ wo_id: woId, checklist: checklistState(idx), updated_by: session.vendor_name, updated_by_role: 'vendor' }) })
+    .then(function(d) { return !!(d && d.success); }).catch(function() { return false; });
 }
 function saveChecklistProgress(idx) {
   var woId = (window._wos && window._wos[idx]) ? window._wos[idx].ID : null; if (!woId) return;
