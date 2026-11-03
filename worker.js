@@ -40031,7 +40031,7 @@ function strFindCleaner(ctx, k) {
   return c && String(c.Active).toUpperCase() !== 'FALSE' ? c : null;
 }
 const STR_BAD_LINK = () => json({ ok: false, error: 'bad_link', message: 'This link is not valid any more. Ask Brett for a new one.' }, 404);
-const STR_COMING_SOON = ['Supplies requests', 'Cleaning checklists', 'Recurring tasks', 'Guest-condition report'];
+const STR_COMING_SOON = ['Cleaning checklists', 'Recurring tasks', 'Guest-condition report'];
 
 // GET /str/c/page?k=TOKEN[&offer=ID][&backup=YYYY-MM-DD]  (public, token-gated)
 async function strCleanerPage(env, url) {
