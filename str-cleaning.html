@@ -1221,6 +1221,10 @@ document.addEventListener('click', function(ev){
   else if(a === 'refresh' || a === 'retry') loadState();
   else if(a === 'flash-x') $('flash').innerHTML = '';
   else if(a === 'filter'){ filterMode = el.getAttribute('data-v'); if(S) renderTurnovers(); }
+  else if(a === 'sup-ordered'){
+    var ref = $('sref-' + id);
+    busy(el, 'Saving…', api('POST', '/str/admin/supply/ordered', { request_id: id, order_ref: ref ? ref.value : '' })).then(function(r){ toast(r.message || 'Marked ordered'); loadState(); }, function(e){ if(e.code === 'unauthorized') authFailed(); else flash('Could not mark that ordered: ' + errText(e)); });
+  }
   else if(a === 'ack'){
     busy(el, 'Working…', api('POST', '/str/admin/alert/ack', { id: id })).then(function(){ toast('Acknowledged'); loadState(); }, function(e){ if(e.code === 'unauthorized') authFailed(); else flash('Could not acknowledge the alert: ' + errText(e)); });
   }
