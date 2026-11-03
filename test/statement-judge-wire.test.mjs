@@ -157,5 +157,14 @@ const line = (amount, date, extra = {}) => ({ amount, date, description: 'HOME D
     'window count: only same-amount, active, within 3 days (the day-4 record, the other amount and the inactive record are excluded)');
 }
 
+// 11) A confirmed queue row and the Receipts row it created are ONE purchase (found on the Nov 3 staging run) - count once, judge() still asked.
+{
+  const t = setup({ receipts: [R('9', 56.04, '2026-11-01', 'TEST-JudgeVendor')], queue: [{ ID: '73', Status: 'confirmed', Vendor: 'TEST-JudgeVendor', Receipt_Date: '2026-11-01', Total: '56.04', Confirmed_Receipt_ID: '9' }] });
+  const r = await t.fn({}, { vendor: 'TEST-JudgeVendor', rows: [line(56.04, '2026-11-03')] });
+  ok(pure.statementWindowCount({ amount: 56.04, date: '2026-11-03' }, [R('9', 56.04, '2026-11-01')], [{ ID: '73', Status: 'confirmed', Total: '56.04', Receipt_Date: '2026-11-01', Confirmed_Receipt_ID: '9' }]) === 1, 'window count: a receipt and the confirmed queue row that created it count once');
+  ok(t.judgeCalls.length === 1 && r.judge_confirmed === 1 && r.inserted === 0, 'receipt + its own confirmed queue row is not treated as ambiguous: judge() is asked and an approval resolves the line');
+  ok(pure.statementWindowCount({ amount: 56.04, date: '2026-11-03' }, [R('9', 56.04, '2026-11-01')], [{ ID: '80', Status: 'confirmed', Total: '56.04', Receipt_Date: '2026-11-02', Confirmed_Receipt_ID: '' }]) === 2, 'window count: an unlinked queue row with the same amount still counts as a second candidate');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
