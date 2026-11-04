@@ -92,7 +92,7 @@ function world(opts = {}) {
     },
   };
   const names = Object.keys(dep);
-  const factory = new Function(...names, 'INSP_TZ', 'INSP_ACTIVE_BOOKING', block + '\nreturn { insbPlan, insbComplete, insbPreview, insbReleaseOwner, insbCustomerConfig, insbCustomerUpdate, insbSetWO, insbWoInUse, insbQueue, insbPdfDownload, insbOwnerPdf, insbQbStubbed, insbJobType, insbCheckPaid, insbMarkPaid, fiBilling };');
+  const factory = new Function(...names, 'INSP_TZ', 'INSP_ACTIVE_BOOKING', block + '\nreturn { insbPlan, insbComplete, insbPreview, insbReleaseOwner, insbCustomerConfig, insbCustomerUpdate, insbSetWO, insbBackfillWo, insbWoInUse, insbQueue, insbPdfDownload, insbOwnerPdf, insbQbStubbed, insbJobType, insbCheckPaid, insbMarkPaid, fiBilling };');
   const api = factory(...names.map(k => dep[k]), 'America/New_York', ['pending', 'approved']);
   const env = { QB_CLIENT_ID: w.qbCreds ? 'x' : '', QB_CLIENT_SECRET: w.qbCreds ? 'y' : '', QB_REALM_ID: w.qbCreds ? 'z' : '', GMAIL_SENDER: 'ridgeco@test', __STAGING__: w.staging, __INSB_SETTLE_MS: 0, __INSB_RETRY_MS: 0 };
   return { w, api, env };
@@ -541,6 +541,38 @@ async function main() {
     ok(!('Manage_Token' in ok1.body.booking) && !('Billing_Lock' in ok1.body.booking), 'no secrets in the answer');
     const no = await api.fiBilling(env, new URL('https://x.test/fi/billing?id=insp_zzz999')); ok(no.body.ok && no.body.linked === false, 'an inspection with no booking is "not linked"');
     const badId = await api.fiBilling(env, new URL('https://x.test/fi/billing?id=a b')); ok(!badId.body.ok && badId.status === 400, 'a malformed id is refused');
+  }
+  // 29) AppFolio WO-number backfill (Nov 3 2026): additive only, address-checked, dry run by default, loud on failure
+  {
+    const mk = (extra) => Object.assign({ Customer_ID: '5', Status: 'approved', Active: 'TRUE', WO_Number: '', Completed_At: '', QB_Invoice_ID: '', Invoice_Status: '' }, extra);
+    const { w, api, env } = world({ booking: { WO_Number: '43945-1' } });
+    w.tabs.Insp_Bookings.push(mk({ ID: '9', Address: '1510 E Madison Street Baltimore Md 21205', Formatted_Address: '1510 E Madison St, Baltimore, MD 21205, USA' }),
+      mk({ ID: '10', Address: '2023 Jefferson street Baltimore Md 21205', Formatted_Address: '2023 Jefferson St, Baltimore, MD 21205, USA' }),
+      mk({ ID: '11', Address: '3809 Lyndale Avenue', Formatted_Address: '3809 Lyndale Ave, Baltimore, MD 21213, USA', WO_Number: '99999-1' }),
+      mk({ ID: '12', Address: '637 E 29th Street', Formatted_Address: '637 E 29th St, Baltimore, MD 21218, USA', Completed_At: '2026-11-01T10:00:00Z' }));
+    const items = [{ id: '9', wo: '44248-1', expect_address: 'madison' }, { id: '10', wo: '44249-1', expect_address: 'jefferson' }];
+    const d = await call(api, env, 'insbBackfillWo', { items });
+    ok(d.body.ok && d.body.dry_run === true && d.body.steps.every(x => x.status === 'planned') && !w.tabs.Insp_Bookings.some(b => b.WO_Number === '44248-1'), 'dry run is the default and writes nothing');
+    const r = await call(api, env, 'insbBackfillWo', { items, dry_run: false });
+    ok(r.body.ok && r.body.steps.every(x => x.status === 'done') && w.tabs.Insp_Bookings[1].WO_Number === '44248-1' && w.tabs.Insp_Bookings[2].WO_Number === '44249-1', 'real run saves both and reads them back');
+    ok(/AppFolio email backfill/.test(w.tabs.Insp_Bookings[1].Billing_Log), 'the save is noted in the booking billing log');
+    const again = await call(api, env, 'insbBackfillWo', { items, dry_run: false }); ok(again.body.ok && again.body.steps.every(x => x.status === 'skipped'), 'running it again changes nothing');
+    const bad = await call(api, env, 'insbBackfillWo', { dry_run: false, items: [
+      { id: '9', wo: '44250-1', expect_address: 'madison' },       // already has a different WO
+      { id: '10', wo: '44251-1', expect_address: 'lyndale' },      // wrong address for this id
+      { id: '11', wo: '44252-1', expect_address: 'lyndale' },      // holds a different WO
+      { id: '12', wo: '44253-1', expect_address: '29th' },         // already billed
+      { id: '77', wo: '44254-1', expect_address: 'x' },            // no such booking
+      { id: '2', wo: '44248-1', expect_address: 'gilmor' },        // WO already on booking 9
+      { id: '10', wo: '4', expect_address: 'jefferson' } ] });
+    ok(!bad.body.ok && bad.status === 409 && bad.body.steps.every(x => x.status === 'conflict'), 'every unsafe pairing is refused, none saved', bad.body.steps);
+    ok(w.tabs.Insp_Bookings[1].WO_Number === '44248-1' && w.tabs.Insp_Bookings[3].WO_Number === '99999-1' && !w.tabs.Insp_Bookings[4].WO_Number, 'refused items left the sheet untouched');
+    const dup = await call(api, env, 'insbBackfillWo', { dry_run: false, items: [{ id: '9', wo: '44248-1', expect_address: 'madison' }, { id: '10', wo: '44248-1', expect_address: 'jefferson' }] });
+    ok(dup.body.steps[1].status === 'conflict', 'the same WO listed twice is refused');
+    const none = await call(api, env, 'insbBackfillWo', {}); ok(!none.body.ok && none.status === 400, 'no items is refused');
+    const w2 = world(); w2.w.tabs.Insp_Bookings.push(mk({ ID: '9', Address: '1510 E Madison Street', Formatted_Address: '1510 E Madison St' })); w2.w.failAlways = ['WO_Number'];
+    const f = await call(w2.api, w2.env, 'insbBackfillWo', { dry_run: false, items: [{ id: '9', wo: '44248-1', expect_address: 'madison' }] });
+    ok(!f.body.ok && f.status === 500 && f.body.steps[0].status === 'error' && w2.w.telemetry.some(t => t.Success === 'FALSE' && /backfill-premier-wo/.test(t.Skill_Or_Endpoint)), 'a failed write is a loud error step AND a telemetry row');
   }
   // 24) severity of the new failure stages
   {

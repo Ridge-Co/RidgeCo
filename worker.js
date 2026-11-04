@@ -512,7 +512,7 @@ const _hubWorkerCore = {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage', '/portal-access/backfill', '/admin/fi-premier-repair', '/admin/fi-originals-bridge', '/failure/update'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage', '/portal-access/backfill', '/admin/fi-premier-repair', '/admin/fi-originals-bridge', '/admin/backfill-premier-wo', '/failure/update'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
           // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
           // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
@@ -1208,6 +1208,7 @@ const _hubWorkerCore = {
         if (path === '/fi/booking/start')         return await fiRoute(env, 'booking-start', () => fiBookingStart(env, body));
         if (path === '/fi/reword')                return await fiRoute(env, 'reword', () => fiReword(env, body));
         if (path === '/admin/fi-premier-repair')  return await fiRoute(env, 'premier-repair', () => fiPremierRepair(env, body));
+        if (path === '/admin/backfill-premier-wo') return await insbBackfillWo(env, body);
         if (path === '/admin/fi-originals-bridge') return await fiRoute(env, 'originals-bridge', () => fiOrigBridge(env, body));
         if (path === '/fi/folder/organize')       return await fiRoute(env, 'folder-organize', () => fiFolderOrganize(env, body));
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
@@ -28021,6 +28022,11 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/fi/structure' || path === '/fi/summarize' || path === '/fi/route' || path === '/fi/brand/scrape' || path === '/fi/transcribe/json') return true; // AI / read-only: no sheet writes
   if (path === '/fi/reword') return true; // AI only: writes nothing
   if (path === '/admin/fi-originals-bridge') return String((body && body.inspection_id) || '').startsWith('TEST-'); // Nov 2 2026: staging may only read/attach photos of a TEST- inspection
+  if (path === '/admin/backfill-premier-wo') { // Nov 3 2026: a dry run writes nothing; a real run on staging may only touch TEST- bookings (address starts TEST-)
+    if (!body || body.dry_run !== false) return true;
+    const _bb = await fetchTab(env, 'Insp_Bookings');
+    return Array.isArray(body.items) && body.items.length > 0 && body.items.every(x => { const _r = _bb.find(r => String(r.ID) === String((x && x.id) || '')); return !!_r && String(_r.Address || '').startsWith('TEST-'); });
+  }
   if (path === '/admin/fi-premier-repair') { // staging may only repair a TEST- partner's links, to a TEST- inspection
     if (!body || body.dry_run !== false) return true; // a dry run writes nothing
     const _cu = (await fetchTab(env, 'Insp_Customers')).find(c => String(c.ID) === String(body.customer_id));
@@ -45922,6 +45928,52 @@ async function insbSetWO(env, body) {
     const back = await updateRowVerified(env, 'Insp_Bookings', L.b.ID, { WO_Number: wo, Billing_Log: insbLogLine(L.b, 'WO set to ' + wo) });
     return json({ ok: true, booking: insbPublicBooking(back) });
   } catch (e) { await insbFail(env, 'set_wo', e.message, body && body.id); return json({ ok: false, error: 'save_failed', message: e.message }, 500); }
+}
+// ── One-time / repeatable Premier WO-number backfill (Nov 3 2026, Brett) ─────────────────────────────────────
+// POST /admin/backfill-premier-wo { items:[{ id, wo, expect_address }], dry_run }  (HUB_PROD_WRITE_PATHS: additive only)
+// Saves the AppFolio work order number on bookings that were scheduled and inspected before the WO email arrived. ADDITIVE: only fills a BLANK
+// WO_Number, never overwrites a different one, never touches a billed booking, money, QuickBooks or texts. Each item must also name a street
+// fragment (expect_address) that has to appear in the booking's address, so a wrong id/WO pairing is refused, not saved. A dry run (the default)
+// writes nothing. Every real write is read back; a failed write is a loud 'error' step, logged to Ops_Telemetry and returned to the caller.
+async function insbBackfillWo(env, body) {
+  body = body || {};
+  const dry = body.dry_run !== false;
+  const items = Array.isArray(body.items) ? body.items : [];
+  if (!items.length) return json({ ok: false, error: 'bad_request', message: 'items is required.' }, 400);
+  if (items.length > 20) return json({ ok: false, error: 'bad_request', message: 'At most 20 items at a time.' }, 400);
+  const steps = [], step = (id, wo, status, detail) => steps.push({ id: String(id || ''), wo: wo || '', status, detail: detail || '' });
+  try {
+    await insbEnsureColumns(env);
+    invalidateTabCache('Insp_Bookings');
+    const seen = new Set();
+    for (const it of items) {
+      const id = String((it && it.id) || '').trim(), wo = insbNormWO(it && it.wo), want = String((it && it.expect_address) || '').trim().toLowerCase();
+      if (!id || !wo || !want) { step(id, wo, 'conflict', 'each item needs id, a valid wo and expect_address; nothing changed for it'); continue; }
+      if (seen.has(id) || seen.has('wo:' + wo)) { step(id, wo, 'conflict', 'the same booking or work order is listed twice; nothing changed'); continue; }
+      seen.add(id); seen.add('wo:' + wo);
+      const all = await fetchTab(env, 'Insp_Bookings');
+      const b = all.find(r => String(r.ID) === id);
+      if (!b) { step(id, wo, 'conflict', 'booking not found; nothing changed'); continue; }
+      const addr = (String(b.Address || '') + ' ' + String(b.Formatted_Address || '')).toLowerCase();
+      if (!addr.includes(want)) { step(id, wo, 'conflict', 'booking address "' + (b.Formatted_Address || b.Address || '') + '" does not contain "' + want + '"; nothing changed'); continue; }
+      if (String(b.Completed_At || '').trim() || String(b.QB_Invoice_ID || '').trim() || String(b.Invoice_Status || '').trim()) { step(id, wo, 'conflict', 'booking is already billed; nothing changed'); continue; }
+      const cur = insbNormWO(b.WO_Number);
+      if (cur === wo) { step(id, wo, 'skipped', 'already has this work order number'); continue; }
+      if (cur || String(b.WO_Number || '').trim()) { step(id, wo, 'conflict', 'booking already has work order ' + b.WO_Number + '; nothing changed'); continue; }
+      const dupe = all.find(r => String(r.ID) !== id && String(r.Customer_ID) === String(b.Customer_ID) && insbNormWO(r.WO_Number) === wo && insbWoInUse(r));
+      if (dupe) { step(id, wo, 'conflict', 'work order is already on booking #' + dupe.ID + '; nothing changed'); continue; }
+      if (dry) { step(id, wo, 'planned', 'would set WO_Number=' + wo); continue; }
+      try {
+        const back = await updateRowVerified(env, 'Insp_Bookings', id, { WO_Number: wo, Billing_Log: insbLogLine(b, 'WO set to ' + wo + ' (AppFolio email backfill)') });
+        if (insbNormWO(back && back.WO_Number) !== wo) throw new Error('read-back shows WO_Number=' + (back && back.WO_Number));
+        step(id, wo, 'done', 'WO_Number saved and read back');
+      } catch (e) { step(id, wo, 'error', e.message); }
+    }
+  } catch (e) { step('', '', 'error', e.message); }
+  const bad = steps.filter(x => x.status === 'error');
+  if (bad.length) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'premier_wo_backfill_error', Skill_Or_Endpoint: '/admin/backfill-premier-wo', Success: 'FALSE', Notes: bad.map(x => x.id + ': ' + x.detail).join(' | ').slice(0, 200) }); } catch (_) { /* silent-ok: telemetry is best-effort; the steps are returned to the caller below */ } }
+  const conflicts = steps.filter(x => x.status === 'conflict').length;
+  return json({ ok: !bad.length && !conflicts, dry_run: dry, steps }, bad.length ? 500 : (conflicts ? 409 : 200));
 }
 // ── Paid tracking + the Field Inspection billing card (Nov 2 2026) ──
 // A QuickBooks invoice that is "Invoiced" (created, not emailed) is paid when its QuickBooks balance reaches 0 (the customer's ACH is booked there), or when a person says so.
