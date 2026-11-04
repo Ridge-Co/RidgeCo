@@ -84,7 +84,8 @@ function bookInit(){
     var ex=(r.example_durations||[]).map(function(d){return d.units+' unit'+(d.units>1?'s':'')+' ≈ '+fmtDur(d.minutes);}).join(' · ');
     setMain('<div id="mine"></div><div class="card"><b>Where and how big?</b>'
       +(r.open_block_count? openDays(r.open_days) : banner('warn','No time slots are open right now. Brett opens blocks of time — check back or ask him.'))
-      +(r.require_wo?'<label>Work order number <span class="muted">(required)</span></label><input id="f-wo" placeholder="e.g. 43945-1" autocomplete="off" autocapitalize="characters">':'')
+      +((r.require_wo||r.ask_wo)?'<label>Work order number <span class="muted">'+(r.require_wo?'(required)':'(add it if you have it)')+'</span></label><input id="f-wo" placeholder="e.g. 43945-1" autocomplete="off" autocapitalize="characters">':'')
+      +'<input type="hidden" id="f-wo-req" value="'+(r.require_wo?'1':'')+'">'
       +'<label>Property address</label><input id="f-addr" placeholder="123 N Main St, Baltimore, MD 21201" autocomplete="street-address">'
       +'<div class="row2"><div><label>Total units</label><input id="f-units" type="number" min="1" max="60" inputmode="numeric" placeholder="e.g. 2"></div>'
       +'<div><label>Buildings</label><input id="f-bldg" type="number" min="1" inputmode="numeric" placeholder="1"></div></div>'
@@ -128,7 +129,8 @@ function findTimes(){
   var addr=$('f-addr').value.trim(), u=Math.floor(+$('f-units').value), b=Math.floor(+$('f-bldg').value)||1;
   var res=$('results');
   var woEl=$('f-wo'), wo=woEl?woEl.value.trim().replace(/\s+/g,'').toUpperCase():'';
-  if(woEl&&!/^[A-Z0-9][A-Z0-9-]{1,29}$/.test(wo)){res.innerHTML=banner('err','Please enter the work order number (letters, numbers and dashes, like 43945-1).');return;}
+  var woReq=$('f-wo-req')&&$('f-wo-req').value==='1';
+  if(woEl&&(woReq||wo)&&!/^[A-Z0-9][A-Z0-9-]{1,29}$/.test(wo)){res.innerHTML=banner('err','Please enter the work order number (letters, numbers and dashes, like 43945-1).');return;}
   if(addr.length<6){res.innerHTML=banner('err','Please enter the full street address.');return;}
   if(!(u>=1)){res.innerHTML=banner('err','Please enter the number of units.');return;}
   if(b>u){res.innerHTML=banner('err','Buildings can’t be more than units.');return;}
