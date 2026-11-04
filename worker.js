@@ -41683,7 +41683,7 @@ async function inspBookInfo(env, url) {
     .map(x => ({ date: x.b.Date, from: inspFmtEtTime(inspEtWallToMs(x.b.Date, x.b.Start_Time)), to: inspFmtEtTime(inspBlockWindowEndMs(x.b)), last_start: !!String(x.b.Last_Start || '').trim(), closes_iso: new Date(x.exp).toISOString(), closes_label: inspFmtEt(x.exp) }));
   let open = open_days;
   try { const closed = await inspStrClosedOrThrow(env, await fetchConfig(env), false); open = open_days.filter(d => !closed.has(d.date)); } catch (e) { console.error('insp: cleaning guard unavailable for open-days list (slots will report it):', e && e.message); }
-  return json({ ok: true, customer: c.Name, require_wo: String(c.Billing_Mode || '') === 'wo', open_block_count: open.length, open_days: open, step_min: INSP_STEP_MIN, example_durations: [1, 2, 3, 4, 6].map(u => ({ units: u, minutes: inspDurationMin(u, 1) })) });
+  return json({ ok: true, customer: c.Name, require_wo: String(c.Billing_Mode || '') === 'wo' && String(c.Invoice_Delivery || '') !== 'qb_only', ask_wo: String(c.Billing_Mode || '') === 'wo', open_block_count: open.length, open_days: open, step_min: INSP_STEP_MIN, example_durations: [1, 2, 3, 4, 6].map(u => ({ units: u, minutes: inspDurationMin(u, 1) })) });
 }
 async function inspBookSlots(env, body) {
   try {
@@ -41694,6 +41694,15 @@ async function inspBookSlots(env, body) {
     const slots = a.slots.slice(0, 600).map(inspSlotOut);
     return json({ ok: true, address: a.geo.formatted, duration_min: a.durationMin, units: input.units, buildings: input.buildings, slots, warnings: a.warnings.filter(w => /partial match/.test(w)), no_blocks: a.blocksCount === 0 });
   } catch (e) { if (!(e && e.code)) await inspAlert(env, 'slots_internal', String(e && e.message)); return inspHandleErr(e); }
+}
+// Booking-time work order rule (Nov 3 2026): a billed-by-work-order customer must give a valid WO number, EXCEPT one set to "create in QuickBooks only" (Premier),
+// which often books before the AppFolio work order exists (the two arrive in either order). A number that IS typed must still be valid; billing later refuses a booking with no WO.
+function inspBookingWoInput(c, body) {
+  if (String(c.Billing_Mode || '') !== 'wo') return '';
+  const woRaw = String(body && body.wo_number != null ? body.wo_number : '').trim();
+  const woNumber = insbNormWO(woRaw);
+  if (woRaw ? !woNumber : String(c.Invoice_Delivery || '') !== 'qb_only') throw inspErr('bad_wo', 'Please enter the work order number (for example 43945-1).', 400);
+  return woNumber;
 }
 async function inspBookRequest(env, body) {
   let createdEventId = '';
@@ -41711,10 +41720,9 @@ async function inspBookRequest(env, body) {
     // Billed-by-work-order customers (Premier): the work order number is required, and one work order = one booking at a time (Oct 22 2026).
     let woNumber = '';
     if (String(c.Billing_Mode || '') === 'wo') {
-      woNumber = insbNormWO(body.wo_number);
-      if (!woNumber) throw inspErr('bad_wo', 'Please enter the work order number (for example 43945-1).', 400);
-      await insbEnsureColumns(env);
-      const dupe = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.Customer_ID) === String(c.ID) && insbNormWO(r.WO_Number) === woNumber && insbWoInUse(r));
+      woNumber = inspBookingWoInput(c, body);
+      if (woNumber) await insbEnsureColumns(env);
+      const dupe = woNumber ? (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.Customer_ID) === String(c.ID) && insbNormWO(r.WO_Number) === woNumber && insbWoInUse(r)) : null;
       if (dupe) throw inspErr('wo_in_use', 'Work order ' + woNumber + ' already has a booking (' + (String(dupe.Completed_At || '').trim() ? 'already completed and billed' : dupe.Status === 'pending' ? 'waiting for approval' : 'approved') + '). Cancel it first, or use the manage link to change it.', 409);
     }
     if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) throw inspErr('bad_contact', 'That email address does not look right.', 400);
