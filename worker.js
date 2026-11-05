@@ -13302,7 +13302,8 @@ async function addEstimateVersion(env, body) {
   let overMaxReason = '', overMaxReasonEn = '', overMax = false;
   if (!_estByAdmin) {
     let _mwo = null; try { _mwo = findWO(await fetchTab(env, 'Work_Orders'), woId); } catch (_) {}
-    const _mx = maxPriceNum(_mwo && _mwo.Max_Price);
+    const _mxRaw = parseFloat(String((_mwo && _mwo.Max_Price) == null ? '' : _mwo.Max_Price).replace(/[$,\s]/g, ''));   // inline (not maxPriceNum) so this function stays self-contained for tests that run it alone
+    const _mx = Number.isFinite(_mxRaw) && _mxRaw > 0 ? _mxRaw : 0;
     if (_mx && subtotal > _mx + 0.004) {
       overMax = true;
       overMaxReason = String(body.over_max_reason || '').trim().slice(0, 1000);
