@@ -10937,6 +10937,13 @@ function renderHubEstimateView(woId, estimates, holder) {
         'v' + e.Version + ' — $' + parseFloat(e.Subtotal).toFixed(2) + (e.Change_Reason ? ' — ' + esc(e.Change_Reason) + (e.Change_Reason_EN ? ' (English: ' + esc(e.Change_Reason_EN) + ')' : '') : '') + ' — ' + esc(e.Created_By || '') + '</div>';
     }).join('') : '';
 
+    // Max price (Nov 5 2026): flag an estimate that is over the WO's max, with the vendor's reason (English copy beneath when translated).
+    var _mpWO = (state.workorders || []).find(function(w){ return w.ID === woId; }) || {};
+    var _mpNum = parseFloat(String(_mpWO.Max_Price || '').replace(/[$,\s]/g, '')) || 0;
+    if (_mpNum && parseFloat(current.Subtotal || 0) > _mpNum + 0.004) {
+      reasonBlock += '<div style="margin-top:8px;background:#fff4e5;border:1px solid #d97706;border-radius:6px;padding:8px 10px;font-size:11px;color:#7c3a00"><b>⚠ OVER MAX PRICE</b> ($' + _mpNum.toFixed(2) + ' max) — vendor’s reason: ' + esc(current.Over_Max_Reason || '(none given)') +
+        (current.Over_Max_Reason_EN && current.Over_Max_Reason_EN !== current.Over_Max_Reason ? '<div class="est-en" style="color:var(--accent2)"><b>English:</b> ' + esc(current.Over_Max_Reason_EN) + '</div>' : '') + '</div>';
+    }
     var approvalBlock = (isApproved || isConverted)
       ? '<div style="margin-top:10px;background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:8px 10px">' +
         '<span style="color:var(--accent2);font-weight:bold;font-size:11px">' + (isConverted ? '✓ APPROVED — IN A PROPOSAL' : '✓ APPROVED') + '</span>' +
