@@ -25,7 +25,8 @@ ratchet('unguarded header-column indexOf', /=\s*\w+\.indexOf\('[^']+'\)\s*;/g, 1
 // Baseline 12 -> 13 (Oct 13 2026, sms_delivery_check): the one new btoa() encodes Twilio's ASCII API-key SID:secret pair for Basic auth - identical to sendSMSRaw's - never user text.
 // Baseline 13 -> 14 (Oct 16 2026, failure ledger A3a): the Twilio Balance.json check encodes the same ASCII API-key SID:secret pair for Basic auth (already UTF-8-wrapped), never user text.
 // Baseline 14 -> 15 (Oct 28 2026, field-inspection urgent items): gmailSendEmailMulti's Subject header uses the same UTF-8-wrapped btoa(unescape(encodeURIComponent(..))) as its two sibling senders; photo bytes go through the existing bytesToB64.
-ratchet('btoa()', /\bbtoa\(/g, 15, 'btoa throws on non-Latin-1 text (gh-broker bug class). Use a UTF-8-safe encoder for text.');
+// Baseline 15 -> 16 (Nov 5 2026, web push): pushB64uEnc base64url-encodes raw key/signature BYTES (String.fromCharCode of a Uint8Array, always Latin-1) - never user text. test/web-push.test.mjs round-trips it against an independent decoder.
+ratchet('btoa()', /\bbtoa\(/g, 16, 'btoa throws on non-Latin-1 text (gh-broker bug class). Use a UTF-8-safe encoder for text.');
 // Baseline 1 -> 2 (Oct 20 2026): ReadMeterStore /put (internal Durable Object endpoint, only called by the Worker itself, wrapped in the class's outer try/catch). test/read-meter-rollup.test.mjs requires unreadable input to return an error, not be swallowed.
 ratchet('bare await request.json()', /await\s+request\.json\(\)(?!\s*\))/g, 2, 'Empty POST bodies must not 500 (rule 167). Wrap in try/catch.');
 console.log(`bug-class-tripwires: ${n}/${n} passing`);
