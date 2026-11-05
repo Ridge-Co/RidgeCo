@@ -19328,6 +19328,7 @@ async function recurPostWO(env, tpl, target, due, opts) {
     notes: (ov.notes ? ov.notes + ' — ' : '') + `Recurring template #${tpl.ID} "${tpl.Name || ''}"${due ? ' — due ' + due : ''}${opts.manual ? ' (posted manually)' : ''}`,
     tenant_visible: notifyTenant, tenant_notify_created: notifyTenant, tenant_notify_updates: notifyTenant,
     recurring_template_id: tpl.ID, recurring_due: due || '', owner_notify_override: 'off',
+    max_price: tpl.Max_Price || '',   // template max price carries onto every WO it posts (set before assignVendor so the vendor text shows it)
   });
   const created = await res.json();
   if (!created || !created.id) return { error: (created && created.error) || 'create failed' };
