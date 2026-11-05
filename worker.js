@@ -9866,6 +9866,71 @@ function vendorSmsDetailFromResult(env, r, lang, msg) {
   if (env.__STAGING__ ?? isStaging(env)) return { status: 'skipped', reason: 'STAGING: texts are stubbed, so nothing was really sent (the message was only logged)', language: lang, message_body: r.message_body || msg };
   return { status: 'failed', reason: 'Twilio rejected or failed to send the text (see Message_Queue)', language: lang, message_body: r.message_body || msg };
 }
+// ── "New work order" EMAIL to the vendor (Nov 5 2026, Brett: "Send them an email when assigned. Just something basic with a
+// link to the work order, which would be on their portal. Period. That will just give us one more point of contact.") ──
+// Sent from assignVendor right after the vendor text, so every path that assigns a vendor (the Assign modal, New Work Order,
+// Duplicate, recurring) gets it. It carries ONLY the job label, the address and the portal link — no lockbox code, no tenant
+// contact (those unlock in the portal once the vendor accepts) — and the link is vendorPortalLink (PIN login), never a share link.
+// PURE — may the email go out, and if not, why. The text side redirects to a test number in Test Mode but an email has no
+// redirect, so Test Mode (default ON) means NO email to a real vendor. Honors the master messaging switch, the vendor's own
+// SMS_Enabled switch and the property's vendor switch, same as the text. Returns { send, status, reason }.
+function vendorAssignEmailPlan({ cfg, vendor, property }) {
+  const to = String((vendor && vendor.Email) || '').trim();
+  if (!to) return { send: false, status: 'skipped', reason: 'Vendor has no email address on file, so no email was sent (the text still went)' };
+  if (!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(to)) return { send: false, status: 'failed', reason: 'Vendor email address "' + to + '" is not valid, so no email was sent. Fix it on the vendor record.' };
+  if (String((cfg && cfg.TWILIO_ENABLED) || '').toUpperCase() !== 'TRUE') return { send: false, status: 'skipped', reason: 'Messaging is OFF (Global switch), so no email was sent' };
+  if (String((cfg && cfg.TWILIO_TEST_MODE) || '').toUpperCase() !== 'FALSE') return { send: false, status: 'skipped', reason: 'Test Mode is on, so no email goes to a real vendor' };
+  if (!smsToggleOn(vendor && vendor.SMS_Enabled)) return { send: false, status: 'skipped', reason: 'Messaging is switched OFF for this vendor, so no email was sent' };
+  if (property && smsPropertyGateFlags(property).propertyVendorsOn === false) return { send: false, status: 'skipped', reason: 'Vendor messages are switched OFF for this property, so no email was sent' };
+  return { send: true, status: 'sent', reason: '', to };
+}
+// PURE — the email itself. English by default, Spanish for a Spanish-language vendor. Returns { subject, html, language }.
+function vendorAssignEmailBuild({ woId, trade, address, vendor, link }) {
+  const es = String((vendor && vendor.Language) || '').toLowerCase() === 'es';
+  const first = _escHtml(vendorFirstName(vendor));
+  const job = _escHtml(String(trade || '').trim());
+  const where = _escHtml(String(address || '').trim());
+  const id = _escHtml(woId);
+  const url = _escHtml(link);
+  const btn = '<p><a href="' + url + '" style="display:inline-block;background:#0b5cad;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;font-weight:bold">' + (es ? 'Ver la orden de trabajo' : 'View work order') + '</a></p>';
+  if (es) return { language: 'es', subject: 'Nuevo trabajo asignado — OT ' + woId,
+    html: '<p>Hola ' + first + ',</p><p>Se le asignó un nuevo trabajo: <b>OT ' + id + '</b>' + (job ? ' (' + job + ')' : '') + (where ? ' en <b>' + where + '</b>' : '') + '.</p>'
+      + '<p>Inicie sesión en su portal de proveedor para aceptar o rechazar:</p>' + btn
+      + '<p style="color:#888;font-size:11px">Ridge Co — este es un aviso automático.</p>' };
+  return { language: 'en', subject: 'New work order assigned — WO ' + woId,
+    html: '<p>Hi ' + first + ',</p><p>You have been assigned a new job: <b>WO ' + id + '</b>' + (job ? ' (' + job + ')' : '') + (where ? ' at <b>' + where + '</b>' : '') + '.</p>'
+      + '<p>Log in to your vendor portal to accept or decline:</p>' + btn
+      + '<p style="color:#888;font-size:11px">Ridge Co — this is an automated notice.</p>' };
+}
+// Sends (or declines to send) the email for ONE assignment. NEVER throws and never touches the assignment itself: every outcome is
+// returned (assignVendor puts it in the response as vendor_email_detail), a send that FAILS is also reported to the failure ledger,
+// and every real attempt is written to the work order's communication audit (the same place the text shows up).
+async function sendVendorAssignEmail(env, { woId, wo, vendor, property, address, cfg }) {
+  woId = String(woId || (wo && (wo.WO_ID || wo.ID)) || '');
+  const plan = vendorAssignEmailPlan({ cfg, vendor, property });
+  if (!plan.send) {
+    if (plan.status === 'failed') { try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'vendor_assign_email', ref: 'WO ' + woId, severity: 'P3', message: plan.reason }); } catch (e) { console.error('vendor_assign_email: reportFailure failed', e && e.message); } }
+    return { status: plan.status, reason: plan.reason };
+  }
+  const mail = vendorAssignEmailBuild({ woId, trade: wo && wo.Trade, address, vendor, link: vendorPortalLink(woId) });
+  let res;
+  try {
+    res = await gmailSendEmail(env, { to: plan.to, subject: mail.subject, html: mail.html });
+  } catch (e) {
+    const msg = 'The new-work-order email to ' + (vendor.Name || vendor.ID || 'the vendor') + ' (' + plan.to + ') failed to send: ' + String((e && e.message) || e).slice(0, 200);
+    try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'vendor_assign_email', ref: 'WO ' + woId, severity: 'P2', message: msg }); } catch (e2) { console.error('vendor_assign_email: reportFailure failed', e2 && e2.message); }
+    let auditErr = '';
+    try { await logMessageAudit(env, { woId, channel: 'email', recipientName: vendor.Name || vendor.First_Name || '', recipientType: 'vendor', messageType: 'vendor_job_assigned', messageBody: mail.subject, outcome: 'failed', notes: msg }); } catch (e3) { auditErr = ' (and it could not be written to the audit log)'; }
+    return { status: 'failed', reason: msg + auditErr, language: mail.language };
+  }
+  const staged = !!(res && res.staged);
+  const outcome = staged ? 'skipped' : 'sent';
+  const reason = staged ? 'STAGING: emails are stubbed, so nothing was really sent' : 'Email sent to the vendor';
+  let auditWarn = '';
+  try { await logMessageAudit(env, { woId, channel: 'email', recipientName: vendor.Name || vendor.First_Name || '', recipientType: 'vendor', messageType: 'vendor_job_assigned', messageBody: mail.subject + '\n\n' + mail.html, outcome, notes: reason }); }
+  catch (e) { auditWarn = ' — but it could not be written to the work order audit log'; try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'vendor_assign_email_audit', ref: 'WO ' + woId, severity: 'P3', message: 'Vendor assignment email went out but the audit row failed: ' + String((e && e.message) || e).slice(0, 160) }); } catch (e4) { console.error('vendor_assign_email_audit: reportFailure failed', e4 && e4.message); } }
+  return { status: outcome, reason: reason + auditWarn, language: mail.language, to: plan.to };
+}
 // What WILL / WOULD happen for one cancelled copy's vendor. Pure (no I/O). Statuses: will_send | skipped | cannot_send.
 // keptVendors: Map vendorId -> id of a job that stays open for that vendor (they are not texted about the cancelled one).
 function bidCancelVendorPlan(row, vendor, wo, property, unit, keptVendors) {
@@ -10192,6 +10257,24 @@ async function assignVendor(env, body, internal) {
     const _lang = isSpanish ? 'es' : 'en';
     vendorSmsDetail = vendorSmsDetailFromResult(env, r, _lang, msg);
   }
+  // Nov 5 2026 (Brett): one more point of contact — a basic "new work order" email with the portal link, alongside the text.
+  // Same assignment, same notify switch. A repeat Assign to the SAME vendor whose email already went is not emailed twice.
+  let vendorEmailDetail = { status: 'skipped', reason: 'Notifications were turned off for this assignment' };
+  let vendorEmailSent = String(wo.Vendor_ID || '') === String(body.vendor_id) && String(wo.Status || '') === 'Assigned' && String(wo.Vendor_Email_Sent || '').toUpperCase() === 'TRUE';
+  if (notify && vendorEmailSent) vendorEmailDetail = { status: 'skipped', reason: 'This vendor already got the new-work-order email for this assignment' };
+  else if (notify) {
+    let _emailCfg = null;
+    try { _emailCfg = await fetchConfig(env); }
+    catch (e) {
+      const m = 'Could not read the Config settings, so the new-work-order email was not sent: ' + String((e && e.message) || e).slice(0, 160);
+      try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'vendor_assign_email', ref: 'WO ' + body.wo_id, severity: 'P2', message: m }); } catch (e2) { console.error('vendor_assign_email: reportFailure failed', e2 && e2.message); }
+      vendorEmailDetail = { status: 'failed', reason: m };
+    }
+    if (_emailCfg) {
+      vendorEmailDetail = await sendVendorAssignEmail(env, { woId: body.wo_id, wo, vendor, property, address, cfg: _emailCfg });
+      vendorEmailSent = vendorEmailDetail.status === 'sent';
+    }
+  }
   if (notify && notifyTenantOnAssign) {
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
     // name + phone (Brett confirmed this is already customer-facing and safe to surface),
@@ -10206,12 +10289,13 @@ async function assignVendor(env, body, internal) {
       if (r.sent) tenantSMSSent = true;
     }
   }
-  await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' });
+  try { await ensureColumns(env, 'Work_Orders', ['Vendor_Email_Sent']); } catch (e) { vendorEmailDetail = Object.assign({}, vendorEmailDetail, { warning: 'Could not add the Vendor_Email_Sent column (already logged), so a repeat Assign may email the vendor again' }); }
+  await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE', Vendor_Email_Sent: vendorEmailSent ? 'TRUE' : 'FALSE' });
   // Vendor nudge clock (Sep 14 2026) — starts on every successful assignment, notify or
   // silent, since it tracks actual work progress rather than whether a text went out.
   await createVendorNudgeClock(env, body.wo_id, body.vendor_id);
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent} notify=${notify}` }); } catch(_){}
-  return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify, vendor_sms_detail: vendorSmsDetail });
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent} vendor_email=${vendorEmailDetail.status} notify=${notify}` }); } catch (e) { console.error('wo_assign telemetry failed', e && e.message); }
+  return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify, vendor_sms_detail: vendorSmsDetail, vendor_email_detail: vendorEmailDetail });
 }
 
 // ── Vendor checklist gate (Nov 2 2026, Brett) ───────────────────────────────────────────────────
