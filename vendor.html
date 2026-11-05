@@ -1709,6 +1709,7 @@ function submitEstimate(woId, idx) {
     wo_id: woId, vendor_id: (window.session && session.vendor_id) || '',
     line_items: items.map(function(li) { return { desc: li.desc, amount: parseFloat(li.amount) }; }),
     change_reason: reason, created_by: (window.session && session.vendor_name) || 'vendor',
+    over_max_reason: overMaxReason, lang: LANG,
   }).then(function(res) {
     release();
     if (res.success) {
