@@ -6570,6 +6570,17 @@ function toggleTenantField(woId, field, newVal) {
   });
 }
 
+// Max price (Nov 5 2026): vendor-facing ceiling. Saved through the admin-only /wo/max-price route, which reads the value back before it says saved.
+function saveWoMaxPrice(woId, clear) {
+  var el = document.getElementById('detail-max-price');
+  var v = clear ? '' : (el ? String(el.value || '').trim() : '');
+  api('POST','/wo/max-price',{wo_id:woId, max_price:v}).then(function(res){
+    if (!res || res.error || res.saved === false) { toast('Max price not saved: '+((res && res.error) || 'unknown error'),'error'); return; }
+    toast(v ? 'Max price saved: $'+res.max_price+' (vendor can see it)' : 'Max price cleared','success');
+    loadAll().then(function(){ openWODetail(woId); });
+  }).catch(function(e){ toast('Max price not saved: '+e.message,'error'); });
+}
+
 function setVendorAccess(woId, value) {
   // value: 'TRUE' | 'FALSE' | 'auto'
   api('POST','/workorder/update',{id:woId, fields:{Vendor_Needs_Access:value}}).then(function(res){
