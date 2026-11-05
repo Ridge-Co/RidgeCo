@@ -39,6 +39,13 @@
   .btn.block{display:block;width:100%}
   .btn.sec{background:#fff;color:var(--ink);border:1px solid var(--line);font-weight:500}
   .btn.nav{background:var(--navy)}
+  /* Nov 5 2026 (Brett): job checklist boxes were tiny browser defaults. Big 32px box, thick dark border, green fill + white check when done, whole row is the tap target. */
+  .clrow{display:flex;align-items:center;gap:14px;padding:12px;margin:0;min-height:56px;border-radius:10px;cursor:pointer;background:#f3f5f8;border:2px solid #b8c0cc;font-size:16px;color:#1b1f24}
+  .clrow.on{background:#e7f6ec;border-color:#166534}
+  input.clbox{-webkit-appearance:none;appearance:none;flex:0 0 32px;width:32px;height:32px;margin:0;padding:0;border:3px solid #1b1f24;border-radius:8px;background:#fff;cursor:pointer;display:inline-block}
+  input.clbox:checked{background:#166534 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round' d='M5 12.5l4.5 4.5L19 7'/%3E%3C/svg%3E") center/24px no-repeat;border-color:#166534}
+  input.clbox:focus-visible{outline:3px solid #1d4ed8;outline-offset:2px}
+  .cltxt{font-size:16px;font-weight:600;line-height:1.35}
   .gate-msg{min-height:20px;margin-top:12px;font-size:13px}
   .err-red{color:var(--danger)}
 
@@ -561,14 +568,14 @@ function clRow(wo){
   var rows=CL.map(function(it,i){
     var opts='<option value="">'+esc(clT('Why not done? (pick one)'))+'</option>'+CL_REASONS.map(function(r){ return '<option value="'+r[0]+'"'+(it.code===r[0]?' selected':'')+'>'+esc(clT(r[1]))+'</option>'; }).join('');
     return '<div style="padding:8px 0;border-bottom:1px solid var(--line,#ddd)">'+
-      '<label style="display:flex;gap:8px;align-items:flex-start"><input type="checkbox" '+(it.done?'checked':'')+' onchange="clTick('+i+',this.checked)" style="margin-top:3px"><span class="v" style="font-size:14px">'+esc(it.t||'')+'</span></label>'+
-      '<div id="cl-r-'+i+'" style="display:'+(it.done?'none':'block')+';margin:6px 0 0 26px"><select onchange="clReason('+i+',this.value)" style="width:100%;padding:6px">'+opts+'</select>'+
+      '<label id="cl-lbl-'+i+'" class="clrow'+(it.done?' on':'')+'"><input type="checkbox" class="clbox" '+(it.done?'checked':'')+' onchange="clTick('+i+',this.checked)"><span class="v cltxt">'+esc(it.t||'')+'</span></label>'+
+      '<div id="cl-r-'+i+'" style="display:'+(it.done?'none':'block')+';margin:6px 0 0 12px"><select onchange="clReason('+i+',this.value)" style="width:100%;padding:6px">'+opts+'</select>'+
       '<input type="text" value="'+esc(it.why||'')+'" oninput="clWhy('+i+',this.value)" placeholder="'+esc(clT('Add a note (optional)'))+'" style="width:100%;margin-top:6px;padding:6px"></div></div>';
   }).join('');
   return row(clT('JOB CHECKLIST'), '<div class="v" style="font-size:12px;color:var(--muted);margin-bottom:6px">'+esc(clT('Check off each item as you finish. To complete the job or send a bill, every item must be checked, or marked with a reason if you could not do it.'))+'</div>'+rows+
     '<button class="btn sec" style="margin-top:10px" onclick="clSave()">'+esc(clT('Save checklist'))+'</button><div id="cl-msg" class="sheet-msg"></div>');
 }
-function clTick(i,on){ CL[i].done=on; if(on){ CL[i].code=''; CL[i].why=''; } var r=document.getElementById('cl-r-'+i); if(r) r.style.display=on?'none':'block'; }
+function clTick(i,on){ var lb=document.getElementById('cl-lbl-'+i); if(lb) lb.classList.toggle('on',!!on); CL[i].done=on; if(on){ CL[i].code=''; CL[i].why=''; } var r=document.getElementById('cl-r-'+i); if(r) r.style.display=on?'none':'block'; }
 function clReason(i,v){ CL[i].code=v; }
 function clWhy(i,v){ CL[i].why=v; }
 function clSave(){

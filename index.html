@@ -4119,9 +4119,9 @@ function hubChecklistHtml(wo){
   var CODES={na:'Not applicable',separate:'Separate WO',estimate:'Needs estimate',access:'Couldn’t access',parts:'Needs parts'};
   var done=items.filter(function(i){return i.done;}).length;
   var rows=items.map(function(it){
-    var mark=it.done?'<span style="color:var(--accent2)">✓</span>':(it.code?'<span style="color:var(--warn)">●</span>':'<span style="color:var(--muted)">○</span>');
+    var mark=it.done?'<span style="color:var(--accent2);font-size:18px;font-weight:bold;line-height:1">✓</span>':(it.code?'<span style="color:var(--warn);font-size:18px;line-height:1">●</span>':'<span style="color:var(--muted);font-size:18px;line-height:1">○</span>');
     var reason=(!it.done&&it.code)?' <span style="color:var(--warn);font-size:10px">— '+esc(CODES[it.code]||it.code)+(it.why?': '+esc(it.why):'')+'</span>':'';
-    return '<div style="font-size:12px;padding:3px 0">'+mark+' <span style="'+(it.done?'text-decoration:line-through;color:var(--muted)':'')+'">'+esc(it.t||'')+'</span>'+reason+'</div>';
+    return '<div style="font-size:14px;padding:5px 0">'+mark+' <span style="'+(it.done?'text-decoration:line-through;color:var(--muted)':'')+'">'+esc(it.t||'')+'</span>'+reason+'</div>';
   }).join('');
   // Nov 2 2026 (Brett): admin-only "Mark all resolved" — ticks every item that has no vendor reason code, so the
   // invoice can list the work as done. Items with a reason code stay as the vendor left them. Never shown on the vendor pages.
