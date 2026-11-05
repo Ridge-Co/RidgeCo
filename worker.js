@@ -875,6 +875,7 @@ const _hubWorkerCore = {
         if (path === '/intake/retry')             return await intakeRetry(env, body);
         if (path === '/intake/delivery-email')    return await deliveryEmailIntake(env, _idEmail ? Object.assign({}, body, { mailbox: _idEmail, mailbox_claimed: String(body && body.mailbox || '').slice(0, 120) }) : body);   // a verified identity replaces whatever mailbox the body claims   // Oct 23 2026: store delivery emails (INTAKE_TOKEN or WORKER_SECRET)
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
+        if (path === '/wo/max-price')             return await setWoMaxPrice(env, body);   // ADMIN-ONLY (not in ROLE_SCOPES): set / clear the vendor max price
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
         if (path === '/wo-tenant/add')            return await addTenantToWO(env, body);
         if (path === '/wo-tenant/remove')         return await removeTenantFromWO(env, body);
