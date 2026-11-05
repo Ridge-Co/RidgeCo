@@ -8989,6 +8989,7 @@ function applySheetTemplate(id) {
     document.getElementById('wo-trade').value = t.Trade || document.getElementById('wo-trade').value;
     document.getElementById('wo-priority').value = t.Priority || document.getElementById('wo-priority').value;
     document.getElementById('wo-desc').value = desc;
+    var _tmx = document.getElementById('wo-max-price'); if (_tmx && t.Max_Price) _tmx.value = t.Max_Price;   // template max price carries onto the new WO
   } else if (editModal && editModal.classList.contains('open')) {
     var ta = document.getElementById('ewo-description');
     if (ta) { ta.value = (ta.value?ta.value+'\n\n':'')+desc; ta.style.height='auto'; ta.style.height=Math.max(140,ta.scrollHeight)+'px'; }
