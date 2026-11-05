@@ -10186,9 +10186,14 @@ async function assignVendor(env, body, internal) {
     // English version always built (Oct 13 2026, Brett: the Message Queue showed only the Spanish that
     // was sent): for a Spanish vendor it rides along as the queue row's Original_Body so the review
     // screen can show what the text says in English.
-    const msgEn = `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.\n${link}`;
+    // Max price (Nov 5 2026): only WOs that have a max get the extra line; it goes to the vendor's text only, never into the WO description.
+    const _mpAssign = maxPriceNum(wo.Max_Price);
+    const _mpFmt = _mpAssign ? '$' + _mpAssign.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) : '';
+    const _mpLineEn = _mpAssign ? ` Max price: ${_mpFmt} — send a new estimate with your reason before going over.` : '';
+    const _mpLineEs = _mpAssign ? ` Precio máximo: ${_mpFmt} — envíe un nuevo presupuesto con su razón antes de pasarse.` : '';
+    const msgEn = `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.${_mpLineEn}\n${link}`;
     const msg = isSpanish
-      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Inicie sesión en su portal de proveedor para aceptar o rechazar — el código de la caja y el contacto del inquilino se desbloquean al aceptar.\n${link}`
+      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Inicie sesión en su portal de proveedor para aceptar o rechazar — el código de la caja y el contacto del inquilino se desbloquean al aceptar.${_mpLineEs}\n${link}`
       : msgEn;
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — vendor_job_assigned. Gated + queued via smsGatedSend;
     // the accept-gate withholding (lockbox/tenant contact) itself is unchanged, only the
