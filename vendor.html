@@ -1652,6 +1652,9 @@ function openEstimateEditor(woId, idx) {
       rows +
       '<button class="btn btn-sm" style="margin-top:4px" onclick="addEstItem(\'' + woId + '\',' + idx + ')">+ Line Item</button>' +
       (current ? '<textarea id="est-reason-' + idx + '" rows="2" placeholder="Reason for change (required if revising)…" style="width:100%;margin-top:8px;font-size:12px;padding:7px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);resize:vertical;font-family:var(--font)"></textarea>' : '') +
+      (woMaxFor(woId) ? '<div id="est-overmax-wrap-' + idx + '" style="display:none;margin-top:8px;background:#fff4e5;border:1px solid #d97706;border-radius:6px;padding:8px">' +
+        '<div style="font-size:12px;font-weight:bold;color:#b45309;margin-bottom:6px">⚠ ' + esc(t('Over the max price')) + ' ($' + woMaxFor(woId).toFixed(2) + ') — ' + esc(t('why is it more?')) + '</div>' +
+        '<textarea id="est-overmax-' + idx + '" rows="2" placeholder="' + esc(t('Reason this job costs more than the max price (required)…')) + '" style="width:100%;font-size:12px;padding:7px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);resize:vertical;font-family:var(--font)"></textarea></div>' : '') +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">' +
       '<span style="font-weight:bold">Total: $<span id="est-total-' + idx + '">0.00</span></span>' +
       '<div><button class="btn btn-sm" onclick="loadEstimateWidget(\'' + woId + '\',' + idx + ')">Cancel</button> ' +
