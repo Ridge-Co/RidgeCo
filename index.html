@@ -4225,6 +4225,7 @@ function submitNewWO() {
     room:(document.getElementById('wo-room')||{value:''}).value.trim(),
     checklist:checklistFromText((document.getElementById('wo-checklist')||{value:''}).value),
     owner_wo_ref:document.getElementById('wo-owner-ref').value.trim(),
+    max_price:((document.getElementById('wo-max-price')||{value:''}).value||'').trim(),
     vendor_needs_access:(document.getElementById('wo-vendor-access')||{value:'auto'}).value,
     tenant_visible: tvVisible, tenant_notify_created: tvCreated, tenant_notify_updates: tvUpdates,
     created_by:'admin'
