@@ -44935,7 +44935,10 @@ async function fiBookings(env) {
   const have = new Set(it.rows.filter(r => r.o.Active !== 'FALSE').map(r => r.o.ID));
   const from = inspEtDate(Date.now() - 21 * 86400000), to = inspEtDate(Date.now() + 120 * 86400000);
   // Approved, in a sensible window, and not already turned into an inspection. A claim whose inspection never reached the server is offered again.
-  const list = bt.rows.map(r => r.o).filter(b => b.Active !== 'FALSE' && b.Status === 'approved' && b.Date >= from && b.Date <= to && (!b.Inspection_ID || !have.has(b.Inspection_ID)))
+  // Nov 5 2026: never offer a booking for a house + day that already has an inspection, even when the two were never linked (e.g. a second booking / work order arriving for an inspection already done).
+  const doneKeys = new Set(it.rows.map(r => r.o).filter(o => o.Active !== 'FALSE').map(o => fiDupKey(o.Address, o.Inspection_Date)).filter(Boolean));
+  const list = bt.rows.map(r => r.o).filter(b => b.Active !== 'FALSE' && b.Status === 'approved' && b.Date >= from && b.Date <= to && (!b.Inspection_ID || !have.has(b.Inspection_ID))
+      && !(!b.Inspection_ID && doneKeys.has(fiDupKey(b.Formatted_Address || b.Address, b.Date))))
     .sort((x, y) => String(x.Start_ISO).localeCompare(String(y.Start_ISO)));
   return json({ ok: true, bookings: list.map(b => fiBookingOut(b, custById[String(b.Customer_ID)], owners, props)) });
 }
