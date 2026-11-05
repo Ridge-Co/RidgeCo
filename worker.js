@@ -16768,6 +16768,179 @@ function smsSendOutcome(result) {
 
 // For the legacy sendSMS call sites that used to ignore Twilio's answer. A text that was switched off (skipped), stubbed (staging), held back as a
 // duplicate or refused for its region is not a failure; anything else without a message sid is reported to the ledger (P0, it is a text). Returns true when it went.
+// ═══ WEB PUSH (Nov 5 2026) ═══════════════════════════════════════════════════════════════════════════════════
+// Brett's ask: push notifications for EVERYONE (admin, tenants, owners, vendors) on Android, iPhone, Chromebook and desktop/Windows, so fewer texts go out and
+// people who do not want SMS still hear from us. Each person chooses which of THEIR OWN devices receive pushes (a per-device on/off switch).
+// This block is the CAPABILITY only: it can register devices and send to them. Which messages go by push instead of text is decided later by Brett's list
+// (use pushNotify(env, { recipient_type, recipient_id, title, body, url })). Nothing in this block sends a push on its own.
+// Pieces: service worker sw.js + push-client.js live on GitHub Pages (static); the keys, the device list and the sender live here.
+//   * VAPID key pair: generated once on first use and kept in the Push_Keys tab (never returned by any route; only the PUBLIC half is). A Cloudflare secret pair
+//     (VAPID_PRIVATE_JWK + VAPID_PUBLIC_KEY) overrides the tab if Brett ever sets one.
+//   * Devices: Push_Subscriptions, one row per browser/device. The subscription's own keys live there, so nothing about a device is exposed by /push/devices.
+//   * Encryption: RFC 8291 aes128gcm with WebCrypto; auth: RFC 8292 VAPID JWT (ES256). Only the real push services' hosts are accepted as endpoints (SSRF guard).
+const PUSH_SUBS_TAB = 'Push_Subscriptions';
+const PUSH_SUBS_COLS = ['ID','Recipient_Type','Recipient_ID','Platform','Label','Endpoint','P256dh','Auth','Enabled','Created_At','Last_Success_At','Last_Error','Fail_Count','Active'];
+const PUSH_KEYS_TAB = 'Push_Keys';
+const PUSH_PLATFORMS = ['android', 'iphone', 'chromebook', 'desktop'];
+const PUSH_PLATFORM_LABEL = { android: 'Android phone', iphone: 'iPhone', chromebook: 'Chromebook', desktop: 'Windows / desktop computer' };
+const PUSH_HOST_SUFFIXES = ['googleapis.com', 'push.apple.com', 'mozilla.com', 'notify.windows.com'];
+const PUSH_VAPID_SUBJECT = 'mailto:ridgecomaintenance@gmail.com';
+const PUSH_MAX_DEVICES = 10;
+let _pushTabsReady = false, _pushVapidCache = null;
+function pushB64uEnc(bytes) { const a = new Uint8Array(bytes); let s = ''; for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+function pushB64uDec(str) { let s = String(str || '').replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; const bin = atob(s), out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+function pushConcat() { let n = 0; for (const a of arguments) n += a.length; const out = new Uint8Array(n); let o = 0; for (const a of arguments) { out.set(a, o); o += a.length; } return out; }
+function pushNormPlatform(p) { p = String(p || '').toLowerCase(); return PUSH_PLATFORMS.includes(p) ? p : 'desktop'; }
+// Only https endpoints on a known push service are accepted (Chrome/Android/Chromebook/Edge = googleapis.com, Apple = push.apple.com, Firefox = mozilla.com, Windows = notify.windows.com).
+function pushEndpointOk(endpoint) {
+  try { const u = new URL(String(endpoint || '')); if (u.protocol !== 'https:' || u.username || u.password || (u.port && u.port !== '443')) return false; const h = u.hostname.toLowerCase(); return PUSH_HOST_SUFFIXES.some(s => h === s || h.endsWith('.' + s)); }
+  catch (e) { return false; }
+}
+// RFC 8291 (aes128gcm). opts.ephemeral / opts.salt exist only so tests can pin them; production passes neither.
+async function pushEncrypt(plain, p256dh, authSecretB64u, opts) {
+  opts = opts || {};
+  const uaPub = pushB64uDec(p256dh), authSecret = pushB64uDec(authSecretB64u);
+  if (uaPub.length !== 65 || uaPub[0] !== 4 || authSecret.length !== 16) throw new Error('the device keys are malformed');
+  const eph = opts.ephemeral || await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const asPub = new Uint8Array(await crypto.subtle.exportKey('raw', eph.publicKey));
+  const uaKey = await crypto.subtle.importKey('raw', uaPub, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: uaKey }, eph.privateKey, 256));
+  const salt = opts.salt || crypto.getRandomValues(new Uint8Array(16));
+  const te = new TextEncoder();
+  const hkdf = async (ikm, s, info, len) => new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: s, info }, await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']), len * 8));
+  const ikm = await hkdf(shared, authSecret, pushConcat(te.encode('WebPush: info\0'), uaPub, asPub), 32);
+  const cek = await hkdf(ikm, salt, te.encode('Content-Encoding: aes128gcm\0'), 16);
+  const nonce = await hkdf(ikm, salt, te.encode('Content-Encoding: nonce\0'), 12);
+  const aes = await crypto.subtle.importKey('raw', cek, 'AES-GCM', false, ['encrypt']);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, aes, pushConcat(plain, new Uint8Array([2]))));   // 0x02 = last (only) record
+  return pushConcat(salt, new Uint8Array([0, 0, 0x10, 0]), new Uint8Array([asPub.length]), asPub, ct);   // header: salt(16) + record size 4096 + key id length + key id
+}
+async function pushVapidKeys(env) {
+  if (_pushVapidCache) return _pushVapidCache;
+  if (env.VAPID_PRIVATE_JWK && env.VAPID_PUBLIC_KEY) { _pushVapidCache = { pub: String(env.VAPID_PUBLIC_KEY), jwk: JSON.parse(env.VAPID_PRIVATE_JWK) }; return _pushVapidCache; }
+  await ensureTab(env, PUSH_KEYS_TAB, ['ID', 'Name', 'Value', 'Created_At']);
+  const pick = async () => (await fetchTab(env, PUSH_KEYS_TAB)).filter(r => r.Name === 'vapid').sort((a, b) => Number(a.ID) - Number(b.ID))[0] || null;
+  let row = await pick();
+  if (!row) {
+    // One row holds BOTH halves, so two first-ever callers racing can never end up with a public half from one pair and a private half from another (the lowest ID wins below).
+    const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+    const jwk = await crypto.subtle.exportKey('jwk', kp.privateKey);
+    const pub = pushB64uEnc(await crypto.subtle.exportKey('raw', kp.publicKey));
+    const res = await addRow(env, PUSH_KEYS_TAB, { Name: 'vapid', Value: JSON.stringify({ pub, jwk }), Created_At: new Date().toISOString() });
+    const j = await res.json(); if (!j || !j.success) throw new Error('could not save the push keys');
+    invalidateTabCache(PUSH_KEYS_TAB);
+    row = await pick();
+    if (!row) throw new Error('the push keys did not read back');
+  }
+  const v = JSON.parse(row.Value);
+  _pushVapidCache = { pub: v.pub, jwk: v.jwk };
+  return _pushVapidCache;
+}
+async function pushVapidAuth(env, endpoint) {
+  const v = await pushVapidKeys(env), te = new TextEncoder();
+  const head = pushB64uEnc(te.encode(JSON.stringify({ typ: 'JWT', alg: 'ES256' })));
+  const claims = pushB64uEnc(te.encode(JSON.stringify({ aud: new URL(endpoint).origin, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: PUSH_VAPID_SUBJECT })));
+  const key = await crypto.subtle.importKey('jwk', v.jwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, te.encode(head + '.' + claims)));   // WebCrypto gives r||s, which is what JWS wants
+  return 'vapid t=' + head + '.' + claims + '.' + pushB64uEnc(sig) + ', k=' + v.pub;
+}
+async function pushEnsureTabs(env) { if (_pushTabsReady) return; await ensureTab(env, PUSH_SUBS_TAB, PUSH_SUBS_COLS); _pushTabsReady = true; }
+function pushDeviceOut(r, thisEndpoint) {
+  return { id: String(r.ID), platform: pushNormPlatform(r.Platform), label: String(r.Label || PUSH_PLATFORM_LABEL[pushNormPlatform(r.Platform)]), enabled: String(r.Enabled).toUpperCase() !== 'FALSE', created_at: String(r.Created_At || ''), last_success_at: String(r.Last_Success_At || ''), last_error: String(r.Last_Error || ''), this_device: !!thisEndpoint && String(r.Endpoint) === String(thisEndpoint) };
+}
+async function pushMyRows(env, type, id) {
+  await pushEnsureTabs(env); invalidateTabCache(PUSH_SUBS_TAB);
+  return (await fetchTab(env, PUSH_SUBS_TAB)).filter(r => String(r.Active).toUpperCase() !== 'FALSE' && String(r.Recipient_Type) === type && String(r.Recipient_ID) === String(id));
+}
+// Send ONE push to ONE device row. Returns { ok, status, gone, error }. Never throws.
+async function pushSendOne(env, row, payload, opts) {
+  opts = opts || {};
+  try {
+    if (!pushEndpointOk(row.Endpoint)) return { ok: false, status: 0, gone: true, error: 'endpoint is not a push service address' };
+    if (env.__STAGING__ ?? isStaging(env)) return { ok: true, status: 0, staged: true, gone: false, error: '' };   // staging never reaches a real phone
+    const body = await pushEncrypt(new TextEncoder().encode(JSON.stringify(payload)), row.P256dh, row.Auth);
+    const res = await fetch(row.Endpoint, { method: 'POST', headers: { 'Authorization': await pushVapidAuth(env, row.Endpoint), 'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream', 'TTL': String(opts.ttl || 86400), 'Urgency': opts.urgency || 'normal' }, body });
+    if (res.status >= 200 && res.status < 300) return { ok: true, status: res.status, gone: false, error: '' };
+    let t = ''; try { t = (await res.text()).slice(0, 160); } catch (e) { /* silent-ok: the status code alone says what happened */ }
+    return { ok: false, status: res.status, gone: res.status === 404 || res.status === 410, error: 'push service said ' + res.status + (t ? ': ' + t : '') };
+  } catch (e) { return { ok: false, status: 0, gone: false, error: String((e && e.message) || e).slice(0, 160) }; }
+}
+// THE entry point for later wiring: pushNotify(env, { recipient_type: 'admin'|'tenant'|'owner'|'vendor', recipient_id, title, body, url?, tag?, urgency?, platforms?: ['android',...], device_id? })
+// -> { ok, sent, failed, devices:[{id,platform,label,ok,error}] }. Only devices that are Active AND switched on receive it. `sent` = 0 with no failures means the person has no push device
+// (the caller then falls back to a text). Never throws; a dead device (404/410) is switched off; a device failing 5 times in a row is retired.
+async function pushNotify(env, opts) {
+  const out = { ok: true, sent: 0, failed: 0, devices: [] };
+  try {
+    const type = String(opts.recipient_type || ''), id = String(opts.recipient_id || '');
+    if (!type || !id) return { ok: false, sent: 0, failed: 0, devices: [], error: 'recipient_type and recipient_id are required' };
+    let rows = (await pushMyRows(env, type, id)).filter(r => String(r.Enabled).toUpperCase() !== 'FALSE');
+    if (opts.device_id) rows = rows.filter(r => String(r.ID) === String(opts.device_id));
+    if (Array.isArray(opts.platforms) && opts.platforms.length) rows = rows.filter(r => opts.platforms.includes(pushNormPlatform(r.Platform)));
+    const payload = { title: String(opts.title || 'Ridge Co').slice(0, 80), body: String(opts.body || '').slice(0, 400), url: String(opts.url || ''), tag: String(opts.tag || '').slice(0, 60) };
+    for (const r of rows) {
+      const s = await pushSendOne(env, r, payload, { urgency: opts.urgency, ttl: opts.ttl });
+      const fails = s.ok ? 0 : (Number(r.Fail_Count) || 0) + 1;
+      try { await updateRow(env, PUSH_SUBS_TAB, r.ID, s.ok ? { Last_Success_At: new Date().toISOString(), Last_Error: '', Fail_Count: '0' } : { Last_Error: s.error, Fail_Count: String(fails), Active: (s.gone || fails >= 5) ? 'FALSE' : 'TRUE' }); }
+      catch (e) { /* silent-ok: bookkeeping only; the send result is still returned below */ }
+      if (s.ok) out.sent++; else out.failed++;
+      out.devices.push({ id: String(r.ID), platform: pushNormPlatform(r.Platform), label: String(r.Label || ''), ok: s.ok, error: s.error });
+    }
+    invalidateTabCache(PUSH_SUBS_TAB);
+  } catch (e) { return { ok: false, sent: out.sent, failed: out.failed, devices: out.devices, error: String((e && e.message) || e).slice(0, 200) }; }
+  return out;
+}
+// /push/* routes. A signed-in tenant/owner/vendor (or the admin) only ever sees and changes THEIR OWN devices: the identity comes from the session, never from the request.
+async function pushRoute(env, path, url, body, callerRole, callerSessionId) {
+  try {
+    const type = callerRole || 'admin', id = callerRole ? String(callerSessionId) : 'brett';
+    body = body || {};
+    if (path === '/push/vapid-key') return json({ ok: true, key: (await pushVapidKeys(env)).pub });
+    if (path === '/push/devices') { const rows = await pushMyRows(env, type, id), ep = url ? url.searchParams.get('endpoint') || '' : ''; return json({ ok: true, devices: rows.map(r => pushDeviceOut(r, ep)) }); }
+    if (path === '/push/subscribe') {
+      const sub = body.subscription || {}, keys = sub.keys || {};
+      if (!pushEndpointOk(sub.endpoint)) return json({ ok: false, error: 'bad_endpoint', message: 'That does not look like a browser push address, so it was not saved.' }, 400);
+      if (pushB64uDec(keys.p256dh).length !== 65 || pushB64uDec(keys.auth).length !== 16) return json({ ok: false, error: 'bad_keys', message: 'The device keys were missing or malformed, so nothing was saved.' }, 400);
+      await pushEnsureTabs(env); invalidateTabCache(PUSH_SUBS_TAB);
+      const all = await fetchTab(env, PUSH_SUBS_TAB), platform = pushNormPlatform(body.platform), label = String(body.label || '').trim().slice(0, 40) || PUSH_PLATFORM_LABEL[platform];
+      const same = all.find(r => String(r.Endpoint) === String(sub.endpoint));
+      if (same) {   // the same browser signing in as someone else, or turning push back on: it moves to whoever is signed in now and is switched on
+        await updateRowVerified(env, PUSH_SUBS_TAB, same.ID, { Recipient_Type: type, Recipient_ID: id, Platform: platform, Label: label, P256dh: keys.p256dh, Auth: keys.auth, Enabled: 'TRUE', Active: 'TRUE', Fail_Count: '0', Last_Error: '' });
+        return json({ ok: true, device: Object.assign(pushDeviceOut(Object.assign({}, same, { Platform: platform, Label: label, Enabled: 'TRUE' }), sub.endpoint), { this_device: true }) });
+      }
+      const mine = all.filter(r => String(r.Active).toUpperCase() !== 'FALSE' && String(r.Recipient_Type) === type && String(r.Recipient_ID) === id);
+      if (mine.length >= PUSH_MAX_DEVICES) return json({ ok: false, error: 'too_many', message: 'You already have ' + PUSH_MAX_DEVICES + ' devices. Remove one you no longer use first.' }, 409);
+      const res = await addRow(env, PUSH_SUBS_TAB, { Recipient_Type: type, Recipient_ID: id, Platform: platform, Label: label, Endpoint: sub.endpoint, P256dh: keys.p256dh, Auth: keys.auth, Enabled: 'TRUE', Created_At: new Date().toISOString(), Last_Success_At: '', Last_Error: '', Fail_Count: '0', Active: 'TRUE' });
+      const j = await res.json(); if (!j || !j.success) return json({ ok: false, error: 'save_failed', message: 'The device could not be saved. Try again.' }, 500);
+      invalidateTabCache(PUSH_SUBS_TAB);
+      return json({ ok: true, device: { id: String(j.id), platform, label, enabled: true, created_at: new Date().toISOString(), last_success_at: '', last_error: '', this_device: true } });
+    }
+    if (path === '/push/device' || path === '/push/remove') {
+      const rows = await pushMyRows(env, type, id), row = rows.find(r => String(r.ID) === String(body.id));
+      if (!row) return json({ ok: false, error: 'not_found', message: 'That device is not on your list.' }, 404);
+      const f = {};
+      if (path === '/push/remove') f.Active = 'FALSE';
+      else { if (typeof body.enabled === 'boolean') f.Enabled = body.enabled ? 'TRUE' : 'FALSE'; if (typeof body.label === 'string' && body.label.trim()) f.Label = body.label.trim().slice(0, 40); }
+      if (!Object.keys(f).length) return json({ ok: false, error: 'nothing_to_change', message: 'Nothing to change.' }, 400);
+      await updateRowVerified(env, PUSH_SUBS_TAB, row.ID, f); invalidateTabCache(PUSH_SUBS_TAB);
+      return json({ ok: true, device: pushDeviceOut(Object.assign({}, row, f), '') });
+    }
+    if (path === '/push/test') {
+      const r = await pushNotify(env, { recipient_type: type, recipient_id: id, device_id: body.id || '', title: 'Ridge Co test', body: 'Push notifications are working on this device.', url: '', tag: 'push-test' });
+      if (!r.devices.length) return json({ ok: false, error: 'no_devices', message: 'No switched-on device to send to. Turn push on for a device first.' }, 409);
+      return json({ ok: r.sent > 0, sent: r.sent, failed: r.failed, devices: r.devices });
+    }
+    if (path === '/push/send') {   // admin only (not in any role scope): send to one named recipient, e.g. a first real test to a tenant
+      if (callerRole) return json({ error: 'Unauthorized' }, 401);
+      const r = await pushNotify(env, { recipient_type: String(body.recipient_type || ''), recipient_id: String(body.recipient_id || ''), title: body.title, body: body.body, url: body.url, tag: body.tag, platforms: body.platforms });
+      return json(Object.assign({ ok: r.ok }, r), r.ok ? 200 : 400);
+    }
+    return json({ ok: false, error: 'not_found' }, 404);
+  } catch (e) {
+    try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'push_route', ref: path, severity: 'P2', message: 'push request failed: ' + String((e && e.message) || e).slice(0, 200) }); } catch (_) { /* silent-ok: the caller still gets the error below */ }
+    return json({ ok: false, error: 'push_failed', message: 'Push could not be completed: ' + String((e && e.message) || e).slice(0, 160) }, 500);
+  }
+}
+
 async function smsReportIfFailed(env, where, ref, r) {
   if (r && (r.sid || r.staged || r.skipped)) return !!(r && r.sid);
   const o = smsSendOutcome(r);
