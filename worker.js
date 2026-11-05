@@ -7825,7 +7825,9 @@ async function createWorkOrder(env, body) {
   // header row — otherwise the field maps to a non-existent header and is silently dropped.
   if (body.checklist) { try { await ensureColumns(env, 'Work_Orders', ['Checklist']); } catch(_){} }
   // Max price (Nov 5 2026): admin-only field (the router strips it from portal sessions); the column is added only when a max is actually set.
-  const _maxPrice = maxPriceNum(body.max_price);
+  // (parsed inline, not via maxPriceNum, so this function stays self-contained for the tests that run it on its own)
+  const _mpRaw = parseFloat(String(body.max_price == null ? '' : body.max_price).replace(/[$,\s]/g, ''));
+  const _maxPrice = Number.isFinite(_mpRaw) && _mpRaw > 0 ? Math.round(_mpRaw * 100) / 100 : 0;
   if (_maxPrice) { try { await ensureColumns(env, 'Work_Orders', ['Max_Price']); } catch(_){} }
   const data = await sheetsRequest(env, 'GET', `/values/Work_Orders`);
   const rows = data.values || [];
