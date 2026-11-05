@@ -13222,6 +13222,29 @@ async function addEstimateVersion(env, body) {
   }, 120, r => estimateLineItemsCanonical(r.Line_Items) === estimateLineItemsCanonical(lineItemsJson));
   if (dupe) return json({ success: true, duplicate: true, version: parseInt(dupe.Version || '1'), subtotal: dupe.Subtotal || subtotal.toFixed(2) });
 
+  // Nov 5 2026 — max price: a vendor estimate ABOVE the WO's max must say why. The reason is stored on the estimate
+  // (Over_Max_Reason + English copy) so Brett sees it beside the number; the max amount itself is never copied onto the estimate.
+  const _estByAdmin = /^(admin|hub|brett)$/i.test(String(body.created_by || ''));
+  let overMaxReason = '', overMaxReasonEn = '', overMax = false;
+  if (!_estByAdmin) {
+    let _mwo = null; try { _mwo = findWO(await fetchTab(env, 'Work_Orders'), woId); } catch (_) {}
+    const _mx = maxPriceNum(_mwo && _mwo.Max_Price);
+    if (_mx && subtotal > _mx + 0.004) {
+      overMax = true;
+      overMaxReason = String(body.over_max_reason || '').trim().slice(0, 1000);
+      if (overMaxReason.length < 5) {
+        let _ml = String(body.lang || '').toLowerCase() === 'es' ? 'es' : 'en';
+        try { const _mv = body.vendor_id ? (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(body.vendor_id)) : null; if (vendorWantsSpanish(_mv)) _ml = 'es'; } catch (_) {}
+        return json({ error: _ml === 'es' ? 'Este presupuesto supera el precio máximo de este trabajo. Escriba la razón de la diferencia para poder enviarlo.' : 'This estimate is over the max price for this job. Add the reason for the difference to send it.', code: 'over_max_reason_needed', max: _mx, subtotal: +subtotal.toFixed(2), lang: _ml }, 409);
+      }
+      overMaxReasonEn = overMaxReason;
+      try {
+        const _mv2 = body.vendor_id ? (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(body.vendor_id)) : null;
+        if (vendorWantsSpanish(_mv2)) { const _tr = await translateText(env, overMaxReason, 'es', 'en'); if (_tr) overMaxReasonEn = String(_tr); }
+      } catch (_) {}
+    }
+  }
+
   // Vendor text is kept exactly as written; an English copy is stored beside it (per-line desc_en
   // inside Line_Items + Change_Reason_EN) so the admin panel, owner proposal and invoice can read
   // English. Fails open — a translation miss just means no English copy (Re-translate can retry).
