@@ -13279,7 +13279,7 @@ async function addEstimateVersion(env, body) {
     try {
       const c = await estimateSmsContext(env, woId, body.vendor_id);
       await sendTemplatedSms(env, { type: 'admin_estimate_new', kind: 'admin', wo_id: woId, property: c.property,
-        tokens: { Kind: (c.wo && c.wo.Type === 'addon') ? (nextVersion > 1 ? 'Revised additional work' : 'Additional work') : (nextVersion > 1 ? 'Revised estimate' : 'New estimate')) + (overMax ? ' OVER MAX' : ''), WO: woId, Address: c.address, Vendor: (c.vendor && (c.vendor.Name || c.vendor.First_Name)) || body.created_by || 'a vendor', Amount: fmtMoney(subtotal) } });
+        tokens: { Kind: ((c.wo && c.wo.Type === 'addon') ? (nextVersion > 1 ? 'Revised additional work' : 'Additional work') : (nextVersion > 1 ? 'Revised estimate' : 'New estimate')) + (overMax ? ' OVER MAX' : ''), WO: woId, Address: c.address, Vendor: (c.vendor && (c.vendor.Name || c.vendor.First_Name)) || body.created_by || 'a vendor', Amount: fmtMoney(subtotal) } });
     } catch (_) {}
   }
   return json({ success: true, version: nextVersion, subtotal: subtotal.toFixed(2) });
