@@ -25309,6 +25309,8 @@ async function woSharedRead(env, url){
     vendor_has_access: !!e.vendor_has_access, Vendor_ID: e.Vendor_ID||'',
     Checklist: wo.Checklist||'',
   };
+  // Max price (Nov 5 2026): shown only to the vendor this WO is assigned to (the link's own vendor), never to a tenant/other link.
+  { const _smp = maxPriceNum(wo.Max_Price); if (_smp && auth.vid && String(auth.vid) === String(wo.Vendor_ID||'')) safe.Max_Price = _smp.toFixed(2); }
   let attachments = [];
   try {
     const at = await fetchTab(env, 'Attachments');
