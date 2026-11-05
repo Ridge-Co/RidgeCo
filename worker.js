@@ -43606,10 +43606,30 @@ function fiInspHeaderOut(o) {
 }
 
 // ── Endpoints ───────────────────────────────────────────────────────────────────────────────
+// House number + first two street words + date: "1510 E Madison St, Baltimore" and "1510 E Madison Street Baltimore Md 21205" on the same day are the same visit.
+function fiDupKey(address, date) {
+  const t = String(address || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
+  const d = String(date || '').slice(0, 10);
+  return t && /^\d/.test(t) && d ? t + '|' + d : '';
+}
+const FI_BILLED_STATES = ['invoiced', 'emailed', 'none'];   // 'staged' is a test run, 'creating…/sending…/review…/held' are unfinished
+function fiBilledInspectionIds(bookingRows) {
+  const out = new Set();
+  for (const b of (bookingRows || [])) {
+    if (String(b.Active || '').toUpperCase() === 'FALSE') continue;
+    const id = String(b.Inspection_ID || '').trim();
+    if (id && String(b.Completed_At || '').trim() && FI_BILLED_STATES.includes(String(b.Invoice_Status || '').trim())) out.add(id);
+  }
+  return out;
+}
 async function fiList(env) {
   await fiEnsureTabs(env);
   const [t, bt] = [await fiReadFresh(env, 'FI_Inspections'), await fiReadFresh(env, 'FI_Brands')];
-  const items = t.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiInspHeaderOut(r.o)).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))).slice(0, 100);
+  // Nov 5 2026: billing is the last step of an inspection. An inspection is "billed" when its linked booking is completed AND the invoice step finished
+  // (invoiced / emailed, or completed with no charge). The phone tucks published+billed inspections into a collapsed section. A read failure here must never break the list.
+  let billedIds = new Set();
+  try { billedIds = fiBilledInspectionIds(await fetchTab(env, 'Insp_Bookings')); } catch (e) { /* list still loads; nothing is collapsed */ }
+  const items = t.rows.filter(r => r.o.Active !== 'FALSE').map(r => Object.assign(fiInspHeaderOut(r.o), { billed: billedIds.has(String(r.o.ID)) })).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))).slice(0, 100);
   const brands = bt.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiBrandOut(r.o, true));
   return json({ ok: true, inspections: items, brands, report_base: FI_PAGE_BASE });
 }
@@ -44915,7 +44935,10 @@ async function fiBookings(env) {
   const have = new Set(it.rows.filter(r => r.o.Active !== 'FALSE').map(r => r.o.ID));
   const from = inspEtDate(Date.now() - 21 * 86400000), to = inspEtDate(Date.now() + 120 * 86400000);
   // Approved, in a sensible window, and not already turned into an inspection. A claim whose inspection never reached the server is offered again.
-  const list = bt.rows.map(r => r.o).filter(b => b.Active !== 'FALSE' && b.Status === 'approved' && b.Date >= from && b.Date <= to && (!b.Inspection_ID || !have.has(b.Inspection_ID)))
+  // Nov 5 2026: never offer a booking for a house + day that already has an inspection, even when the two were never linked (e.g. a second booking / work order arriving for an inspection already done).
+  const doneKeys = new Set(it.rows.map(r => r.o).filter(o => o.Active !== 'FALSE').map(o => fiDupKey(o.Address, o.Inspection_Date)).filter(Boolean));
+  const list = bt.rows.map(r => r.o).filter(b => b.Active !== 'FALSE' && b.Status === 'approved' && b.Date >= from && b.Date <= to && (!b.Inspection_ID || !have.has(b.Inspection_ID))
+      && !(!b.Inspection_ID && doneKeys.has(fiDupKey(b.Formatted_Address || b.Address, b.Date))))
     .sort((x, y) => String(x.Start_ISO).localeCompare(String(y.Start_ISO)));
   return json({ ok: true, bookings: list.map(b => fiBookingOut(b, custById[String(b.Customer_ID)], owners, props)) });
 }
