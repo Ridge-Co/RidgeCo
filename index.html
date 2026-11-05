@@ -8930,6 +8930,7 @@ function openEditTemplateModal(id) {
   document.getElementById('tmpl-desc').value = t.Description || '';
   document.getElementById('tmpl-link-url').value = t.Link_URL || '';
   document.getElementById('tmpl-link-label').value = t.Link_Label || '';
+  document.getElementById('tmpl-max-price').value = t.Max_Price || '';
   recurFillForm(t);
   var title = document.getElementById('tmpl-modal-title'); if (title) title.textContent = 'EDIT WO TEMPLATE';
   var saveBtn = document.getElementById('tmpl-save-btn'); if (saveBtn) saveBtn.textContent = 'SAVE CHANGES';
