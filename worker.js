@@ -19193,7 +19193,7 @@ async function schedUnexpectedCloudflareCron(env, event) {
 //     is the explicit override (default off). Owners are always suppressed (Owner_Notify_Override='off').
 // The date math below is pure (ISO 'YYYY-MM-DD' strings in, out) so test/recurring-wo.test.mjs
 // exercises it directly.
-const RECUR_TEMPLATE_COLS = ['Recurrence_Enabled','Freq_Type','Freq_Interval','Freq_Weekday','Freq_Nth','Freq_Day_Of_Month','Start_Date','End_Date','Season_Enabled','Season_Start','Season_End','Targets','Default_Vendor_ID','Lead_Days','Notify_Tenant','Last_Skips','Last_Posted_Date'];
+const RECUR_TEMPLATE_COLS = ['Recurrence_Enabled','Freq_Type','Freq_Interval','Freq_Weekday','Freq_Nth','Freq_Day_Of_Month','Start_Date','End_Date','Season_Enabled','Season_Start','Season_End','Targets','Default_Vendor_ID','Lead_Days','Notify_Tenant','Last_Skips','Last_Posted_Date','Max_Price'];
 const RECUR_WO_COLS = ['Recurring_Template_ID','Recurring_Due','Owner_Notify_Override'];
 const RECUR_CLOSED_STATUSES = WOStatus.sets.RECUR_CLOSED;
 const RECUR_LOOKBACK_DAYS = 3; // a sweep outage of up to 3 days still catches up an occurrence; older ones are dropped, not posted late
