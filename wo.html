@@ -502,6 +502,9 @@ function renderDoc(){
   // job
   h += row(t('Trade'), '<span class="v">'+esc(trTrade(wo.Trade)||'—')+'</span>');
   h += row(t('Job Description'), '<div class="v desc">'+esc(wo.Description||'—')+'</div>');
+  // Max price (Nov 5 2026): only sent to the assigned vendor's own link; the server also refuses a bill over it.
+  var _mp=parseFloat(String(wo.Max_Price||'').replace(/[$,\s]/g,''));
+  if(_mp>0) h += row(t('Max price'), '<div class="v" style="background:#fff4e5;border:2px solid #d97706;border-radius:8px;padding:10px 12px;color:#7c3a00"><div style="font-size:22px;font-weight:bold;line-height:1.2">$'+_mp.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2})+'</div><div style="font-size:13px;margin-top:2px">'+esc(t('The most you can bill for this job. To go over it, contact the office for a new estimate first.'))+'</div></div>');
   h += clRow(wo);
   if(wo.Scheduled_Date) h += row(t('Scheduled'), '<span class="v">'+esc(wo.Scheduled_Date)+(wo.Scheduled_Window?(' · '+esc(wo.Scheduled_Window)):'')+'</span>');
 
