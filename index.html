@@ -17861,7 +17861,7 @@ function loadPortalAttachments(woId, opts) {
           // Real thumbnail, tap opens the in-app lightbox at this photo -- with a small
           // delete "x" overlay in the corner (admin-only capability this page already had).
           var thumb = document.createElement('span');
-          thumb.style.cssText = 'position:relative;display:inline-block;width:56px;height:56px;border-radius:5px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid var(--border);margin:2px 4px 2px 0;vertical-align:top';
+          thumb.style.cssText = 'position:relative;display:inline-block;width:64px;height:64px;border-radius:5px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid var(--border);margin:2px 4px 2px 0;vertical-align:top';
           thumb.onclick = (function(woIdC, idxC){ return function(){ rcOpenLightbox(_rcWoItems[woIdC], idxC); }; })(woId, itemIdx);
           // Internal (receipt/bill/invoice) files are never Drive-shared (rule 13), so the
           // public thumbnail endpoint always fails for them -- go straight to the authenticated
