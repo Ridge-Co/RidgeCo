@@ -10613,6 +10613,9 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
     access_gated: accessGated,
     vendor_name: vendorName, vendor_phone: vendorPhone, vendor_trade: vendorTrade,
   };
+  // Max price (Nov 5 2026): vendor-facing only. `...wo` above copies every column, so it is stripped here by default
+  // and only the vendor portal view (vendorView) keeps it — tenant, owner and shared-link views never carry it.
+  if (!opts.vendorView) delete base.Max_Price;
   // Tenants get the full technician contact (name+phone+trade) so they can coordinate
   // access directly once someone's assigned — that's the whole point of showing it.
   if (opts.tenantView) { delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = []; }
