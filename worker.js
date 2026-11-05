@@ -793,6 +793,8 @@ const _hubWorkerCore = {
         // this only removes the uncaught-parse-error class of failure, not real validation.
         let body = {};
         try { body = await request.json(); } catch (e) { body = {}; }
+        // Max price (Nov 5 2026): only the admin can set or change it. A tenant / owner / vendor session can never create or edit it, whatever they put in the body.
+        if (callerRole && body && typeof body === 'object') { delete body.max_price; delete body.Max_Price; if (body.fields && typeof body.fields === 'object') delete body.fields.Max_Price; }
         if (callerRole) {
           const _mmb = sessionIdentityMismatch(callerRole, callerSessionId, null, body);
           if (_mmb) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mmb);
