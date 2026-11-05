@@ -3150,7 +3150,18 @@ function openWODetail(woId) {
     '<div style="font-size:10px;color:var(--muted);margin-top:8px">Trade defaults are set in Config → Access_Trade_Defaults. Trades not listed default to YES.</div>' +
     '</div>';
 
-  document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + vaSection);
+  // Max price (Nov 5 2026) — what the vendor may bill; shown to the vendor, never on the description or invoice.
+  var mpVal = String(wo.Max_Price || '');
+  var mpSection = '<div style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">MAX PRICE (vendor sees this · never on invoices)</div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+    '<input type="text" inputmode="decimal" id="detail-max-price" value="' + esc(mpVal) + '" placeholder="No max set" autocomplete="off" style="max-width:160px">' +
+    '<button class="btn small" onclick="saveWoMaxPrice(\'' + woId + '\')">Save</button>' +
+    (mpVal ? '<button class="btn small secondary" onclick="saveWoMaxPrice(\'' + woId + '\',true)">Clear</button>' : '') +
+    '</div>' +
+    '<div style="font-size:10px;color:var(--muted);margin-top:8px">A vendor invoice over this is blocked until they accept the max or send a new estimate with a reason and you approve it.</div>' +
+    '</div>';
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + vaSection + mpSection);
   // Vendor Task Requests (CAP-036 #12) -- its own section/insert, deliberately separate
   // from the addBtn(...) action-buttons block above so it never collides with that code.
   var vtrSection = wo.Vendor_ID ? (
