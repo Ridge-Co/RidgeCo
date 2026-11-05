@@ -816,11 +816,23 @@ function viewHome(){
   var arr = Object.keys(items).map(function(k){return items[k];}).sort(function(a,b){ return String(b.updated||'').localeCompare(String(a.updated||'')); });
   h += '<h2>Inspections</h2>';
   if (!arr.length) h += '<div class="card muted">None yet. Tap “New inspection” to start one.</div>';
-  arr.forEach(function(it){
+  // Nov 5 2026: billing is the last step. Published + billed inspections are tucked into a collapsed section at the bottom (still listed, tap to open one).
+  // Anything with unsaved changes or not on the server stays up top so it can never be hidden by accident.
+  var isDone = function(it){ return it.status==='published' && it.billed && it.server && !it.dirty; };
+  var card = function(it){
     var pill = it.status==='published' ? '<span class="pill ok">Published</span>' : '<span class="pill">Draft</span>';
+    if (it.billed) pill += ' <span class="pill ok">Billed</span>';
     var sync = it.dirty ? ' <span class="pill warn">unsaved changes</span>' : (!it.server ? ' <span class="pill bad">only on this phone</span>' : '');
-    h += '<div class="card" style="cursor:pointer" onclick="openInspection(\''+esc(it.id)+'\')"><div class="row"><b>'+esc(it.address||'(no address)')+'</b>'+pill+'</div><div class="muted">'+esc(it.date||'')+' · '+(it.issues||0)+' issue'+((it.issues||0)===1?'':'s')+sync+'</div></div>';
-  });
+    return '<div class="card" style="cursor:pointer" onclick="openInspection(\''+esc(it.id)+'\')"><div class="row"><b>'+esc(it.address||'(no address)')+'</b><span>'+pill+'</span></div><div class="muted">'+esc(it.date||'')+' · '+(it.issues||0)+' issue'+((it.issues||0)===1?'':'s')+sync+'</div></div>';
+  };
+  var active = arr.filter(function(it){ return !isDone(it); }), done = arr.filter(isDone);
+  active.forEach(function(it){ h += card(it); });
+  if (!active.length && done.length) h += '<div class="card muted">Nothing open — everything is submitted and billed.</div>';
+  if (done.length){
+    h += '<details id="fi-billed"'+(S.billedOpen?' open':'')+' ontoggle="S.billedOpen=this.open" style="margin-top:14px"><summary style="cursor:pointer;font-weight:600">Submitted &amp; billed ('+done.length+')</summary>';
+    done.forEach(function(it){ h += card(it); });
+    h += '</details>';
+  }
   return h;
 }
 
