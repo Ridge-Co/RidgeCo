@@ -69,7 +69,7 @@ ok(claims.aud === 'https://fcm.googleapis.com' && claims.exp > Date.now() / 1000
 // --- routes and role scopes ---
 ok(/path === '\/push\/vapid-key' \|\| path === '\/push\/devices'/.test(worker), 'GET routes registered');
 ok(/'\/push\/subscribe'/.test(worker) && /'\/push\/test'/.test(worker) && /'\/push\/remove'/.test(worker) && /'\/push\/device'/.test(worker), 'POST routes registered');
-const rs = worker.indexOf('ROLE_SCOPES'); ok(rs >= 0, 'ROLE_SCOPES exists');
+const rs = worker.indexOf('const ROLE_SCOPES = {'); ok(rs >= 0, 'ROLE_SCOPES exists');
 const scopesEnd = worker.indexOf('\n};', rs); const scopes = worker.slice(rs, scopesEnd);
 for (const p of ['/push/vapid-key', '/push/devices', '/push/subscribe', '/push/device', '/push/remove', '/push/test']) ok(scopes.split("'" + p + "'").length - 1 >= 3, p + ' allowed for vendor, tenant and owner sessions');
 ok(!scopes.includes('/push/send'), 'sending to someone else is admin-only: no portal role can call /push/send');
