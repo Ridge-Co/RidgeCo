@@ -624,7 +624,7 @@ const _hubWorkerCore = {
         if (path === '/vendor-file/view')       return await viewInternalFile(env, url, callerRole, callerSessionId);
         if (path === '/owner-file/view')        return await viewOwnerReceiptFile(env, url, callerRole, callerSessionId);
         if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
-        if (path === '/wo-audit')               return await getWOAudit(env, url);
+        if (path === '/wo-audit')               return await getWOAudit(env, url, callerRole);
         if (path === '/wo/bid-group')           return await woBidGroupGet(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
         if (path === '/portal-access')          return await portalAccessList(env, url);
