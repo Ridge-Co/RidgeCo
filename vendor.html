@@ -1604,8 +1604,35 @@ function toggleEstimateHistory(woId, idx) {
   el.style.display = 'block';
 }
 
+// ── Max price (Nov 5 2026, Brett) ───────────────────────────────────────────────────────────────
+// The most the vendor may bill on a job. Shown only to the vendor; the server enforces it too (an invoice over the max
+// is refused unless an approved estimate covers it), so these checks are there to give a clear choice, not to be the lock.
+function woMaxFor(woId) {
+  var w = (window._allWos || window._wos || []).filter(function(x) { return x.ID === woId; })[0];
+  var n = w ? parseFloat(String(w.Max_Price || '').replace(/[$,\s]/g, '')) : 0;
+  return n > 0 ? n : 0;
+}
+function woCeilingFor(woId) {
+  var max = woMaxFor(woId); if (!max) return 0;
+  var ests = (window._estimates && window._estimates[woId]) || [], ap = 0;
+  for (var i = ests.length - 1; i >= 0; i--) {
+    var s = String(ests[i].Status || '').toLowerCase();
+    if (s === 'approved' || s === 'converted') { ap = parseFloat(ests[i].Subtotal) || 0; break; }
+  }
+  return Math.max(max, ap);
+}
+function woMaxBanner(wo) {
+  var n = parseFloat(String(wo.Max_Price || '').replace(/[$,\s]/g, ''));
+  if (!(n > 0)) return '';
+  return '<div style="background:#fff4e5;border:2px solid #d97706;border-radius:8px;padding:10px 12px;margin-bottom:10px">' +
+    '<div style="color:#b45309;font-size:11px;font-weight:bold;letter-spacing:.08em">💲 ' + esc(t('MAX PRICE')) + '</div>' +
+    '<div style="color:#7c3a00;font-size:22px;font-weight:bold;line-height:1.2">$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + '</div>' +
+    '<div style="color:#7c3a00;font-size:12px;line-height:1.4;margin-top:2px">' + esc(t('The most you can bill for this job. To go over it, send a new estimate with your reason first.')) + '</div></div>';
+}
+
 // Simple inline editor — add/remove line items, submit as new version with reason
 function openEstimateEditor(woId, idx) {
+  window._estEditWO = woId;
   var estimates = (window._estimates && window._estimates[woId]) || [];
   var current = estimates.length ? estimates[estimates.length - 1] : null;
   var items = current ? JSON.parse(JSON.stringify(current.Line_Items)) : [{ desc: '', amount: '' }];
