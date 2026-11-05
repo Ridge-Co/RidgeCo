@@ -10252,6 +10252,77 @@ async function checklistGateResponse(env, wo, vendorId, action, hintLang) {
   return json({ error: checklistGateMessage(open.length, action, lang), code: 'checklist_incomplete', unresolved: open.map(i => i.t), lang }, 409);
 }
 
+// ── Max price (Nov 5 2026, Brett) ───────────────────────────────────────────────────────────────
+// A per-WO (or per-template) ceiling on what a vendor may bill. It is VENDOR-FACING ONLY: the vendor portal and the
+// vendor's own share link show it; it is never on the WO description, the customer invoice, the QuickBooks lines, or
+// any tenant / owner view (enrichWO strips it by default — see the `delete base.Max_Price` line). Only the admin sets it
+// (/wo/max-price, New WO form, WO templates). A bill over it is refused unless an APPROVED estimate covers the amount,
+// so the vendor must either accept the max or send a new estimate with a reason before billing more.
+function maxPriceNum(v) {
+  const n = parseFloat(String(v == null ? '' : v).replace(/[$,\s]/g, ''));
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
+}
+
+function estimateSubtotalOf(e) {
+  const s = parseFloat(String((e && e.Subtotal) == null ? '' : e.Subtotal).replace(/[$,\s]/g, ''));
+  if (Number.isFinite(s)) return s;
+  try { return (JSON.parse((e && e.Line_Items) || '[]') || []).reduce((t, li) => t + (parseFloat(li && li.amount) || 0), 0); } catch (_) { return 0; }
+}
+
+// What the vendor may bill: the max price, or the latest APPROVED estimate for this WO if that is higher. 0 = no max set.
+function woMaxCeiling(wo, estimates) {
+  const max = maxPriceNum(wo && wo.Max_Price);
+  if (!max) return 0;
+  const approved = (estimates || [])
+    .filter(e => String(e.WO_ID) === String(wo.ID) && String(e.Status || '').trim().toLowerCase() === 'approved')
+    .sort((a, b) => (parseInt(b.Version || '0') || 0) - (parseInt(a.Version || '0') || 0));
+  return Math.max(max, approved.length ? estimateSubtotalOf(approved[0]) : 0);
+}
+
+function maxPriceMoney(n) { return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
+
+// Returns null when the bill is fine, else a ready-to-send 409 Response (EN/ES).
+async function maxPriceGateResponse(env, wo, vendorId, total, hintLang) {
+  const max = maxPriceNum(wo && wo.Max_Price);
+  if (!max) return null;
+  const amt = parseFloat(String(total == null ? '' : total).replace(/[$,\s]/g, ''));
+  if (!Number.isFinite(amt) || amt <= max + 0.004) return null;
+  let ceiling = max;
+  try { ceiling = woMaxCeiling(wo, await fetchTab(env, 'Estimates')); } catch (_) { ceiling = max; }
+  if (amt <= ceiling + 0.004) return null;
+  let lang = String(hintLang || '').toLowerCase() === 'es' ? 'es' : 'en';
+  if (vendorId) { try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (vendorWantsSpanish(v)) lang = 'es'; } catch (_) {} }
+  const msg = lang === 'es'
+    ? 'Esta factura (' + maxPriceMoney(amt) + ') supera el precio máximo de este trabajo (' + maxPriceMoney(ceiling) + '). Acepte el precio máximo, o envíe un nuevo presupuesto con la razón de la diferencia.'
+    : 'This invoice (' + maxPriceMoney(amt) + ') is over the max price for this job (' + maxPriceMoney(ceiling) + '). Accept the max price, or send a new estimate with the reason for the difference.';
+  return json({ error: msg, code: 'over_max', max, ceiling, total: amt, lang }, 409);
+}
+
+// POST /wo/max-price { wo_id, max_price }  — ADMIN-ONLY (absent from ROLE_SCOPES). Blank max_price clears it.
+async function setWoMaxPrice(env, body) {
+  const woId = String((body && (body.wo_id || body.id)) || '').trim();
+  if (!woId) return json({ error: 'wo_id required' }, 400);
+  const raw = body.max_price == null ? '' : String(body.max_price).trim();
+  let val = '';
+  if (raw !== '') {
+    const n = maxPriceNum(raw);
+    if (!n) return json({ error: 'Max price must be a dollar amount greater than 0 (or blank to clear it).' }, 400);
+    if (n > 1000000) return json({ error: 'Max price looks too large — check the amount.' }, 400);
+    val = n.toFixed(2);
+  }
+  const wo = findWO(await fetchTab(env, 'Work_Orders'), woId);
+  if (!wo) return json({ error: 'WO not found' }, 404);
+  await ensureColumns(env, 'Work_Orders', ['Max_Price']);
+  const old = String(wo.Max_Price || '');
+  await updateWOFields(env, woId, { Max_Price: val });
+  invalidateTabCache('Work_Orders');
+  const after = findWO(await fetchTab(env, 'Work_Orders'), woId);
+  const stored = String((after && after.Max_Price) || '');
+  if (maxPriceNum(stored) !== maxPriceNum(val)) return json({ error: 'The max price did not save — please try again.', saved: false }, 500);
+  if (old !== stored) { try { await logWOAudit(env, woId, 'admin', 'admin', 'Max_Price', old, stored, val ? 'Max price set (vendor-facing)' : 'Max price cleared'); } catch (_) {} }
+  return json({ success: true, saved: true, wo_id: woId, max_price: stored });
+}
+
 async function updateStatus(env, body) {
   const _t0 = Date.now();
   // On Hold now REQUIRES a reason (Sep 14 2026, Brett) — checked before anything is written,
