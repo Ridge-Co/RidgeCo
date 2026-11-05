@@ -1681,6 +1681,9 @@ function updateEstTotal(idx) {
   var total = (window._estEditItems || []).reduce(function(s, li) { return s + (parseFloat(li.amount) || 0); }, 0);
   var el = document.getElementById('est-total-' + idx);
   if (el) el.textContent = total.toFixed(2);
+  // Max price: the "why is it more?" box appears only while the total is over the max.
+  var omWrap = document.getElementById('est-overmax-wrap-' + idx);
+  if (omWrap) { var mx = woMaxFor(window._estEditWO); omWrap.style.display = (mx && total > mx + 0.004) ? '' : 'none'; }
 }
 
 function submitEstimate(woId, idx) {
