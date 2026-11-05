@@ -575,7 +575,7 @@ function clRow(wo){
   return row(clT('JOB CHECKLIST'), '<div class="v" style="font-size:12px;color:var(--muted);margin-bottom:6px">'+esc(clT('Check off each item as you finish. To complete the job or send a bill, every item must be checked, or marked with a reason if you could not do it.'))+'</div>'+rows+
     '<button class="btn sec" style="margin-top:10px" onclick="clSave()">'+esc(clT('Save checklist'))+'</button><div id="cl-msg" class="sheet-msg"></div>');
 }
-function clTick(i,on){ CL[i].done=on; if(on){ CL[i].code=''; CL[i].why=''; } var r=document.getElementById('cl-r-'+i); if(r) r.style.display=on?'none':'block'; }
+function clTick(i,on){ var lb=document.getElementById('cl-lbl-'+i); if(lb) lb.classList.toggle('on',!!on); CL[i].done=on; if(on){ CL[i].code=''; CL[i].why=''; } var r=document.getElementById('cl-r-'+i); if(r) r.style.display=on?'none':'block'; }
 function clReason(i,v){ CL[i].code=v; }
 function clWhy(i,v){ CL[i].why=v; }
 function clSave(){
