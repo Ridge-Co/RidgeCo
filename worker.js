@@ -10189,7 +10189,8 @@ async function assignVendor(env, body, internal) {
     // was sent): for a Spanish vendor it rides along as the queue row's Original_Body so the review
     // screen can show what the text says in English.
     // Max price (Nov 5 2026): only WOs that have a max get the extra line; it goes to the vendor's text only, never into the WO description.
-    const _mpAssign = maxPriceNum(wo.Max_Price);
+    const _mpAssignRaw = parseFloat(String(wo.Max_Price == null ? '' : wo.Max_Price).replace(/[$,\s]/g, ''));   // inline (not maxPriceNum) so this function stays self-contained for tests that run it alone
+    const _mpAssign = Number.isFinite(_mpAssignRaw) && _mpAssignRaw > 0 ? Math.round(_mpAssignRaw * 100) / 100 : 0;
     const _mpFmt = _mpAssign ? '$' + _mpAssign.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) : '';
     const _mpLineEn = _mpAssign ? ` Max price: ${_mpFmt} — send a new estimate with your reason before going over.` : '';
     const _mpLineEs = _mpAssign ? ` Precio máximo: ${_mpFmt} — envíe un nuevo presupuesto con su razón antes de pasarse.` : '';
