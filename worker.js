@@ -13565,11 +13565,18 @@ async function logMessageAudit(env, { woId, changedBy, changedByRole, channel, r
   }]);
 }
 
-async function getWOAudit(env, url) {
+async function getWOAudit(env, url, callerRole) {
   const woId = url.searchParams.get('wo_id'); if (!woId) return json({ error: 'Missing wo_id' }, 400);
   try {
     const audit = await fetchTab(env, 'WO_Audit');
-    return json(audit.filter(a => a.WO_ID === woId).sort((a,b) => new Date(a.Timestamp)-new Date(b.Timestamp)));
+    let rows = audit.filter(a => a.WO_ID === woId).sort((a,b) => new Date(a.Timestamp)-new Date(b.Timestamp));
+    // Max price (Nov 5 2026) is vendor-facing only: a portal session (owner) never sees the Max_Price change rows,
+    // nor the "Max price: $X" line inside the vendor's job text.
+    if (callerRole) {
+      const _mpLine = /\s*(Max price|Precio máximo): \$[\d,]+(\.\d+)? —[^\n]*/g;
+      rows = rows.filter(a => a.Field !== 'Max_Price').map(a => (a.Message_Body || a.Original_Body) ? { ...a, Message_Body: String(a.Message_Body || '').replace(_mpLine, ''), Original_Body: String(a.Original_Body || '').replace(_mpLine, '') } : a);
+    }
+    return json(rows);
   } catch(e) { return json([]); }
 }
 
