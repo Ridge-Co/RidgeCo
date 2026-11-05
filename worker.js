@@ -26837,7 +26837,9 @@ const ROLE_SCOPES = {
     // picker, the "request access to another property" picker, and the One-Off Job property
     // picker all need real addresses to show, not just IDs — same address-only data an owner
     // session already sees via /owner-properties.
-    '/vendor-bill/add-standalone','/vendor/request-property-access','/workorder/self-serve','/properties'],
+    '/vendor-bill/add-standalone','/vendor/request-property-access','/workorder/self-serve','/properties',
+    // Web push (Nov 5 2026): a session manages only ITS OWN devices (identity comes from the session inside pushRoute). /push/send is admin-only and is in no role scope.
+    '/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
   tenant: ['/tenant-by-pin','/tenant-session-refresh','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo'],
   owner:  ['/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo','/owner-file/view','/owner/tenant-roster','/owner/tenant-roster/preview','/owner/tenant-roster/apply'],
 };
