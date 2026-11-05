@@ -13257,6 +13257,7 @@ async function addEstimateVersion(env, body) {
   } catch (_) {}
   const row = { WO_ID: woId, Vendor_ID: body.vendor_id||'', Version: String(nextVersion), Line_Items: JSON.stringify(storedLineItems), Subtotal: subtotal.toFixed(2), Change_Reason: changeReason, Created_By: body.created_by||'vendor', Created_Date: new Date().toISOString(), Status: body.status||'Pending' };
   if (changeReasonEn) { try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); row.Change_Reason_EN = changeReasonEn; } catch (_) {} }
+  if (overMax && overMaxReason) { try { await ensureColumns(env, 'Estimates', ['Over_Max_Reason', 'Over_Max_Reason_EN']); row.Over_Max_Reason = overMaxReason; row.Over_Max_Reason_EN = overMaxReasonEn; } catch (_) {} }
   await addRow(env, 'Estimates', row);
   try { await updateWOField(env, woId, 'Current_Estimate', subtotal.toFixed(2)); } catch(e) {}
   // Approval stage: a first/normal estimate puts the job in Estimated. A revision that arrives AFTER
