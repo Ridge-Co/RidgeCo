@@ -141,7 +141,7 @@ ok(/if \(path === '\/wo\/max-price'\)\s+return await setWoMaxPrice\(env, body\)/
     ok(allowed.has(fn), 'Max_Price appears in ' + fn + ' (line ' + (i + 1) + ') — it may only live in the vendor-facing functions. If this is intentional, check it cannot reach an invoice, QuickBooks line, description, tenant or owner view, then add it here.');
   });
   ok(seen.size >= 10, 'the scan is not vacuous (' + seen.size + ' functions seen)');
-  const invoiceish = [...seen].filter(f => /invoice|quickbooks|^qb|proposal|statement|billing|receipt|owner(?!)|tenant/i.test(f) && !['createWorkOrder'].includes(f));
+  const invoiceish = [...seen].filter(f => /invoice|quickbooks|^qb|proposal|statement|billing|receipt|owner|tenant/i.test(f) && !['createWorkOrder'].includes(f));
   eq(invoiceish, [], 'no invoice / QuickBooks / proposal / statement / owner / tenant function mentions it');
   ok(/const RECUR_TEMPLATE_COLS = \[[^\]]*'Max_Price'\]/.test(worker), 'templates carry the column');
 }
