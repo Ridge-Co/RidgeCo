@@ -3884,7 +3884,57 @@ function submitVendorBill() {
     return;
   }
   msgEl.innerHTML = '';
+  if (billMaxCheck(total)) return;   // Max price: over the max → offer "accept the max" or "propose a new estimate"
   startBillReviewFlow();
+}
+
+// Max price (Nov 5 2026): an invoice over the job's max (or over an approved higher estimate) is not sent. The vendor chooses:
+// accept the max price (a flat bill is trimmed to fit; an hourly bill is told how much to take off), or propose a new estimate with a reason.
+function billMaxCheck(total) {
+  var ceiling = woCeilingFor(_billWOId);
+  if (!ceiling || total <= ceiling + 0.004) return false;
+  var panel = document.getElementById('bill-flow-panel');
+  if (!panel) return false;   // the server refuses it anyway
+  var over = total - ceiling;
+  panel.style.display = '';
+  panel.innerHTML = '<div style="background:#fff4e5;border:2px solid #d97706;border-radius:8px;padding:14px;margin-bottom:10px">' +
+    '<div style="font-weight:bold;font-size:13px;margin-bottom:8px;color:#7c3a00">⚠ ' + esc(t('This invoice is over the max price')) + '</div>' +
+    '<div style="font-size:12.5px;color:#7c3a00;line-height:1.5;margin-bottom:12px">' + esc(t('Your invoice is $')) + total.toFixed(2) + esc(t(' but the most you can bill for this job is $')) + ceiling.toFixed(2) + '. ' + esc(t('Accept the max price, or send a new estimate with the reason for the difference.')) + '</div>' +
+    '<div style="display:flex;gap:8px;flex-direction:column">' +
+      '<button type="button" onclick="billAcceptMax()" style="padding:12px;border-radius:6px;font-weight:bold;font-size:13px;cursor:pointer;border:none;background:var(--accent2);color:#fff">✓ ' + esc(t('Accept the max price')) + ' ($' + ceiling.toFixed(2) + ')</button>' +
+      '<button type="button" onclick="billProposeEstimate()" style="padding:12px;border-radius:6px;font-weight:bold;font-size:13px;cursor:pointer;border:2px solid #d97706;background:var(--surface);color:#7c3a00">📝 ' + esc(t('Send a new estimate with my reason')) + '</button>' +
+      '<button type="button" onclick="cancelBillReviewFlow()" style="padding:10px;border-radius:6px;font-size:12.5px;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--muted)">' + esc(t('← Let me check')) + '</button>' +
+    '</div></div>';
+  panel.scrollIntoView({block:'center'});
+  return true;
+}
+
+function billAcceptMax() {
+  var ceiling = woCeilingFor(_billWOId);
+  var total = parseFloat(document.getElementById('bill-grand-total').textContent.replace('$','')) || 0;
+  var over = total - ceiling;
+  var msgEl = document.getElementById('bill-msg');
+  var flatEl = document.getElementById('bill-flat');
+  var flat = flatEl ? (parseFloat(flatEl.value) || 0) : 0;
+  if (_billType === 'flat' && flatEl && flat - over >= 0) {
+    flatEl.value = (flat - over).toFixed(2);
+    calcBillTotal();
+    cancelBillReviewFlow();
+    msgEl.innerHTML = '<div style="color:var(--accent2);font-size:12px;font-weight:bold">✓ ' + esc(t('Invoice set to the max price. Check it, then tap Submit.')) + '</div>';
+  } else {
+    cancelBillReviewFlow();
+    msgEl.innerHTML = '<div style="color:#7c3a00;font-size:12px;font-weight:bold">' + esc(t('Lower your invoice by $')) + over.toFixed(2) + esc(t(' (hours or items) to reach the max price, then tap Submit.')) + '</div>';
+  }
+}
+
+function billProposeEstimate() {
+  var woId = _billWOId;
+  var idx = -1; (window._wos || []).forEach(function(w, i) { if (w.ID === woId) idx = i; });
+  closeBillModal();
+  if (idx < 0) return;
+  var card = document.getElementById('card-' + idx);
+  if (card) { card.classList.add('expanded'); card.scrollIntoView({ block: 'start' }); }
+  openEstimateEditor(woId, idx);
 }
 
 // Step 1 of the guided flow: truck stock, only if it hasn't already been addressed (the
