@@ -2220,9 +2220,9 @@ function buildVendorChecklist(wo, idx) {
     var whyInput = '<input type="text" oninput="setChecklistWhy(' + idx + ',' + i + ',this.value)" value="' + esc(it.why || '') + '" placeholder="Add a note (optional)" style="width:100%;margin-top:6px;font-size:12px;padding:6px;border:1px solid var(--border);border-radius:5px;background:var(--surface2);color:var(--text)">';
     var reasonWrap = '<div id="cl-reason-' + idx + '-' + i + '" style="display:' + (it.done ? 'none' : 'block') + ';padding-left:26px">' + reasonSel + whyInput + '</div>';
     return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">' +
-      '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">' +
-      '<input type="checkbox" ' + (it.done ? 'checked' : '') + ' onchange="toggleChecklistItem(' + idx + ',' + i + ',this.checked)" style="width:auto;margin-top:2px;flex-shrink:0">' +
-      '<span id="cl-txt-' + idx + '-' + i + '" style="font-size:13px;' + (it.done ? 'text-decoration:line-through;color:var(--muted)' : 'color:var(--text)') + '">' + esc(it.t || '') + '</span>' +
+      '<label id="cl-lbl-' + idx + '-' + i + '" class="clrow' + (it.done ? ' on' : '') + '">' +
+      '<input type="checkbox" class="clbox" ' + (it.done ? 'checked' : '') + ' onchange="toggleChecklistItem(' + idx + ',' + i + ',this.checked)">' +
+      '<span id="cl-txt-' + idx + '-' + i + '" class="cltxt" style="' + (it.done ? 'text-decoration:line-through;color:var(--muted)' : 'color:var(--text)') + '">' + esc(it.t || '') + '</span>' +
       '</label>' + reasonWrap + '</div>';
   }).join('');
   return '<div class="action-section"><div class="action-title">JOB CHECKLIST</div>' +
