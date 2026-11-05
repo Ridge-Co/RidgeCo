@@ -65,6 +65,13 @@ input:focus{outline:none;border-color:var(--accent);}
 .btn-green{background:var(--accent2);color:#fff;}
 .btn-blue{background:var(--info);color:#fff;}
 .btn-muted{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+/* Nov 5 2026 (Brett): job checklist boxes were tiny browser defaults. Big 32px box, thick dark border, green fill + white check when done, whole row is the tap target. */
+.clrow{display:flex;align-items:center;gap:14px;padding:12px;margin:0;min-height:56px;border-radius:10px;cursor:pointer;background:#f3f5f8;border:2px solid #b8c0cc;text-transform:none;letter-spacing:normal;font-size:16px;color:#1b1f24}
+.clrow.on{background:#e7f6ec;border-color:#166534}
+input.clbox{-webkit-appearance:none;appearance:none;flex:0 0 32px;width:32px !important;height:32px !important;min-height:32px !important;margin:0;padding:0 !important;border:3px solid #1b1f24;border-radius:8px;background:#fff;cursor:pointer;display:inline-block;letter-spacing:normal;text-align:left}
+input.clbox:checked{background:#166534 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round' d='M5 12.5l4.5 4.5L19 7'/%3E%3C/svg%3E") center/24px no-repeat;border-color:#166534}
+input.clbox:focus-visible{outline:3px solid #1d4ed8;outline-offset:2px}
+.cltxt{font-size:16px;font-weight:600;line-height:1.35;text-transform:none;letter-spacing:normal}
 .msg{margin-top:12px;padding:10px;border-radius:6px;font-size:12px;text-align:center;}
 .msg.error{background:#fdecea;border:1px solid var(--danger);color:var(--danger);}
 .msg.warn{background:#fdf2e2;border:1px solid var(--warn);color:var(--warn);}
