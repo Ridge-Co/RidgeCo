@@ -1693,6 +1693,12 @@ function submitEstimate(woId, idx) {
   var reason = reasonEl ? reasonEl.value.trim() : '';
   var estimates = (window._estimates && window._estimates[woId]) || [];
   if (estimates.length && !reason) { toast('Reason for change is required when revising', 'error'); return; }
+  // Max price: an estimate above the job's max must say why (the server checks this too).
+  var _estMax = woMaxFor(woId);
+  var _estTot = items.reduce(function(s, li) { return s + (parseFloat(li.amount) || 0); }, 0);
+  var _omEl = document.getElementById('est-overmax-' + idx);
+  var overMaxReason = _omEl ? _omEl.value.trim() : '';
+  if (_estMax && _estTot > _estMax + 0.004 && overMaxReason.length < 5) { toast(t('This estimate is over the max price — add the reason for the difference.'), 'error'); if (_omEl) _omEl.focus(); return; }
 
   // This is the one that actually bit us — WO-1052, WO-1012 and WO-1062 each carry two
   // identical estimates written about a second apart. Nothing was stopping the second tap.
