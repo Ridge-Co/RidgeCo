@@ -65,6 +65,13 @@ input:focus{outline:none;border-color:var(--accent);}
 .btn-green{background:var(--accent2);color:#fff;}
 .btn-blue{background:var(--info);color:#fff;}
 .btn-muted{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+/* Nov 5 2026 (Brett): job checklist boxes were tiny browser defaults. Big 32px box, thick dark border, green fill + white check when done, whole row is the tap target. */
+.clrow{display:flex;align-items:center;gap:14px;padding:12px;margin:0;min-height:56px;border-radius:10px;cursor:pointer;background:#f3f5f8;border:2px solid #b8c0cc;text-transform:none;letter-spacing:normal;font-size:16px;color:#1b1f24}
+.clrow.on{background:#e7f6ec;border-color:#166534}
+input.clbox{-webkit-appearance:none;appearance:none;flex:0 0 32px;width:32px !important;height:32px !important;min-height:32px !important;margin:0;padding:0 !important;border:3px solid #1b1f24;border-radius:8px;background:#fff;cursor:pointer;display:inline-block;letter-spacing:normal;text-align:left}
+input.clbox:checked{background:#166534 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round' d='M5 12.5l4.5 4.5L19 7'/%3E%3C/svg%3E") center/24px no-repeat;border-color:#166534}
+input.clbox:focus-visible{outline:3px solid #1d4ed8;outline-offset:2px}
+.cltxt{font-size:16px;font-weight:600;line-height:1.35;text-transform:none;letter-spacing:normal}
 .msg{margin-top:12px;padding:10px;border-radius:6px;font-size:12px;text-align:center;}
 .msg.error{background:#fdecea;border:1px solid var(--danger);color:var(--danger);}
 .msg.warn{background:#fdf2e2;border:1px solid var(--warn);color:var(--warn);}
@@ -2252,11 +2259,11 @@ function buildVendorChecklist(wo, idx) {
       CL_REASONS.map(function(r) { return '<option value="' + r[0] + '"' + (it.code === r[0] ? ' selected' : '') + '>' + r[1] + '</option>'; }).join('') +
       '</select>';
     var whyInput = '<input type="text" oninput="setChecklistWhy(' + idx + ',' + i + ',this.value)" value="' + esc(it.why || '') + '" placeholder="Add a note (optional)" style="width:100%;margin-top:6px;font-size:12px;padding:6px;border:1px solid var(--border);border-radius:5px;background:var(--surface2);color:var(--text)">';
-    var reasonWrap = '<div id="cl-reason-' + idx + '-' + i + '" style="display:' + (it.done ? 'none' : 'block') + ';padding-left:26px">' + reasonSel + whyInput + '</div>';
+    var reasonWrap = '<div id="cl-reason-' + idx + '-' + i + '" style="display:' + (it.done ? 'none' : 'block') + ';padding-left:12px">' + reasonSel + whyInput + '</div>';
     return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">' +
-      '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">' +
-      '<input type="checkbox" ' + (it.done ? 'checked' : '') + ' onchange="toggleChecklistItem(' + idx + ',' + i + ',this.checked)" style="width:auto;margin-top:2px;flex-shrink:0">' +
-      '<span id="cl-txt-' + idx + '-' + i + '" style="font-size:13px;' + (it.done ? 'text-decoration:line-through;color:var(--muted)' : 'color:var(--text)') + '">' + esc(it.t || '') + '</span>' +
+      '<label id="cl-lbl-' + idx + '-' + i + '" class="clrow' + (it.done ? ' on' : '') + '">' +
+      '<input type="checkbox" class="clbox" ' + (it.done ? 'checked' : '') + ' onchange="toggleChecklistItem(' + idx + ',' + i + ',this.checked)">' +
+      '<span id="cl-txt-' + idx + '-' + i + '" class="cltxt" style="' + (it.done ? 'text-decoration:line-through;color:var(--muted)' : 'color:var(--text)') + '">' + esc(it.t || '') + '</span>' +
       '</label>' + reasonWrap + '</div>';
   }).join('');
   return '<div class="action-section"><div class="action-title">JOB CHECKLIST</div>' +
@@ -2269,6 +2276,7 @@ function buildVendorChecklist(wo, idx) {
 function toggleChecklistItem(idx, i, checked) {
   var it = window._checklists[idx][i]; it.done = checked; if (checked) { it.code = ''; it.why = ''; }
   var rw = document.getElementById('cl-reason-' + idx + '-' + i); if (rw) rw.style.display = checked ? 'none' : 'block';
+  var lb = document.getElementById('cl-lbl-' + idx + '-' + i); if (lb) lb.classList.toggle('on', !!checked);
   var tx = document.getElementById('cl-txt-' + idx + '-' + i);
   if (tx) { tx.style.textDecoration = checked ? 'line-through' : ''; tx.style.color = checked ? 'var(--muted)' : 'var(--text)'; }
 }
