@@ -8905,7 +8905,7 @@ function unitLinkTemplate(tid, propId, unitId, action) {
 
 // Resets the Add/Edit Template modal to ADD mode (blank form, no tmpl-id).
 function openAddTemplateModal() {
-  ['tmpl-id','tmpl-name','tmpl-desc','tmpl-link-url','tmpl-link-label'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  ['tmpl-id','tmpl-name','tmpl-desc','tmpl-link-url','tmpl-link-label','tmpl-max-price'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   var sel = document.getElementById('tmpl-owner');
   if (sel) sel.innerHTML = ownerOptionsHtml('', '<option value="">Global (all owners)</option>');
   var trade = document.getElementById('tmpl-trade'); if (trade) trade.value = '';
