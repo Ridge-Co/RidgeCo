@@ -2173,7 +2173,7 @@ function backToInsp(){ stopDictation(); S.selMode=false; S.sel={}; S.view='insp'
 // ---- area ----
 function viewArea(){
   var a = curArea(); var doc = S.rec.doc, idx = doc.areas.filter(function(x){return !x.excluded;}).map(function(x){return x.id;}).indexOf(a.id);
-  var h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button><button class="btn sm" onclick="areaMenu()">⋯ Edit area</button></div>';
+  var h = '<div class="row"><span><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button> <button class="btn sm ghost" onclick="leaveInsp()">‹ All inspections</button></span><button class="btn sm" onclick="areaMenu()">⋯ Edit area</button></div>';
   h += '<h1>'+esc(a.name)+'</h1>';
   h += '<div class="seg" id="cond-seg">'+CONDS.map(function(c){ return '<button class="'+(a.condition===c[0]?'sel '+c[2]:'')+'" onclick="setCond(\''+c[0]+'\')">'+c[1]+'</button>'; }).join('')+'</div>';
   h += accessHtml(a);
