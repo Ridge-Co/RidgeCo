@@ -2235,6 +2235,7 @@ function buildVendorChecklist(wo, idx) {
 function toggleChecklistItem(idx, i, checked) {
   var it = window._checklists[idx][i]; it.done = checked; if (checked) { it.code = ''; it.why = ''; }
   var rw = document.getElementById('cl-reason-' + idx + '-' + i); if (rw) rw.style.display = checked ? 'none' : 'block';
+  var lb = document.getElementById('cl-lbl-' + idx + '-' + i); if (lb) lb.classList.toggle('on', !!checked);
   var tx = document.getElementById('cl-txt-' + idx + '-' + i);
   if (tx) { tx.style.textDecoration = checked ? 'line-through' : ''; tx.style.color = checked ? 'var(--muted)' : 'var(--text)'; }
 }
