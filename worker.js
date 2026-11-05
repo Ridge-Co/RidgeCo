@@ -19299,6 +19299,8 @@ function recurSanitizeTemplateFields(f) {
   for (const k of ['Season_Start', 'Season_End']) if (o[k] && !/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(String(o[k]))) o[k] = '';
   for (const k of ['Recurrence_Enabled', 'Season_Enabled', 'Notify_Tenant']) if (o[k] !== undefined) o[k] = (o[k] === true || recurIsTrue(o[k])) ? 'TRUE' : 'FALSE';
   if (o.Targets !== undefined && typeof o.Targets !== 'string') o.Targets = JSON.stringify(o.Targets);
+  // Max price (Nov 5 2026): a clean positive amount, or blank to clear. Anything unreadable is blanked rather than guessed at.
+  if (o.Max_Price !== undefined) { const _mp = maxPriceNum(o.Max_Price); o.Max_Price = _mp ? _mp.toFixed(2) : ''; }
   return o;
 }
 
