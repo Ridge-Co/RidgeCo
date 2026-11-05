@@ -1662,7 +1662,7 @@ function openEstimateEditor(woId, idx) {
       '</div>';
     updateEstTotal(idx);
     // Auto-size textareas to existing content on first render
-    wrap.querySelectorAll('textarea').forEach(function(t) { if (t.id !== 'est-reason-' + idx) { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; } });
+    wrap.querySelectorAll('textarea').forEach(function(t) { if (t.id !== 'est-reason-' + idx && t.id !== 'est-overmax-' + idx) { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; } });
   }
   window._estEditItems = items;
   window._renderEstEditor = renderEditor;
