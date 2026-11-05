@@ -1244,6 +1244,8 @@ function openInspection(id){
 function typeLabel(t){ for (var i=0;i<INSP_TYPES.length;i++) if (INSP_TYPES[i][0]===t) return INSP_TYPES[i][1]; return t||''; }
 function condPill(c){ var cls = c==='good'||c==='nothing_to_do' ? 'ok' : c==='poor' ? 'bad' : c==='fair' ? 'warn' : ''; return '<span class="pill '+cls+'">'+esc(COND_LABEL[c]||'Not inspected')+'</span>'; }
 function leaveInsp(){
+  try { stopDictation(); } catch(e){}   // Nov 5 2026: also reachable straight from the area / review / voice screens
+  S.selMode=false; S.sel={};
   var go2 = function(){ S.rec=null; S.areaId=null; S.view='home'; refreshList().then(render); render(); };
   if (S.rec && S.rec.dirty){ syncNow(true).then(function(){ if (S.rec && S.rec.dirty){ toast('Not saved to the server yet — it is kept on this phone'); } go2(); }); } else go2();
 }
