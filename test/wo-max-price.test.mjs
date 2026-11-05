@@ -165,7 +165,7 @@ ok(/if \(path === '\/wo\/max-price'\)\s+return await setWoMaxPrice\(env, body\)/
   const av = worker.slice(worker.indexOf('async function assignVendor('));
   ok(/Max price: \$\{_mpFmt\} — send a new estimate with your reason before going over\./.test(av) && /Precio máximo: \$\{_mpFmt\}/.test(av), 'the vendor job text carries an English and a Spanish max-price line');
   ok(/\$\{_mpLineEn\}\\n\$\{link\}/.test(av) && /\$\{_mpLineEs\}\\n\$\{link\}/.test(av), 'right before the link');
-  ok(/const _mpAssign = maxPriceNum\(wo\.Max_Price\);/.test(av) && /_mpAssign \? ` Max price/.test(av), 'and only on a WO that has a max');
+  ok(/const _mpAssign = Number\.isFinite\(_mpAssignRaw\)/.test(av) && /wo\.Max_Price == null/.test(av) && /_mpAssign \? ` Max price/.test(av), 'and only on a WO that has a max');
   const b0 = worker.indexOf('async function addVendorBill('), bill = worker.slice(b0, worker.indexOf('const dupe = await findRecentDuplicate', b0));
   ok(bill.indexOf("toLowerCase() !== 'hub'") >= 0 && bill.indexOf('maxPriceGateResponse(') > bill.indexOf("toLowerCase() !== 'hub'") && bill.indexOf('maxPriceGateResponse(') > bill.indexOf('checklistGateResponse('), 'vendor bills (portal and share link) go through the gate; the Hub is not gated');
   ok(/maxPriceGateResponse\(env, _gwo, body\.Vendor_ID \|\| body\.vendor_id \|\| _gwo\.Vendor_ID, body\.Total, body\.lang\)/.test(bill), 'with the bill total');
