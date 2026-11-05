@@ -1239,6 +1239,7 @@ const _hubWorkerCore = {
         if (path === '/insp/customer/key-pickup')  return await inspCustomerKeyPickup(env, body);
         if (path === '/insp/str-guard/config')     return await inspStrGuardConfigSave(env, body);
         if (path === '/insp/str-guard/run')        { try { return json(Object.assign({ ok: true }, await inspStrGuardTick(env, { dry: !!(body && body.dry) }))); } catch (e) { return inspHandleErr(e); } }
+        if (path === '/push/subscribe' || path === '/push/device' || path === '/push/remove' || path === '/push/test' || path === '/push/send') return await pushRoute(env, path, url, body, callerRole, callerSessionId);
         if (path === '/str/c/mark')                return await strCleanerMark(env, body);
         if (path === '/str/c/offer')               return await strOfferRespond(env, body);
         if (path === '/str/c/cancel')              return await strCleanerCancel(env, body);
