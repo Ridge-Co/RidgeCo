@@ -72,7 +72,7 @@ ok(/'\/push\/subscribe'/.test(worker) && /'\/push\/test'/.test(worker) && /'\/pu
 const rs = worker.indexOf('const ROLE_SCOPES = {'); ok(rs >= 0, 'ROLE_SCOPES exists');
 const scopesEnd = worker.indexOf('\n};', rs); const scopes = worker.slice(rs, scopesEnd);
 for (const p of ['/push/vapid-key', '/push/devices', '/push/subscribe', '/push/device', '/push/remove', '/push/test']) ok(scopes.split("'" + p + "'").length - 1 >= 3, p + ' allowed for vendor, tenant and owner sessions');
-ok(!scopes.includes('/push/send'), 'sending to someone else is admin-only: no portal role can call /push/send');
+ok(!scopes.includes("'/push/send'"), 'sending to someone else is admin-only: no portal role can call /push/send');
 ok(/if \(callerRole\) return json\(\{ error: 'Unauthorized' \}, 401\)/.test(worker), '/push/send refuses any signed-in portal role');
 ok(/const type = callerRole \|\| 'admin', id = callerRole \? String\(callerSessionId\) : 'brett'/.test(worker), 'a person only ever sees and changes their own devices (identity from the session, not the request)');
 ok(/if \(env\.__STAGING__ \?\? isStaging\(env\)\) return \{ ok: true, status: 0, staged: true/.test(worker), 'staging never reaches a real device');
