@@ -811,7 +811,7 @@ function viewHome(){
   h += '<button class="btn primary block" style="min-height:56px;font-size:17px" onclick="startNew()">＋ New inspection</button>';
   h += '<div class="btns"><button class="btn" onclick="openBrands()">🎨 Brands (Ridge Co, Premier…)</button></div>';
   var items = {};
-  S.list.forEach(function(i){ items[i.id] = { id:i.id, address:i.address, date:i.date, status:i.status, issues:i.issue_count, server:true, rev:i.rev, brand:i.brand_id, updated:i.updated_at }; });
+  S.list.forEach(function(i){ items[i.id] = { id:i.id, address:i.address, date:i.date, status:i.status, issues:i.issue_count, server:true, rev:i.rev, brand:i.brand_id, updated:i.updated_at, billed:!!i.billed }; });
   Object.keys(localOnly).forEach(function(id){ var r = localOnly[id]; var it = items[id] || { id:id, server:false }; it.address = r.doc.property.address; it.date = r.meta.inspection_date; it.local = true; it.dirty = r.dirty; it.issues = r.doc.areas.reduce(function(n,a){return n+(a.issues||[]).length;},0); it.status = it.status || 'draft'; it.updated = r.doc.updated || it.updated; items[id]=it; });
   var arr = Object.keys(items).map(function(k){return items[k];}).sort(function(a,b){ return String(b.updated||'').localeCompare(String(a.updated||'')); });
   h += '<h2>Inspections</h2>';
