@@ -2218,7 +2218,7 @@ function buildVendorChecklist(wo, idx) {
       CL_REASONS.map(function(r) { return '<option value="' + r[0] + '"' + (it.code === r[0] ? ' selected' : '') + '>' + r[1] + '</option>'; }).join('') +
       '</select>';
     var whyInput = '<input type="text" oninput="setChecklistWhy(' + idx + ',' + i + ',this.value)" value="' + esc(it.why || '') + '" placeholder="Add a note (optional)" style="width:100%;margin-top:6px;font-size:12px;padding:6px;border:1px solid var(--border);border-radius:5px;background:var(--surface2);color:var(--text)">';
-    var reasonWrap = '<div id="cl-reason-' + idx + '-' + i + '" style="display:' + (it.done ? 'none' : 'block') + ';padding-left:26px">' + reasonSel + whyInput + '</div>';
+    var reasonWrap = '<div id="cl-reason-' + idx + '-' + i + '" style="display:' + (it.done ? 'none' : 'block') + ';padding-left:12px">' + reasonSel + whyInput + '</div>';
     return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">' +
       '<label id="cl-lbl-' + idx + '-' + i + '" class="clrow' + (it.done ? ' on' : '') + '">' +
       '<input type="checkbox" class="clbox" ' + (it.done ? 'checked' : '') + ' onchange="toggleChecklistItem(' + idx + ',' + i + ',this.checked)">' +
