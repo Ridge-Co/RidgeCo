@@ -10274,7 +10274,7 @@ function woMaxCeiling(wo, estimates) {
   const max = maxPriceNum(wo && wo.Max_Price);
   if (!max) return 0;
   const approved = (estimates || [])
-    .filter(e => String(e.WO_ID) === String(wo.ID) && String(e.Status || '').trim().toLowerCase() === 'approved')
+    .filter(e => String(e.WO_ID) === String(wo.ID) && ['approved', 'converted'].includes(String(e.Status || '').trim().toLowerCase()))   // 'Converted' = approved and pushed into a proposal
     .sort((a, b) => (parseInt(b.Version || '0') || 0) - (parseInt(a.Version || '0') || 0));
   return Math.max(max, approved.length ? estimateSubtotalOf(approved[0]) : 0);
 }
