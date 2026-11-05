@@ -11326,6 +11326,8 @@ async function addVendorBill(env, body) {
     let _gwo = null;
     try { _gwo = findWO(await fetchTab(env, 'Work_Orders'), dupeKey); } catch (_) { _gwo = null; }
     if (_gwo) { const _gate = await checklistGateResponse(env, _gwo, body.Vendor_ID || body.vendor_id || _gwo.Vendor_ID, 'invoice', body.lang); if (_gate) return _gate; }
+    // Nov 5 2026: a bill over the WO's max price needs an approved estimate that covers it (same non-hub callers as the checklist gate).
+    if (_gwo) { const _mgate = await maxPriceGateResponse(env, _gwo, body.Vendor_ID || body.vendor_id || _gwo.Vendor_ID, body.Total, body.lang); if (_mgate) return _mgate; }
   }
   if (dupeKey && body.Total) {
     const dupe = await findRecentDuplicate(env, 'Vendor_Bills', {
