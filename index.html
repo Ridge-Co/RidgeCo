@@ -17861,7 +17861,7 @@ function loadPortalAttachments(woId, opts) {
           // Real thumbnail, tap opens the in-app lightbox at this photo -- with a small
           // delete "x" overlay in the corner (admin-only capability this page already had).
           var thumb = document.createElement('span');
-          thumb.style.cssText = 'position:relative;display:inline-block;width:56px;height:56px;border-radius:5px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid var(--border);margin:2px 4px 2px 0;vertical-align:top';
+          thumb.style.cssText = 'position:relative;display:inline-block;width:64px;height:64px;border-radius:5px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid var(--border);margin:2px 4px 2px 0;vertical-align:top';
           thumb.onclick = (function(woIdC, idxC){ return function(){ rcOpenLightbox(_rcWoItems[woIdC], idxC); }; })(woId, itemIdx);
           // Internal (receipt/bill/invoice) files are never Drive-shared (rule 13), so the
           // public thumbnail endpoint always fails for them -- go straight to the authenticated
@@ -17874,7 +17874,13 @@ function loadPortalAttachments(woId, opts) {
           var del = document.createElement('button');
           del.textContent = '\u00d7';
           del.title = 'Remove from work order';
-          del.style.cssText = 'position:absolute;right:2px;top:2px;background:rgba(0,0,0,.6);border:none;border-radius:3px;color:#fff;cursor:pointer;font-size:12px;line-height:1;padding:1px 4px';
+          // Nov 5 2026: the phone/Chromebook touch-target rule near the top of this file gives EVERY button a
+          // 44x44 minimum (!important), which blew this corner "x" up to cover the whole 56px thumbnail, so
+          // any tap meant to open the photo landed on delete. The inline !important here beats that sheet rule
+          // (inline !important wins over stylesheet !important); the 22px corner stays tappable but leaves the
+          // rest of the photo free to open the viewer. The two-step "confirm" tap in deleteAttachment() is unchanged.
+          del.className = 'wo-photo-del';
+          del.style.cssText = 'position:absolute;right:2px;top:2px;background:rgba(0,0,0,.6);border:none;border-radius:11px;color:#fff;cursor:pointer;font-size:13px;line-height:1;padding:0 6px;height:22px !important;min-height:22px !important;min-width:22px !important;white-space:nowrap';
           del.onclick = function(ev) { ev.stopPropagation(); deleteAttachment(f.ID, woId, thumb); };
           thumb.appendChild(del);
           el.appendChild(thumb);
