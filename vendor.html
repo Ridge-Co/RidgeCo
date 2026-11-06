@@ -65,6 +65,13 @@ input:focus{outline:none;border-color:var(--accent);}
 .btn-green{background:var(--accent2);color:#fff;}
 .btn-blue{background:var(--info);color:#fff;}
 .btn-muted{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+/* Nov 5 2026 (Brett): job checklist boxes were tiny browser defaults. Big 32px box, thick dark border, green fill + white check when done, whole row is the tap target. */
+.clrow{display:flex;align-items:center;gap:14px;padding:12px;margin:0;min-height:56px;border-radius:10px;cursor:pointer;background:#f3f5f8;border:2px solid #b8c0cc;text-transform:none;letter-spacing:normal;font-size:16px;color:#1b1f24}
+.clrow.on{background:#e7f6ec;border-color:#166534}
+input.clbox{-webkit-appearance:none;appearance:none;flex:0 0 32px;width:32px !important;height:32px !important;min-height:32px !important;margin:0;padding:0 !important;border:3px solid #1b1f24;border-radius:8px;background:#fff;cursor:pointer;display:inline-block;letter-spacing:normal;text-align:left}
+input.clbox:checked{background:#166534 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='%23fff' stroke-width='4' stroke-linecap='round' stroke-linejoin='round' d='M5 12.5l4.5 4.5L19 7'/%3E%3C/svg%3E") center/24px no-repeat;border-color:#166534}
+input.clbox:focus-visible{outline:3px solid #1d4ed8;outline-offset:2px}
+.cltxt{font-size:16px;font-weight:600;line-height:1.35;text-transform:none;letter-spacing:normal}
 .msg{margin-top:12px;padding:10px;border-radius:6px;font-size:12px;text-align:center;}
 .msg.error{background:#fdecea;border:1px solid var(--danger);color:var(--danger);}
 .msg.warn{background:#fdf2e2;border:1px solid var(--warn);color:var(--warn);}
@@ -1438,6 +1445,7 @@ function renderWOs(wos, opts) {
         (wo.Room ? '<div class="detail-row"><span class="detail-label">Room / Area</span><span class="detail-val" style="color:var(--info);font-weight:bold">' + esc(wo.Room) + '</span></div>' : '') +
         (wo.Owner_WO_Ref ? '<div class="detail-row"><span class="detail-label">Owner Ref #</span><span class="detail-val" style="color:var(--info);font-weight:bold">' + esc(wo.Owner_WO_Ref) + '</span></div>' : '') +
         '<div class="detail-row"><span class="detail-label">Issue</span><span class="detail-val" style="text-align:justify;font-size:13px">' + esc(wo.Description || '—') + '</span></div>' +
+        woMaxBanner(wo) +
         '<div class="detail-row"><span class="detail-label">Tenant</span><span class="detail-val">' + tenantHtml + '</span></div>' +
         (wo.Notes ? '<div class="detail-row"><span class="detail-label">Notes</span><span class="detail-val">' + esc(wo.Notes) + '</span></div>' : '') +
         (wo.Scheduled_Date ? '<div class="detail-row"><span class="detail-label">Scheduled</span><span class="detail-val">' + esc(wo.Scheduled_Date) + '</span></div>' : '') +
@@ -1604,8 +1612,35 @@ function toggleEstimateHistory(woId, idx) {
   el.style.display = 'block';
 }
 
+// ── Max price (Nov 5 2026, Brett) ───────────────────────────────────────────────────────────────
+// The most the vendor may bill on a job. Shown only to the vendor; the server enforces it too (an invoice over the max
+// is refused unless an approved estimate covers it), so these checks are there to give a clear choice, not to be the lock.
+function woMaxFor(woId) {
+  var w = (window._allWos || window._wos || []).filter(function(x) { return x.ID === woId; })[0];
+  var n = w ? parseFloat(String(w.Max_Price || '').replace(/[$,\s]/g, '')) : 0;
+  return n > 0 ? n : 0;
+}
+function woCeilingFor(woId) {
+  var max = woMaxFor(woId); if (!max) return 0;
+  var ests = (window._estimates && window._estimates[woId]) || [], ap = 0;
+  for (var i = ests.length - 1; i >= 0; i--) {
+    var s = String(ests[i].Status || '').toLowerCase();
+    if (s === 'approved' || s === 'converted') { ap = parseFloat(ests[i].Subtotal) || 0; break; }
+  }
+  return Math.max(max, ap);
+}
+function woMaxBanner(wo) {
+  var n = parseFloat(String(wo.Max_Price || '').replace(/[$,\s]/g, ''));
+  if (!(n > 0)) return '';
+  return '<div style="background:#fff4e5;border:2px solid #d97706;border-radius:8px;padding:10px 12px;margin-bottom:10px">' +
+    '<div style="color:#b45309;font-size:11px;font-weight:bold;letter-spacing:.08em">💲 ' + esc(t('MAX PRICE')) + '</div>' +
+    '<div style="color:#7c3a00;font-size:22px;font-weight:bold;line-height:1.2">$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + '</div>' +
+    '<div style="color:#7c3a00;font-size:12px;line-height:1.4;margin-top:2px">' + esc(t('The most you can bill for this job. To go over it, send a new estimate with your reason first.')) + '</div></div>';
+}
+
 // Simple inline editor — add/remove line items, submit as new version with reason
 function openEstimateEditor(woId, idx) {
+  window._estEditWO = woId;
   var estimates = (window._estimates && window._estimates[woId]) || [];
   var current = estimates.length ? estimates[estimates.length - 1] : null;
   var items = current ? JSON.parse(JSON.stringify(current.Line_Items)) : [{ desc: '', amount: '' }];
@@ -1624,6 +1659,9 @@ function openEstimateEditor(woId, idx) {
       rows +
       '<button class="btn btn-sm" style="margin-top:4px" onclick="addEstItem(\'' + woId + '\',' + idx + ')">+ Line Item</button>' +
       (current ? '<textarea id="est-reason-' + idx + '" rows="2" placeholder="Reason for change (required if revising)…" style="width:100%;margin-top:8px;font-size:12px;padding:7px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);resize:vertical;font-family:var(--font)"></textarea>' : '') +
+      (woMaxFor(woId) ? '<div id="est-overmax-wrap-' + idx + '" style="display:none;margin-top:8px;background:#fff4e5;border:1px solid #d97706;border-radius:6px;padding:8px">' +
+        '<div style="font-size:12px;font-weight:bold;color:#b45309;margin-bottom:6px">⚠ ' + esc(t('Over the max price')) + ' ($' + woMaxFor(woId).toFixed(2) + ') — ' + esc(t('why is it more?')) + '</div>' +
+        '<textarea id="est-overmax-' + idx + '" rows="2" placeholder="' + esc(t('Reason this job costs more than the max price (required)…')) + '" style="width:100%;font-size:12px;padding:7px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);resize:vertical;font-family:var(--font)"></textarea></div>' : '') +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">' +
       '<span style="font-weight:bold">Total: $<span id="est-total-' + idx + '">0.00</span></span>' +
       '<div><button class="btn btn-sm" onclick="loadEstimateWidget(\'' + woId + '\',' + idx + ')">Cancel</button> ' +
@@ -1631,7 +1669,7 @@ function openEstimateEditor(woId, idx) {
       '</div>';
     updateEstTotal(idx);
     // Auto-size textareas to existing content on first render
-    wrap.querySelectorAll('textarea').forEach(function(t) { if (t.id !== 'est-reason-' + idx) { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; } });
+    wrap.querySelectorAll('textarea').forEach(function(t) { if (t.id !== 'est-reason-' + idx && t.id !== 'est-overmax-' + idx) { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; } });
   }
   window._estEditItems = items;
   window._renderEstEditor = renderEditor;
@@ -1650,6 +1688,9 @@ function updateEstTotal(idx) {
   var total = (window._estEditItems || []).reduce(function(s, li) { return s + (parseFloat(li.amount) || 0); }, 0);
   var el = document.getElementById('est-total-' + idx);
   if (el) el.textContent = total.toFixed(2);
+  // Max price: the "why is it more?" box appears only while the total is over the max.
+  var omWrap = document.getElementById('est-overmax-wrap-' + idx);
+  if (omWrap) { var mx = woMaxFor(window._estEditWO); omWrap.style.display = (mx && total > mx + 0.004) ? '' : 'none'; }
 }
 
 function submitEstimate(woId, idx) {
@@ -1659,6 +1700,12 @@ function submitEstimate(woId, idx) {
   var reason = reasonEl ? reasonEl.value.trim() : '';
   var estimates = (window._estimates && window._estimates[woId]) || [];
   if (estimates.length && !reason) { toast('Reason for change is required when revising', 'error'); return; }
+  // Max price: an estimate above the job's max must say why (the server checks this too).
+  var _estMax = woMaxFor(woId);
+  var _estTot = items.reduce(function(s, li) { return s + (parseFloat(li.amount) || 0); }, 0);
+  var _omEl = document.getElementById('est-overmax-' + idx);
+  var overMaxReason = _omEl ? _omEl.value.trim() : '';
+  if (_estMax && _estTot > _estMax + 0.004 && overMaxReason.length < 5) { toast(t('This estimate is over the max price — add the reason for the difference.'), 'error'); if (_omEl) _omEl.focus(); return; }
 
   // This is the one that actually bit us — WO-1052, WO-1012 and WO-1062 each carry two
   // identical estimates written about a second apart. Nothing was stopping the second tap.
@@ -1669,6 +1716,7 @@ function submitEstimate(woId, idx) {
     wo_id: woId, vendor_id: (window.session && session.vendor_id) || '',
     line_items: items.map(function(li) { return { desc: li.desc, amount: parseFloat(li.amount) }; }),
     change_reason: reason, created_by: (window.session && session.vendor_name) || 'vendor',
+    over_max_reason: overMaxReason, lang: LANG,
   }).then(function(res) {
     release();
     if (res.success) {
@@ -2211,11 +2259,11 @@ function buildVendorChecklist(wo, idx) {
       CL_REASONS.map(function(r) { return '<option value="' + r[0] + '"' + (it.code === r[0] ? ' selected' : '') + '>' + r[1] + '</option>'; }).join('') +
       '</select>';
     var whyInput = '<input type="text" oninput="setChecklistWhy(' + idx + ',' + i + ',this.value)" value="' + esc(it.why || '') + '" placeholder="Add a note (optional)" style="width:100%;margin-top:6px;font-size:12px;padding:6px;border:1px solid var(--border);border-radius:5px;background:var(--surface2);color:var(--text)">';
-    var reasonWrap = '<div id="cl-reason-' + idx + '-' + i + '" style="display:' + (it.done ? 'none' : 'block') + ';padding-left:26px">' + reasonSel + whyInput + '</div>';
+    var reasonWrap = '<div id="cl-reason-' + idx + '-' + i + '" style="display:' + (it.done ? 'none' : 'block') + ';padding-left:12px">' + reasonSel + whyInput + '</div>';
     return '<div style="padding:8px 0;border-bottom:1px solid var(--border)">' +
-      '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">' +
-      '<input type="checkbox" ' + (it.done ? 'checked' : '') + ' onchange="toggleChecklistItem(' + idx + ',' + i + ',this.checked)" style="width:auto;margin-top:2px;flex-shrink:0">' +
-      '<span id="cl-txt-' + idx + '-' + i + '" style="font-size:13px;' + (it.done ? 'text-decoration:line-through;color:var(--muted)' : 'color:var(--text)') + '">' + esc(it.t || '') + '</span>' +
+      '<label id="cl-lbl-' + idx + '-' + i + '" class="clrow' + (it.done ? ' on' : '') + '">' +
+      '<input type="checkbox" class="clbox" ' + (it.done ? 'checked' : '') + ' onchange="toggleChecklistItem(' + idx + ',' + i + ',this.checked)">' +
+      '<span id="cl-txt-' + idx + '-' + i + '" class="cltxt" style="' + (it.done ? 'text-decoration:line-through;color:var(--muted)' : 'color:var(--text)') + '">' + esc(it.t || '') + '</span>' +
       '</label>' + reasonWrap + '</div>';
   }).join('');
   return '<div class="action-section"><div class="action-title">JOB CHECKLIST</div>' +
@@ -2228,6 +2276,7 @@ function buildVendorChecklist(wo, idx) {
 function toggleChecklistItem(idx, i, checked) {
   var it = window._checklists[idx][i]; it.done = checked; if (checked) { it.code = ''; it.why = ''; }
   var rw = document.getElementById('cl-reason-' + idx + '-' + i); if (rw) rw.style.display = checked ? 'none' : 'block';
+  var lb = document.getElementById('cl-lbl-' + idx + '-' + i); if (lb) lb.classList.toggle('on', !!checked);
   var tx = document.getElementById('cl-txt-' + idx + '-' + i);
   if (tx) { tx.style.textDecoration = checked ? 'line-through' : ''; tx.style.color = checked ? 'var(--muted)' : 'var(--text)'; }
 }
@@ -3843,7 +3892,57 @@ function submitVendorBill() {
     return;
   }
   msgEl.innerHTML = '';
+  if (billMaxCheck(total)) return;   // Max price: over the max → offer "accept the max" or "propose a new estimate"
   startBillReviewFlow();
+}
+
+// Max price (Nov 5 2026): an invoice over the job's max (or over an approved higher estimate) is not sent. The vendor chooses:
+// accept the max price (a flat bill is trimmed to fit; an hourly bill is told how much to take off), or propose a new estimate with a reason.
+function billMaxCheck(total) {
+  var ceiling = woCeilingFor(_billWOId);
+  if (!ceiling || total <= ceiling + 0.004) return false;
+  var panel = document.getElementById('bill-flow-panel');
+  if (!panel) return false;   // the server refuses it anyway
+  var over = total - ceiling;
+  panel.style.display = '';
+  panel.innerHTML = '<div style="background:#fff4e5;border:2px solid #d97706;border-radius:8px;padding:14px;margin-bottom:10px">' +
+    '<div style="font-weight:bold;font-size:13px;margin-bottom:8px;color:#7c3a00">⚠ ' + esc(t('This invoice is over the max price')) + '</div>' +
+    '<div style="font-size:12.5px;color:#7c3a00;line-height:1.5;margin-bottom:12px">' + esc(t('Your invoice is $')) + total.toFixed(2) + esc(t(' but the most you can bill for this job is $')) + ceiling.toFixed(2) + '. ' + esc(t('Accept the max price, or send a new estimate with the reason for the difference.')) + '</div>' +
+    '<div style="display:flex;gap:8px;flex-direction:column">' +
+      '<button type="button" onclick="billAcceptMax()" style="padding:12px;border-radius:6px;font-weight:bold;font-size:13px;cursor:pointer;border:none;background:var(--accent2);color:#fff">✓ ' + esc(t('Accept the max price')) + ' ($' + ceiling.toFixed(2) + ')</button>' +
+      '<button type="button" onclick="billProposeEstimate()" style="padding:12px;border-radius:6px;font-weight:bold;font-size:13px;cursor:pointer;border:2px solid #d97706;background:var(--surface);color:#7c3a00">📝 ' + esc(t('Send a new estimate with my reason')) + '</button>' +
+      '<button type="button" onclick="cancelBillReviewFlow()" style="padding:10px;border-radius:6px;font-size:12.5px;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--muted)">' + esc(t('← Let me check')) + '</button>' +
+    '</div></div>';
+  panel.scrollIntoView({block:'center'});
+  return true;
+}
+
+function billAcceptMax() {
+  var ceiling = woCeilingFor(_billWOId);
+  var total = parseFloat(document.getElementById('bill-grand-total').textContent.replace('$','')) || 0;
+  var over = total - ceiling;
+  var msgEl = document.getElementById('bill-msg');
+  var flatEl = document.getElementById('bill-flat');
+  var flat = flatEl ? (parseFloat(flatEl.value) || 0) : 0;
+  if (_billType === 'flat' && flatEl && flat - over >= 0) {
+    flatEl.value = (flat - over).toFixed(2);
+    calcBillTotal();
+    cancelBillReviewFlow();
+    msgEl.innerHTML = '<div style="color:var(--accent2);font-size:12px;font-weight:bold">✓ ' + esc(t('Invoice set to the max price. Check it, then tap Submit.')) + '</div>';
+  } else {
+    cancelBillReviewFlow();
+    msgEl.innerHTML = '<div style="color:#7c3a00;font-size:12px;font-weight:bold">' + esc(t('Lower your invoice by $')) + over.toFixed(2) + esc(t(' (hours or items) to reach the max price, then tap Submit.')) + '</div>';
+  }
+}
+
+function billProposeEstimate() {
+  var woId = _billWOId;
+  var idx = -1; (window._wos || []).forEach(function(w, i) { if (w.ID === woId) idx = i; });
+  closeBillModal();
+  if (idx < 0) return;
+  var card = document.getElementById('card-' + idx);
+  if (card) { card.classList.add('expanded'); card.scrollIntoView({ block: 'start' }); }
+  openEstimateEditor(woId, idx);
 }
 
 // Step 1 of the guided flow: truck stock, only if it hasn't already been addressed (the
@@ -4206,6 +4305,22 @@ var ES = {
   'LOG JOB':'REGISTRAR TRABAJO',
   'Send Request':'Enviar Solicitud',
   'Found something else?':'¿Encontró algo más?',
+  // Max price (Nov 5 2026)
+  'MAX PRICE':'PRECIO MÁXIMO',
+  'The most you can bill for this job. To go over it, send a new estimate with your reason first.':'Lo máximo que puede cobrar por este trabajo. Para pasarse, envíe primero un nuevo presupuesto con su razón.',
+  'Over the max price':'Por encima del precio máximo',
+  'why is it more?':'¿por qué es más?',
+  'Reason this job costs more than the max price (required)…':'Razón por la que este trabajo cuesta más que el precio máximo (obligatorio)…',
+  'This estimate is over the max price — add the reason for the difference.':'Este presupuesto supera el precio máximo — agregue la razón de la diferencia.',
+  'This invoice is over the max price':'Esta factura supera el precio máximo',
+  'Your invoice is $':'Su factura es de $',
+  ' but the most you can bill for this job is $':' pero lo máximo que puede cobrar por este trabajo es $',
+  'Accept the max price, or send a new estimate with the reason for the difference.':'Acepte el precio máximo, o envíe un nuevo presupuesto con la razón de la diferencia.',
+  'Accept the max price':'Aceptar el precio máximo',
+  'Send a new estimate with my reason':'Enviar un nuevo presupuesto con mi razón',
+  'Invoice set to the max price. Check it, then tap Submit.':'Factura ajustada al precio máximo. Revísela y toque Enviar.',
+  'Lower your invoice by $':'Reduzca su factura en $',
+  ' (hours or items) to reach the max price, then tap Submit.':' (horas o artículos) para llegar al precio máximo, y luego toque Enviar.',
   'FOUND SOMETHING ELSE?':'¿ENCONTRÓ ALGO MÁS?',
   'List each extra problem with photos and one total price. Ridge Co will review it before you do any of this work.':'Anote cada problema adicional con fotos y un precio total. Ridge Co lo revisará antes de que haga este trabajo.',
   'Sending — please wait.':'Enviando — espere por favor.',

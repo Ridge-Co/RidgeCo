@@ -17,7 +17,7 @@ const MIN = 60000, HOUR = 3600000;
 function world(opts) {
   opts = opts || {};
   const w = { clock: Date.parse('2026-10-12T14:00:00Z'), logs: [], mails: [], fetches: [], props: {}, triggers: [], locked: false, sleeps: 0,
-    mailFails: false, probeFetches: [], probe: null, hub: null, uuid: 0, dropSheetWrite: false, opened: [], sheets: {} };
+    mailFails: false, probeFetches: [], probe: null, hub: null, uuid: 0, dropSheetWrite: false, opened: [], sheets: {}, gmailQueries: [], gmailThrows: null, gmailThreads: [] };
   w.sheetRows = [['Key', 'Value'], ['digest_enabled', 'TRUE']];
   w.sheets['1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4'] = { Config: w.sheetRows };
   w.setupTriggers = opts.triggers || 0;
@@ -52,6 +52,7 @@ function world(opts) {
       deleteTrigger: (t) => { w.triggers = w.triggers.filter(x => x !== t); },
       newTrigger: (fn) => { const t = mkTrigger(fn); return { timeBased: () => ({ everyMinutes: (m) => ({ create: () => { t.mins = m; w.triggers.push(t); return t; } }) }) }; },
     },
+    GmailApp: { search: (q, start, max) => { w.gmailQueries.push(q); if (w.gmailThrows) throw new Error(w.gmailThrows); return typeof w.gmailThreads === 'function' ? w.gmailThreads(q) : w.gmailThreads; } },
     MailApp: { sendEmail: (to, subject, body) => { if (w.mailFails) throw new Error('mail quota'); w.mails.push({ to, subject, body }); } },
     SpreadsheetApp: { openById: (id) => { w.openedSheet = id; w.opened.push(id); const book = w.sheets[id]; if (!book) throw new Error('no such spreadsheet ' + id);
         return { getSheetByName: (n) => book[n] ? mkSheet(book[n]) : null, insertSheet: (n) => { book[n] = []; return mkSheet(book[n]); } }; }, flush: () => {} },
@@ -88,7 +89,7 @@ const mailsWith = (w, re) => w.mails.filter(m => re.test(m.subject));
   ok(vm.runInContext('SHEET_ID', w.ctx) === '1KggRJBeJg6WDElisEQmAEsmB0hXtoNBIYWbOMFCd4S4', 'SHEET_ID');
   ok(vm.runInContext('NOTIFY_EMAIL', w.ctx) === 'brett@bmoremanagement.com', 'NOTIFY_EMAIL');
   ok(MANIFEST.timeZone === 'America/New_York' && MANIFEST.runtimeVersion === 'V8', 'manifest tz + V8');
-  ok(JSON.stringify(MANIFEST.oauthScopes.slice().sort()) === JSON.stringify(['https://www.googleapis.com/auth/script.external_request', 'https://www.googleapis.com/auth/script.scriptapp', 'https://www.googleapis.com/auth/script.send_mail', 'https://www.googleapis.com/auth/spreadsheets']), 'manifest scopes are exactly the four needed', MANIFEST.oauthScopes);
+  ok(JSON.stringify(MANIFEST.oauthScopes.slice().sort()) === JSON.stringify(['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/script.external_request', 'https://www.googleapis.com/auth/script.scriptapp', 'https://www.googleapis.com/auth/script.send_mail', 'https://www.googleapis.com/auth/spreadsheets']), 'manifest scopes are exactly the five needed (Gmail is READ-ONLY, for the payment watcher)', MANIFEST.oauthScopes);
   ok(/NO CRON ANYWHERE/.test(SRC) && /SETUP: TWO STEPS/.test(SRC) && /paste this file over Code\.gs/.test(SRC), 'header carries the no-cron rule and the two-step setup');
   ok(/approveAndStart/.test(SRC.slice(0, SRC.indexOf('var JOBS'))) && /setup\(\) is SAFE/.test(SRC) && /THAT is the only step that starts the 15-minute/.test(SRC), 'header explains setup is safe and approveAndStart is the only start');
   ok(!/catch \(\w+\) \{\s*\}/.test(SRC), 'no empty catch blocks');
@@ -926,6 +927,209 @@ const runsBody = (w, list) => ({ code: 200, body: { workflow_runs: list.map(x =>
   w = world({ allJobs: true }); w.props.STARTED = '1'; w.props.SCHEDULER_TOKEN = 'T'.repeat(30);
   ok(/ledgerThrottled_\('job_' \+ job\.name/.test(SRC) && /ledgerThrottled_\('gh_' \+ job\.name/.test(SRC), 'script-job failures and failed GitHub workflow checks are wired to the ledger');
   ok(!/catch \((\w+)\) \{\s*\}/.test(SRC), 'still no empty catch blocks');
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// PAYMENT-EMAIL WATCHER (Brett, Nov 3 2026): premier_payment_watch, weekdays only, reads Gmail, emails Brett, never marks anything paid
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// The shape of the one REAL AppFolio vendor-payment email in Brett's inbox (Aug 18 2026), with the portal link and bank digits replaced by fakes.
+const FAKE_TOKEN = 'eyJFAKE_TEST_ONLY_TOKEN_DO_NOT_USE';
+const AUG_BODY = [
+  '    body { margin: 0 !important; padding: 0; }', '    .payment-overview__header { background-color: #21971d; }', '', 'Hi Saint Thomas Ventures LLC,', '', 'Initiated: $500.00 Vendor Payment to you.', '',
+  'Payment Overview', '', 'Payee', 'Saint Thomas Ventures LLC', '', 'Payee Bank Account', '******0000', '', 'Total', '$500.00', '', 'Confirmation Number', 'TEST-CONF-1', '', 'Date', '08/18/2026', '',
+  'You could be paid instantly after client payment approval for future payments by switching to Instant Pay.', '',
+  'View Payment Preferences: https://vendor.appfolio.com/payments?from_receipt=1?idp_type=vendor&magic_link_token=' + FAKE_TOKEN + '&ref=email', '',
+  'Here is a breakdown of the payment details:', '', 'Payment #1 Details', '', 'Amount', '$500.00', '', 'Processing Speed', '  Estimated in 1-3 business days', '', 'Property Name/Address', 'PPM Property Group - - -', '',
+  'Description', 'New Owner Referral', '', 'Let us know if you have any questions.', '', 'Thank you,', '', 'Premier Property Management Investment, LLC'
+].join('\n');
+const INSP_BODY = AUG_BODY.replace('New Owner Referral', 'Inspection WO 44248-1 invoice 1775').replace('PPM Property Group - - -', '1510 E Madison St').replace('$500.00', '$95.00').replace('$500.00', '$95.00').replace('$500.00', '$95.00');
+const msg = (id, from, subject, dateMs, body, opts) => ({ getId: () => id, getFrom: () => from, getSubject: () => subject, getDate: () => new Date(dateMs), getPlainBody: () => { if (opts && opts.bodyThrows) throw new Error('Gmail body unavailable'); return body; } });
+const thread = (msgs, opts) => ({ getMessages: () => msgs, getPermalink: () => { if (opts && opts.noLink) throw new Error('no permalink'); return 'https://mail.google.com/mail/u/0/#all/T' + msgs[0].getId(); } });
+const AF = 'Premier Property Management Investment, LLC <donotreply@appfolio.com>';
+const mondayAM = Date.parse('2026-11-09T12:50:00Z');   // Mon 07:50 ET (EST), after the 07:45 slot
+function watchWorld(threadsFn) {
+  const w = started(); onlyRows(w, ['premier_payment_watch']); net(w);
+  w.clock = mondayAM; w.gmailThreads = threadsFn || [];
+  return w;
+}
+const pwState = (w) => JSON.parse(w.props.PAYMENT_WATCH || '{}');
+const pwMails = (w) => w.mails.filter(m => /Payment watcher/.test(m.subject));
+const callPW = (w, expr) => vm.runInContext(expr, w.ctx);
+
+// ── the row, the new "weekdays" schedule style, and its validation ──
+{
+  const w = world({ allJobs: true });
+  const rows = JSON.parse(vm.runInContext('JSON.stringify(JOBS)', w.ctx));
+  const r = rows.find(x => x.name === 'premier_payment_watch');
+  ok(r && r.run === 'gmail_watch' && r.weekdays === true && r.at === '07:45' && r.enabled === true && /never marks anything paid/i.test(r.what), 'the shipped table has the premier_payment_watch row: Gmail watcher, weekdays 07:45, on, read-only');
+  ok(vm.runInContext('checkJobs_()', w.ctx).ok === true, 'the table with the new row passes validation');
+  const badRow = (patch, re, name) => { const w2 = world({ allJobs: true }); vm.runInContext("JOBS.push(Object.assign({ name: 'wd', run: 'gmail_watch', at: '07:45', enabled: true, what: 'w' }, " + JSON.stringify(patch) + "));", w2.ctx); const c = vm.runInContext('checkJobs_()', w2.ctx); ok(!c.ok && re.test(c.problems.join(' | ')), 'weekdays typo caught: ' + name, c.problems); };
+  badRow({ weekdays: 'yes' }, /weekdays must be true/, 'weekdays as text');
+  badRow({ weekdays: true, day: 'Mon' }, /EITHER day OR weekdays/, 'weekdays with a day');
+  badRow({ weekdays: true, at: undefined, every_min: 30 }, /weekdays goes with at/, 'weekdays with every_min');
+  { const w3 = world({ allJobs: true }); vm.runInContext("JOBS[0].weekdays = true;", w3.ctx); const c = vm.runInContext('checkJobs_()', w3.ctx); ok(!c.ok && /only for the non-Hub rows/.test(c.problems.join()), 'weekdays on a Hub row is rejected'); }
+  ok(vm.runInContext("describe_({ weekdays: true, at: '07:45' })", w.ctx) === 'every weekday (Mon-Fri) at 7:45 AM Eastern', 'plain-English description says every weekday');
+  const due = (job, js, t) => vm.runInContext('scriptJobDue_(' + JSON.stringify(job) + ',' + JSON.stringify(js) + ',' + t + ')', w.ctx);
+  const od = (job, js, t) => vm.runInContext('scriptJobOverdue_(' + JSON.stringify(job) + ',' + JSON.stringify(js) + ',' + t + ')', w.ctx);
+  const wd = { weekdays: true, at: '07:45' };
+  const FRI = Date.parse('2026-11-13T13:30:00Z'), SAT = Date.parse('2026-11-14T13:30:00Z'), SUN = Date.parse('2026-11-15T13:30:00Z'), MON = Date.parse('2026-11-16T13:30:00Z');
+  ok(due(wd, {}, FRI) !== null && due(wd, {}, SAT) === null && due(wd, {}, SUN) === null && due(wd, {}, MON) !== null, 'weekday row: due Friday and Monday, never Saturday or Sunday');
+  ok(due(wd, {}, Date.parse('2026-11-13T12:44:00Z')) === null && due(wd, {}, Date.parse('2026-11-13T12:46:00Z')) !== null, 'weekday row: not before 07:45 ET');
+  ok(od(wd, {}, SAT + 8 * HOUR) === '' && od(wd, {}, SUN + 8 * HOUR) === '', 'weekday row is never "overdue" on a weekend');
+  ok(/has not completed successfully for 2026-11-13/.test(od(wd, {}, Date.parse('2026-11-13T21:00:00Z'))), 'weekday row IS overdue on a weekday that went by with no success');
+  ok(!vm.runInContext("wouldSeedScriptJobs_(" + SAT + ")", w.ctx).includes('premier_payment_watch'), 'on a Saturday start the weekday row is not "already done today"');
+}
+
+// ── classification, extraction (the real Aug 18 shape), queries ──
+{
+  const w = world({ allJobs: true });
+  const cls = (f, sj, b) => vm.runInContext('payWatchClassify_(' + JSON.stringify(f) + ',' + JSON.stringify(sj) + ',' + JSON.stringify(b || '') + ').kind', w.ctx);
+  ok(cls(AF, 'Your Vendor Payments as of August 18, 2026', AUG_BODY) === 'vendor_payment', 'the real AppFolio "Your Vendor Payments" email is recognised as a vendor payment');
+  ok(cls('noreply@appfolio.com', 'Something else', 'Initiated: $95.00 Vendor Payment to you.') === 'vendor_payment', 'a vendor payment is recognised by its body even with a different subject');
+  ok(cls('Masterpiece <donotreply@appfolio.com>', 'Masterpiece Management - Online Payment Confirmation', 'x') === 'noise' && cls(AF, 'Payment Method Updated (Premier Property Management Investment, LLC)', 'x') === 'noise' && cls(AF, 'Request to Access Account - Vendor Portal by AppFolio', 'x') === 'noise' && cls(AF, 'Vendor Portal 2-Step Verification Enrollment Confirmation', 'x') === 'noise', 'known AppFolio housekeeping / rent-confirmation emails are noise, not payments');
+  ok(cls('noreply-us@klarna.com', 'Payment received for eBay', '') === 'noise' && cls('cash@square.com', 'Payment sent', '') === 'noise' && cls(AF, 'Reminder - New Documents Request for Premier Property Management Investment, LLC', '') === 'noise' && cls('dume@alerts.dume.ai', 'Morning Briefing', '') === 'noise', 'other businesses\' receipts (Klarna, Square), Brett\'s own briefing app and AppFolio document requests are noise');
+  ok(cls('josiah@ppmillc.com', 'Invoice paid - thanks', 'we paid it') === 'candidate' && cls('bank@example.com', 'ACH payment received', '') === 'candidate', 'anything else payment-looking is a candidate, not ignored');
+  const x = JSON.parse(vm.runInContext('JSON.stringify(payWatchExtract_(' + JSON.stringify('Your Vendor Payments as of August 18, 2026') + ',' + JSON.stringify(AUG_BODY) + '))', w.ctx));
+  ok(x.total === '$500.00' && x.confirmation === 'TEST-CONF-1' && x.date === '08/18/2026', 'extracts total, confirmation number and date from the real shape', x);
+  ok(x.lines.length === 1 && x.lines[0].amount === '$500.00' && x.lines[0].property === 'PPM Property Group - - -' && x.lines[0].description === 'New Owner Referral', 'extracts the payment line (amount, property, description)', x.lines);
+  ok(!JSON.stringify(x).includes('magic_link') && !JSON.stringify(x).includes(FAKE_TOKEN) && !/https?:/.test(JSON.stringify(x)), 'the extracted fields contain NO link and NO portal magic-link token');
+  const y = JSON.parse(vm.runInContext('JSON.stringify(payWatchExtract_("Payment", ' + JSON.stringify(INSP_BODY) + '))', w.ctx));
+  ok(y.refs.includes('WO 44248-1') && y.refs.includes('invoice 1775') && y.total === '$95.00', 'an inspection payment that names a work order and invoice has them pulled out', y);
+  ok(JSON.parse(vm.runInContext('JSON.stringify(payWatchExtract_("x", "no labels here at all"))', w.ctx)).lines.length === 0, 'an email with none of the labels extracts nothing and does not crash');
+  const qs = vm.runInContext('payWatchQueries_(1700000000000)', w.ctx);
+  ok(qs.length === 3 && qs[0].startsWith('from:appfolio.com subject:"Vendor Payments"') && qs.every(q => q.includes('after:1700000000') && q.includes('-from:me') && q.includes('-in:trash') && q.includes('-in:spam')), 'three searches: the exact shape, AppFolio/Premier + payment words, and payment wording from any sender; all date-bounded and skip my own mail/trash/spam', qs);
+  ok(/premier/i.test(qs[1]) && /ppmillc\.com/.test(qs[1]) && /remittance/.test(qs[2]) && /ACH payment/.test(qs[2]) && /invoice paid/.test(qs[2]) && qs[2].startsWith('subject:(') && !/payment received|payment sent|Saint Thomas|BMore/i.test(qs[2]), 'the wide searches cover Premier senders and invoice-paid / ACH / remittance wording; the any-sender one is subject-phrases only (no bare "payment received", no company names: those matched 74 and 684 emails a year of noise)');
+}
+
+// ── end to end through the scheduler tick: start, dedupe, new, noise, weekend ──
+{
+  const aug = msg('m1', AF, 'Your Vendor Payments as of August 18, 2026', mondayAM - 2 * 24 * HOUR, AUG_BODY);
+  const w = watchWorld([thread([aug])]);
+  w.run('runScheduler');
+  const m = pwMails(w);
+  ok(m.length === 1 && /Payment watcher is ON - 1 payment-looking email\(s\) found/.test(m[0].subject) && m[0].to === 'brett@bmoremanagement.com', 'first run: ONE email, to Brett, saying it is on and what it already found', m.map(x => x.subject));
+  ok(/AppFolio VENDOR PAYMENT/.test(m[0].body) && /\$500\.00/.test(m[0].body) && /TEST-CONF-1/.test(m[0].body) && /New Owner Referral/.test(m[0].body) && /Open it: https:\/\/mail\.google\.com/.test(m[0].body) && /Nothing was marked paid/.test(m[0].body), 'the email lists amount, confirmation, description and a Gmail link, and says nothing was marked paid');
+  ok(!(m[0].subject + m[0].body).includes('magic_link') && !(m[0].subject + m[0].body).includes(FAKE_TOKEN) && !/vendor\.appfolio\.com/.test(m[0].body), 'the email never contains the AppFolio magic-link token or portal link');
+  const st1 = pwState(w);
+  ok(st1.started_at === mondayAM && st1.seen_total === 1 && st1.seen_ids.includes('m1') && st1.last_checked === mondayAM, 'state is saved only after the email went out', st1);
+  ok(jstate(w).premier_payment_watch.last_status === 'ok' && /started; emailed 1 new/.test(jstate(w).premier_payment_watch.last_note), 'the scheduler records the job as ok, with a plain note');
+  // Tuesday: same email still in Gmail -> not reported twice
+  w.clock = mondayAM + 24 * HOUR; w.run('runScheduler');
+  ok(pwMails(w).length === 1 && /no new payment emails/.test(jstate(w).premier_payment_watch.last_note), 'next day with nothing new: NO email (a quiet day is not noise) but the job still reports ok', jstate(w).premier_payment_watch);
+  ok(w.gmailQueries.length === 6 && w.gmailQueries.slice(3).every(q => /after:/.test(q)), 'it searched Gmail on both days (3 searches each)');
+  // Wednesday: a new inspection payment arrives (with the old one still in the window)
+  const insp = msg('m2', AF, 'Your Vendor Payments as of November 11, 2026', mondayAM + 2 * 24 * HOUR - HOUR, INSP_BODY);
+  w.gmailThreads = [thread([aug]), thread([insp])];
+  w.clock = mondayAM + 2 * 24 * HOUR; w.run('runScheduler');
+  const m3 = pwMails(w);
+  ok(m3.length === 2 && /1 new payment-looking email$/.test(m3[1].subject) && /WO 44248-1/.test(m3[1].body) && /invoice 1775/.test(m3[1].body) && /\$95\.00/.test(m3[1].body) && !/m1|New Owner Referral/.test(m3[1].body), 'a NEW payment emails only the new one, pulls out the WO and invoice number it mentions', m3.map(x => x.subject));
+  ok(pwState(w).seen_total === 2 && pwState(w).last_candidate_at === mondayAM + 2 * 24 * HOUR, 'state counts both and remembers when the last one came');
+  // Saturday: the weekday row does not even search
+  const q0 = w.gmailQueries.length; w.clock = Date.parse('2026-11-14T14:00:00Z'); w.run('runScheduler');
+  ok(w.gmailQueries.length === q0, 'Saturday: no Gmail search at all (Mon-Fri only)');
+  // Monday after the weekend: a payment that arrived Saturday is still found (the window overlaps)
+  const sat = msg('m3', AF, 'Your Vendor Payments as of November 14, 2026', Date.parse('2026-11-14T15:00:00Z'), INSP_BODY);
+  w.gmailThreads = [thread([sat])]; w.clock = Date.parse('2026-11-16T13:30:00Z'); w.run('runScheduler');
+  ok(pwMails(w).length === 3 && /1 new/.test(pwMails(w)[2].subject), 'a payment email that arrived over the weekend is caught on Monday');
+  ok(w.mails.every(mm => !/Hub scheduler job/.test(mm.subject)), 'no failure alerts during all of this', w.mails.map(x => x.subject));
+}
+
+// ── a quiet start proves itself once, then stays quiet; 30 days of nothing asks Brett (and again every 30 days) ──
+{
+  const w = watchWorld([]);
+  w.run('runScheduler');
+  ok(pwMails(w).length === 1 && /^\[Hub scheduler\] Payment watcher is ON$/.test(pwMails(w)[0].subject) && /No payment-looking emails in the last 7 days/.test(pwMails(w)[0].body), 'quiet start: one "it is ON" email (proof Gmail + email work), nothing found');
+  const noise = msg('n1', 'Masterpiece Management <donotreply@appfolio.com>', 'Masterpiece Management - Online Payment Confirmation', mondayAM + 3 * 24 * HOUR - HOUR, 'rent');
+  let asks = [], lastDay = 0;
+  for (let d = 1; d <= 62; d++) {
+    w.clock = mondayAM + d * 24 * HOUR;
+    w.gmailThreads = d === 3 ? [thread([noise])] : [];
+    const before = w.mails.length; w.run('runScheduler');
+    const added = w.mails.slice(before).filter(x => /Payment watcher/.test(x.subject));
+    if (added.length) asks.push({ d, subj: added[0].subject, body: added[0].body });
+    lastDay = d;
+  }
+  ok(asks.length === 2, 'exactly two asks in 62 days of nothing (day 30 and day 60), no other emails', asks.map(a => a.d + ': ' + a.subj));
+  const dow = (d) => new Date(mondayAM + d * 24 * HOUR).getUTCDay();
+  ok(asks[0] && asks[0].d >= 30 && asks[0].d <= 32 && dow(asks[0].d) >= 1 && dow(asks[0].d) <= 5, 'the first ask comes on the first weekday at or after 30 days', asks[0] && asks[0].d);
+  ok(asks[0] && /nothing seen in \d+ days/.test(asks[0].subj) && /Keep waiting/.test(asks[0].body) && /enabled: false/.test(asks[0].body) && /skipped 1 known non-payment/.test(asks[0].body), 'the ask explains the options and counts the known non-payment email it skipped', asks[0] && asks[0].body);
+  ok(asks[1] && asks[1].d - asks[0].d >= 30 && asks[1].d - asks[0].d <= 32, 'it asks again 30 days later while still nothing', asks.map(a => a.d));
+  ok(pwState(w).noise_total === 1 && pwState(w).seen_total === 0, 'the Masterpiece rent confirmation was skipped and counted, not reported');
+  ok(/skipped 1 known non-payment/.test(jstate(w).premier_payment_watch.last_note) === false, 'the per-run note only mentions skipped emails on the run that skipped them');
+}
+
+// ── something seen means no 30-day ask ──
+{
+  const w = watchWorld([thread([msg('x1', 'josiah@ppmillc.com', 'Invoice paid', mondayAM - HOUR, 'paid WO 44249-1')])]);
+  w.run('runScheduler');
+  ok(pwMails(w).length === 1 && /1 payment-looking email\(s\) found/.test(pwMails(w)[0].subject) && /Payment-looking email/.test(pwMails(w)[0].body) && /WO 44249-1/.test(pwMails(w)[0].body), 'a plain "invoice paid" email from Premier is a candidate and is reported with its WO');
+  w.gmailThreads = [];
+  for (let d = 1; d <= 45; d++) { w.clock = mondayAM + d * 24 * HOUR; w.run('runScheduler'); }
+  ok(pwMails(w).length === 1, 'after something was seen, 45 quiet days produce no "nothing seen" ask');
+}
+
+// ── loud failures: Gmail permission, a search that throws, email that will not send, an unreadable email, the 50 cap ──
+{
+  const w = watchWorld([]); w.gmailThrows = 'Authorization is required to perform that action.';
+  w.run('runScheduler');
+  const f = w.mails.filter(m => /Hub scheduler job failed|premier_payment_watch/i.test(m.subject + m.body));
+  ok(f.length >= 1 && /Gmail permission is not granted/.test(f.map(x => x.body).join(' ')) && /run setup once and click Allow/.test(f.map(x => x.body).join(' ')), 'missing Gmail permission: Brett gets a plain-English email saying what to do', w.mails.map(x => x.subject));
+  ok(!w.props.PAYMENT_WATCH && jstate(w).premier_payment_watch.last_status === 'failed', 'a failed run saves NO state (so the start email is still owed) and is marked failed');
+  w.gmailThrows = null; w.clock += 31 * MIN; w.run('runScheduler');
+  ok(pwMails(w).length === 1 && /is ON/.test(pwMails(w)[0].subject) && jstate(w).premier_payment_watch.last_status === 'ok', 'after the permission is fixed the same day, the retry (30 min later) starts it');
+}
+{
+  const w = watchWorld([thread([msg('e1', AF, 'Your Vendor Payments as of X', mondayAM - HOUR, AUG_BODY)])]);
+  w.mailFails = true;
+  const r = JSON.parse(vm.runInContext("JSON.stringify(runPaymentWatch_({ name: 'premier_payment_watch' }))", w.ctx));
+  ok(r.ok === false && /could not email you/.test(r.errors.join()) && /next try sends it again/.test(r.errors.join()), 'if the email cannot be sent the job FAILS and says so', r);
+  ok(!w.props.PAYMENT_WATCH, 'and nothing is marked as reported, so the payment email is not lost');
+  w.mailFails = false;
+  const r2 = JSON.parse(vm.runInContext("JSON.stringify(runPaymentWatch_({ name: 'premier_payment_watch' }))", w.ctx));
+  ok(r2.ok === true && pwMails(w).length === 1 && /\$500\.00/.test(pwMails(w)[0].body), 'the next try sends it');
+}
+{
+  const bad = msg('u1', AF, 'Your Vendor Payments as of Y', mondayAM - HOUR, '', { bodyThrows: true });
+  const w = watchWorld([thread([bad])]); w.run('runScheduler');
+  ok(pwMails(w).length === 1 && /Could not read the body: Gmail body unavailable/.test(pwMails(w)[0].body) && /open it yourself/.test(pwMails(w)[0].body), 'an email the script cannot read is STILL listed (with why), never dropped');
+  ok(w.mails.some(m => /needs a look: premier_payment_watch/.test(m.subject) && /Could not read one email/.test(m.body)), 'and the scheduler also emails the warning');
+  ok(pwState(w).seen_ids.includes('u1'), 'it is remembered so it is not listed again tomorrow');
+}
+{
+  const many = []; for (let i = 0; i < 50; i++) many.push(thread([msg('b' + i, 'x@example.com', 'ACH payment received ' + i, mondayAM - HOUR, 'x')]));
+  const w = watchWorld((q) => /Vendor Payments/.test(q) ? [] : (/Premier/.test(q) ? many : []));
+  w.run('runScheduler');
+  ok(pwMails(w).length === 1 && /returned 50 conversations \(the most it reads\)/.test(pwMails(w)[0].body), 'hitting the 50-conversation cap is reported, not hidden');
+  const w2 = watchWorld([thread([msg('l1', AF, 'Your Vendor Payments as of Z', mondayAM - HOUR, AUG_BODY)], { noLink: true })]); w2.run('runScheduler');
+  ok(pwMails(w2).length === 1 && !/Open it:/.test(pwMails(w2)[0].body) && w2.mails.some(m => /Could not make an "Open it" link/.test(m.body)), 'a missing Gmail link is a warning, and the payment is still reported');
+}
+{
+  const w = watchWorld([]); w.props.PAYMENT_WATCH = '{not json';
+  w.run('runScheduler');
+  ok(w.mails.some(m => /Payment watcher lost its memory/.test(m.subject)) && pwMails(w).some(m => /is ON/.test(m.subject)), 'corrupt saved state: Brett is told, it resets, and it starts again');
+}
+
+// ── the read-only preview (setup) proves Gmail works against the real shape and sends nothing ──
+{
+  const aug = msg('p1', AF, 'Your Vendor Payments as of August 18, 2026', Date.parse('2026-08-18T14:30:00Z'), AUG_BODY);
+  const w = started({}, {}); onlyRows(w, ['premier_payment_watch']); net(w); w.gmailThreads = [thread([aug])];
+  vm.runInContext('describeScriptJobs_()', w.ctx);
+  ok(w.logs.some(l => /READY\s+premier_payment_watch - every weekday \(Mon-Fri\) at 7:45 AM Eastern\. Gmail read access works\. Looking back 365 days it would have flagged 1 payment-looking email\(s\) \(1 AppFolio vendor payment\(s\)\)/.test(l)), 'setup preview: READY, and it finds the real Aug 18 payment email in the last year', w.logs.filter(l => /premier_payment_watch/.test(l)));
+  ok(w.mails.length === 0 && !w.props.PAYMENT_WATCH, 'the preview sends no email and saves no state');
+  w.logs.length = 0; const r = JSON.parse(vm.runInContext('JSON.stringify(paymentWatchPreview().ok)', w.ctx));
+  ok(r === true && w.logs.some(l => /AppFolio VENDOR PAYMENT - 2026-08-18/.test(l)) && w.logs.some(l => /\$500\.00/.test(l)) && !w.logs.some(l => l.includes(FAKE_TOKEN) || /magic_link/.test(l)), 'paymentWatchPreview() lists it item by item, with no token', w.logs);
+  const w2 = started({}, {}); onlyRows(w2, ['premier_payment_watch']); net(w2); w2.gmailThrows = 'Authorization is required to perform that action.';
+  vm.runInContext('describeScriptJobs_()', w2.ctx);
+  ok(w2.logs.some(l => /PROBLEM\s+premier_payment_watch.*Gmail permission is not granted/.test(l)), 'setup preview: no Gmail permission shows as a PROBLEM with the fix, not a crash');
+  const w3 = started({ SCHEDULER_TOKEN: 'hs_' + 'a'.repeat(64) }); onlyRows(w3, ['premier_payment_watch']); net(w3); w3.run('statusReport');
+  ok(w3.logs.some(l => /Payment watcher: has not run yet/.test(l)), 'statusReport shows the watcher line');
+}
+
+// ── it can only READ Gmail ──
+{
+  ok(/GmailApp\.search\(/.test(SRC) && !/GmailApp\.(sendEmail|createDraft|createLabel|getUserLabelByName|moveThreadToTrash|moveMessageToTrash|markThreadRead|markMessageRead|markThreadImportant|deleteLabel)|\.(addLabel|removeLabel|moveToTrash|moveToArchive|markRead|markUnread|star|reply|forward)\(/.test(SRC.slice(SRC.indexOf('5b. PAYMENT-EMAIL WATCHER'), SRC.indexOf('// GitHub: press "Run workflow"'))), 'the watcher only calls GmailApp.search and reads messages: no send, label, archive, trash or reply');
+  ok(!/fetch\(|http_\(/.test(SRC.slice(SRC.indexOf('5b. PAYMENT-EMAIL WATCHER'), SRC.indexOf('// GitHub: press "Run workflow"'))), 'the watcher makes no HTTP call: it cannot touch the Hub, QuickBooks or anything else, so it cannot mark an invoice paid');
 }
 
 console.log(`\nhub-scheduler: ${pass} passed, ${fail} failed`);

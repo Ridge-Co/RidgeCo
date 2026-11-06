@@ -625,7 +625,7 @@ const _hubWorkerCore = {
         if (path === '/vendor-file/view')       return await viewInternalFile(env, url, callerRole, callerSessionId);
         if (path === '/owner-file/view')        return await viewOwnerReceiptFile(env, url, callerRole, callerSessionId);
         if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
-        if (path === '/wo-audit')               return await getWOAudit(env, url);
+        if (path === '/wo-audit')               return await getWOAudit(env, url, callerRole);
         if (path === '/wo/bid-group')           return await woBidGroupGet(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
         if (path === '/portal-access')          return await portalAccessList(env, url);
@@ -794,6 +794,8 @@ const _hubWorkerCore = {
         // this only removes the uncaught-parse-error class of failure, not real validation.
         let body = {};
         try { body = await request.json(); } catch (e) { body = {}; }
+        // Max price (Nov 5 2026): only the admin can set or change it. A tenant / owner / vendor session can never create or edit it, whatever they put in the body.
+        if (callerRole && body && typeof body === 'object') { delete body.max_price; delete body.Max_Price; if (body.fields && typeof body.fields === 'object') delete body.fields.Max_Price; }
         if (callerRole) {
           const _mmb = sessionIdentityMismatch(callerRole, callerSessionId, null, body);
           if (_mmb) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mmb);
@@ -874,6 +876,7 @@ const _hubWorkerCore = {
         if (path === '/intake/retry')             return await intakeRetry(env, body);
         if (path === '/intake/delivery-email')    return await deliveryEmailIntake(env, _idEmail ? Object.assign({}, body, { mailbox: _idEmail, mailbox_claimed: String(body && body.mailbox || '').slice(0, 120) }) : body);   // a verified identity replaces whatever mailbox the body claims   // Oct 23 2026: store delivery emails (INTAKE_TOKEN or WORKER_SECRET)
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
+        if (path === '/wo/max-price')             return await setWoMaxPrice(env, body);   // ADMIN-ONLY (not in ROLE_SCOPES): set / clear the vendor max price
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
         if (path === '/wo-tenant/add')            return await addTenantToWO(env, body);
         if (path === '/wo-tenant/remove')         return await removeTenantFromWO(env, body);
@@ -7823,6 +7826,11 @@ async function createWorkOrder(env, body) {
   // If a checklist was defined at creation, make sure the column exists BEFORE we read the
   // header row — otherwise the field maps to a non-existent header and is silently dropped.
   if (body.checklist) { try { await ensureColumns(env, 'Work_Orders', ['Checklist']); } catch(_){} }
+  // Max price (Nov 5 2026): admin-only field (the router strips it from portal sessions); the column is added only when a max is actually set.
+  // (parsed inline, not via maxPriceNum, so this function stays self-contained for the tests that run it on its own)
+  const _mpRaw = parseFloat(String(body.max_price == null ? '' : body.max_price).replace(/[$,\s]/g, ''));
+  const _maxPrice = Number.isFinite(_mpRaw) && _mpRaw > 0 ? Math.round(_mpRaw * 100) / 100 : 0;
+  if (_maxPrice) { try { await ensureColumns(env, 'Work_Orders', ['Max_Price']); } catch(_){} }
   const data = await sheetsRequest(env, 'GET', `/values/Work_Orders`);
   const rows = data.values || [];
   if (!rows.length) throw new Error('Work_Orders tab has no headers');
@@ -7847,7 +7855,9 @@ async function createWorkOrder(env, body) {
     // Recurring WOs (Sep 28 2026) — only processRecurringWorkOrders/recurPostWO send these, after ensureColumns.
     Recurring_Template_ID: body.recurring_template_id||'', Recurring_Due: body.recurring_due||'', Owner_Notify_Override: body.owner_notify_override||'',
     // Vendor Additional Work (Sep 30 2026) — only /wo/additional-work/start sends this, after ensureColumns.
-    Parent_WO_ID: body.parent_wo_id||''
+    Parent_WO_ID: body.parent_wo_id||'',
+    // Max price (Nov 5 2026) — vendor-facing ceiling, never printed on a description or invoice.
+    Max_Price: _maxPrice ? _maxPrice.toFixed(2) : ''
   }[h] ?? ''));
   const _woAppend = await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   // Oct 16 2026: if another request took the same WO number in the gap, give THIS row the next free number (and say so in telemetry).
@@ -10180,9 +10190,15 @@ async function assignVendor(env, body, internal) {
     // English version always built (Oct 13 2026, Brett: the Message Queue showed only the Spanish that
     // was sent): for a Spanish vendor it rides along as the queue row's Original_Body so the review
     // screen can show what the text says in English.
-    const msgEn = `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.\n${link}`;
+    // Max price (Nov 5 2026): only WOs that have a max get the extra line; it goes to the vendor's text only, never into the WO description.
+    const _mpAssignRaw = parseFloat(String(wo.Max_Price == null ? '' : wo.Max_Price).replace(/[$,\s]/g, ''));   // inline (not maxPriceNum) so this function stays self-contained for tests that run it alone
+    const _mpAssign = Number.isFinite(_mpAssignRaw) && _mpAssignRaw > 0 ? Math.round(_mpAssignRaw * 100) / 100 : 0;
+    const _mpFmt = _mpAssign ? '$' + _mpAssign.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) : '';
+    const _mpLineEn = _mpAssign ? ` Max price: ${_mpFmt} — send a new estimate with your reason before going over.` : '';
+    const _mpLineEs = _mpAssign ? ` Precio máximo: ${_mpFmt} — envíe un nuevo presupuesto con su razón antes de pasarse.` : '';
+    const msgEn = `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.${_mpLineEn}\n${link}`;
     const msg = isSpanish
-      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Inicie sesión en su portal de proveedor para aceptar o rechazar — el código de la caja y el contacto del inquilino se desbloquean al aceptar.\n${link}`
+      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Inicie sesión en su portal de proveedor para aceptar o rechazar — el código de la caja y el contacto del inquilino se desbloquean al aceptar.${_mpLineEs}\n${link}`
       : msgEn;
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — vendor_job_assigned. Gated + queued via smsGatedSend;
     // the accept-gate withholding (lockbox/tenant contact) itself is unchanged, only the
@@ -10239,6 +10255,77 @@ async function checklistGateResponse(env, wo, vendorId, action, hintLang) {
     try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (v && String(v.Language || '').toLowerCase() === 'es') lang = 'es'; } catch (_) {}
   }
   return json({ error: checklistGateMessage(open.length, action, lang), code: 'checklist_incomplete', unresolved: open.map(i => i.t), lang }, 409);
+}
+
+// ── Max price (Nov 5 2026, Brett) ───────────────────────────────────────────────────────────────
+// A per-WO (or per-template) ceiling on what a vendor may bill. It is VENDOR-FACING ONLY: the vendor portal and the
+// vendor's own share link show it; it is never on the WO description, the customer invoice, the QuickBooks lines, or
+// any tenant / owner view (enrichWO strips it by default — see the `delete base.Max_Price` line). Only the admin sets it
+// (/wo/max-price, New WO form, WO templates). A bill over it is refused unless an APPROVED estimate covers the amount,
+// so the vendor must either accept the max or send a new estimate with a reason before billing more.
+function maxPriceNum(v) {
+  const n = parseFloat(String(v == null ? '' : v).replace(/[$,\s]/g, ''));
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
+}
+
+function estimateSubtotalOf(e) {
+  const s = parseFloat(String((e && e.Subtotal) == null ? '' : e.Subtotal).replace(/[$,\s]/g, ''));
+  if (Number.isFinite(s)) return s;
+  try { return (JSON.parse((e && e.Line_Items) || '[]') || []).reduce((t, li) => t + (parseFloat(li && li.amount) || 0), 0); } catch (_) { return 0; }
+}
+
+// What the vendor may bill: the max price, or the latest APPROVED estimate for this WO if that is higher. 0 = no max set.
+function woMaxCeiling(wo, estimates) {
+  const max = maxPriceNum(wo && wo.Max_Price);
+  if (!max) return 0;
+  const approved = (estimates || [])
+    .filter(e => String(e.WO_ID) === String(wo.ID) && ['approved', 'converted'].includes(String(e.Status || '').trim().toLowerCase()))   // 'Converted' = approved and pushed into a proposal
+    .sort((a, b) => (parseInt(b.Version || '0') || 0) - (parseInt(a.Version || '0') || 0));
+  return Math.max(max, approved.length ? estimateSubtotalOf(approved[0]) : 0);
+}
+
+function maxPriceMoney(n) { return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
+
+// Returns null when the bill is fine, else a ready-to-send 409 Response (EN/ES).
+async function maxPriceGateResponse(env, wo, vendorId, total, hintLang) {
+  const max = maxPriceNum(wo && wo.Max_Price);
+  if (!max) return null;
+  const amt = parseFloat(String(total == null ? '' : total).replace(/[$,\s]/g, ''));
+  if (!Number.isFinite(amt) || amt <= max + 0.004) return null;
+  let ceiling = max;
+  try { ceiling = woMaxCeiling(wo, await fetchTab(env, 'Estimates')); } catch (_) { ceiling = max; }
+  if (amt <= ceiling + 0.004) return null;
+  let lang = String(hintLang || '').toLowerCase() === 'es' ? 'es' : 'en';
+  if (vendorId) { try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (vendorWantsSpanish(v)) lang = 'es'; } catch (_) {} }
+  const msg = lang === 'es'
+    ? 'Esta factura (' + maxPriceMoney(amt) + ') supera el precio máximo de este trabajo (' + maxPriceMoney(ceiling) + '). Acepte el precio máximo, o envíe un nuevo presupuesto con la razón de la diferencia.'
+    : 'This invoice (' + maxPriceMoney(amt) + ') is over the max price for this job (' + maxPriceMoney(ceiling) + '). Accept the max price, or send a new estimate with the reason for the difference.';
+  return json({ error: msg, code: 'over_max', max, ceiling, total: amt, lang }, 409);
+}
+
+// POST /wo/max-price { wo_id, max_price }  — ADMIN-ONLY (absent from ROLE_SCOPES). Blank max_price clears it.
+async function setWoMaxPrice(env, body) {
+  const woId = String((body && (body.wo_id || body.id)) || '').trim();
+  if (!woId) return json({ error: 'wo_id required' }, 400);
+  const raw = body.max_price == null ? '' : String(body.max_price).trim();
+  let val = '';
+  if (raw !== '') {
+    const n = maxPriceNum(raw);
+    if (!n) return json({ error: 'Max price must be a dollar amount greater than 0 (or blank to clear it).' }, 400);
+    if (n > 1000000) return json({ error: 'Max price looks too large — check the amount.' }, 400);
+    val = n.toFixed(2);
+  }
+  const wo = findWO(await fetchTab(env, 'Work_Orders'), woId);
+  if (!wo) return json({ error: 'WO not found' }, 404);
+  await ensureColumns(env, 'Work_Orders', ['Max_Price']);
+  const old = String(wo.Max_Price || '');
+  await updateWOFields(env, woId, { Max_Price: val });
+  invalidateTabCache('Work_Orders');
+  const after = findWO(await fetchTab(env, 'Work_Orders'), woId);
+  const stored = String((after && after.Max_Price) || '');
+  if (maxPriceNum(stored) !== maxPriceNum(val)) return json({ error: 'The max price did not save — please try again.', saved: false }, 500);
+  if (old !== stored) { try { await logWOAudit(env, woId, 'admin', 'admin', 'Max_Price', old, stored, val ? 'Max price set (vendor-facing)' : 'Max price cleared'); } catch (_) {} }
+  return json({ success: true, saved: true, wo_id: woId, max_price: stored });
 }
 
 async function updateStatus(env, body) {
@@ -10602,6 +10689,9 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
     access_gated: accessGated,
     vendor_name: vendorName, vendor_phone: vendorPhone, vendor_trade: vendorTrade,
   };
+  // Max price (Nov 5 2026): vendor-facing only. `...wo` above copies every column, so it is stripped here by default
+  // and only the vendor portal view (vendorView) keeps it — tenant, owner and shared-link views never carry it.
+  if (!opts.vendorView) delete base.Max_Price;
   // Tenants get the full technician contact (name+phone+trade) so they can coordinate
   // access directly once someone's assigned — that's the whole point of showing it.
   if (opts.tenantView) { delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = []; }
@@ -11312,6 +11402,8 @@ async function addVendorBill(env, body) {
     let _gwo = null;
     try { _gwo = findWO(await fetchTab(env, 'Work_Orders'), dupeKey); } catch (_) { _gwo = null; }
     if (_gwo) { const _gate = await checklistGateResponse(env, _gwo, body.Vendor_ID || body.vendor_id || _gwo.Vendor_ID, 'invoice', body.lang); if (_gate) return _gate; }
+    // Nov 5 2026: a bill over the WO's max price needs an approved estimate that covers it (same non-hub callers as the checklist gate).
+    if (_gwo) { const _mgate = await maxPriceGateResponse(env, _gwo, body.Vendor_ID || body.vendor_id || _gwo.Vendor_ID, body.Total, body.lang); if (_mgate) return _mgate; }
   }
   if (dupeKey && body.Total) {
     const dupe = await findRecentDuplicate(env, 'Vendor_Bills', {
@@ -13206,6 +13298,30 @@ async function addEstimateVersion(env, body) {
   }, 120, r => estimateLineItemsCanonical(r.Line_Items) === estimateLineItemsCanonical(lineItemsJson));
   if (dupe) return json({ success: true, duplicate: true, version: parseInt(dupe.Version || '1'), subtotal: dupe.Subtotal || subtotal.toFixed(2) });
 
+  // Nov 5 2026 — max price: a vendor estimate ABOVE the WO's max must say why. The reason is stored on the estimate
+  // (Over_Max_Reason + English copy) so Brett sees it beside the number; the max amount itself is never copied onto the estimate.
+  const _estByAdmin = /^(admin|hub|brett)$/i.test(String(body.created_by || ''));
+  let overMaxReason = '', overMaxReasonEn = '', overMax = false;
+  if (!_estByAdmin) {
+    let _mwo = null; try { _mwo = findWO(await fetchTab(env, 'Work_Orders'), woId); } catch (_) {}
+    const _mxRaw = parseFloat(String((_mwo && _mwo.Max_Price) == null ? '' : _mwo.Max_Price).replace(/[$,\s]/g, ''));   // inline (not maxPriceNum) so this function stays self-contained for tests that run it alone
+    const _mx = Number.isFinite(_mxRaw) && _mxRaw > 0 ? _mxRaw : 0;
+    if (_mx && subtotal > _mx + 0.004) {
+      overMax = true;
+      overMaxReason = String(body.over_max_reason || '').trim().slice(0, 1000);
+      if (overMaxReason.length < 5) {
+        let _ml = String(body.lang || '').toLowerCase() === 'es' ? 'es' : 'en';
+        try { const _mv = body.vendor_id ? (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(body.vendor_id)) : null; if (vendorWantsSpanish(_mv)) _ml = 'es'; } catch (_) {}
+        return json({ error: _ml === 'es' ? 'Este presupuesto supera el precio máximo de este trabajo. Escriba la razón de la diferencia para poder enviarlo.' : 'This estimate is over the max price for this job. Add the reason for the difference to send it.', code: 'over_max_reason_needed', max: _mx, subtotal: +subtotal.toFixed(2), lang: _ml }, 409);
+      }
+      overMaxReasonEn = overMaxReason;
+      try {
+        const _mv2 = body.vendor_id ? (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(body.vendor_id)) : null;
+        if (vendorWantsSpanish(_mv2)) { const _tr = await translateText(env, overMaxReason, 'Spanish', 'English'); if (_tr) overMaxReasonEn = String(_tr); }
+      } catch (_) {}
+    }
+  }
+
   // Vendor text is kept exactly as written; an English copy is stored beside it (per-line desc_en
   // inside Line_Items + Change_Reason_EN) so the admin panel, owner proposal and invoice can read
   // English. Fails open — a translation miss just means no English copy (Re-translate can retry).
@@ -13218,6 +13334,7 @@ async function addEstimateVersion(env, body) {
   } catch (_) {}
   const row = { WO_ID: woId, Vendor_ID: body.vendor_id||'', Version: String(nextVersion), Line_Items: JSON.stringify(storedLineItems), Subtotal: subtotal.toFixed(2), Change_Reason: changeReason, Created_By: body.created_by||'vendor', Created_Date: new Date().toISOString(), Status: body.status||'Pending' };
   if (changeReasonEn) { try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); row.Change_Reason_EN = changeReasonEn; } catch (_) {} }
+  if (overMax && overMaxReason) { try { await ensureColumns(env, 'Estimates', ['Over_Max_Reason', 'Over_Max_Reason_EN']); row.Over_Max_Reason = overMaxReason; row.Over_Max_Reason_EN = overMaxReasonEn; } catch (_) {} }
   await addRow(env, 'Estimates', row);
   try { await updateWOField(env, woId, 'Current_Estimate', subtotal.toFixed(2)); } catch(e) {}
   // Approval stage: a first/normal estimate puts the job in Estimated. A revision that arrives AFTER
@@ -13239,7 +13356,7 @@ async function addEstimateVersion(env, body) {
     try {
       const c = await estimateSmsContext(env, woId, body.vendor_id);
       await sendTemplatedSms(env, { type: 'admin_estimate_new', kind: 'admin', wo_id: woId, property: c.property,
-        tokens: { Kind: (c.wo && c.wo.Type === 'addon') ? (nextVersion > 1 ? 'Revised additional work' : 'Additional work') : (nextVersion > 1 ? 'Revised estimate' : 'New estimate'), WO: woId, Address: c.address, Vendor: (c.vendor && (c.vendor.Name || c.vendor.First_Name)) || body.created_by || 'a vendor', Amount: fmtMoney(subtotal) } });
+        tokens: { Kind: ((c.wo && c.wo.Type === 'addon') ? (nextVersion > 1 ? 'Revised additional work' : 'Additional work') : (nextVersion > 1 ? 'Revised estimate' : 'New estimate')) + (overMax ? ' OVER MAX' : ''), WO: woId, Address: c.address, Vendor: (c.vendor && (c.vendor.Name || c.vendor.First_Name)) || body.created_by || 'a vendor', Amount: fmtMoney(subtotal) } });
     } catch (_) {}
   }
   return json({ success: true, version: nextVersion, subtotal: subtotal.toFixed(2) });
@@ -13454,11 +13571,18 @@ async function logMessageAudit(env, { woId, changedBy, changedByRole, channel, r
   }]);
 }
 
-async function getWOAudit(env, url) {
+async function getWOAudit(env, url, callerRole) {
   const woId = url.searchParams.get('wo_id'); if (!woId) return json({ error: 'Missing wo_id' }, 400);
   try {
     const audit = await fetchTab(env, 'WO_Audit');
-    return json(audit.filter(a => a.WO_ID === woId).sort((a,b) => new Date(a.Timestamp)-new Date(b.Timestamp)));
+    let rows = audit.filter(a => a.WO_ID === woId).sort((a,b) => new Date(a.Timestamp)-new Date(b.Timestamp));
+    // Max price (Nov 5 2026) is vendor-facing only: a portal session (owner) never sees the Max_Price change rows,
+    // nor the "Max price: $X" line inside the vendor's job text.
+    if (callerRole) {
+      const _mpLine = /\s*(Max price|Precio máximo): \$[\d,]+(\.\d+)? —[^\n]*/g;
+      rows = rows.filter(a => a.Field !== 'Max_Price').map(a => (a.Message_Body || a.Original_Body) ? { ...a, Message_Body: String(a.Message_Body || '').replace(_mpLine, ''), Original_Body: String(a.Original_Body || '').replace(_mpLine, '') } : a);
+    }
+    return json(rows);
   } catch(e) { return json([]); }
 }
 
@@ -19360,7 +19484,7 @@ async function schedUnexpectedCloudflareCron(env, event) {
 //     is the explicit override (default off). Owners are always suppressed (Owner_Notify_Override='off').
 // The date math below is pure (ISO 'YYYY-MM-DD' strings in, out) so test/recurring-wo.test.mjs
 // exercises it directly.
-const RECUR_TEMPLATE_COLS = ['Recurrence_Enabled','Freq_Type','Freq_Interval','Freq_Weekday','Freq_Nth','Freq_Day_Of_Month','Start_Date','End_Date','Season_Enabled','Season_Start','Season_End','Targets','Default_Vendor_ID','Lead_Days','Notify_Tenant','Last_Skips','Last_Posted_Date'];
+const RECUR_TEMPLATE_COLS = ['Recurrence_Enabled','Freq_Type','Freq_Interval','Freq_Weekday','Freq_Nth','Freq_Day_Of_Month','Start_Date','End_Date','Season_Enabled','Season_Start','Season_End','Targets','Default_Vendor_ID','Lead_Days','Notify_Tenant','Last_Skips','Last_Posted_Date','Max_Price'];
 const RECUR_WO_COLS = ['Recurring_Template_ID','Recurring_Due','Owner_Notify_Override'];
 const RECUR_CLOSED_STATUSES = WOStatus.sets.RECUR_CLOSED;
 const RECUR_LOOKBACK_DAYS = 3; // a sweep outage of up to 3 days still catches up an occurrence; older ones are dropped, not posted late
@@ -19466,6 +19590,8 @@ function recurSanitizeTemplateFields(f) {
   for (const k of ['Season_Start', 'Season_End']) if (o[k] && !/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(String(o[k]))) o[k] = '';
   for (const k of ['Recurrence_Enabled', 'Season_Enabled', 'Notify_Tenant']) if (o[k] !== undefined) o[k] = (o[k] === true || recurIsTrue(o[k])) ? 'TRUE' : 'FALSE';
   if (o.Targets !== undefined && typeof o.Targets !== 'string') o.Targets = JSON.stringify(o.Targets);
+  // Max price (Nov 5 2026): a clean positive amount, or blank to clear. Anything unreadable is blanked rather than guessed at.
+  if (o.Max_Price !== undefined) { const _mp = maxPriceNum(o.Max_Price); o.Max_Price = _mp ? _mp.toFixed(2) : ''; }
   return o;
 }
 
@@ -19493,6 +19619,7 @@ async function recurPostWO(env, tpl, target, due, opts) {
     notes: (ov.notes ? ov.notes + ' — ' : '') + `Recurring template #${tpl.ID} "${tpl.Name || ''}"${due ? ' — due ' + due : ''}${opts.manual ? ' (posted manually)' : ''}`,
     tenant_visible: notifyTenant, tenant_notify_created: notifyTenant, tenant_notify_updates: notifyTenant,
     recurring_template_id: tpl.ID, recurring_due: due || '', owner_notify_override: 'off',
+    max_price: tpl.Max_Price || '',   // template max price carries onto every WO it posts (set before assignVendor so the vendor text shows it)
   });
   const created = await res.json();
   if (!created || !created.id) return { error: (created && created.error) || 'create failed' };
@@ -25439,6 +25566,8 @@ async function woSharedRead(env, url){
     vendor_has_access: !!e.vendor_has_access, Vendor_ID: e.Vendor_ID||'',
     Checklist: wo.Checklist||'',
   };
+  // Max price (Nov 5 2026): shown only to the vendor this WO is assigned to (the link's own vendor), never to a tenant/other link.
+  { const _smp = maxPriceNum(wo.Max_Price); if (_smp && auth.vid && String(auth.vid) === String(wo.Vendor_ID||'')) safe.Max_Price = _smp.toFixed(2); }
   let attachments = [];
   try {
     const at = await fetchTab(env, 'Attachments');
