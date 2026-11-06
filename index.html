@@ -2472,9 +2472,28 @@ function loadAll() {
     });
     _loadAllFinish(loaded);
   }).catch(function(e) {
-    logError('hub-bootstrap', (e && e.message) || 'Failed — falling back to per-tab loads');
+    // Nov 6 2026 (Brett): a plain phone network drop (weak signal, Chrome waking up, wifi/cell
+    // handoff) is not a Hub problem and was filling the 50-slot Error log. A network-type failure
+    // is NOT logged on its own: the per-tab fallback runs, and only if THAT also loads nothing is
+    // one entry logged (see _loadAllFallback). Real errors (HTTP 500, bad response) still log.
+    var msg = (e && e.message) || 'Failed — falling back to per-tab loads';
+    if (!_isNetworkDrop(msg)) logError('hub-bootstrap', msg);
+    else _countNetworkDrop();
     return _loadAllFallback();
   });
+}
+
+// True for the browser-side "could not reach the server" messages: Chrome "Failed to fetch",
+// Safari/iOS "Load failed", Firefox "NetworkError...", and api()'s own "Request timed out after Ns".
+function _isNetworkDrop(msg) {
+  return /failed to fetch|load failed|networkerror|network request failed|network connection was lost|timed out after/i.test(String(msg || ''));
+}
+// Dropped-but-recovered loads are counted (not hidden): mh_net_drops = {count, last}.
+function _countNetworkDrop() {
+  try {
+    var d = JSON.parse(localStorage.getItem('mh_net_drops') || '{}');
+    localStorage.setItem('mh_net_drops', JSON.stringify({ count: (d.count || 0) + 1, last: new Date().toISOString() }));
+  } catch (err) { /* counter only; the load itself already continues via the fallback */ }
 }
 
 function showPage(name, btn) {
