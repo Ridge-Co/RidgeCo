@@ -10432,7 +10432,51 @@ async function vendorWorkorders(env, url, callerRole, callerSessionId) {
   // to another vendor would matter).
   const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults, vendorView: true, vendors, viewingVendorId: vendorId }, masterKeys, masterKeyHolders));
   enriched.sort((a, b) => { const pa = PRIORITY_ORDER[a.Priority?.toLowerCase()] ?? 2, pb = PRIORITY_ORDER[b.Priority?.toLowerCase()] ?? 2; return pa !== pb ? pa - pb : (a.property_address||'').localeCompare(b.property_address||''); });
+  // Nov 6 2026 (Brett: Cesar's portal showed English job descriptions): the portal translated its buttons but never the job text.
+  const vendorRow = vendors.find(v => String(v.ID) === vendorId);
+  if (vendorWantsSpanish(vendorRow)) await localizeVendorDescriptions(env, vendorRow, enriched);
   return json(enriched);
+}
+
+// Spanish job descriptions for a Spanish vendor (Vendors.Language = 'es'). Translated ONCE and saved on the work order
+// (Description_ES + Description_ES_Src = fingerprint of the English it came from), so a portal refresh costs nothing and an
+// edited description is re-translated automatically. Response: Description = Spanish, Description_EN = the original English.
+// At most DESC_ES_MAX_PER_CALL new translations per request (the rest show English and finish on the next refresh), so a first
+// load never stalls. Every miss is LOUD: Telemetry Success=FALSE (-> Needs Attention) with the WO ids, never a silent English fallback.
+const DESC_ES_MAX_PER_CALL = 5;
+function descFingerprint(text) { let h = 5381; const s = String(text || ''); for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; return s.length + ':' + h.toString(36); }
+async function localizeVendorDescriptions(env, vendor, list) {
+  const failures = [];
+  const todo = [];
+  for (const wo of list) {
+    const en = String(wo.Description || '');
+    if (!en.trim()) continue;
+    wo.Description_EN = en;
+    const fp = descFingerprint(en);
+    if (wo.Description_ES && wo.Description_ES_Src === fp) { wo.Description = wo.Description_ES; continue; }
+    todo.push({ wo, en, fp });
+  }
+  if (!todo.length) return { translated: 0, failures };
+  const batch = todo.slice(0, DESC_ES_MAX_PER_CALL);
+  try { await ensureColumns(env, 'Work_Orders', ['Description_ES', 'Description_ES_Src']); }
+  catch (e) { failures.push('could not add Description_ES columns: ' + (e && e.message)); }
+  let translated = 0;
+  await Promise.all(batch.map(async ({ wo, en, fp }) => {
+    const woId = wo.WO_ID || wo.ID;
+    try {
+      const r = await translateForVendorDetailed(env, vendor, en, { max_tokens: 1500 });
+      if (!r.translated) { failures.push(woId + ': not translated (' + (r.skipped_reason || 'unknown') + ')'); return; }
+      wo.Description = r.text;
+      translated++;
+      try { await updateRowVerified(env, 'Work_Orders', wo.ID, { Description_ES: r.text, Description_ES_Src: fp }); }
+      catch (e) { failures.push(woId + ': translation shown but not saved (' + (e && e.message) + ')'); }
+    } catch (e) { failures.push(woId + ': ' + (e && e.message)); }
+  }));
+  if (failures.length) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_description_translate', Skill_Or_Endpoint: '/vendor-workorders', Success: 'FALSE', Notes: 'vendor ' + vendor.ID + ': ' + failures.join(' | ').slice(0, 900) }); }
+    catch (e) { console.error('vendor_description_translate telemetry failed', e && e.message); }
+  }
+  return { translated, failures };
 }
 
 async function tenantWorkorders(env, url, callerRole, callerSessionId) {
