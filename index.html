@@ -2421,17 +2421,22 @@ function _loadAllFallback() {
     api('GET','/workorders?include_voided=1', null, 20000), api('GET','/invoices', null, 20000),
     api('GET','/owners', null, 20000), api('GET','/keys', null, 20000)
   ]).then(function(results) {
+    var okCount = results.filter(function(r){return r.status==='fulfilled';}).length;
     results.forEach(function(r,i) {
       if (r.status === 'fulfilled') {
         state[_names8[i]] = Array.isArray(r.value) ? r.value : [];
         if (!Array.isArray(r.value)) logError('Load '+_names8[i], 'Not array: '+JSON.stringify(r.value).substring(0,100));
       } else {
         state[_names8[i]] = [];
-        logError('Load '+_names8[i], r.reason?.message || 'Failed');
+        var rmsg = (r.reason && r.reason.message) || 'Failed';
+        // A network-type failure is only logged when the whole load failed (below), once.
+        if (!_isNetworkDrop(rmsg)) logError('Load '+_names8[i], rmsg);
+        else if (okCount > 0) _countNetworkDrop();
       }
     });
-    var okCount = results.filter(function(r){return r.status==='fulfilled';}).length;
     if (okCount === 0) {
+      var firstFail = results[0] && results[0].reason && results[0].reason.message;
+      if (_isNetworkDrop(firstFail)) logError('hub-bootstrap', 'No connection: all data loads failed (' + firstFail + ')');
       var msg = '<div class="loading" style="color:var(--danger)">Couldn\'t load data — check your connection. '
         + '<span style="cursor:pointer;color:var(--info);text-decoration:underline" onclick="loadAll()">Retry</span></div>';
       var d1 = document.getElementById('dashboard-wo-list'); if (d1) d1.innerHTML = msg;
