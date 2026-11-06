@@ -1,0 +1,11 @@
+{
+  "name": "Ridge Co Tenant Portal",
+  "short_name": "Ridge Co",
+  "id": "./tenant.html",
+  "start_url": "./tenant.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#253562",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
