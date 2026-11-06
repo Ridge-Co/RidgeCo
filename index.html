@@ -1228,6 +1228,7 @@ window.addEventListener('pageshow', function(e){
         <div class="cl-quick"><input type="text" id="wo-checklist-quick" placeholder="Type an item, press Enter — or paste a whole list here" autocomplete="off" onkeydown="clQuickKey(event,'wo-checklist')" onpaste="clQuickPaste(event,'wo-checklist')"><button type="button" class="btn" onclick="clQuickAdd('wo-checklist')">Add</button></div>
         <textarea id="wo-checklist" class="cl-area" oninput="checklistRefresh('wo-checklist')" placeholder="One per line, e.g.&#10;Replace faucet cartridge&#10;Re-caulk around sink&#10;Run water & check for leaks"></textarea>
         <div class="cl-hint">One item per line. Pasted bullets / numbers / checkboxes are cleaned up; items are added to the end, never replacing what is here.</div></div>
+      <div class="form-group" id="wo-max-price-block"><label>Max price <span style="color:var(--muted);font-weight:normal">(optional — vendor sees it; never on the description or invoice)</span></label><input type="text" inputmode="decimal" id="wo-max-price" placeholder="e.g. 350" autocomplete="off"></div>
       <div class="form-group"><label>Assign Vendor <span style="color:var(--muted);font-weight:normal">(optional)</span></label><select id="wo-vendor-opt" onchange="woVendorOptChanged()" style="width:100%"><option value="">Assign after creation</option></select></div>
       <div class="form-group" id="wo-vendor-notify-group" style="display:none"><label style="cursor:pointer;display:flex;align-items:center;gap:6px;margin-top:22px"><input type="checkbox" id="wo-vendor-notify" checked style="width:auto"> Notify vendor + tenant now</label></div>
       <div class="form-group"><label>Schedule Date <span style="color:var(--muted);font-weight:normal">(optional)</span></label><input type="date" id="wo-sched-date-opt"></div>
@@ -3173,7 +3174,18 @@ function openWODetail(woId) {
     '<div style="font-size:10px;color:var(--muted);margin-top:8px">Trade defaults are set in Config → Access_Trade_Defaults. Trades not listed default to YES.</div>' +
     '</div>';
 
-  document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + vaSection);
+  // Max price (Nov 5 2026) — what the vendor may bill; shown to the vendor, never on the description or invoice.
+  var mpVal = String(wo.Max_Price || '');
+  var mpSection = '<div style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">MAX PRICE (vendor sees this · never on invoices)</div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+    '<input type="text" inputmode="decimal" id="detail-max-price" value="' + esc(mpVal) + '" placeholder="No max set" autocomplete="off" style="max-width:160px">' +
+    '<button class="btn small" onclick="saveWoMaxPrice(\'' + woId + '\')">Save</button>' +
+    (mpVal ? '<button class="btn small secondary" onclick="saveWoMaxPrice(\'' + woId + '\',true)">Clear</button>' : '') +
+    '</div>' +
+    '<div style="font-size:10px;color:var(--muted);margin-top:8px">A vendor invoice over this is blocked until they accept the max or send a new estimate with a reason and you approve it.</div>' +
+    '</div>';
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + vaSection + mpSection);
   // Vendor Task Requests (CAP-036 #12) -- its own section/insert, deliberately separate
   // from the addBtn(...) action-buttons block above so it never collides with that code.
   var vtrSection = wo.Vendor_ID ? (
@@ -4052,6 +4064,7 @@ function openNewWOModal() {
   var priority = document.getElementById('wo-priority'); if(priority) priority.value='normal';
   var type = document.getElementById('wo-type'); if(type) type.value='manual';
   var ownerRef = document.getElementById('wo-owner-ref'); if(ownerRef) ownerRef.value='';
+  var _mpIn = document.getElementById('wo-max-price'); if(_mpIn) _mpIn.value='';
   var clTa = document.getElementById('wo-checklist'); if(clTa) clTa.value='';
   var clQ = document.getElementById('wo-checklist-quick'); if(clQ) clQ.value='';
   // Hide conditional sections
@@ -4247,6 +4260,7 @@ function submitNewWO() {
     room:(document.getElementById('wo-room')||{value:''}).value.trim(),
     checklist:checklistFromText((document.getElementById('wo-checklist')||{value:''}).value),
     owner_wo_ref:document.getElementById('wo-owner-ref').value.trim(),
+    max_price:((document.getElementById('wo-max-price')||{value:''}).value||'').trim(),
     vendor_needs_access:(document.getElementById('wo-vendor-access')||{value:'auto'}).value,
     tenant_visible: tvVisible, tenant_notify_created: tvCreated, tenant_notify_updates: tvUpdates,
     created_by:'admin'
@@ -6591,6 +6605,17 @@ function toggleTenantField(woId, field, newVal) {
   });
 }
 
+// Max price (Nov 5 2026): vendor-facing ceiling. Saved through the admin-only /wo/max-price route, which reads the value back before it says saved.
+function saveWoMaxPrice(woId, clear) {
+  var el = document.getElementById('detail-max-price');
+  var v = clear ? '' : (el ? String(el.value || '').trim() : '');
+  api('POST','/wo/max-price',{wo_id:woId, max_price:v}).then(function(res){
+    if (!res || res.error || res.saved === false) { toast('Max price not saved: '+((res && res.error) || 'unknown error'),'error'); return; }
+    toast(v ? 'Max price saved: $'+res.max_price+' (vendor can see it)' : 'Max price cleared','success');
+    loadAll().then(function(){ openWODetail(woId); });
+  }).catch(function(e){ toast('Max price not saved: '+e.message,'error'); });
+}
+
 function setVendorAccess(woId, value) {
   // value: 'TRUE' | 'FALSE' | 'auto'
   api('POST','/workorder/update',{id:woId, fields:{Vendor_Needs_Access:value}}).then(function(res){
@@ -8926,7 +8951,7 @@ function unitLinkTemplate(tid, propId, unitId, action) {
 
 // Resets the Add/Edit Template modal to ADD mode (blank form, no tmpl-id).
 function openAddTemplateModal() {
-  ['tmpl-id','tmpl-name','tmpl-desc','tmpl-link-url','tmpl-link-label'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  ['tmpl-id','tmpl-name','tmpl-desc','tmpl-link-url','tmpl-link-label','tmpl-max-price'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   var sel = document.getElementById('tmpl-owner');
   if (sel) sel.innerHTML = ownerOptionsHtml('', '<option value="">Global (all owners)</option>');
   var trade = document.getElementById('tmpl-trade'); if (trade) trade.value = '';
@@ -8951,6 +8976,7 @@ function openEditTemplateModal(id) {
   document.getElementById('tmpl-desc').value = t.Description || '';
   document.getElementById('tmpl-link-url').value = t.Link_URL || '';
   document.getElementById('tmpl-link-label').value = t.Link_Label || '';
+  document.getElementById('tmpl-max-price').value = t.Max_Price || '';
   recurFillForm(t);
   var title = document.getElementById('tmpl-modal-title'); if (title) title.textContent = 'EDIT WO TEMPLATE';
   var saveBtn = document.getElementById('tmpl-save-btn'); if (saveBtn) saveBtn.textContent = 'SAVE CHANGES';
@@ -8967,6 +8993,7 @@ function submitAddTemplate() {
     Description: document.getElementById('tmpl-desc').value.trim(),
     Link_URL: document.getElementById('tmpl-link-url').value.trim(),
     Link_Label: document.getElementById('tmpl-link-label').value.trim()||'View',
+    Max_Price: document.getElementById('tmpl-max-price').value.trim(),   // blank clears it
   };
   var rec = recurReadForm();
   if (rec.error) { toast(rec.error,'error'); return; }
@@ -9008,6 +9035,7 @@ function applySheetTemplate(id) {
     document.getElementById('wo-trade').value = t.Trade || document.getElementById('wo-trade').value;
     document.getElementById('wo-priority').value = t.Priority || document.getElementById('wo-priority').value;
     document.getElementById('wo-desc').value = desc;
+    var _tmx = document.getElementById('wo-max-price'); if (_tmx && t.Max_Price) _tmx.value = t.Max_Price;   // template max price carries onto the new WO
   } else if (editModal && editModal.classList.contains('open')) {
     var ta = document.getElementById('ewo-description');
     if (ta) { ta.value = (ta.value?ta.value+'\n\n':'')+desc; ta.style.height='auto'; ta.style.height=Math.max(140,ta.scrollHeight)+'px'; }
@@ -10933,6 +10961,13 @@ function renderHubEstimateView(woId, estimates, holder) {
         'v' + e.Version + ' — $' + parseFloat(e.Subtotal).toFixed(2) + (e.Change_Reason ? ' — ' + esc(e.Change_Reason) + (e.Change_Reason_EN ? ' (English: ' + esc(e.Change_Reason_EN) + ')' : '') : '') + ' — ' + esc(e.Created_By || '') + '</div>';
     }).join('') : '';
 
+    // Max price (Nov 5 2026): flag an estimate that is over the WO's max, with the vendor's reason (English copy beneath when translated).
+    var _mpWO = (state.workorders || []).find(function(w){ return w.ID === woId; }) || {};
+    var _mpNum = parseFloat(String(_mpWO.Max_Price || '').replace(/[$,\s]/g, '')) || 0;
+    if (_mpNum && parseFloat(current.Subtotal || 0) > _mpNum + 0.004) {
+      reasonBlock += '<div style="margin-top:8px;background:#fff4e5;border:1px solid #d97706;border-radius:6px;padding:8px 10px;font-size:11px;color:#7c3a00"><b>⚠ OVER MAX PRICE</b> ($' + _mpNum.toFixed(2) + ' max) — vendor’s reason: ' + esc(current.Over_Max_Reason || '(none given)') +
+        (current.Over_Max_Reason_EN && current.Over_Max_Reason_EN !== current.Over_Max_Reason ? '<div class="est-en" style="color:var(--accent2)"><b>English:</b> ' + esc(current.Over_Max_Reason_EN) + '</div>' : '') + '</div>';
+    }
     var approvalBlock = (isApproved || isConverted)
       ? '<div style="margin-top:10px;background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:8px 10px">' +
         '<span style="color:var(--accent2);font-weight:bold;font-size:11px">' + (isConverted ? '✓ APPROVED — IN A PROPOSAL' : '✓ APPROVED') + '</span>' +
@@ -15502,6 +15537,7 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
       <div class="form-group full"><label>Description Template</label><textarea id="tmpl-desc" placeholder="Text to insert into WO description. The link will be appended below this." style="min-height:80px;resize:vertical"></textarea></div>
       <div class="form-group"><label>Link URL <span style="font-weight:normal;color:var(--muted)">(Google Sheet, doc, checklist)</span></label><input type="url" id="tmpl-link-url" placeholder="https://docs.google.com/…"></div>
       <div class="form-group"><label>Link Label</label><input type="text" id="tmpl-link-label" placeholder="Inspection Checklist"></div>
+      <div class="form-group"><label>Max price <span style="font-weight:normal;color:var(--muted)">(optional — vendor sees it; never on the description or invoice)</span></label><input type="text" inputmode="decimal" id="tmpl-max-price" placeholder="e.g. 350" autocomplete="off"></div>
       <div class="form-group full" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <select id="tmpl-snippet" style="flex:1;min-width:150px"><option value="">📎 Insert saved text snippet…</option></select>
         <button class="btn small secondary" type="button" onclick="insertTemplateSnippet()">Insert</button>
