@@ -1,0 +1,8 @@
+# Spanish job descriptions in the vendor portal — 2026-11-06 — PR into main, head `fix/vendor-portal-spanish-descriptions` (cut from main tip 6f05881e), merged: pending
+## CURRENT
+Brett: Cesar's (Language=es) portal showed English job descriptions. Cause: NOT old data — the portal translated buttons/labels (vendor-i18n.js) but nothing ever translated the free-text Description. Fix: GET /vendor-workorders, for a Spanish vendor, returns Description in Spanish (Description_EN keeps the English); translated once with translateForVendorDetailed and saved on the WO (Work_Orders.Description_ES + Description_ES_Src fingerprint, columns auto-added). A saved copy is reused (no AI call), an edited English description re-translates, max 5 new translations per request (rest finish on next refresh). vendor.html shows "EN: ..." under the Spanish in the job detail.
+Misses are loud: translation not produced / save not verified -> Telemetry Success=FALSE (Job_Type vendor_description_translate, WO ids) -> Needs Attention; the vendor still sees English meanwhile.
+Tests: new test/vendor-description-spanish.test.mjs (12), vendor-translation 55/55, full suite 231/232 (email-intake-buildium timing test flaky under load, passes alone). NOT yet verified on staging/live. Costs one small AI call per new/edited description for Spanish vendors only.
+Silent-failure check: every catch logs Telemetry FALSE and the failure list; cache write uses updateRowVerified.
+## FEATURE_LOG
+**[FL-20261106-vendor-desc-es]** Vendor portal job descriptions are translated for Spanish vendors and cached on the WO (Description_ES/_Src). Do not remove the fingerprint (edits must re-translate) or the per-call cap. Test: vendor-description-spanish.test.mjs.
