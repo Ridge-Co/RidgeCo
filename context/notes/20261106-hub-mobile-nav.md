@@ -1,0 +1,7 @@
+# Hub mobile hamburger menu + shorter nav — 2026-11-06 — PR into main, head `feat/hub-mobile-nav` (cut from main tip 6f05881e), merged: pending
+## CURRENT
+index.html + test/devlog-tools.test.mjs. Brett: the Hub nav was too long to scroll on a phone. Removed from the top bar: INVOICES, SEND TO QB (Review Bills covers it), QB MAPPING, VENDOR PERFORMANCE, VENDOR ONBOARDING, PORTALS, MESSAGING. Kept: Dashboard, Work Orders, Properties, Vendors, Tenants, Owners, Shopping, Review Bills, Who to Pay, Tools & Log. The pages still exist; Portals, Messaging, Vendor Performance and Vendor Onboarding got tiles in Tools & Log > Daily work (QB Mapping already had one). Phones (<=768px): the sticky header shows a menu button with the current page name; tapping opens a 2-column grid of 48px buttons under the header and closes on selection. Desktop is unchanged.
+Tests: devlog-tools 296 pass (4 new tool tiles pinned), full suite 231/232 (email-intake-buildium timing test is flaky under parallel load, passes alone), inline script syntax OK. Playwright at 412px: menu closed by default, opens to 10 buttons, closes on tap, label follows showPage. Frontend only; not verified on a real phone.
+Silent-failure check: no catch added; no data path changed.
+## FEATURE_LOG
+**[FL-20261106-hub-mobile-nav]** Hub nav is a hamburger on phones; INVOICES / SEND TO QB / QB MAPPING / VENDOR PERFORMANCE / VENDOR ONBOARDING / PORTALS / MESSAGING are reached from Tools & Log (showPage(name,null)). New top-level Hub page = add a nav button ONLY if it is used daily, otherwise a Tools tile.

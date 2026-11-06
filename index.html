@@ -334,11 +334,19 @@ window.addEventListener('pageshow', function(e){
   .table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
   #key-search-table{overflow-x:auto;-webkit-overflow-scrolling:touch}
 }
-/* Hub header (index.html only): its 17 nav buttons wrap into a sticky block that is already ~320px tall at 360px wide; 44px rows would make it ~485px, so on a phone the nav becomes ONE swipeable row of 44px buttons instead. */
-@media (hover:none) and (pointer:coarse) and (max-width:600px){
-  header{flex-wrap:wrap;padding:8px 12px;row-gap:4px}
-  header nav{order:3;flex:1 1 100%;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;gap:2px}
-  .nav-btn{flex:none;white-space:nowrap}
+/* Hub header on a phone (Nov 6 2026, Brett: "long scroll to get to tools"): the nav is a hamburger. The sticky header shows the current page + a menu
+   button; tapping it opens a 2-column grid of big buttons right under the header (header stays pinned, the page scrolls underneath). */
+.nav-toggle{display:none}
+@media (max-width:768px){
+  header{flex-wrap:wrap;padding:8px 12px;row-gap:6px}
+  .logo{flex:0 0 auto}
+  .nav-toggle{display:flex;align-items:center;gap:8px;order:2;flex:1 1 auto;justify-content:flex-end;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);padding:0 14px;min-height:44px;font-family:var(--font);font-size:13px;letter-spacing:.08em;cursor:pointer}
+  .nav-toggle .nav-burger{font-size:20px;line-height:1}
+  header > div:last-child{order:3}
+  header nav{display:none;order:4;flex:1 1 100%;width:100%;max-height:calc(100vh - 120px);overflow-y:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}
+  header.nav-open nav{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  header.nav-open .nav-btn{min-height:48px;white-space:normal;text-align:center;background:var(--surface2);border:1px solid var(--border);font-size:12px;display:flex;align-items:center;justify-content:center}
+  header.nav-open .nav-btn.active{border-color:var(--accent)}
 }
 </style>
 </head>
@@ -357,24 +365,18 @@ window.addEventListener('pageshow', function(e){
 <div id="app">
   <header>
     <div class="logo"><svg width="22" height="22" viewBox="0 0 22 22" fill="none" style="display:inline;vertical-align:middle;margin-right:7px;position:relative;top:-1px"><rect x="1" y="1" width="20" height="20" rx="3.5" fill="#f3f5f8" stroke="#1d4ed8" stroke-width="1.5"/><polygon points="11,4 19,17 3,17" fill="none" stroke="#1d4ed8" stroke-width="1.4" stroke-linejoin="round"/><polygon points="11,9 15.5,17 6.5,17" fill="#1d4ed8" fill-opacity="0.4"/></svg>RIDGE CO <span>/ HUB</span></div>
-    <nav>
+    <button type="button" class="nav-toggle" id="nav-toggle" aria-expanded="false" aria-controls="main-nav" onclick="toggleNav()"><span class="nav-burger" aria-hidden="true">&#9776;</span> <span id="nav-current">DASHBOARD</span></button>
+    <nav id="main-nav">
       <button class="nav-btn active" onclick="showPage('dashboard',this)">DASHBOARD</button>
       <button class="nav-btn" onclick="showPage('workorders',this)">WORK ORDERS</button>
       <button class="nav-btn" onclick="showPage('properties',this)">PROPERTIES</button>
       <button class="nav-btn" onclick="showPage('vendors',this)">VENDORS</button>
       <button class="nav-btn" onclick="showPage('tenants',this)">TENANTS</button>
-      <button class="nav-btn" onclick="showPage('invoices',this)">INVOICES</button>
       <button class="nav-btn" onclick="showPage('owners',this)">OWNERS</button>
       <button class="nav-btn" onclick="showPage('shopping',this)">🛒 SHOPPING</button>
       <button class="nav-btn" onclick="showPage('invoice-review',this)">💰 REVIEW BILLS</button>
-      <button class="nav-btn" onclick="showPage('qb-send',this)">💵 SEND TO QB</button>
-      <button class="nav-btn" onclick="showPage('qb-map',this)">🔗 QB MAPPING</button>
       <button class="nav-btn" onclick="showPage('payables',this)">💸 WHO TO PAY</button>
-      <button class="nav-btn" onclick="showPage('vendor-performance',this)">📊 VENDOR PERFORMANCE</button>
-      <button class="nav-btn" onclick="showPage('vendor-onboarding',this)">📋 VENDOR ONBOARDING</button>
       <button class="nav-btn" onclick="showPage('devlog',this)">TOOLS &amp; LOG <span id="devlog-nav-badge" style="display:none;background:var(--danger);color:#fff;border-radius:10px;padding:0 6px;font-size:10px;margin-left:4px">0</span></button>
-      <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
-      <button class="nav-btn" onclick="showPage('messaging',this)">📢 MESSAGING</button>
     </nav>
     <div><span class="status-dot"></span><span style="color:var(--muted);font-size:11px">LIVE</span></div>
   </header>
@@ -899,6 +901,10 @@ window.addEventListener('pageshow', function(e){
     <details class="dl-group" data-dl-key="work" data-tools="1" open>
       <summary><span class="dl-h">Daily work</span><span class="dl-sub">Pages you open to get things done</span><span class="dl-count"></span></summary>
       <div class="dl-body"><div class="dl-grid">
+        <div class="dl-tool" data-tool="portals" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="showPage('portals',null)">🚪 Portals</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Quick links to every Ridge Co page and portal.</p></div>
+        <div class="dl-tool" data-tool="messaging" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="showPage('messaging',null)">📢 Messaging</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Edit the texts and emails the Hub sends, and send a notice to a property's tenants.</p></div>
+        <div class="dl-tool" data-tool="vendor-performance" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="showPage('vendor-performance',null)">📊 Vendor Performance</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Ranks vendors by reliability, speed, volume and cost.</p></div>
+        <div class="dl-tool" data-tool="vendor-onboarding" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="showPage('vendor-onboarding',null)">📋 Vendor Onboarding</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Active vendors missing a phone, billing email, address or tax ID.</p></div>
         <div class="dl-tool" data-tool="scope-creator" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('scope-creator.html','_blank')">📝 Scope Creator</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Turn your notes into a scope, then a work order and a proposal.</p></div>
         <div class="dl-tool" data-tool="inspection-scheduler" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('inspect.html','_blank')">🔍 Inspection Scheduler</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Set your availability and manage inspection customers and properties.</p></div>
         <div class="dl-tool" data-tool="shift-appointments" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('shift.html','_blank')">⏱ Shift Appointments</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Running late, or re-laying a day? Move your inspections and work-order windows, and tell the right people.</p></div>
@@ -2477,7 +2483,22 @@ function loadAll() {
   });
 }
 
+function toggleNav(force) {
+  var h = document.querySelector('header'); if (!h) return;
+  var open = (typeof force === 'boolean') ? force : !h.classList.contains('nav-open');
+  h.classList.toggle('nav-open', open);
+  var t = document.getElementById('nav-toggle'); if (t) t.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+// The label next to the menu button = the nav button that opens this page; pages with no nav button (Portals, Messaging, ... are reached from Tools) show their name.
+function navLabelFor(name) {
+  var b = Array.prototype.find.call(document.querySelectorAll('.nav-btn'), function(x){ return (x.getAttribute('onclick') || '').indexOf("showPage('" + name + "'") !== -1; });
+  if (b) return (b.childNodes[0] && b.childNodes[0].textContent || b.textContent).trim();
+  var names = { 'portals': 'PORTALS', 'messaging': 'MESSAGING', 'vendor-performance': 'VENDOR PERFORMANCE', 'vendor-onboarding': 'VENDOR ONBOARDING', 'qb-map': 'QB MAPPING', 'qb-send': 'SEND TO QB', 'invoices': 'INVOICES' };
+  return names[name] || String(name || '').toUpperCase().replace(/-/g, ' ');
+}
 function showPage(name, btn) {
+  var _nc = document.getElementById('nav-current'); if (_nc) _nc.textContent = navLabelFor(name);
+  toggleNav(false);
   document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});
   document.querySelectorAll('.nav-btn').forEach(function(b){b.classList.remove('active');});
   document.getElementById('page-'+name).classList.add('active');
