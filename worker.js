@@ -39744,6 +39744,15 @@ function strBuildTasks(stays, today, S) {
       if (pd >= today && pd <= maxDate && !seen.has(pk)) { seen.add(pk); out.push({ key: pk, kind: 'prearrival', date: pd, winStart: pd, winEnd: next, next, guests: '' }); }
     }
   }
+  // A future arrival with no checkout inside the look-back window before it has a long gap, so it still gets its pre-arrival clean.
+  if (S.preGap > 0) {
+    const endDates = [...byOut.keys()];
+    for (const next of starts) {
+      const pd = inspAddDays(next, -1), pk = `${STR_PROP}|prearrival|${next}`;
+      if (pd < today || pd > maxDate || seen.has(pk) || endDates.some(e => e <= next)) continue;
+      seen.add(pk); out.push({ key: pk, kind: 'prearrival', date: pd, winStart: pd, winEnd: next, next, guests: '' });
+    }
+  }
   return out.sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
 }
 
