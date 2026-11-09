@@ -512,7 +512,7 @@ const _hubWorkerCore = {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage', '/portal-access/backfill', '/admin/fi-premier-repair', '/admin/fi-originals-bridge', '/failure/update'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage', '/portal-access/backfill', '/admin/fi-premier-repair', '/admin/fi-originals-bridge', '/admin/backfill-premier-wo', '/failure/update'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
           // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
           // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
@@ -564,6 +564,7 @@ const _hubWorkerCore = {
       }
       if (request.method === 'GET') {
         if (path === '/health')                 return await health(env, url);
+        if (path === '/push/vapid-key' || path === '/push/devices') return await pushRoute(env, path, url, null, callerRole, callerSessionId);
         if (path === '/cron/status')            return await schedStatusHandler(env);
         if (path === '/ai-credit/status')       return await aiCreditStatusHandler(env);   // Oct 16 2026: is AI reading paused? (admin; GET + secret-free, so the read-only prod token may read it)
         if (path === '/failures/open')          return await failOpenList(env, url);
@@ -624,7 +625,7 @@ const _hubWorkerCore = {
         if (path === '/vendor-file/view')       return await viewInternalFile(env, url, callerRole, callerSessionId);
         if (path === '/owner-file/view')        return await viewOwnerReceiptFile(env, url, callerRole, callerSessionId);
         if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
-        if (path === '/wo-audit')               return await getWOAudit(env, url);
+        if (path === '/wo-audit')               return await getWOAudit(env, url, callerRole);
         if (path === '/wo/bid-group')           return await woBidGroupGet(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
         if (path === '/portal-access')          return await portalAccessList(env, url);
@@ -793,6 +794,8 @@ const _hubWorkerCore = {
         // this only removes the uncaught-parse-error class of failure, not real validation.
         let body = {};
         try { body = await request.json(); } catch (e) { body = {}; }
+        // Max price (Nov 5 2026): only the admin can set or change it. A tenant / owner / vendor session can never create or edit it, whatever they put in the body.
+        if (callerRole && body && typeof body === 'object') { delete body.max_price; delete body.Max_Price; if (body.fields && typeof body.fields === 'object') delete body.fields.Max_Price; }
         if (callerRole) {
           const _mmb = sessionIdentityMismatch(callerRole, callerSessionId, null, body);
           if (_mmb) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mmb);
@@ -873,6 +876,7 @@ const _hubWorkerCore = {
         if (path === '/intake/retry')             return await intakeRetry(env, body);
         if (path === '/intake/delivery-email')    return await deliveryEmailIntake(env, _idEmail ? Object.assign({}, body, { mailbox: _idEmail, mailbox_claimed: String(body && body.mailbox || '').slice(0, 120) }) : body);   // a verified identity replaces whatever mailbox the body claims   // Oct 23 2026: store delivery emails (INTAKE_TOKEN or WORKER_SECRET)
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
+        if (path === '/wo/max-price')             return await setWoMaxPrice(env, body);   // ADMIN-ONLY (not in ROLE_SCOPES): set / clear the vendor max price
         if (path === '/workorder/notes')          return await appendWONotes(env, body);
         if (path === '/wo-tenant/add')            return await addTenantToWO(env, body);
         if (path === '/wo-tenant/remove')         return await removeTenantFromWO(env, body);
@@ -1208,6 +1212,7 @@ const _hubWorkerCore = {
         if (path === '/fi/booking/start')         return await fiRoute(env, 'booking-start', () => fiBookingStart(env, body));
         if (path === '/fi/reword')                return await fiRoute(env, 'reword', () => fiReword(env, body));
         if (path === '/admin/fi-premier-repair')  return await fiRoute(env, 'premier-repair', () => fiPremierRepair(env, body));
+        if (path === '/admin/backfill-premier-wo') return await insbBackfillWo(env, body);
         if (path === '/admin/fi-originals-bridge') return await fiRoute(env, 'originals-bridge', () => fiOrigBridge(env, body));
         if (path === '/fi/folder/organize')       return await fiRoute(env, 'folder-organize', () => fiFolderOrganize(env, body));
         if (path === '/insp/customer/add')        return await inspCustomerAdd(env, body);
@@ -1237,6 +1242,7 @@ const _hubWorkerCore = {
         if (path === '/insp/customer/key-pickup')  return await inspCustomerKeyPickup(env, body);
         if (path === '/insp/str-guard/config')     return await inspStrGuardConfigSave(env, body);
         if (path === '/insp/str-guard/run')        { try { return json(Object.assign({ ok: true }, await inspStrGuardTick(env, { dry: !!(body && body.dry) }))); } catch (e) { return inspHandleErr(e); } }
+        if (path === '/push/subscribe' || path === '/push/device' || path === '/push/remove' || path === '/push/test' || path === '/push/send') return await pushRoute(env, path, url, body, callerRole, callerSessionId);
         if (path === '/str/c/mark')                return await strCleanerMark(env, body);
         if (path === '/str/c/offer')               return await strOfferRespond(env, body);
         if (path === '/str/c/cancel')              return await strCleanerCancel(env, body);
@@ -1254,6 +1260,7 @@ const _hubWorkerCore = {
         if (path === '/str/admin/pending/send-now') return await strAdminPendingSendNow(env, body);
         if (path === '/str/admin/offer-now')       return await strAdminOfferNow(env, body);
         if (path === '/str/admin/alert/ack')       return await strAdminAlertAck(env, body);
+        if (path === '/str/admin/cancel-decision') return await strAdminCancelDecision(env, body);
         if (path === '/str/admin/run')             return await strAdminRun(env, body);
         if (path === '/str/admin/digest-run')      { try { const r = await strRunDigest(env, { dry: !!(body && body.dry) }); return json(Object.assign({ ok: r.ok }, r)); } catch (e) { return await strHandleErr(env, e, 'digest'); } }
         if (path === '/insp-book/slots')           return await inspBookSlots(env, body);
@@ -7909,6 +7916,11 @@ async function createWorkOrder(env, body) {
   // If a checklist was defined at creation, make sure the column exists BEFORE we read the
   // header row — otherwise the field maps to a non-existent header and is silently dropped.
   if (body.checklist) { try { await ensureColumns(env, 'Work_Orders', ['Checklist']); } catch(_){} }
+  // Max price (Nov 5 2026): admin-only field (the router strips it from portal sessions); the column is added only when a max is actually set.
+  // (parsed inline, not via maxPriceNum, so this function stays self-contained for the tests that run it on its own)
+  const _mpRaw = parseFloat(String(body.max_price == null ? '' : body.max_price).replace(/[$,\s]/g, ''));
+  const _maxPrice = Number.isFinite(_mpRaw) && _mpRaw > 0 ? Math.round(_mpRaw * 100) / 100 : 0;
+  if (_maxPrice) { try { await ensureColumns(env, 'Work_Orders', ['Max_Price']); } catch(_){} }
   const data = await sheetsRequest(env, 'GET', `/values/Work_Orders`);
   const rows = data.values || [];
   if (!rows.length) throw new Error('Work_Orders tab has no headers');
@@ -7933,7 +7945,9 @@ async function createWorkOrder(env, body) {
     // Recurring WOs (Sep 28 2026) — only processRecurringWorkOrders/recurPostWO send these, after ensureColumns.
     Recurring_Template_ID: body.recurring_template_id||'', Recurring_Due: body.recurring_due||'', Owner_Notify_Override: body.owner_notify_override||'',
     // Vendor Additional Work (Sep 30 2026) — only /wo/additional-work/start sends this, after ensureColumns.
-    Parent_WO_ID: body.parent_wo_id||''
+    Parent_WO_ID: body.parent_wo_id||'',
+    // Max price (Nov 5 2026) — vendor-facing ceiling, never printed on a description or invoice.
+    Max_Price: _maxPrice ? _maxPrice.toFixed(2) : ''
   }[h] ?? ''));
   const _woAppend = await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   // Oct 16 2026: if another request took the same WO number in the gap, give THIS row the next free number (and say so in telemetry).
@@ -9954,6 +9968,71 @@ function vendorSmsDetailFromResult(env, r, lang, msg) {
   if (env.__STAGING__ ?? isStaging(env)) return { status: 'skipped', reason: 'STAGING: texts are stubbed, so nothing was really sent (the message was only logged)', language: lang, message_body: r.message_body || msg };
   return { status: 'failed', reason: 'Twilio rejected or failed to send the text (see Message_Queue)', language: lang, message_body: r.message_body || msg };
 }
+// ── "New work order" EMAIL to the vendor (Nov 5 2026, Brett: "Send them an email when assigned. Just something basic with a
+// link to the work order, which would be on their portal. Period. That will just give us one more point of contact.") ──
+// Sent from assignVendor right after the vendor text, so every path that assigns a vendor (the Assign modal, New Work Order,
+// Duplicate, recurring) gets it. It carries ONLY the job label, the address and the portal link — no lockbox code, no tenant
+// contact (those unlock in the portal once the vendor accepts) — and the link is vendorPortalLink (PIN login), never a share link.
+// PURE — may the email go out, and if not, why. The text side redirects to a test number in Test Mode but an email has no
+// redirect, so Test Mode (default ON) means NO email to a real vendor. Honors the master messaging switch, the vendor's own
+// SMS_Enabled switch and the property's vendor switch, same as the text. Returns { send, status, reason }.
+function vendorAssignEmailPlan({ cfg, vendor, property }) {
+  const to = String((vendor && vendor.Email) || '').trim();
+  if (!to) return { send: false, status: 'skipped', reason: 'Vendor has no email address on file, so no email was sent (the text still went)' };
+  if (!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(to)) return { send: false, status: 'failed', reason: 'Vendor email address "' + to + '" is not valid, so no email was sent. Fix it on the vendor record.' };
+  if (String((cfg && cfg.TWILIO_ENABLED) || '').toUpperCase() !== 'TRUE') return { send: false, status: 'skipped', reason: 'Messaging is OFF (Global switch), so no email was sent' };
+  if (String((cfg && cfg.TWILIO_TEST_MODE) || '').toUpperCase() !== 'FALSE') return { send: false, status: 'skipped', reason: 'Test Mode is on, so no email goes to a real vendor' };
+  if (!smsToggleOn(vendor && vendor.SMS_Enabled)) return { send: false, status: 'skipped', reason: 'Messaging is switched OFF for this vendor, so no email was sent' };
+  if (property && smsPropertyGateFlags(property).propertyVendorsOn === false) return { send: false, status: 'skipped', reason: 'Vendor messages are switched OFF for this property, so no email was sent' };
+  return { send: true, status: 'sent', reason: '', to };
+}
+// PURE — the email itself. English by default, Spanish for a Spanish-language vendor. Returns { subject, html, language }.
+function vendorAssignEmailBuild({ woId, trade, address, vendor, link }) {
+  const es = String((vendor && vendor.Language) || '').toLowerCase() === 'es';
+  const first = _escHtml(vendorFirstName(vendor));
+  const job = _escHtml(String(trade || '').trim());
+  const where = _escHtml(String(address || '').trim());
+  const id = _escHtml(woId);
+  const url = _escHtml(link);
+  const btn = '<p><a href="' + url + '" style="display:inline-block;background:#0b5cad;color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;font-weight:bold">' + (es ? 'Ver la orden de trabajo' : 'View work order') + '</a></p>';
+  if (es) return { language: 'es', subject: 'Nuevo trabajo asignado — OT ' + woId,
+    html: '<p>Hola ' + first + ',</p><p>Se le asignó un nuevo trabajo: <b>OT ' + id + '</b>' + (job ? ' (' + job + ')' : '') + (where ? ' en <b>' + where + '</b>' : '') + '.</p>'
+      + '<p>Inicie sesión en su portal de proveedor para aceptar o rechazar:</p>' + btn
+      + '<p style="color:#888;font-size:11px">Ridge Co — este es un aviso automático.</p>' };
+  return { language: 'en', subject: 'New work order assigned — WO ' + woId,
+    html: '<p>Hi ' + first + ',</p><p>You have been assigned a new job: <b>WO ' + id + '</b>' + (job ? ' (' + job + ')' : '') + (where ? ' at <b>' + where + '</b>' : '') + '.</p>'
+      + '<p>Log in to your vendor portal to accept or decline:</p>' + btn
+      + '<p style="color:#888;font-size:11px">Ridge Co — this is an automated notice.</p>' };
+}
+// Sends (or declines to send) the email for ONE assignment. NEVER throws and never touches the assignment itself: every outcome is
+// returned (assignVendor puts it in the response as vendor_email_detail), a send that FAILS is also reported to the failure ledger,
+// and every real attempt is written to the work order's communication audit (the same place the text shows up).
+async function sendVendorAssignEmail(env, { woId, wo, vendor, property, address, cfg }) {
+  woId = String(woId || (wo && (wo.WO_ID || wo.ID)) || '');
+  const plan = vendorAssignEmailPlan({ cfg, vendor, property });
+  if (!plan.send) {
+    if (plan.status === 'failed') { try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'vendor_assign_email', ref: 'WO ' + woId, severity: 'P3', message: plan.reason }); } catch (e) { console.error('vendor_assign_email: reportFailure failed', e && e.message); } }
+    return { status: plan.status, reason: plan.reason };
+  }
+  const mail = vendorAssignEmailBuild({ woId, trade: wo && wo.Trade, address, vendor, link: vendorPortalLink(woId) });
+  let res;
+  try {
+    res = await gmailSendEmail(env, { to: plan.to, subject: mail.subject, html: mail.html });
+  } catch (e) {
+    const msg = 'The new-work-order email to ' + (vendor.Name || vendor.ID || 'the vendor') + ' (' + plan.to + ') failed to send: ' + String((e && e.message) || e).slice(0, 200);
+    try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'vendor_assign_email', ref: 'WO ' + woId, severity: 'P2', message: msg }); } catch (e2) { console.error('vendor_assign_email: reportFailure failed', e2 && e2.message); }
+    let auditErr = '';
+    try { await logMessageAudit(env, { woId, channel: 'email', recipientName: vendor.Name || vendor.First_Name || '', recipientType: 'vendor', messageType: 'vendor_job_assigned', messageBody: mail.subject, outcome: 'failed', notes: msg }); } catch (e3) { auditErr = ' (and it could not be written to the audit log)'; }
+    return { status: 'failed', reason: msg + auditErr, language: mail.language };
+  }
+  const staged = !!(res && res.staged);
+  const outcome = staged ? 'skipped' : 'sent';
+  const reason = staged ? 'STAGING: emails are stubbed, so nothing was really sent' : 'Email sent to the vendor';
+  let auditWarn = '';
+  try { await logMessageAudit(env, { woId, channel: 'email', recipientName: vendor.Name || vendor.First_Name || '', recipientType: 'vendor', messageType: 'vendor_job_assigned', messageBody: mail.subject + '\n\n' + mail.html, outcome, notes: reason }); }
+  catch (e) { auditWarn = ' — but it could not be written to the work order audit log'; try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'vendor_assign_email_audit', ref: 'WO ' + woId, severity: 'P3', message: 'Vendor assignment email went out but the audit row failed: ' + String((e && e.message) || e).slice(0, 160) }); } catch (e4) { console.error('vendor_assign_email_audit: reportFailure failed', e4 && e4.message); } }
+  return { status: outcome, reason: reason + auditWarn, language: mail.language, to: plan.to };
+}
 // What WILL / WOULD happen for one cancelled copy's vendor. Pure (no I/O). Statuses: will_send | skipped | cannot_send.
 // keptVendors: Map vendorId -> id of a job that stays open for that vendor (they are not texted about the cancelled one).
 function bidCancelVendorPlan(row, vendor, wo, property, unit, keptVendors) {
@@ -10266,9 +10345,15 @@ async function assignVendor(env, body, internal) {
     // English version always built (Oct 13 2026, Brett: the Message Queue showed only the Spanish that
     // was sent): for a Spanish vendor it rides along as the queue row's Original_Body so the review
     // screen can show what the text says in English.
-    const msgEn = `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.\n${link}`;
+    // Max price (Nov 5 2026): only WOs that have a max get the extra line; it goes to the vendor's text only, never into the WO description.
+    const _mpAssignRaw = parseFloat(String(wo.Max_Price == null ? '' : wo.Max_Price).replace(/[$,\s]/g, ''));   // inline (not maxPriceNum) so this function stays self-contained for tests that run it alone
+    const _mpAssign = Number.isFinite(_mpAssignRaw) && _mpAssignRaw > 0 ? Math.round(_mpAssignRaw * 100) / 100 : 0;
+    const _mpFmt = _mpAssign ? '$' + _mpAssign.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) : '';
+    const _mpLineEn = _mpAssign ? ` Max price: ${_mpFmt} — send a new estimate with your reason before going over.` : '';
+    const _mpLineEs = _mpAssign ? ` Precio máximo: ${_mpFmt} — envíe un nuevo presupuesto con su razón antes de pasarse.` : '';
+    const msgEn = `[${body.wo_id}] New ${wo.Trade} job: ${wo.Description} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.${_mpLineEn}\n${link}`;
     const msg = isSpanish
-      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Inicie sesión en su portal de proveedor para aceptar o rechazar — el código de la caja y el contacto del inquilino se desbloquean al aceptar.\n${link}`
+      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Inicie sesión en su portal de proveedor para aceptar o rechazar — el código de la caja y el contacto del inquilino se desbloquean al aceptar.${_mpLineEs}\n${link}`
       : msgEn;
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — vendor_job_assigned. Gated + queued via smsGatedSend;
     // the accept-gate withholding (lockbox/tenant contact) itself is unchanged, only the
@@ -10279,6 +10364,24 @@ async function assignVendor(env, body, internal) {
     vendorSMSSent = r.sent;
     const _lang = isSpanish ? 'es' : 'en';
     vendorSmsDetail = vendorSmsDetailFromResult(env, r, _lang, msg);
+  }
+  // Nov 5 2026 (Brett): one more point of contact — a basic "new work order" email with the portal link, alongside the text.
+  // Same assignment, same notify switch. A repeat Assign to the SAME vendor whose email already went is not emailed twice.
+  let vendorEmailDetail = { status: 'skipped', reason: 'Notifications were turned off for this assignment' };
+  let vendorEmailSent = String(wo.Vendor_ID || '') === String(body.vendor_id) && String(wo.Status || '') === 'Assigned' && String(wo.Vendor_Email_Sent || '').toUpperCase() === 'TRUE';
+  if (notify && vendorEmailSent) vendorEmailDetail = { status: 'skipped', reason: 'This vendor already got the new-work-order email for this assignment' };
+  else if (notify) {
+    let _emailCfg = null;
+    try { _emailCfg = await fetchConfig(env); }
+    catch (e) {
+      const m = 'Could not read the Config settings, so the new-work-order email was not sent: ' + String((e && e.message) || e).slice(0, 160);
+      try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'vendor_assign_email', ref: 'WO ' + body.wo_id, severity: 'P2', message: m }); } catch (e2) { console.error('vendor_assign_email: reportFailure failed', e2 && e2.message); }
+      vendorEmailDetail = { status: 'failed', reason: m };
+    }
+    if (_emailCfg) {
+      vendorEmailDetail = await sendVendorAssignEmail(env, { woId: body.wo_id, wo, vendor, property, address, cfg: _emailCfg });
+      vendorEmailSent = vendorEmailDetail.status === 'sent';
+    }
   }
   if (notify && notifyTenantOnAssign) {
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_assigned. Now includes the assigned vendor's
@@ -10294,12 +10397,13 @@ async function assignVendor(env, body, internal) {
       if (r.sent) tenantSMSSent = true;
     }
   }
-  await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE' });
+  try { await ensureColumns(env, 'Work_Orders', ['Vendor_Email_Sent']); } catch (e) { vendorEmailDetail = Object.assign({}, vendorEmailDetail, { warning: 'Could not add the Vendor_Email_Sent column (already logged), so a repeat Assign may email the vendor again' }); }
+  await updateWOFields(env, body.wo_id, { Vendor_ID: body.vendor_id, Status: 'Assigned', Vendor_SMS_Sent: vendorSMSSent ? 'TRUE' : 'FALSE', Tenant_SMS_Sent: tenantSMSSent ? 'TRUE' : 'FALSE', Vendor_Email_Sent: vendorEmailSent ? 'TRUE' : 'FALSE' });
   // Vendor nudge clock (Sep 14 2026) — starts on every successful assignment, notify or
   // silent, since it tracks actual work progress rather than whether a text went out.
   await createVendorNudgeClock(env, body.wo_id, body.vendor_id);
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent} notify=${notify}` }); } catch(_){}
-  return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify, vendor_sms_detail: vendorSmsDetail });
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent} vendor_email=${vendorEmailDetail.status} notify=${notify}` }); } catch (e) { console.error('wo_assign telemetry failed', e && e.message); }
+  return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify, vendor_sms_detail: vendorSmsDetail, vendor_email_detail: vendorEmailDetail });
 }
 
 // ── Vendor checklist gate (Nov 2 2026, Brett) ───────────────────────────────────────────────────
@@ -10325,6 +10429,77 @@ async function checklistGateResponse(env, wo, vendorId, action, hintLang) {
     try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (v && String(v.Language || '').toLowerCase() === 'es') lang = 'es'; } catch (_) {}
   }
   return json({ error: checklistGateMessage(open.length, action, lang), code: 'checklist_incomplete', unresolved: open.map(i => i.t), lang }, 409);
+}
+
+// ── Max price (Nov 5 2026, Brett) ───────────────────────────────────────────────────────────────
+// A per-WO (or per-template) ceiling on what a vendor may bill. It is VENDOR-FACING ONLY: the vendor portal and the
+// vendor's own share link show it; it is never on the WO description, the customer invoice, the QuickBooks lines, or
+// any tenant / owner view (enrichWO strips it by default — see the `delete base.Max_Price` line). Only the admin sets it
+// (/wo/max-price, New WO form, WO templates). A bill over it is refused unless an APPROVED estimate covers the amount,
+// so the vendor must either accept the max or send a new estimate with a reason before billing more.
+function maxPriceNum(v) {
+  const n = parseFloat(String(v == null ? '' : v).replace(/[$,\s]/g, ''));
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
+}
+
+function estimateSubtotalOf(e) {
+  const s = parseFloat(String((e && e.Subtotal) == null ? '' : e.Subtotal).replace(/[$,\s]/g, ''));
+  if (Number.isFinite(s)) return s;
+  try { return (JSON.parse((e && e.Line_Items) || '[]') || []).reduce((t, li) => t + (parseFloat(li && li.amount) || 0), 0); } catch (_) { return 0; }
+}
+
+// What the vendor may bill: the max price, or the latest APPROVED estimate for this WO if that is higher. 0 = no max set.
+function woMaxCeiling(wo, estimates) {
+  const max = maxPriceNum(wo && wo.Max_Price);
+  if (!max) return 0;
+  const approved = (estimates || [])
+    .filter(e => String(e.WO_ID) === String(wo.ID) && ['approved', 'converted'].includes(String(e.Status || '').trim().toLowerCase()))   // 'Converted' = approved and pushed into a proposal
+    .sort((a, b) => (parseInt(b.Version || '0') || 0) - (parseInt(a.Version || '0') || 0));
+  return Math.max(max, approved.length ? estimateSubtotalOf(approved[0]) : 0);
+}
+
+function maxPriceMoney(n) { return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
+
+// Returns null when the bill is fine, else a ready-to-send 409 Response (EN/ES).
+async function maxPriceGateResponse(env, wo, vendorId, total, hintLang) {
+  const max = maxPriceNum(wo && wo.Max_Price);
+  if (!max) return null;
+  const amt = parseFloat(String(total == null ? '' : total).replace(/[$,\s]/g, ''));
+  if (!Number.isFinite(amt) || amt <= max + 0.004) return null;
+  let ceiling = max;
+  try { ceiling = woMaxCeiling(wo, await fetchTab(env, 'Estimates')); } catch (_) { ceiling = max; }
+  if (amt <= ceiling + 0.004) return null;
+  let lang = String(hintLang || '').toLowerCase() === 'es' ? 'es' : 'en';
+  if (vendorId) { try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (vendorWantsSpanish(v)) lang = 'es'; } catch (_) {} }
+  const msg = lang === 'es'
+    ? 'Esta factura (' + maxPriceMoney(amt) + ') supera el precio máximo de este trabajo (' + maxPriceMoney(ceiling) + '). Acepte el precio máximo, o envíe un nuevo presupuesto con la razón de la diferencia.'
+    : 'This invoice (' + maxPriceMoney(amt) + ') is over the max price for this job (' + maxPriceMoney(ceiling) + '). Accept the max price, or send a new estimate with the reason for the difference.';
+  return json({ error: msg, code: 'over_max', max, ceiling, total: amt, lang }, 409);
+}
+
+// POST /wo/max-price { wo_id, max_price }  — ADMIN-ONLY (absent from ROLE_SCOPES). Blank max_price clears it.
+async function setWoMaxPrice(env, body) {
+  const woId = String((body && (body.wo_id || body.id)) || '').trim();
+  if (!woId) return json({ error: 'wo_id required' }, 400);
+  const raw = body.max_price == null ? '' : String(body.max_price).trim();
+  let val = '';
+  if (raw !== '') {
+    const n = maxPriceNum(raw);
+    if (!n) return json({ error: 'Max price must be a dollar amount greater than 0 (or blank to clear it).' }, 400);
+    if (n > 1000000) return json({ error: 'Max price looks too large — check the amount.' }, 400);
+    val = n.toFixed(2);
+  }
+  const wo = findWO(await fetchTab(env, 'Work_Orders'), woId);
+  if (!wo) return json({ error: 'WO not found' }, 404);
+  await ensureColumns(env, 'Work_Orders', ['Max_Price']);
+  const old = String(wo.Max_Price || '');
+  await updateWOFields(env, woId, { Max_Price: val });
+  invalidateTabCache('Work_Orders');
+  const after = findWO(await fetchTab(env, 'Work_Orders'), woId);
+  const stored = String((after && after.Max_Price) || '');
+  if (maxPriceNum(stored) !== maxPriceNum(val)) return json({ error: 'The max price did not save — please try again.', saved: false }, 500);
+  if (old !== stored) { try { await logWOAudit(env, woId, 'admin', 'admin', 'Max_Price', old, stored, val ? 'Max price set (vendor-facing)' : 'Max price cleared'); } catch (_) {} }
+  return json({ success: true, saved: true, wo_id: woId, max_price: stored });
 }
 
 async function updateStatus(env, body) {
@@ -10520,7 +10695,51 @@ async function vendorWorkorders(env, url, callerRole, callerSessionId) {
   // to another vendor would matter).
   const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { tradeAccessDefaults, vendorView: true, vendors, viewingVendorId: vendorId }, masterKeys, masterKeyHolders));
   enriched.sort((a, b) => { const pa = PRIORITY_ORDER[a.Priority?.toLowerCase()] ?? 2, pb = PRIORITY_ORDER[b.Priority?.toLowerCase()] ?? 2; return pa !== pb ? pa - pb : (a.property_address||'').localeCompare(b.property_address||''); });
+  // Nov 6 2026 (Brett: Cesar's portal showed English job descriptions): the portal translated its buttons but never the job text.
+  const vendorRow = vendors.find(v => String(v.ID) === vendorId);
+  if (vendorWantsSpanish(vendorRow)) await localizeVendorDescriptions(env, vendorRow, enriched);
   return json(enriched);
+}
+
+// Spanish job descriptions for a Spanish vendor (Vendors.Language = 'es'). Translated ONCE and saved on the work order
+// (Description_ES + Description_ES_Src = fingerprint of the English it came from), so a portal refresh costs nothing and an
+// edited description is re-translated automatically. Response: Description = Spanish, Description_EN = the original English.
+// At most DESC_ES_MAX_PER_CALL new translations per request (the rest show English and finish on the next refresh), so a first
+// load never stalls. Every miss is LOUD: Telemetry Success=FALSE (-> Needs Attention) with the WO ids, never a silent English fallback.
+const DESC_ES_MAX_PER_CALL = 5;
+function descFingerprint(text) { let h = 5381; const s = String(text || ''); for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; return s.length + ':' + h.toString(36); }
+async function localizeVendorDescriptions(env, vendor, list) {
+  const failures = [];
+  const todo = [];
+  for (const wo of list) {
+    const en = String(wo.Description || '');
+    if (!en.trim()) continue;
+    wo.Description_EN = en;
+    const fp = descFingerprint(en);
+    if (wo.Description_ES && wo.Description_ES_Src === fp) { wo.Description = wo.Description_ES; continue; }
+    todo.push({ wo, en, fp });
+  }
+  if (!todo.length) return { translated: 0, failures };
+  const batch = todo.slice(0, DESC_ES_MAX_PER_CALL);
+  try { await ensureColumns(env, 'Work_Orders', ['Description_ES', 'Description_ES_Src']); }
+  catch (e) { failures.push('could not add Description_ES columns: ' + (e && e.message)); }
+  let translated = 0;
+  await Promise.all(batch.map(async ({ wo, en, fp }) => {
+    const woId = wo.WO_ID || wo.ID;
+    try {
+      const r = await translateForVendorDetailed(env, vendor, en, { max_tokens: 1500 });
+      if (!r.translated) { failures.push(woId + ': not translated (' + (r.skipped_reason || 'unknown') + ')'); return; }
+      wo.Description = r.text;
+      translated++;
+      try { await updateRowVerified(env, 'Work_Orders', wo.ID, { Description_ES: r.text, Description_ES_Src: fp }); }
+      catch (e) { failures.push(woId + ': translation shown but not saved (' + (e && e.message) + ')'); }
+    } catch (e) { failures.push(woId + ': ' + (e && e.message)); }
+  }));
+  if (failures.length) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_description_translate', Skill_Or_Endpoint: '/vendor-workorders', Success: 'FALSE', Notes: 'vendor ' + vendor.ID + ': ' + failures.join(' | ').slice(0, 900) }); }
+    catch (e) { console.error('vendor_description_translate telemetry failed', e && e.message); }
+  }
+  return { translated, failures };
 }
 
 async function tenantWorkorders(env, url, callerRole, callerSessionId) {
@@ -10688,6 +10907,9 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
     access_gated: accessGated,
     vendor_name: vendorName, vendor_phone: vendorPhone, vendor_trade: vendorTrade,
   };
+  // Max price (Nov 5 2026): vendor-facing only. `...wo` above copies every column, so it is stripped here by default
+  // and only the vendor portal view (vendorView) keeps it — tenant, owner and shared-link views never carry it.
+  if (!opts.vendorView) delete base.Max_Price;
   // Tenants get the full technician contact (name+phone+trade) so they can coordinate
   // access directly once someone's assigned — that's the whole point of showing it.
   if (opts.tenantView) { delete base.access_notes; delete base.legacy_lockbox; base.lockboxes = []; }
@@ -11398,6 +11620,8 @@ async function addVendorBill(env, body) {
     let _gwo = null;
     try { _gwo = findWO(await fetchTab(env, 'Work_Orders'), dupeKey); } catch (_) { _gwo = null; }
     if (_gwo) { const _gate = await checklistGateResponse(env, _gwo, body.Vendor_ID || body.vendor_id || _gwo.Vendor_ID, 'invoice', body.lang); if (_gate) return _gate; }
+    // Nov 5 2026: a bill over the WO's max price needs an approved estimate that covers it (same non-hub callers as the checklist gate).
+    if (_gwo) { const _mgate = await maxPriceGateResponse(env, _gwo, body.Vendor_ID || body.vendor_id || _gwo.Vendor_ID, body.Total, body.lang); if (_mgate) return _mgate; }
   }
   if (dupeKey && body.Total) {
     const dupe = await findRecentDuplicate(env, 'Vendor_Bills', {
@@ -13292,6 +13516,30 @@ async function addEstimateVersion(env, body) {
   }, 120, r => estimateLineItemsCanonical(r.Line_Items) === estimateLineItemsCanonical(lineItemsJson));
   if (dupe) return json({ success: true, duplicate: true, version: parseInt(dupe.Version || '1'), subtotal: dupe.Subtotal || subtotal.toFixed(2) });
 
+  // Nov 5 2026 — max price: a vendor estimate ABOVE the WO's max must say why. The reason is stored on the estimate
+  // (Over_Max_Reason + English copy) so Brett sees it beside the number; the max amount itself is never copied onto the estimate.
+  const _estByAdmin = /^(admin|hub|brett)$/i.test(String(body.created_by || ''));
+  let overMaxReason = '', overMaxReasonEn = '', overMax = false;
+  if (!_estByAdmin) {
+    let _mwo = null; try { _mwo = findWO(await fetchTab(env, 'Work_Orders'), woId); } catch (_) {}
+    const _mxRaw = parseFloat(String((_mwo && _mwo.Max_Price) == null ? '' : _mwo.Max_Price).replace(/[$,\s]/g, ''));   // inline (not maxPriceNum) so this function stays self-contained for tests that run it alone
+    const _mx = Number.isFinite(_mxRaw) && _mxRaw > 0 ? _mxRaw : 0;
+    if (_mx && subtotal > _mx + 0.004) {
+      overMax = true;
+      overMaxReason = String(body.over_max_reason || '').trim().slice(0, 1000);
+      if (overMaxReason.length < 5) {
+        let _ml = String(body.lang || '').toLowerCase() === 'es' ? 'es' : 'en';
+        try { const _mv = body.vendor_id ? (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(body.vendor_id)) : null; if (vendorWantsSpanish(_mv)) _ml = 'es'; } catch (_) {}
+        return json({ error: _ml === 'es' ? 'Este presupuesto supera el precio máximo de este trabajo. Escriba la razón de la diferencia para poder enviarlo.' : 'This estimate is over the max price for this job. Add the reason for the difference to send it.', code: 'over_max_reason_needed', max: _mx, subtotal: +subtotal.toFixed(2), lang: _ml }, 409);
+      }
+      overMaxReasonEn = overMaxReason;
+      try {
+        const _mv2 = body.vendor_id ? (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(body.vendor_id)) : null;
+        if (vendorWantsSpanish(_mv2)) { const _tr = await translateText(env, overMaxReason, 'Spanish', 'English'); if (_tr) overMaxReasonEn = String(_tr); }
+      } catch (_) {}
+    }
+  }
+
   // Vendor text is kept exactly as written; an English copy is stored beside it (per-line desc_en
   // inside Line_Items + Change_Reason_EN) so the admin panel, owner proposal and invoice can read
   // English. Fails open — a translation miss just means no English copy (Re-translate can retry).
@@ -13304,6 +13552,7 @@ async function addEstimateVersion(env, body) {
   } catch (_) {}
   const row = { WO_ID: woId, Vendor_ID: body.vendor_id||'', Version: String(nextVersion), Line_Items: JSON.stringify(storedLineItems), Subtotal: subtotal.toFixed(2), Change_Reason: changeReason, Created_By: body.created_by||'vendor', Created_Date: new Date().toISOString(), Status: body.status||'Pending' };
   if (changeReasonEn) { try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); row.Change_Reason_EN = changeReasonEn; } catch (_) {} }
+  if (overMax && overMaxReason) { try { await ensureColumns(env, 'Estimates', ['Over_Max_Reason', 'Over_Max_Reason_EN']); row.Over_Max_Reason = overMaxReason; row.Over_Max_Reason_EN = overMaxReasonEn; } catch (_) {} }
   await addRow(env, 'Estimates', row);
   try { await updateWOField(env, woId, 'Current_Estimate', subtotal.toFixed(2)); } catch(e) {}
   // Approval stage: a first/normal estimate puts the job in Estimated. A revision that arrives AFTER
@@ -13325,7 +13574,7 @@ async function addEstimateVersion(env, body) {
     try {
       const c = await estimateSmsContext(env, woId, body.vendor_id);
       await sendTemplatedSms(env, { type: 'admin_estimate_new', kind: 'admin', wo_id: woId, property: c.property,
-        tokens: { Kind: (c.wo && c.wo.Type === 'addon') ? (nextVersion > 1 ? 'Revised additional work' : 'Additional work') : (nextVersion > 1 ? 'Revised estimate' : 'New estimate'), WO: woId, Address: c.address, Vendor: (c.vendor && (c.vendor.Name || c.vendor.First_Name)) || body.created_by || 'a vendor', Amount: fmtMoney(subtotal) } });
+        tokens: { Kind: ((c.wo && c.wo.Type === 'addon') ? (nextVersion > 1 ? 'Revised additional work' : 'Additional work') : (nextVersion > 1 ? 'Revised estimate' : 'New estimate')) + (overMax ? ' OVER MAX' : ''), WO: woId, Address: c.address, Vendor: (c.vendor && (c.vendor.Name || c.vendor.First_Name)) || body.created_by || 'a vendor', Amount: fmtMoney(subtotal) } });
     } catch (_) {}
   }
   return json({ success: true, version: nextVersion, subtotal: subtotal.toFixed(2) });
@@ -13540,11 +13789,18 @@ async function logMessageAudit(env, { woId, changedBy, changedByRole, channel, r
   }]);
 }
 
-async function getWOAudit(env, url) {
+async function getWOAudit(env, url, callerRole) {
   const woId = url.searchParams.get('wo_id'); if (!woId) return json({ error: 'Missing wo_id' }, 400);
   try {
     const audit = await fetchTab(env, 'WO_Audit');
-    return json(audit.filter(a => a.WO_ID === woId).sort((a,b) => new Date(a.Timestamp)-new Date(b.Timestamp)));
+    let rows = audit.filter(a => a.WO_ID === woId).sort((a,b) => new Date(a.Timestamp)-new Date(b.Timestamp));
+    // Max price (Nov 5 2026) is vendor-facing only: a portal session (owner) never sees the Max_Price change rows,
+    // nor the "Max price: $X" line inside the vendor's job text.
+    if (callerRole) {
+      const _mpLine = /\s*(Max price|Precio máximo): \$[\d,]+(\.\d+)? —[^\n]*/g;
+      rows = rows.filter(a => a.Field !== 'Max_Price').map(a => (a.Message_Body || a.Original_Body) ? { ...a, Message_Body: String(a.Message_Body || '').replace(_mpLine, ''), Original_Body: String(a.Original_Body || '').replace(_mpLine, '') } : a);
+    }
+    return json(rows);
   } catch(e) { return json([]); }
 }
 
@@ -16856,6 +17112,179 @@ function smsSendOutcome(result) {
 
 // For the legacy sendSMS call sites that used to ignore Twilio's answer. A text that was switched off (skipped), stubbed (staging), held back as a
 // duplicate or refused for its region is not a failure; anything else without a message sid is reported to the ledger (P0, it is a text). Returns true when it went.
+// ═══ WEB PUSH (Nov 5 2026) ═══════════════════════════════════════════════════════════════════════════════════
+// Brett's ask: push notifications for EVERYONE (admin, tenants, owners, vendors) on Android, iPhone, Chromebook and desktop/Windows, so fewer texts go out and
+// people who do not want SMS still hear from us. Each person chooses which of THEIR OWN devices receive pushes (a per-device on/off switch).
+// This block is the CAPABILITY only: it can register devices and send to them. Which messages go by push instead of text is decided later by Brett's list
+// (use pushNotify(env, { recipient_type, recipient_id, title, body, url })). Nothing in this block sends a push on its own.
+// Pieces: service worker sw.js + push-client.js live on GitHub Pages (static); the keys, the device list and the sender live here.
+//   * VAPID key pair: generated once on first use and kept in the Push_Keys tab (never returned by any route; only the PUBLIC half is). A Cloudflare secret pair
+//     (VAPID_PRIVATE_JWK + VAPID_PUBLIC_KEY) overrides the tab if Brett ever sets one.
+//   * Devices: Push_Subscriptions, one row per browser/device. The subscription's own keys live there, so nothing about a device is exposed by /push/devices.
+//   * Encryption: RFC 8291 aes128gcm with WebCrypto; auth: RFC 8292 VAPID JWT (ES256). Only the real push services' hosts are accepted as endpoints (SSRF guard).
+const PUSH_SUBS_TAB = 'Push_Subscriptions';
+const PUSH_SUBS_COLS = ['ID','Recipient_Type','Recipient_ID','Platform','Label','Endpoint','P256dh','Auth','Enabled','Created_At','Last_Success_At','Last_Error','Fail_Count','Active'];
+const PUSH_KEYS_TAB = 'Push_Keys';
+const PUSH_PLATFORMS = ['android', 'iphone', 'chromebook', 'desktop'];
+const PUSH_PLATFORM_LABEL = { android: 'Android phone', iphone: 'iPhone', chromebook: 'Chromebook', desktop: 'Windows / desktop computer' };
+const PUSH_HOST_SUFFIXES = ['googleapis.com', 'push.apple.com', 'mozilla.com', 'notify.windows.com'];
+const PUSH_VAPID_SUBJECT = 'mailto:ridgecomaintenance@gmail.com';
+const PUSH_MAX_DEVICES = 10;
+let _pushTabsReady = false, _pushVapidCache = null;
+function pushB64uEnc(bytes) { const a = new Uint8Array(bytes); let s = ''; for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+function pushB64uDec(str) { let s = String(str || '').replace(/-/g, '+').replace(/_/g, '/'); while (s.length % 4) s += '='; const bin = atob(s), out = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i); return out; }
+function pushConcat() { let n = 0; for (const a of arguments) n += a.length; const out = new Uint8Array(n); let o = 0; for (const a of arguments) { out.set(a, o); o += a.length; } return out; }
+function pushNormPlatform(p) { p = String(p || '').toLowerCase(); return PUSH_PLATFORMS.includes(p) ? p : 'desktop'; }
+// Only https endpoints on a known push service are accepted (Chrome/Android/Chromebook/Edge = googleapis.com, Apple = push.apple.com, Firefox = mozilla.com, Windows = notify.windows.com).
+function pushEndpointOk(endpoint) {
+  try { const u = new URL(String(endpoint || '')); if (u.protocol !== 'https:' || u.username || u.password || (u.port && u.port !== '443')) return false; const h = u.hostname.toLowerCase(); return PUSH_HOST_SUFFIXES.some(s => h === s || h.endsWith('.' + s)); }
+  catch (e) { return false; }
+}
+// RFC 8291 (aes128gcm). opts.ephemeral / opts.salt exist only so tests can pin them; production passes neither.
+async function pushEncrypt(plain, p256dh, authSecretB64u, opts) {
+  opts = opts || {};
+  const uaPub = pushB64uDec(p256dh), authSecret = pushB64uDec(authSecretB64u);
+  if (uaPub.length !== 65 || uaPub[0] !== 4 || authSecret.length !== 16) throw new Error('the device keys are malformed');
+  const eph = opts.ephemeral || await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const asPub = new Uint8Array(await crypto.subtle.exportKey('raw', eph.publicKey));
+  const uaKey = await crypto.subtle.importKey('raw', uaPub, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const shared = new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: uaKey }, eph.privateKey, 256));
+  const salt = opts.salt || crypto.getRandomValues(new Uint8Array(16));
+  const te = new TextEncoder();
+  const hkdf = async (ikm, s, info, len) => new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: s, info }, await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']), len * 8));
+  const ikm = await hkdf(shared, authSecret, pushConcat(te.encode('WebPush: info\0'), uaPub, asPub), 32);
+  const cek = await hkdf(ikm, salt, te.encode('Content-Encoding: aes128gcm\0'), 16);
+  const nonce = await hkdf(ikm, salt, te.encode('Content-Encoding: nonce\0'), 12);
+  const aes = await crypto.subtle.importKey('raw', cek, 'AES-GCM', false, ['encrypt']);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, aes, pushConcat(plain, new Uint8Array([2]))));   // 0x02 = last (only) record
+  return pushConcat(salt, new Uint8Array([0, 0, 0x10, 0]), new Uint8Array([asPub.length]), asPub, ct);   // header: salt(16) + record size 4096 + key id length + key id
+}
+async function pushVapidKeys(env) {
+  if (_pushVapidCache) return _pushVapidCache;
+  if (env.VAPID_PRIVATE_JWK && env.VAPID_PUBLIC_KEY) { _pushVapidCache = { pub: String(env.VAPID_PUBLIC_KEY), jwk: JSON.parse(env.VAPID_PRIVATE_JWK) }; return _pushVapidCache; }
+  await ensureTab(env, PUSH_KEYS_TAB, ['ID', 'Name', 'Value', 'Created_At']);
+  const pick = async () => (await fetchTab(env, PUSH_KEYS_TAB)).filter(r => r.Name === 'vapid').sort((a, b) => Number(a.ID) - Number(b.ID))[0] || null;
+  let row = await pick();
+  if (!row) {
+    // One row holds BOTH halves, so two first-ever callers racing can never end up with a public half from one pair and a private half from another (the lowest ID wins below).
+    const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+    const jwk = await crypto.subtle.exportKey('jwk', kp.privateKey);
+    const pub = pushB64uEnc(await crypto.subtle.exportKey('raw', kp.publicKey));
+    const res = await addRow(env, PUSH_KEYS_TAB, { Name: 'vapid', Value: JSON.stringify({ pub, jwk }), Created_At: new Date().toISOString() });
+    const j = await res.json(); if (!j || !j.success) throw new Error('could not save the push keys');
+    invalidateTabCache(PUSH_KEYS_TAB);
+    row = await pick();
+    if (!row) throw new Error('the push keys did not read back');
+  }
+  const v = JSON.parse(row.Value);
+  _pushVapidCache = { pub: v.pub, jwk: v.jwk };
+  return _pushVapidCache;
+}
+async function pushVapidAuth(env, endpoint) {
+  const v = await pushVapidKeys(env), te = new TextEncoder();
+  const head = pushB64uEnc(te.encode(JSON.stringify({ typ: 'JWT', alg: 'ES256' })));
+  const claims = pushB64uEnc(te.encode(JSON.stringify({ aud: new URL(endpoint).origin, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: PUSH_VAPID_SUBJECT })));
+  const key = await crypto.subtle.importKey('jwk', v.jwk, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key, te.encode(head + '.' + claims)));   // WebCrypto gives r||s, which is what JWS wants
+  return 'vapid t=' + head + '.' + claims + '.' + pushB64uEnc(sig) + ', k=' + v.pub;
+}
+async function pushEnsureTabs(env) { if (_pushTabsReady) return; await ensureTab(env, PUSH_SUBS_TAB, PUSH_SUBS_COLS); _pushTabsReady = true; }
+function pushDeviceOut(r, thisEndpoint) {
+  return { id: String(r.ID), platform: pushNormPlatform(r.Platform), label: String(r.Label || PUSH_PLATFORM_LABEL[pushNormPlatform(r.Platform)]), enabled: String(r.Enabled).toUpperCase() !== 'FALSE', created_at: String(r.Created_At || ''), last_success_at: String(r.Last_Success_At || ''), last_error: String(r.Last_Error || ''), this_device: !!thisEndpoint && String(r.Endpoint) === String(thisEndpoint) };
+}
+async function pushMyRows(env, type, id) {
+  await pushEnsureTabs(env); invalidateTabCache(PUSH_SUBS_TAB);
+  return (await fetchTab(env, PUSH_SUBS_TAB)).filter(r => String(r.Active).toUpperCase() !== 'FALSE' && String(r.Recipient_Type) === type && String(r.Recipient_ID) === String(id));
+}
+// Send ONE push to ONE device row. Returns { ok, status, gone, error }. Never throws.
+async function pushSendOne(env, row, payload, opts) {
+  opts = opts || {};
+  try {
+    if (!pushEndpointOk(row.Endpoint)) return { ok: false, status: 0, gone: true, error: 'endpoint is not a push service address' };
+    if (env.__STAGING__ ?? isStaging(env)) return { ok: true, status: 0, staged: true, gone: false, error: '' };   // staging never reaches a real phone
+    const body = await pushEncrypt(new TextEncoder().encode(JSON.stringify(payload)), row.P256dh, row.Auth);
+    const res = await fetch(row.Endpoint, { method: 'POST', headers: { 'Authorization': await pushVapidAuth(env, row.Endpoint), 'Content-Encoding': 'aes128gcm', 'Content-Type': 'application/octet-stream', 'TTL': String(opts.ttl || 86400), 'Urgency': opts.urgency || 'normal' }, body });
+    if (res.status >= 200 && res.status < 300) return { ok: true, status: res.status, gone: false, error: '' };
+    let t = ''; try { t = (await res.text()).slice(0, 160); } catch (e) { /* silent-ok: the status code alone says what happened */ }
+    return { ok: false, status: res.status, gone: res.status === 404 || res.status === 410, error: 'push service said ' + res.status + (t ? ': ' + t : '') };
+  } catch (e) { return { ok: false, status: 0, gone: false, error: String((e && e.message) || e).slice(0, 160) }; }
+}
+// THE entry point for later wiring: pushNotify(env, { recipient_type: 'admin'|'tenant'|'owner'|'vendor', recipient_id, title, body, url?, tag?, urgency?, platforms?: ['android',...], device_id? })
+// -> { ok, sent, failed, devices:[{id,platform,label,ok,error}] }. Only devices that are Active AND switched on receive it. `sent` = 0 with no failures means the person has no push device
+// (the caller then falls back to a text). Never throws; a dead device (404/410) is switched off; a device failing 5 times in a row is retired.
+async function pushNotify(env, opts) {
+  const out = { ok: true, sent: 0, failed: 0, devices: [] };
+  try {
+    const type = String(opts.recipient_type || ''), id = String(opts.recipient_id || '');
+    if (!type || !id) return { ok: false, sent: 0, failed: 0, devices: [], error: 'recipient_type and recipient_id are required' };
+    let rows = (await pushMyRows(env, type, id)).filter(r => String(r.Enabled).toUpperCase() !== 'FALSE');
+    if (opts.device_id) rows = rows.filter(r => String(r.ID) === String(opts.device_id));
+    if (Array.isArray(opts.platforms) && opts.platforms.length) rows = rows.filter(r => opts.platforms.includes(pushNormPlatform(r.Platform)));
+    const payload = { title: String(opts.title || 'Ridge Co').slice(0, 80), body: String(opts.body || '').slice(0, 400), url: String(opts.url || ''), tag: String(opts.tag || '').slice(0, 60) };
+    for (const r of rows) {
+      const s = await pushSendOne(env, r, payload, { urgency: opts.urgency, ttl: opts.ttl });
+      const fails = s.ok ? 0 : (Number(r.Fail_Count) || 0) + 1;
+      try { await updateRow(env, PUSH_SUBS_TAB, r.ID, s.ok ? { Last_Success_At: new Date().toISOString(), Last_Error: '', Fail_Count: '0' } : { Last_Error: s.error, Fail_Count: String(fails), Active: (s.gone || fails >= 5) ? 'FALSE' : 'TRUE' }); }
+      catch (e) { /* silent-ok: bookkeeping only; the send result is still returned below */ }
+      if (s.ok) out.sent++; else out.failed++;
+      out.devices.push({ id: String(r.ID), platform: pushNormPlatform(r.Platform), label: String(r.Label || ''), ok: s.ok, error: s.error });
+    }
+    invalidateTabCache(PUSH_SUBS_TAB);
+  } catch (e) { return { ok: false, sent: out.sent, failed: out.failed, devices: out.devices, error: String((e && e.message) || e).slice(0, 200) }; }
+  return out;
+}
+// /push/* routes. A signed-in tenant/owner/vendor (or the admin) only ever sees and changes THEIR OWN devices: the identity comes from the session, never from the request.
+async function pushRoute(env, path, url, body, callerRole, callerSessionId) {
+  try {
+    const type = callerRole || 'admin', id = callerRole ? String(callerSessionId) : 'brett';
+    body = body || {};
+    if (path === '/push/vapid-key') return json({ ok: true, key: (await pushVapidKeys(env)).pub });
+    if (path === '/push/devices') { const rows = await pushMyRows(env, type, id), ep = url ? url.searchParams.get('endpoint') || '' : ''; return json({ ok: true, devices: rows.map(r => pushDeviceOut(r, ep)) }); }
+    if (path === '/push/subscribe') {
+      const sub = body.subscription || {}, keys = sub.keys || {};
+      if (!pushEndpointOk(sub.endpoint)) return json({ ok: false, error: 'bad_endpoint', message: 'That does not look like a browser push address, so it was not saved.' }, 400);
+      if (pushB64uDec(keys.p256dh).length !== 65 || pushB64uDec(keys.auth).length !== 16) return json({ ok: false, error: 'bad_keys', message: 'The device keys were missing or malformed, so nothing was saved.' }, 400);
+      await pushEnsureTabs(env); invalidateTabCache(PUSH_SUBS_TAB);
+      const all = await fetchTab(env, PUSH_SUBS_TAB), platform = pushNormPlatform(body.platform), label = String(body.label || '').trim().slice(0, 40) || PUSH_PLATFORM_LABEL[platform];
+      const same = all.find(r => String(r.Endpoint) === String(sub.endpoint));
+      if (same) {   // the same browser signing in as someone else, or turning push back on: it moves to whoever is signed in now and is switched on
+        await updateRowVerified(env, PUSH_SUBS_TAB, same.ID, { Recipient_Type: type, Recipient_ID: id, Platform: platform, Label: label, P256dh: keys.p256dh, Auth: keys.auth, Enabled: 'TRUE', Active: 'TRUE', Fail_Count: '0', Last_Error: '' });
+        return json({ ok: true, device: Object.assign(pushDeviceOut(Object.assign({}, same, { Platform: platform, Label: label, Enabled: 'TRUE' }), sub.endpoint), { this_device: true }) });
+      }
+      const mine = all.filter(r => String(r.Active).toUpperCase() !== 'FALSE' && String(r.Recipient_Type) === type && String(r.Recipient_ID) === id);
+      if (mine.length >= PUSH_MAX_DEVICES) return json({ ok: false, error: 'too_many', message: 'You already have ' + PUSH_MAX_DEVICES + ' devices. Remove one you no longer use first.' }, 409);
+      const res = await addRow(env, PUSH_SUBS_TAB, { Recipient_Type: type, Recipient_ID: id, Platform: platform, Label: label, Endpoint: sub.endpoint, P256dh: keys.p256dh, Auth: keys.auth, Enabled: 'TRUE', Created_At: new Date().toISOString(), Last_Success_At: '', Last_Error: '', Fail_Count: '0', Active: 'TRUE' });
+      const j = await res.json(); if (!j || !j.success) return json({ ok: false, error: 'save_failed', message: 'The device could not be saved. Try again.' }, 500);
+      invalidateTabCache(PUSH_SUBS_TAB);
+      return json({ ok: true, device: { id: String(j.id), platform, label, enabled: true, created_at: new Date().toISOString(), last_success_at: '', last_error: '', this_device: true } });
+    }
+    if (path === '/push/device' || path === '/push/remove') {
+      const rows = await pushMyRows(env, type, id), row = rows.find(r => String(r.ID) === String(body.id));
+      if (!row) return json({ ok: false, error: 'not_found', message: 'That device is not on your list.' }, 404);
+      const f = {};
+      if (path === '/push/remove') f.Active = 'FALSE';
+      else { if (typeof body.enabled === 'boolean') f.Enabled = body.enabled ? 'TRUE' : 'FALSE'; if (typeof body.label === 'string' && body.label.trim()) f.Label = body.label.trim().slice(0, 40); }
+      if (!Object.keys(f).length) return json({ ok: false, error: 'nothing_to_change', message: 'Nothing to change.' }, 400);
+      await updateRowVerified(env, PUSH_SUBS_TAB, row.ID, f); invalidateTabCache(PUSH_SUBS_TAB);
+      return json({ ok: true, device: pushDeviceOut(Object.assign({}, row, f), '') });
+    }
+    if (path === '/push/test') {
+      const r = await pushNotify(env, { recipient_type: type, recipient_id: id, device_id: body.id || '', title: 'Ridge Co test', body: 'Push notifications are working on this device.', url: '', tag: 'push-test' });
+      if (!r.devices.length) return json({ ok: false, error: 'no_devices', message: 'No switched-on device to send to. Turn push on for a device first.' }, 409);
+      return json({ ok: r.sent > 0, sent: r.sent, failed: r.failed, devices: r.devices });
+    }
+    if (path === '/push/send') {   // admin only (not in any role scope): send to one named recipient, e.g. a first real test to a tenant
+      if (callerRole) return json({ error: 'Unauthorized' }, 401);
+      const r = await pushNotify(env, { recipient_type: String(body.recipient_type || ''), recipient_id: String(body.recipient_id || ''), title: body.title, body: body.body, url: body.url, tag: body.tag, platforms: body.platforms });
+      return json(Object.assign({ ok: r.ok }, r), r.ok ? 200 : 400);
+    }
+    return json({ ok: false, error: 'not_found' }, 404);
+  } catch (e) {
+    try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'push_route', ref: path, severity: 'P2', message: 'push request failed: ' + String((e && e.message) || e).slice(0, 200) }); } catch (_) { /* silent-ok: the caller still gets the error below */ }
+    return json({ ok: false, error: 'push_failed', message: 'Push could not be completed: ' + String((e && e.message) || e).slice(0, 160) }, 500);
+  }
+}
+
 async function smsReportIfFailed(env, where, ref, r) {
   if (r && (r.sid || r.staged || r.skipped)) return !!(r && r.sid);
   const o = smsSendOutcome(r);
@@ -19273,7 +19702,7 @@ async function schedUnexpectedCloudflareCron(env, event) {
 //     is the explicit override (default off). Owners are always suppressed (Owner_Notify_Override='off').
 // The date math below is pure (ISO 'YYYY-MM-DD' strings in, out) so test/recurring-wo.test.mjs
 // exercises it directly.
-const RECUR_TEMPLATE_COLS = ['Recurrence_Enabled','Freq_Type','Freq_Interval','Freq_Weekday','Freq_Nth','Freq_Day_Of_Month','Start_Date','End_Date','Season_Enabled','Season_Start','Season_End','Targets','Default_Vendor_ID','Lead_Days','Notify_Tenant','Last_Skips','Last_Posted_Date'];
+const RECUR_TEMPLATE_COLS = ['Recurrence_Enabled','Freq_Type','Freq_Interval','Freq_Weekday','Freq_Nth','Freq_Day_Of_Month','Start_Date','End_Date','Season_Enabled','Season_Start','Season_End','Targets','Default_Vendor_ID','Lead_Days','Notify_Tenant','Last_Skips','Last_Posted_Date','Max_Price'];
 const RECUR_WO_COLS = ['Recurring_Template_ID','Recurring_Due','Owner_Notify_Override'];
 const RECUR_CLOSED_STATUSES = WOStatus.sets.RECUR_CLOSED;
 const RECUR_LOOKBACK_DAYS = 3; // a sweep outage of up to 3 days still catches up an occurrence; older ones are dropped, not posted late
@@ -19379,6 +19808,8 @@ function recurSanitizeTemplateFields(f) {
   for (const k of ['Season_Start', 'Season_End']) if (o[k] && !/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(String(o[k]))) o[k] = '';
   for (const k of ['Recurrence_Enabled', 'Season_Enabled', 'Notify_Tenant']) if (o[k] !== undefined) o[k] = (o[k] === true || recurIsTrue(o[k])) ? 'TRUE' : 'FALSE';
   if (o.Targets !== undefined && typeof o.Targets !== 'string') o.Targets = JSON.stringify(o.Targets);
+  // Max price (Nov 5 2026): a clean positive amount, or blank to clear. Anything unreadable is blanked rather than guessed at.
+  if (o.Max_Price !== undefined) { const _mp = maxPriceNum(o.Max_Price); o.Max_Price = _mp ? _mp.toFixed(2) : ''; }
   return o;
 }
 
@@ -19406,6 +19837,7 @@ async function recurPostWO(env, tpl, target, due, opts) {
     notes: (ov.notes ? ov.notes + ' — ' : '') + `Recurring template #${tpl.ID} "${tpl.Name || ''}"${due ? ' — due ' + due : ''}${opts.manual ? ' (posted manually)' : ''}`,
     tenant_visible: notifyTenant, tenant_notify_created: notifyTenant, tenant_notify_updates: notifyTenant,
     recurring_template_id: tpl.ID, recurring_due: due || '', owner_notify_override: 'off',
+    max_price: tpl.Max_Price || '',   // template max price carries onto every WO it posts (set before assignVendor so the vendor text shows it)
   });
   const created = await res.json();
   if (!created || !created.id) return { error: (created && created.error) || 'create failed' };
@@ -25352,6 +25784,8 @@ async function woSharedRead(env, url){
     vendor_has_access: !!e.vendor_has_access, Vendor_ID: e.Vendor_ID||'',
     Checklist: wo.Checklist||'',
   };
+  // Max price (Nov 5 2026): shown only to the vendor this WO is assigned to (the link's own vendor), never to a tenant/other link.
+  { const _smp = maxPriceNum(wo.Max_Price); if (_smp && auth.vid && String(auth.vid) === String(wo.Vendor_ID||'')) safe.Max_Price = _smp.toFixed(2); }
   let attachments = [];
   try {
     const at = await fetchTab(env, 'Attachments');
@@ -26750,9 +27184,11 @@ const ROLE_SCOPES = {
     // picker, the "request access to another property" picker, and the One-Off Job property
     // picker all need real addresses to show, not just IDs — same address-only data an owner
     // session already sees via /owner-properties.
-    '/vendor-bill/add-standalone','/vendor/request-property-access','/workorder/self-serve','/properties'],
-  tenant: ['/tenant-by-pin','/tenant-session-refresh','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo'],
-  owner:  ['/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo','/owner-file/view','/owner/tenant-roster','/owner/tenant-roster/preview','/owner/tenant-roster/apply'],
+    '/vendor-bill/add-standalone','/vendor/request-property-access','/workorder/self-serve','/properties',
+    // Web push (Nov 5 2026): a session manages only ITS OWN devices (identity comes from the session inside pushRoute). /push/send is admin-only and is in no role scope.
+    '/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
+  tenant: ['/tenant-by-pin','/tenant-session-refresh','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo','/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
+  owner:  ['/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo','/owner-file/view','/owner/tenant-roster','/owner/tenant-roster/preview','/owner/tenant-roster/apply','/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
 };
 function isPathAllowedForRole(path, role){ const s = ROLE_SCOPES[role]; return !!(s && s.includes(path)); }
 
@@ -28110,6 +28546,11 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/fi/structure' || path === '/fi/summarize' || path === '/fi/route' || path === '/fi/brand/scrape' || path === '/fi/transcribe/json') return true; // AI / read-only: no sheet writes
   if (path === '/fi/reword') return true; // AI only: writes nothing
   if (path === '/admin/fi-originals-bridge') return String((body && body.inspection_id) || '').startsWith('TEST-'); // Nov 2 2026: staging may only read/attach photos of a TEST- inspection
+  if (path === '/admin/backfill-premier-wo') { // Nov 3 2026: a dry run writes nothing; a real run on staging may only touch TEST- bookings (address starts TEST-)
+    if (!body || body.dry_run !== false) return true;
+    const _bb = await fetchTab(env, 'Insp_Bookings');
+    return Array.isArray(body.items) && body.items.length > 0 && body.items.every(x => { const _r = _bb.find(r => String(r.ID) === String((x && x.id) || '')); return !!_r && String(_r.Address || '').startsWith('TEST-'); });
+  }
   if (path === '/admin/fi-premier-repair') { // staging may only repair a TEST- partner's links, to a TEST- inspection
     if (!body || body.dry_run !== false) return true; // a dry run writes nothing
     const _cu = (await fetchTab(env, 'Insp_Customers')).find(c => String(c.ID) === String(body.customer_id));
@@ -39304,19 +39745,102 @@ function strWindowText(daysOut, S) { const w = strReplyWindow(daysOut, S); retur
 
 // Bookings-feed stays -> the turnovers that need a cleaner. kind 'checkout': the clean after a guest leaves.
 // kind 'prearrival': when the gap to the next guest is longer than preGap days a second clean the day before they arrive.
+// Pre-arrival cleans hang off the PREVIOUS checkout, which is already in the past on the days before the arrival. Both the
+// feed window (strReadFeed) and the task builder look back this far so a pre-arrival clean does not vanish when that checkout
+// rolls into the past (the Nov 11 2026 clean was dropped at midnight on Nov 9 for exactly this reason).
+function strPreLookback(S) { return Math.max(14, ((S && S.preGap) > 0 ? S.preGap : 0) + 2); }
+const STR_CANCEL_GRACE_MS = 3 * 3600 * 1000; // a booking gone for minutes is a feed glitch, not a cancellation
+function strIsHeld(r) { return /^CANCEL HELD/.test(String((r && r.Note) || '')); }
+// Plain-English reason a turnover has no booking behind it any more (shown to Brett when a cancel is held for his OK).
+function strWhyGone(feed, r, S) {
+  const stays = (feed && feed.stays) || [], parts = String((r && r.Task_Key) || '').split('|'), kind = parts[1], dt = parts[2] || '';
+  if (kind === 'prearrival') {
+    if (!stays.some(s => s.start === dt)) return `the booking arriving ${strFmtDate(dt)} is no longer on the bookings calendar`;
+    const near = stays.filter(s => s.end <= dt && strDaysBetween(s.end, dt) <= ((S && S.preGap) || 0)).sort((a, b) => b.end.localeCompare(a.end))[0];
+    return near ? `the ${strFmtDate(dt)} arrival is still booked, but another stay now ends ${strFmtDate(near.end)} (${strDaysBetween(near.end, dt)} day(s) before it), so the extra clean the day before may not be needed` : `the ${strFmtDate(dt)} arrival is still booked, but the scheduler no longer lists a clean the day before it`;
+  }
+  return stays.some(s => s.end === dt) ? `the stay ending ${strFmtDate(dt)} is still booked, but the scheduler no longer lists this clean` : `the stay ending ${strFmtDate(dt)} is no longer on the bookings calendar`;
+}
+// A turnover with a cleaner on it is NEVER cancelled by the engine on its own (Brett, Nov 9 2026): keep it, say nothing to the cleaner, ask Brett.
+async function strHoldCancel(ctx, r, feed, miss) {
+  const who = ctx.st.cmap[r.Assigned_Cleaner_ID], first = who ? strFirst(who) : 'The cleaner', why = strWhyGone(feed, r, ctx.S);
+  await strSetTurnover(ctx, r, { Missing_Count: String(miss), Note: 'CANCEL HELD - waiting for Brett: ' + why });
+  await strLog(ctx, r.Task_Key, r.Assigned_Cleaner_ID, 'cancel_held', why);
+  await strRaiseAlert(ctx, { key: `cancelhold|${r.Task_Key}`, kind: 'event', severity: 'high', taskKey: r.Task_Key,
+    message: [`CHECK THIS: the ${strFmtDate(r.Date)} clean may no longer be needed - ${why}.`, `${first} is still assigned and has NOT been told. Nothing was cancelled and the calendar entry is still there.`, 'Keep it or cancel it on the cleaning board: https://ridge-co.github.io/RidgeCo/str-cleaning.html'].join('\n'),
+    sms: `Check the ${strFmtDate(r.Date)} cleaning: ${why}. ${first} is still assigned and was NOT told. Nothing cancelled - keep or cancel it on the cleaning board.` });
+}
+// The booking is back (or Brett kept it): drop the hold and its open alert.
+async function strClearHold(ctx, r) {
+  const a = ctx.st.alerts.find(x => x.Alert_Key === `cancelhold|${r.Task_Key}` && !x.Resolved_At);
+  if (a) await strSetRow(ctx.env, 'STR_Alerts', a.ID, { Resolved_At: new Date(ctx.now).toISOString() });
+}
+// A row the engine cancelled by itself has its booking back on the feed. Put the cleaner back on it and tell them (they were told it was cancelled).
+async function strRestoreCancelled(ctx, r, patch) {
+  const who = r.Assigned_Cleaner_ID ? ctx.st.cmap[r.Assigned_Cleaner_ID] : null, auto = /no longer on the feed/.test(String(r.Note || ''));
+  if (!who || !auto) { patch.Status = 'open'; patch.Note = 'booking restored'; return; }
+  patch.Status = 'covered'; patch.Note = 'booking restored - ' + strFirst(who) + ' is covering again';
+  await strLog(ctx, r.Task_Key, r.Assigned_Cleaner_ID, 'task_restored', 'booking is back on the feed; ' + strFirst(who) + ' covers it again');
+  let told = 'has NOT been told yet (outside the texting hours or texts are off)';
+  if (strInSendWindow(ctx.now, ctx.S)) {
+    const t = await strTextCleaner(ctx, who, 'str_task_restored', strTokens(ctx, who, strRowToTask(r)), strRowToTask(r));
+    if (t.ok) told = 'was told by text'; else if (!t.off) ctx.errors.push({ step: 'restore_text', error: `Could not tell ${who.Name} the ${r.Date} clean is back on: ${t.detail}` });
+  }
+  await strRaiseAlert(ctx, { key: `restored|${r.Task_Key}|${ctx.now}`, kind: 'event', severity: 'high', taskKey: r.Task_Key,
+    message: [`RESTORED: the ${strFmtDate(r.Date)} clean is back on - the booking is still on the calendar.`, `${strFirst(who)} is covering it again and ${told}.`].join('\n'),
+    sms: `Restored: ${strFmtDate(r.Date)} clean is back on; ${strFirst(who)} ${told}.` });
+}
+// Cancel a turnover for real (Brett said so, or the engine cancels one with no cleaner on it). Tells the cleaner when there is one.
+async function strCancelTurnover(ctx, r, note, tell) {
+  const iso = new Date(ctx.now).toISOString(), was = r.Status, who = ctx.st.cmap[r.Assigned_Cleaner_ID];
+  for (const o of ctx.st.offers.filter(o => o.Task_Key === r.Task_Key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Note: 'booking cancelled', Responded_At: iso });
+  await strSetTurnover(ctx, r, { Status: 'cancelled', Note: note });
+  await strLog(ctx, r.Task_Key, r.Assigned_Cleaner_ID, 'task_cancelled', note + ' (was ' + was + ')');
+  if (tell && who && (was === 'covered')) {
+    if (strInSendWindow(ctx.now, ctx.S)) { const t = await strTextCleaner(ctx, who, 'str_task_cancelled', strTokens(ctx, who, strRowToTask(r)), strRowToTask(r)); if (!t.ok && !t.off) ctx.errors.push({ step: 'cancel_text', error: `Could not tell ${who.Name} the booking was cancelled: ${t.detail}` }); }
+  }
+}
+// POST /str/admin/cancel-decision {task_key, action:'keep'|'cancel', notify?}
+async function strAdminCancelDecision(env, body) {
+  try {
+    body = body || {};
+    const ctx = await strHandlerCtx(env), r = ctx.st.turnovers.find(x => x.Task_Key === body.task_key);
+    if (!r) return json({ ok: false, error: 'not_found', message: 'That turnover was not found.' }, 404);
+    if (!strIsHeld(r)) return json({ ok: true, already: true, message: 'That turnover is not waiting on a cancel decision. Nothing changed.' });
+    if (body.action === 'keep') {
+      const until = new Date(Date.parse(String(r.Date).slice(0, 10) + 'T23:59:00Z') + 2 * 86400000).toISOString();
+      await strSetTurnover(ctx, r, { Manual_Until: until, Missing_Count: '0', Note: 'kept by Brett - the clean stays on even though the bookings show no reason for it' });
+      await strLog(ctx, r.Task_Key, r.Assigned_Cleaner_ID, 'cancel_kept', 'Brett kept the clean');
+    } else if (body.action === 'cancel') {
+      await strCancelTurnover(ctx, r, 'cancelled by Brett (' + String(r.Note || '').replace(/^CANCEL HELD - waiting for Brett: /, '') + ')', body.notify !== false);
+    } else return json({ ok: false, error: 'bad_action', message: 'action must be "keep" or "cancel".' }, 400);
+    await strClearHold(ctx, r);
+    return json({ ok: true, action: body.action, warnings: ctx.warnings, errors: ctx.errors });
+  } catch (e) { return await strHandleErr(env, e, 'cancel decision'); }
+}
 function strBuildTasks(stays, today, S) {
   const maxDate = inspAddDays(today, S.lookahead), starts = [...new Set((stays || []).map(s => s.start))].sort(), byOut = new Map(), out = [], seen = new Set();
-  for (const s of (stays || [])) { if (!s || s.end < today || s.end > maxDate) continue; if (!byOut.has(s.end)) byOut.set(s.end, []); byOut.get(s.end).push(s); }
+  const back = inspAddDays(today, -strPreLookback(S));
+  for (const s of (stays || [])) { if (!s || s.end < back || s.end > maxDate) continue; if (!byOut.has(s.end)) byOut.set(s.end, []); byOut.get(s.end).push(s); }
   for (const [date, list] of [...byOut.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     const next = starts.find(d => d >= date) || null, gap = next ? strDaysBetween(date, next) : null;
     const pre = !!(S.preGap > 0 && next && gap > S.preGap);
     const guests = [...new Set(list.map(x => x.guest).filter(Boolean))].join(', ');
     const winEnd = next ? (pre ? inspAddDays(date, 2) : next) : inspAddDays(date, 3);
     const ck = `${STR_PROP}|checkout|${date}`;
-    if (!seen.has(ck)) { seen.add(ck); out.push({ key: ck, kind: 'checkout', date, winStart: date, winEnd, next, guests }); }
+    if (date >= today && !seen.has(ck)) { seen.add(ck); out.push({ key: ck, kind: 'checkout', date, winStart: date, winEnd, next, guests }); }
     if (pre) {
       const pd = inspAddDays(next, -1), pk = `${STR_PROP}|prearrival|${next}`;
       if (pd >= today && pd <= maxDate && !seen.has(pk)) { seen.add(pk); out.push({ key: pk, kind: 'prearrival', date: pd, winStart: pd, winEnd: next, next, guests: '' }); }
+    }
+  }
+  // A future arrival with no checkout inside the look-back window before it has a long gap, so it still gets its pre-arrival clean.
+  if (S.preGap > 0) {
+    const endDates = [...byOut.keys()];
+    for (const next of starts) {
+      const pd = inspAddDays(next, -1), pk = `${STR_PROP}|prearrival|${next}`;
+      if (pd < today || pd > maxDate || seen.has(pk) || endDates.some(e => e <= next)) continue;
+      seen.add(pk); out.push({ key: pk, kind: 'prearrival', date: pd, winStart: pd, winEnd: next, next, guests: '' });
     }
   }
   return out.sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
@@ -39435,6 +39959,7 @@ const STR_DEFAULT_TEXTS = {
   str_assigned: "{FirstName}, you're set for the {DateShort} turnover at {Property}. Checkout is 11 AM{NextLine}. Details and calendar invite: {Link}",
   str_checkout_day: "Hi {FirstName}, it's {AssistantName} with Ridge Co. {TodayLine} {NextLine2} Your schedule and details: {Link}",
   str_task_cancelled: "Hi {FirstName}, it's {AssistantName} with Ridge Co. The {DateShort} booking at {Property} was cancelled, so there is no turnover clean that day. Thank you - your schedule: {Link}",
+  str_task_restored: "Hi {FirstName}, it's {AssistantName} with Ridge Co. Sorry for the mix-up - the {DateShort} turnover clean at {Property} is back on (the booking is still active) and you're still covering it. Your schedule: {Link}",
   // Oct 20 2026 (admin swap / bulk). Friendly confirmations; never a rank word. The displaced cleaner is marked backup directly, so no reply is needed.
   str_assigned_multi: "{FirstName}, you're set for these turnovers at {Property}: {DateList}. Checkout is 11 AM. Details and calendar invite: {Link}",
   str_swapped_backup: "Hi {FirstName}, it's {AssistantName} with Ridge Co. {NewFirst}'s going to cover the {DateShort} turnover at {Property}, so you're off the hook - could you be the backup in case anything changes? No reply needed.",
@@ -39604,15 +40129,15 @@ async function strReadFeed(ctx) {
   const { env, cfg, S } = ctx, sc = inspStrConfig(env, cfg);
   if (sc.problems.length) throw strErr('feed_config', sc.problems.join(' '), 503);
   if (!sc.fixture && sc.missing.length) throw strErr('feed_not_configured', 'Not set up yet: ' + sc.missing.join(' and ') + ' (Config STR_GUARD_BOOKING_SOURCES / STR_GUARD_CLEANING_CAL).', 503);
-  const today = inspEtDate(ctx.now), fromDay = inspAddDays(today, -1), toDay = inspAddDays(today, S.lookahead + 20);
+  const today = inspEtDate(ctx.now), fromDay = inspAddDays(today, -1), stayFrom = inspAddDays(today, -strPreLookback(S)), toDay = inspAddDays(today, S.lookahead + 20);
   let stayEvents = [], cal = [];
   if (sc.fixture) {
     stayEvents = (sc.fixture.stays || []).map(s => ({ summary: s.guest || 'Guest', start: { date: s.start }, end: { date: s.end } }));
     cal = (sc.fixture.cleaning || []).map(c => ({ summary: c.title, status: '', start: { date: c.date }, end: { date: inspAddDays(c.date, 1) }, id: 'fx', ext: {} }));
   } else {
     for (const src of sc.sources) {
-      if (/^https?:\/\//i.test(src)) stayEvents.push(...await inspStrReadIcs(env, src, fromDay, toDay));
-      else stayEvents.push(...await inspStrReadGoogle(env, cfg, src, fromDay, toDay));
+      if (/^https?:\/\//i.test(src)) stayEvents.push(...await inspStrReadIcs(env, src, stayFrom, toDay));
+      else stayEvents.push(...await inspStrReadGoogle(env, cfg, src, stayFrom, toDay));
     }
     cal = await strReadCleaningCal(env, cfg, sc.cleaningCal, fromDay, toDay);
   }
@@ -40024,7 +40549,8 @@ async function strTick(env, opts) {
       const b = builtMap.get(r.Task_Key);
       if (b) {
         const patch = {};
-        if (r.Status === 'cancelled') { patch.Status = 'open'; patch.Note = 'booking restored'; }
+        if (r.Status === 'cancelled') await strRestoreCancelled(ctx, r, patch);
+        if (strIsHeld(r)) { patch.Note = ''; await strClearHold(ctx, r); } // the booking is back: drop the held cancel
         if ((parseInt(r.Missing_Count, 10) || 0) > 0) patch.Missing_Count = '0';
         if (r.Manual_Until) patch.Manual_Until = ''; // the feed has caught up with a "Mark as booked now" turnover
         if ((r.Next_Arrival || '') !== (b.next || '')) patch.Next_Arrival = b.next || '';
@@ -40034,6 +40560,9 @@ async function strTick(env, opts) {
       } else if (!anomaly && r.Date >= today && r.Status !== 'cancelled' && !strManualHold(r, ctx.now)) {
         const miss = (parseInt(r.Missing_Count, 10) || 0) + 1;
         if (miss < 2) { await strSetTurnover(ctx, r, { Missing_Count: String(miss) }); continue; }
+        if (strIsHeld(r)) continue; // already waiting for Brett's answer
+        if (r.Assigned_Via !== 'pending_converted' && Date.parse(r.Updated_At || '') > ctx.now - STR_CANCEL_GRACE_MS) continue; // first missed less than 3 h ago: wait, it may just be a feed glitch
+        if ((r.Status === 'covered' || r.Status === 'ext_covered') && r.Assigned_Via !== 'pending_converted') { await strHoldCancel(ctx, r, feed, miss); continue; } // never cancel a clean with a cleaner on it without Brett's OK
         const was = r.Status, who = st.cmap[r.Assigned_Cleaner_ID];
         for (const o of st.offers.filter(o => o.Task_Key === r.Task_Key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Note: 'booking cancelled', Responded_At: iso });
         await strSetTurnover(ctx, r, { Status: 'cancelled', Missing_Count: String(miss), Note: 'booking no longer on the feed' });
@@ -40274,7 +40803,7 @@ async function strAdminState(env) {
     if (feed) for (const t of strBuildTasks(feed.stays, today, ctx.S)) if (!stored.has(t.key)) tasks.push({ key: t.key, kind: t.kind, date: t.date, label: strFmtDate(t.date), days_out: strDaysBetween(today, t.date), next_arrival: t.next || '', next_label: t.next ? strNextDate(t.date, t.next) : '', guests: t.guests, status: 'new', covered: false, via: '', assigned_id: '', assigned_name: '', note: 'not picked up by the scheduler yet', offers: [], backups: { can: [], out: [], unknown: [] }, uncovered_alert: false });
     tasks.sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
     const log = (await fetchTab(env, 'STR_Log')).slice(-40).reverse();
-    return json({ ok: true, build: BUILD_VERSION, today, settings: strSettingsOut(ctx.cfg), feed_error: feedError, feed_ok: !!feed, pending: strPendingBoard(ctx, act), cleaners: ctx.st.cleaners.map(c => strCleanerOut(c, ctx.st.pool)).sort((a, b) => (a.priority || 999) - (b.priority || 999)), tasks, alerts: ctx.st.alerts.filter(a => !a.Resolved_At && a.Kind !== 'info').map(a => ({ id: a.ID, kind: a.Kind, severity: a.Severity, message: a.Message, sent: parseInt(a.Send_Count, 10) || 0, last_sent: a.Last_Sent_At, acked: !!a.Acked_At, created: a.Created_At })), log: log.map(l => ({ time: l.Timestamp, task: l.Task_Key, cleaner: (ctx.st.cmap[l.Cleaner_ID] || {}).Name || '', event: l.Event, detail: l.Detail })), unfinished_changes: ctx.st.changes.filter(c => c.Status === 'applying').map(c => ({ plan_id: c.Plan_ID, summary: c.Summary, stage: c.Stage, started: c.Created_At })), parked_texts: ctx.st.outbox.filter(o => o.Status === 'parked' || o.Status === 'sending').map(o => ({ id: o.ID, cleaner: (ctx.st.cmap[o.Cleaner_ID] || {}).Name || o.Cleaner_ID, kind: o.Kind, not_before: o.Not_Before, status: o.Status, dates: strOutboxDates(o) })), coming_soon: STR_COMING_SOON });
+    return json({ ok: true, build: BUILD_VERSION, today, settings: strSettingsOut(ctx.cfg), feed_error: feedError, feed_ok: !!feed, pending: strPendingBoard(ctx, act), cleaners: ctx.st.cleaners.map(c => strCleanerOut(c, ctx.st.pool)).sort((a, b) => (a.priority || 999) - (b.priority || 999)), tasks, alerts: ctx.st.alerts.filter(a => !a.Resolved_At && a.Kind !== 'info').map(a => ({ id: a.ID, kind: a.Kind, severity: a.Severity, message: a.Message, sent: parseInt(a.Send_Count, 10) || 0, last_sent: a.Last_Sent_At, acked: !!a.Acked_At, created: a.Created_At })), log: log.map(l => ({ time: l.Timestamp, task: l.Task_Key, cleaner: (ctx.st.cmap[l.Cleaner_ID] || {}).Name || '', event: l.Event, detail: l.Detail })), cancel_holds: ctx.st.turnovers.filter(r => strIsHeld(r) && r.Status !== 'cancelled').map(r => ({ task_key: r.Task_Key, date: r.Date, label: strFmtDate(r.Date), kind: r.Kind, cleaner: (ctx.st.cmap[r.Assigned_Cleaner_ID] || {}).Name || '', why: String(r.Note || '').replace(/^CANCEL HELD - waiting for Brett: /, '') })), unfinished_changes: ctx.st.changes.filter(c => c.Status === 'applying').map(c => ({ plan_id: c.Plan_ID, summary: c.Summary, stage: c.Stage, started: c.Created_At })), parked_texts: ctx.st.outbox.filter(o => o.Status === 'parked' || o.Status === 'sending').map(o => ({ id: o.ID, cleaner: (ctx.st.cmap[o.Cleaner_ID] || {}).Name || o.Cleaner_ID, kind: o.Kind, not_before: o.Not_Before, status: o.Status, dates: strOutboxDates(o) })), coming_soon: STR_COMING_SOON });
   } catch (e) { return await strHandleErr(env, e, 'admin state'); }
 }
 function strPhone10(p) { const n = normalizePhone(p); return /^\+1\d{10}$/.test(n) ? n : ''; }
@@ -41766,7 +42295,7 @@ async function inspBookInfo(env, url) {
     .map(x => ({ date: x.b.Date, from: inspFmtEtTime(inspEtWallToMs(x.b.Date, x.b.Start_Time)), to: inspFmtEtTime(inspBlockWindowEndMs(x.b)), last_start: !!String(x.b.Last_Start || '').trim(), closes_iso: new Date(x.exp).toISOString(), closes_label: inspFmtEt(x.exp) }));
   let open = open_days;
   try { const closed = await inspStrClosedOrThrow(env, await fetchConfig(env), false); open = open_days.filter(d => !closed.has(d.date)); } catch (e) { console.error('insp: cleaning guard unavailable for open-days list (slots will report it):', e && e.message); }
-  return json({ ok: true, customer: c.Name, require_wo: String(c.Billing_Mode || '') === 'wo', open_block_count: open.length, open_days: open, step_min: INSP_STEP_MIN, example_durations: [1, 2, 3, 4, 6].map(u => ({ units: u, minutes: inspDurationMin(u, 1) })) });
+  return json({ ok: true, customer: c.Name, require_wo: String(c.Billing_Mode || '') === 'wo' && String(c.Invoice_Delivery || '') !== 'qb_only', ask_wo: String(c.Billing_Mode || '') === 'wo', open_block_count: open.length, open_days: open, step_min: INSP_STEP_MIN, example_durations: [1, 2, 3, 4, 6].map(u => ({ units: u, minutes: inspDurationMin(u, 1) })) });
 }
 async function inspBookSlots(env, body) {
   try {
@@ -41777,6 +42306,15 @@ async function inspBookSlots(env, body) {
     const slots = a.slots.slice(0, 600).map(inspSlotOut);
     return json({ ok: true, address: a.geo.formatted, duration_min: a.durationMin, units: input.units, buildings: input.buildings, slots, warnings: a.warnings.filter(w => /partial match/.test(w)), no_blocks: a.blocksCount === 0 });
   } catch (e) { if (!(e && e.code)) await inspAlert(env, 'slots_internal', String(e && e.message)); return inspHandleErr(e); }
+}
+// Booking-time work order rule (Nov 3 2026): a billed-by-work-order customer must give a valid WO number, EXCEPT one set to "create in QuickBooks only" (Premier),
+// which often books before the AppFolio work order exists (the two arrive in either order). A number that IS typed must still be valid; billing later refuses a booking with no WO.
+function inspBookingWoInput(c, body) {
+  if (String(c.Billing_Mode || '') !== 'wo') return '';
+  const woRaw = String(body && body.wo_number != null ? body.wo_number : '').trim();
+  const woNumber = insbNormWO(woRaw);
+  if (woRaw ? !woNumber : String(c.Invoice_Delivery || '') !== 'qb_only') throw inspErr('bad_wo', 'Please enter the work order number (for example 43945-1).', 400);
+  return woNumber;
 }
 async function inspBookRequest(env, body) {
   let createdEventId = '';
@@ -41794,10 +42332,9 @@ async function inspBookRequest(env, body) {
     // Billed-by-work-order customers (Premier): the work order number is required, and one work order = one booking at a time (Oct 22 2026).
     let woNumber = '';
     if (String(c.Billing_Mode || '') === 'wo') {
-      woNumber = insbNormWO(body.wo_number);
-      if (!woNumber) throw inspErr('bad_wo', 'Please enter the work order number (for example 43945-1).', 400);
-      await insbEnsureColumns(env);
-      const dupe = (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.Customer_ID) === String(c.ID) && insbNormWO(r.WO_Number) === woNumber && insbWoInUse(r));
+      woNumber = inspBookingWoInput(c, body);
+      if (woNumber) await insbEnsureColumns(env);
+      const dupe = woNumber ? (await fetchTab(env, 'Insp_Bookings')).find(r => String(r.Customer_ID) === String(c.ID) && insbNormWO(r.WO_Number) === woNumber && insbWoInUse(r)) : null;
       if (dupe) throw inspErr('wo_in_use', 'Work order ' + woNumber + ' already has a booking (' + (String(dupe.Completed_At || '').trim() ? 'already completed and billed' : dupe.Status === 'pending' ? 'waiting for approval' : 'approved') + '). Cancel it first, or use the manage link to change it.', 409);
     }
     if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) throw inspErr('bad_contact', 'That email address does not look right.', 400);
@@ -43681,10 +44218,30 @@ function fiInspHeaderOut(o) {
 }
 
 // ── Endpoints ───────────────────────────────────────────────────────────────────────────────
+// House number + first two street words + date: "1510 E Madison St, Baltimore" and "1510 E Madison Street Baltimore Md 21205" on the same day are the same visit.
+function fiDupKey(address, date) {
+  const t = String(address || '').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean).slice(0, 3).join(' ');
+  const d = String(date || '').slice(0, 10);
+  return t && /^\d/.test(t) && d ? t + '|' + d : '';
+}
+const FI_BILLED_STATES = ['invoiced', 'emailed', 'none'];   // 'staged' is a test run, 'creating…/sending…/review…/held' are unfinished
+function fiBilledInspectionIds(bookingRows) {
+  const out = new Set();
+  for (const b of (bookingRows || [])) {
+    if (String(b.Active || '').toUpperCase() === 'FALSE') continue;
+    const id = String(b.Inspection_ID || '').trim();
+    if (id && String(b.Completed_At || '').trim() && FI_BILLED_STATES.includes(String(b.Invoice_Status || '').trim())) out.add(id);
+  }
+  return out;
+}
 async function fiList(env) {
   await fiEnsureTabs(env);
   const [t, bt] = [await fiReadFresh(env, 'FI_Inspections'), await fiReadFresh(env, 'FI_Brands')];
-  const items = t.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiInspHeaderOut(r.o)).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))).slice(0, 100);
+  // Nov 5 2026: billing is the last step of an inspection. An inspection is "billed" when its linked booking is completed AND the invoice step finished
+  // (invoiced / emailed, or completed with no charge). The phone tucks published+billed inspections into a collapsed section. A read failure here must never break the list.
+  let billedIds = new Set();
+  try { billedIds = fiBilledInspectionIds(await fetchTab(env, 'Insp_Bookings')); } catch (e) { /* list still loads; nothing is collapsed */ }
+  const items = t.rows.filter(r => r.o.Active !== 'FALSE').map(r => Object.assign(fiInspHeaderOut(r.o), { billed: billedIds.has(String(r.o.ID)) })).sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at))).slice(0, 100);
   const brands = bt.rows.filter(r => r.o.Active !== 'FALSE').map(r => fiBrandOut(r.o, true));
   return json({ ok: true, inspections: items, brands, report_base: FI_PAGE_BASE });
 }
@@ -44990,7 +45547,10 @@ async function fiBookings(env) {
   const have = new Set(it.rows.filter(r => r.o.Active !== 'FALSE').map(r => r.o.ID));
   const from = inspEtDate(Date.now() - 21 * 86400000), to = inspEtDate(Date.now() + 120 * 86400000);
   // Approved, in a sensible window, and not already turned into an inspection. A claim whose inspection never reached the server is offered again.
-  const list = bt.rows.map(r => r.o).filter(b => b.Active !== 'FALSE' && b.Status === 'approved' && b.Date >= from && b.Date <= to && (!b.Inspection_ID || !have.has(b.Inspection_ID)))
+  // Nov 5 2026: never offer a booking for a house + day that already has an inspection, even when the two were never linked (e.g. a second booking / work order arriving for an inspection already done).
+  const doneKeys = new Set(it.rows.map(r => r.o).filter(o => o.Active !== 'FALSE').map(o => fiDupKey(o.Address, o.Inspection_Date)).filter(Boolean));
+  const list = bt.rows.map(r => r.o).filter(b => b.Active !== 'FALSE' && b.Status === 'approved' && b.Date >= from && b.Date <= to && (!b.Inspection_ID || !have.has(b.Inspection_ID))
+      && !(!b.Inspection_ID && doneKeys.has(fiDupKey(b.Formatted_Address || b.Address, b.Date))))
     .sort((x, y) => String(x.Start_ISO).localeCompare(String(y.Start_ISO)));
   return json({ ok: true, bookings: list.map(b => fiBookingOut(b, custById[String(b.Customer_ID)], owners, props)) });
 }
@@ -46011,6 +46571,52 @@ async function insbSetWO(env, body) {
     const back = await updateRowVerified(env, 'Insp_Bookings', L.b.ID, { WO_Number: wo, Billing_Log: insbLogLine(L.b, 'WO set to ' + wo) });
     return json({ ok: true, booking: insbPublicBooking(back) });
   } catch (e) { await insbFail(env, 'set_wo', e.message, body && body.id); return json({ ok: false, error: 'save_failed', message: e.message }, 500); }
+}
+// ── One-time / repeatable Premier WO-number backfill (Nov 3 2026, Brett) ─────────────────────────────────────
+// POST /admin/backfill-premier-wo { items:[{ id, wo, expect_address }], dry_run }  (HUB_PROD_WRITE_PATHS: additive only)
+// Saves the AppFolio work order number on bookings that were scheduled and inspected before the WO email arrived. ADDITIVE: only fills a BLANK
+// WO_Number, never overwrites a different one, never touches a billed booking, money, QuickBooks or texts. Each item must also name a street
+// fragment (expect_address) that has to appear in the booking's address, so a wrong id/WO pairing is refused, not saved. A dry run (the default)
+// writes nothing. Every real write is read back; a failed write is a loud 'error' step, logged to Ops_Telemetry and returned to the caller.
+async function insbBackfillWo(env, body) {
+  body = body || {};
+  const dry = body.dry_run !== false;
+  const items = Array.isArray(body.items) ? body.items : [];
+  if (!items.length) return json({ ok: false, error: 'bad_request', message: 'items is required.' }, 400);
+  if (items.length > 20) return json({ ok: false, error: 'bad_request', message: 'At most 20 items at a time.' }, 400);
+  const steps = [], step = (id, wo, status, detail) => steps.push({ id: String(id || ''), wo: wo || '', status, detail: detail || '' });
+  try {
+    await insbEnsureColumns(env);
+    invalidateTabCache('Insp_Bookings');
+    const seen = new Set();
+    for (const it of items) {
+      const id = String((it && it.id) || '').trim(), wo = insbNormWO(it && it.wo), want = String((it && it.expect_address) || '').trim().toLowerCase();
+      if (!id || !wo || !want) { step(id, wo, 'conflict', 'each item needs id, a valid wo and expect_address; nothing changed for it'); continue; }
+      if (seen.has(id) || seen.has('wo:' + wo)) { step(id, wo, 'conflict', 'the same booking or work order is listed twice; nothing changed'); continue; }
+      seen.add(id); seen.add('wo:' + wo);
+      const all = await fetchTab(env, 'Insp_Bookings');
+      const b = all.find(r => String(r.ID) === id);
+      if (!b) { step(id, wo, 'conflict', 'booking not found; nothing changed'); continue; }
+      const addr = (String(b.Address || '') + ' ' + String(b.Formatted_Address || '')).toLowerCase();
+      if (!addr.includes(want)) { step(id, wo, 'conflict', 'booking address "' + (b.Formatted_Address || b.Address || '') + '" does not contain "' + want + '"; nothing changed'); continue; }
+      if (String(b.Completed_At || '').trim() || String(b.QB_Invoice_ID || '').trim() || String(b.Invoice_Status || '').trim()) { step(id, wo, 'conflict', 'booking is already billed; nothing changed'); continue; }
+      const cur = insbNormWO(b.WO_Number);
+      if (cur === wo) { step(id, wo, 'skipped', 'already has this work order number'); continue; }
+      if (cur || String(b.WO_Number || '').trim()) { step(id, wo, 'conflict', 'booking already has work order ' + b.WO_Number + '; nothing changed'); continue; }
+      const dupe = all.find(r => String(r.ID) !== id && String(r.Customer_ID) === String(b.Customer_ID) && insbNormWO(r.WO_Number) === wo && insbWoInUse(r));
+      if (dupe) { step(id, wo, 'conflict', 'work order is already on booking #' + dupe.ID + '; nothing changed'); continue; }
+      if (dry) { step(id, wo, 'planned', 'would set WO_Number=' + wo); continue; }
+      try {
+        const back = await updateRowVerified(env, 'Insp_Bookings', id, { WO_Number: wo, Billing_Log: insbLogLine(b, 'WO set to ' + wo + ' (AppFolio email backfill)') });
+        if (insbNormWO(back && back.WO_Number) !== wo) throw new Error('read-back shows WO_Number=' + (back && back.WO_Number));
+        step(id, wo, 'done', 'WO_Number saved and read back');
+      } catch (e) { step(id, wo, 'error', e.message); }
+    }
+  } catch (e) { step('', '', 'error', e.message); }
+  const bad = steps.filter(x => x.status === 'error');
+  if (bad.length) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'premier_wo_backfill_error', Skill_Or_Endpoint: '/admin/backfill-premier-wo', Success: 'FALSE', Notes: bad.map(x => x.id + ': ' + x.detail).join(' | ').slice(0, 200) }); } catch (_) { /* silent-ok: telemetry is best-effort; the steps are returned to the caller below */ } }
+  const conflicts = steps.filter(x => x.status === 'conflict').length;
+  return json({ ok: !bad.length && !conflicts, dry_run: dry, steps }, bad.length ? 500 : (conflicts ? 409 : 200));
 }
 // ── Paid tracking + the Field Inspection billing card (Nov 2 2026) ──
 // A QuickBooks invoice that is "Invoiced" (created, not emailed) is paid when its QuickBooks balance reaches 0 (the customer's ACH is booked there), or when a person says so.

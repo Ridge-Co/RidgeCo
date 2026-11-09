@@ -54,6 +54,14 @@ needing this treatment.
 - Typical split: **plan in Cowork (conversational), implement in Claude Code (repo + tests).**
 - PAT-024 (verify before build) + PAT-025 (ask clarifying questions first) are mandatory.
 
+## MANDATORY: pre-build design gate (Brett, Nov 3 2026)
+Before writing code for any feature, run `context/PRE_BUILD_GATE_v1.0.md`: tag the feature's shape, walk every matching item
+(plus the always-on standing parameters), pre-answer each from the file's default column, and ask Brett ONLY where the default is
+unknown (one batch, not a drip). The result goes in the PR note under `## Pre-build gate` (what was N or overridden, and the companion
+actions included). After the first delivery, anything Brett still asks for goes under `## Late requests` and becomes a new gate item
+or a changed default. Purpose: ~85% complete on the first build, fewer questions every month. `test/pre-build-gate.test.mjs` enforces the
+file and the note heading (notes dated 20261104 or later).
+
 ## Stack (non-negotiable)
 - Frontend: single `index.html` + `vendor.html` on GitHub Pages. No subfolders, no build tools.
 - Backend: `worker.js` — Cloudflare Worker, auto-deploys on push to `main`. **Never Wrangler CLI.**

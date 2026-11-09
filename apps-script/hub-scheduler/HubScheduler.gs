@@ -40,8 +40,20 @@
  *   Anything else you need to add (secrets for the Pinterest / GitHub / STR / BrettOS rows) goes in
  *   Project Settings → Script properties → Add. setup() tells you exactly which ones, in plain words.
  *
+ * ── UPDATING A SCHEDULER THAT IS ALREADY RUNNING (e.g. to add the payment watcher, Nov 2026) ───────────
+ *   1. Paste this file over Code.gs and Save. (Do this FIRST. The old manifest is still in place, so the scheduler keeps running as before; the
+ *      payment watcher simply reports "Gmail permission is not granted yet" until step 2.)
+ *   2. Paste the companion appsscript.json over the manifest and Save. It adds ONE permission: read-only Gmail (the watcher never sends, labels,
+ *      archives or deletes anything).
+ *   3. Pick  setup  → Run → click Allow on the new permission prompt. setup is safe (see above) and its preview prints a line for the watcher:
+ *      "READY premier_payment_watch ... Gmail read access works. Looking back 365 days it would have flagged N ...".
+ *   Do steps 2 and 3 in the same sitting: a tick that runs between them just emails "Gmail permission is not granted yet" for the watcher.
+ *   The watcher row is premier_payment_watch in the JOBS table (Mon-Fri 7:45 AM). To see what it finds in the last year without sending anything,
+ *   run  paymentWatchPreview.
+ *
  * Other functions you can run from the dropdown any time:
  *   showSchedule   – the JOBS table in plain English (what runs when, on or off)
+ *   paymentWatchPreview – what the payment watcher finds in your Gmail over the last year (sends nothing, changes nothing)
  *   statusReport   – plain-English status of every job (last success, overdue, errors)
  *   preflight      – re-run the read-only "what would the next tick do?"
  *   runScheduler   – tick now (only works after approveAndStart)
@@ -55,12 +67,14 @@
 //   name      – short id (do not rename a Hub job: the Hub knows it by this name)
 //   run       – 'hub' = the Hub does the work   |   'github' = press Run on a GitHub workflow
 //               'pinterest' | 'barrelco_entry' | 'str_tick' | 'brettos_sync' = call that Worker
+//               'gmail_watch' = read Brett's Gmail for payment emails and tell him (read-only; see section 5b)
 //   what      – one plain-English line
 //   enabled   – true = on, false = off
 //   WHEN (use exactly one style):
 //     every_min: 15              every 15 minutes (the timer ticks every 15 min, so 15 is the fastest that means anything)
 //     at: '07:00'                every day at 7:00 AM
 //     day: 'Mon', at: '08:30'    every Monday at 8:30 AM   (Sun Mon Tue Wed Thu Fri Sat)
+//     weekdays: true, at: '07:45'  Monday to Friday at 7:45 AM (non-Hub rows only; the Hub has its own day rules)
 //   github rows also have:  repo, workflow (the file name), ref (branch, usually 'main'), inputs (optional)
 //   quiet: …   RESERVED for a later "pause overnight" feature. It is NOT active yet — using it is rejected.
 var JOBS = [
@@ -96,6 +110,7 @@ var JOBS = [
   { name: 'barrelco_entry',      run: 'barrelco_entry', every_min: 15,           enabled: true,  what: 'BarrelCo: applies new rows typed in the Entry sheet to Inventory/History (was never running: its cron was switched off).' },
   { name: 'brettos_sync',        run: 'brettos_sync',   at: '06:30',             enabled: true,  what: 'BrettOS: refreshes the shared property / listing / contact list (was a Cloudflare cron set in the dashboard).' },
   { name: 'str_tick',            run: 'str_tick',       every_min: 60,           enabled: false, what: 'STR door codes: runs the hourly arrival-alert / lock-retry job (the TruviSync script already does this every 5 min, so this is an extra safety net; turn on after adding STR_ADMIN_TOKEN).' },
+  { name: 'premier_payment_watch', run: 'gmail_watch',  weekdays: true, at: '07:45', enabled: true,  what: 'Premier / AppFolio payments: looks in Brett\'s Gmail Mon-Fri for new payment emails (AppFolio "Your Vendor Payments", "invoice paid", ACH, remittance) and emails him a short list. Reads and reports ONLY - it never marks anything paid. Emails once when it starts, then only when something new shows up, and asks Brett what to do if 30 days pass with nothing.' },
 
   // ── GitHub workflows (this script presses Run, then checks the result; the workflows no longer have their own timers) ──
   { name: 'ci_context_sync',      run: 'github', repo: 'Ridge-Co/RidgeCo', workflow: 'context-sync.yml',     ref: 'main', every_min: 30,           enabled: true, what: 'Folds Claude capture notes from the Drive inbox into context/CAPTURE_INBOX.md.' },
@@ -143,7 +158,7 @@ var GH_NO_RUN_MIN     = 20;                // a dispatched workflow that shows n
 var GH_STUCK_MIN      = 90;                // a run still not finished after this long is reported
 var DAYS = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 var DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-var JOB_FIELDS = ['name', 'run', 'what', 'enabled', 'every_min', 'at', 'day', 'repo', 'workflow', 'ref', 'inputs'];
+var JOB_FIELDS = ['name', 'run', 'what', 'enabled', 'every_min', 'at', 'day', 'weekdays', 'repo', 'workflow', 'ref', 'inputs'];
 
 function props_() { return PropertiesService.getScriptProperties(); }
 
@@ -381,7 +396,7 @@ function hub_(method, path, token, payload) {
 }
 
 // ═══ 4. THE JOBS TABLE: checking it and turning it into schedules ═══════════════════════════════════
-var RUN_TYPES = ['hub', 'github', 'pinterest', 'barrelco_entry', 'str_tick', 'brettos_sync'];
+var RUN_TYPES = ['hub', 'github', 'pinterest', 'barrelco_entry', 'str_tick', 'brettos_sync', 'gmail_watch'];
 function atMinutes_(at) { var m = /^(\d{1,2}):(\d{2})$/.exec(String(at)); return m ? (+m[1]) * 60 + (+m[2]) : NaN; }
 function validAt_(at) { var m = /^(\d{1,2}):(\d{2})$/.exec(String(at)); return !!m && +m[1] <= 23 && +m[2] <= 59; }
 // Returns { ok, problems:[plain English], notes:[] }. A typo is an error you hear about, never a silently ignored line.
@@ -411,6 +426,12 @@ function checkJobs_() {
       if (!validAt_(j.at)) problems.push(label + ': at must look like \'07:00\' (24-hour, Eastern time).');
       if (hasDay && DAYS[j.day] === undefined) problems.push(label + ': day must be one of Sun Mon Tue Wed Thu Fri Sat.');
     }
+    if (j.weekdays !== undefined) {
+      if (j.weekdays !== true) problems.push(label + ': weekdays must be true (Monday to Friday) or left out.');
+      if (hasDay) problems.push(label + ': use EITHER day OR weekdays, not both.');
+      if (hasEvery) problems.push(label + ': weekdays goes with at: \'07:45\', not every_min.');
+      if (j.run === 'hub') problems.push(label + ': weekdays is only for the non-Hub rows (the Hub keeps its own day rules).');
+    }
     if (j.run === 'github') {
       if (!/^[\w.-]+\/[\w.-]+$/.test(j.repo || '')) problems.push(label + ': a github row needs repo like \'Ridge-Co/RidgeCo\'.');
       if (!/^[\w.-]+\.ya?ml$/.test(j.workflow || '')) problems.push(label + ': a github row needs workflow like \'drift-check.yml\'.');
@@ -438,7 +459,7 @@ function describe_(j) {
     var n = j.every_min;
     return n === 60 ? 'every hour' : (n % 60 === 0 ? 'every ' + (n / 60) + ' hours' : 'every ' + n + ' minutes');
   }
-  return (j.day ? 'every ' + DAY_NAMES[DAYS[j.day]] : 'every day') + ' at ' + fmtTime_(j.at) + ' Eastern';
+  return (j.weekdays ? 'every weekday (Mon-Fri)' : j.day ? 'every ' + DAY_NAMES[DAYS[j.day]] : 'every day') + ' at ' + fmtTime_(j.at) + ' Eastern';
 }
 function showSchedule() {
   var table = checkJobs_();
@@ -477,6 +498,7 @@ function scriptJobDue_(job, js, nowMs) {
   }
   var et = etParts_(nowMs);
   if (job.day && et.dow !== DAYS[job.day]) return null;
+  if (job.weekdays && (et.dow < 1 || et.dow > 5)) return null;
   if (et.minutes < atMinutes_(job.at)) return null;
   if (js.last_key === et.date) return null;
   var a = js.attempts;
@@ -504,6 +526,7 @@ function scriptJobOverdue_(job, js, nowMs) {
   }
   var et = etParts_(nowMs);
   if (job.day && et.dow !== DAYS[job.day]) return '';
+  if (job.weekdays && (et.dow < 1 || et.dow > 5)) return '';
   if (js.last_failed_final === et.date) return 'failed today and will not be retried automatically: ' + (js.last_error || '?');
   if (et.minutes >= atMinutes_(job.at) + OVERDUE_GRACE_MIN && js.ok_key !== et.date) return 'has not completed successfully for ' + et.date + ' (was due ' + job.at + ' ET)' + (js.last_error ? ' [last error: ' + String(js.last_error).slice(0, 150) + ']' : '');
   return '';
@@ -515,6 +538,7 @@ function wouldSeedScriptJobs_(nowMs) {
     if (j.run === 'hub' || !j.enabled || j.every_min !== undefined) return;
     if (st[j.name] && (st[j.name].last_key || st[j.name].last_start)) return;
     if (j.day && et.dow !== DAYS[j.day]) return;
+    if (j.weekdays && (et.dow < 1 || et.dow > 5)) return;
     if (et.minutes < atMinutes_(j.at)) return;
     out.push(j.name);
   });
@@ -629,7 +653,7 @@ function http_(method, url, headers, payload) {
   return { ok: true, code: code, body: j, text: text };
 }
 
-var RUNNERS = { pinterest: runPinterest_, barrelco_entry: runBarrelEntry_, str_tick: runStrTick_, brettos_sync: runBrettos_, github: runGithub_ };
+var RUNNERS = { pinterest: runPinterest_, barrelco_entry: runBarrelEntry_, str_tick: runStrTick_, brettos_sync: runBrettos_, github: runGithub_, gmail_watch: runPaymentWatch_ };
 
 // Pinterest: the same loop the weekly GitHub Action ran - list the boards, then sync each in batches until nothing is left.
 function runPinterest_(job, ctx) {
@@ -692,6 +716,179 @@ function runBrettos_(job) {
   return { ok: errors.length === 0, errors: errors, note: Object.keys(res).map(function (k) { return k + ' ' + (res[k] && res[k].count != null ? res[k].count : '?'); }).join(', ') };
 }
 
+// ═══ 5b. PAYMENT-EMAIL WATCHER (Brett, Nov 3 2026) ═══════════════════════════════════════════════════
+// Premier pays through AppFolio and nobody knows yet what an INSPECTION payment email looks like. One real AppFolio vendor-payment email exists
+// (Aug 18 2026, "Your Vendor Payments as of ...", from donotreply@appfolio.com, a referral payment), so that exact shape is searched for, plus a wider
+// net for anything from AppFolio / Premier that talks about payment, plus payment wording from any sender.
+// READS AND REPORTS ONLY: it never marks anything paid and never touches the Hub, QuickBooks or any label in Gmail. It emails Brett (a) once when it starts,
+// (b) whenever new payment-looking emails show up, (c) when 30 days pass with none. A quiet day sends nothing, but the job still reports ok/failed to this
+// scheduler, so a broken search, a missing Gmail permission or a job that stops running is an alert, never silence.
+// State (what it has already reported) is saved ONLY after the email went out, so a failed send is retried and nothing is lost.
+// Magic-link tokens: AppFolio emails carry a link that logs into the portal without a password. Only a few labelled fields are copied into the digest;
+// no link and no raw email body is ever copied.
+var PAY_WATCH_KEY = 'PAYMENT_WATCH';
+var PAY_WATCH_FIRST_LOOKBACK_MS = 7 * 24 * 3600000;    // first run only: also report anything from the last 7 days
+var PAY_WATCH_OVERLAP_MS = 36 * 3600000;               // each run re-reads 36 h before the last one (already-reported emails are skipped by id)
+var PAY_WATCH_ASK_AFTER_MS = 30 * 24 * 3600000;        // nothing seen for this long -> ask Brett (then again every 30 days while still nothing)
+var PAY_WATCH_MAX_THREADS = 50;                        // per search; hitting it is reported, never ignored
+var PAY_WATCH_SEEN_KEEP = 300;
+var PAY_WATCH_SENDERS = 'from:appfolio.com OR from:appfolioinc.com OR from:ppmillc.com OR from:ppmill.com';
+var PAY_WATCH_WORDS = 'paid OR payment OR payments OR remittance OR ACH OR deposit OR "invoice paid"';
+// Known AppFolio emails that are NOT payments to Brett (his own rent payments, portal housekeeping). Counted and shown in the run note, never emailed.
+var PAY_WATCH_NOISE = [/online payment confirmation/i, /payment method updated/i, /2-step verification/i, /request to access account/i, /foliospace/i, /documents request/i];
+var PAY_WATCH_NOISE_FROM = /dume\.ai|klarna\.com|square\.com|t-mobile\.com/i;   // Brett's own briefing app and other businesses' payment receipts
+function payWatchQueries_(sinceMs) {
+  var tail = ' after:' + Math.floor(sinceMs / 1000) + ' -from:me -in:trash -in:spam';
+  return [
+    'from:appfolio.com subject:"Vendor Payments"' + tail,
+    '(' + PAY_WATCH_SENDERS + ' OR "Premier Property Management") (' + PAY_WATCH_WORDS + ')' + tail,
+    // Any sender, but only a few payment PHRASES in the subject line. (Plain "payment received" matched 74 emails a year from Klarna / Square / T-Mobile, and
+    // searching the body for our company names matched 684: both pure noise. This one matched 1 email in a year of Brett's inbox.)
+    'subject:("invoice paid" OR "paid invoice" OR remittance OR "ACH payment" OR "payment advice")' + tail
+  ];
+}
+// Pure. { kind: 'vendor_payment' | 'noise' | 'candidate' }
+function payWatchClassify_(from, subject, body) {
+  from = String(from || ''); subject = String(subject || ''); body = String(body || '');
+  if (/appfolio\.com/i.test(from) && (/vendor payments?/i.test(subject) || /vendor payment to you/i.test(body))) return { kind: 'vendor_payment' };
+  if (PAY_WATCH_NOISE_FROM.test(from)) return { kind: 'noise' };
+  for (var i = 0; i < PAY_WATCH_NOISE.length; i++) if (PAY_WATCH_NOISE[i].test(subject)) return { kind: 'noise' };
+  return { kind: 'candidate' };
+}
+function payWatchClean_(s) { return String(s || '').replace(/https?:\/\/\S+/gi, '').replace(/\s+/g, ' ').trim().slice(0, 140); }
+function payWatchField_(text, label) { var m = new RegExp('(?:^|\\n)[ \\t]*' + label + '[ \\t]*\\n+[ \\t]*([^\\n]+)', 'i').exec(text); return m ? payWatchClean_(m[1]) : ''; }
+function payWatchAll_(text, label, valueRe) {
+  var re = new RegExp('(?:^|\\n)[ \\t]*' + label + '[ \\t]*\\n+[ \\t]*(' + valueRe + ')', 'gi'), out = [], m;
+  while ((m = re.exec(text)) !== null && out.length < 10) out.push(payWatchClean_(m[1]));
+  return out;
+}
+function payWatchUnique_(arr) { var seen = {}, out = []; arr.forEach(function (x) { if (x && !seen[x]) { seen[x] = true; out.push(x); } }); return out; }
+// Pure. Copies only a few labelled fields; never a link, never the raw body.
+function payWatchExtract_(subject, body) {
+  var text = String(body || '').replace(/\r/g, ''), hay = String(subject || '') + '\n' + text;
+  var init = /Initiated:\s*(\$[\d,]+\.\d{2})/i.exec(text);
+  var amounts = payWatchAll_(text, 'Amount', '\\$[\\d,]+\\.\\d{2}'), props = payWatchAll_(text, 'Property Name\\/Address', '[^\\n]+'), descs = payWatchAll_(text, 'Description', '[^\\n]+');
+  var lines = [];
+  for (var i = 0; i < Math.max(amounts.length, props.length, descs.length); i++) lines.push({ amount: amounts[i] || '', property: props[i] || '', description: descs[i] || '' });
+  var refs = [], m, re1 = /\b\d{5}-\d\b/g, re2 = /\b(?:WO|work order)\s*#?\s*(\d{4,6}(?:-\d{1,2})?)/gi, re3 = /\b(?:invoice|inv)\.?\s*(?:no\.?|number)?\s*#?\s*(\d{3,6})\b/gi;
+  while ((m = re1.exec(hay)) !== null) refs.push('WO ' + m[0]);
+  while ((m = re2.exec(hay)) !== null) refs.push('WO ' + m[1]);
+  while ((m = re3.exec(hay)) !== null) refs.push('invoice ' + m[1]);
+  return { total: init ? init[1] : (payWatchField_(text, 'Total') || (amounts[0] || '')), confirmation: payWatchField_(text, 'Confirmation Number'), date: payWatchField_(text, 'Date'), lines: lines, refs: payWatchUnique_(refs).slice(0, 10) };
+}
+function payWatchItemText_(it, n) {
+  var head = n + ') ' + (it.kind === 'vendor_payment' ? 'AppFolio VENDOR PAYMENT' : 'Payment-looking email') + ' - ' + it.dateText + ' - from ' + payWatchClean_(it.from);
+  var out = [head, '   Subject: ' + payWatchClean_(it.subject)];
+  if (it.unreadable) out.push('   (Could not read the body: ' + payWatchClean_(it.unreadable) + ' - open it yourself.)');
+  else {
+    var x = it.fields;
+    if (x.total) out.push('   Amount: ' + x.total + (x.confirmation ? '   Confirmation: ' + x.confirmation : '') + (x.date ? '   Date in email: ' + x.date : ''));
+    x.lines.forEach(function (l, i) { if (l.amount || l.property || l.description) out.push('   Payment ' + (i + 1) + ': ' + [l.amount, l.property, l.description].filter(Boolean).join(' | ')); });
+    if (x.refs.length) out.push('   Mentions: ' + x.refs.join(', '));
+  }
+  if (it.link) out.push('   Open it: ' + it.link);
+  return out.join('\n');
+}
+// Pure. Builds the one email. mode: 'first' | 'new' | 'ask'.
+function payWatchDigest_(mode, items, ctx) {
+  var parts = [];
+  if (mode === 'ask') {
+    return { subject: 'Payment watcher: nothing seen in ' + ctx.days + ' days - what do you want to do?', body: 'The Premier / AppFolio payment watcher has checked Gmail every weekday since ' + ctx.startedText + ' (' + ctx.days + ' days) and has not seen a single payment-looking email' + (ctx.noise ? ' (it skipped ' + ctx.noise + ' known non-payment AppFolio email(s))' : '') + '.\n\nIt is still running and still reads/reports only. Options:\n  1. Keep waiting - do nothing. It will ask again in 30 days if it still sees nothing.\n  2. Tell Claude where Premier actually pays from (the sender address, or what the bank/QuickBooks shows) so the search can be changed.\n  3. Switch it off: set enabled: false on the premier_payment_watch row in the JOBS table.\n\nCheck on your side too: in AppFolio (vendor portal > Payments) see whether any of the nine inspection invoices has been paid.' };
+  }
+  if (mode === 'first') parts.push('The Premier / AppFolio payment watcher is now ON. It checks your Gmail every weekday at about 7:45 AM Eastern and emails you only when something new shows up. It reads and reports only: it does NOT mark anything paid. If 30 days pass with nothing, it asks you what to do. Gmail access works (this email is the proof).');
+  if (items.length) {
+    parts.push((mode === 'first' ? 'Already in your inbox from the last 7 days (' : 'New since the last check (') + items.length + '):\n\n' + items.map(function (it, i) { return payWatchItemText_(it, i + 1); }).join('\n\n'));
+    parts.push('Nothing was marked paid. Once one of these is a payment for an inspection, tell Claude "build the paid-matcher" and it will match payments to invoices and mark them paid for you to confirm.');
+  } else if (mode === 'first') parts.push('No payment-looking emails in the last 7 days.');
+  if (ctx.noise) parts.push('(Skipped ' + ctx.noise + ' known non-payment email(s), e.g. AppFolio "Online Payment Confirmation" or portal notices.)');
+  if (ctx.warnings && ctx.warnings.length) parts.push('NOTE: ' + ctx.warnings.join(' '));
+  return { subject: mode === 'first' ? 'Payment watcher is ON' + (items.length ? ' - ' + items.length + ' payment-looking email(s) found' : '') : 'Payment watcher: ' + items.length + ' new payment-looking email' + (items.length === 1 ? '' : 's'), body: parts.join('\n\n') };
+}
+function payWatchLoad_() {
+  var raw = props_().getProperty(PAY_WATCH_KEY);
+  if (!raw) return {};
+  try { var j = JSON.parse(raw); if (j && typeof j === 'object' && !Array.isArray(j)) return j; throw new Error('not an object'); }
+  catch (e) { alertThrottled_('paywatch_state', JOB_ALERT_MS, 'Payment watcher lost its memory', 'The payment watcher\'s saved history could not be read (' + e + '). It was reset, so it will tell you "the payment watcher is ON" again and may list emails it already reported. Nothing else is affected.'); props_().deleteProperty(PAY_WATCH_KEY); return {}; }
+}
+function payWatchHint_(e) {
+  var msg = String(e && e.message || e);
+  return /authori|permission|scope|access.*denied|insufficient/i.test(msg)
+    ? 'Gmail permission is not granted to this script yet. Paste the new appsscript.json (it adds read-only Gmail access), run setup once and click Allow. Google said: ' + msg.slice(0, 160)
+    : 'the Gmail search failed: ' + msg.slice(0, 200);
+}
+// Reads Gmail. Returns { items:[…new, newest first], noise:[ids], all:[ids], warnings:[], errors:[] }. Never writes anything.
+function payWatchScan_(sinceMs, seenIds) {
+  var res = { items: [], noiseIds: [], allIds: [], warnings: [], errors: [] }, found = {}, seen = {};
+  (seenIds || []).forEach(function (id) { seen[id] = true; });
+  payWatchQueries_(sinceMs).forEach(function (q) {
+    try {
+      var threads = GmailApp.search(q, 0, PAY_WATCH_MAX_THREADS);
+      if (threads.length >= PAY_WATCH_MAX_THREADS) res.warnings.push('One Gmail search returned ' + PAY_WATCH_MAX_THREADS + ' conversations (the most it reads), so there may be more; check Gmail yourself.');
+      threads.forEach(function (t) { t.getMessages().forEach(function (m) { var id = m.getId(); if (found[id] || seen[id]) return; if (m.getDate().getTime() < sinceMs) return; found[id] = { m: m, t: t }; }); });
+    } catch (e) { res.errors.push(payWatchHint_(e)); }
+  });
+  if (res.errors.length) return res;
+  Object.keys(found).forEach(function (id) {
+    var m = found[id].m, it = { id: id, from: '', subject: '', dateText: '?', ms: 0, kind: 'candidate', link: '' };
+    try {
+      it.from = String(m.getFrom()); it.subject = String(m.getSubject()); it.ms = m.getDate().getTime(); it.dateText = Utilities.formatDate(m.getDate(), 'America/New_York', 'yyyy-MM-dd HH:mm u').slice(0, 16);
+      var body = String(m.getPlainBody() || ''); it.kind = payWatchClassify_(it.from, it.subject, body).kind;
+      try { it.link = found[id].t.getPermalink(); } catch (le) { it.link = ''; res.warnings.push('Could not make an "Open it" link for "' + payWatchClean_(it.subject) + '" (' + payWatchClean_(le) + ').'); }
+      if (it.kind !== 'noise') it.fields = payWatchExtract_(it.subject, body);
+    } catch (e) { it.unreadable = String(e && e.message || e); it.fields = null; if (it.kind === 'noise') it.kind = 'candidate'; res.warnings.push('Could not read one email ("' + payWatchClean_(it.subject || id) + '"): ' + payWatchClean_(it.unreadable) + '. It is listed so you can open it yourself.'); }
+    res.allIds.push(id);
+    if (it.kind === 'noise') res.noiseIds.push(id); else res.items.push(it);
+  });
+  res.items.sort(function (a, b) { return b.ms - a.ms; });
+  return res;
+}
+function runPaymentWatch_(job) {
+  var now = Date.now(), st = payWatchLoad_(), first = !st.started_at, startedAt = st.started_at || now;
+  var since = first ? now - PAY_WATCH_FIRST_LOOKBACK_MS : (st.last_checked || startedAt) - PAY_WATCH_OVERLAP_MS;
+  var scan;
+  try { scan = payWatchScan_(since, st.seen_ids); } catch (e) { return { ok: false, errors: ['Payment watcher: ' + payWatchHint_(e)] }; }
+  if (scan.errors.length) return { ok: false, errors: scan.errors.map(function (m) { return 'Payment watcher: ' + m; }) };
+  var totalSeen = (st.seen_total || 0) + scan.items.length, noiseTotal = (st.noise_total || 0) + scan.noiseIds.length;
+  var days = Math.floor((now - startedAt) / 86400000), lastAsk = st.last_ask || startedAt;
+  var ask = !first && totalSeen === 0 && now - lastAsk >= PAY_WATCH_ASK_AFTER_MS;
+  var mode = first ? 'first' : scan.items.length ? 'new' : ask ? 'ask' : null;
+  var ctx = { noise: scan.noiseIds.length, warnings: scan.warnings, days: days, startedText: Utilities.formatDate(new Date(startedAt), 'America/New_York', 'yyyy-MM-dd HH:mm u').slice(0, 10) };
+  if (mode === 'ask') ctx.noise = noiseTotal;
+  if (mode) {
+    var d = payWatchDigest_(mode, scan.items, ctx);
+    try { MailApp.sendEmail(NOTIFY_EMAIL, '[Hub scheduler] ' + d.subject, d.body); }
+    catch (e) { return { ok: false, errors: ['Payment watcher: found ' + scan.items.length + ' payment-looking email(s) but could not email you (' + String(e && e.message || e).slice(0, 120) + '). Nothing was marked as reported, so the next try sends it again.'] }; }
+  }
+  var ids = (st.seen_ids || []).concat(scan.allIds).slice(-PAY_WATCH_SEEN_KEEP);
+  var next = { started_at: startedAt, last_checked: now, seen_ids: ids, seen_total: totalSeen, noise_total: noiseTotal, last_candidate_at: scan.items.length ? now : (st.last_candidate_at || null), last_ask: mode === 'ask' ? now : (st.last_ask || null) };
+  try { props_().setProperty(PAY_WATCH_KEY, JSON.stringify(next)); }
+  catch (e) { return { ok: false, errors: ['Payment watcher: could not save what it reported (' + String(e && e.message || e).slice(0, 120) + '), so it may report the same emails again.'] }; }
+  return { ok: true, errors: [], warnings: scan.warnings, note: (mode === 'first' ? 'started; ' : '') + (scan.items.length ? 'emailed ' + scan.items.length + ' new payment-looking email(s)' : 'no new payment emails') + (scan.noiseIds.length ? '; skipped ' + scan.noiseIds.length + ' known non-payment' : '') + (mode === 'ask' ? '; asked Brett (nothing in ' + days + ' days)' : '') };
+}
+// One line for statusReport.
+function payWatchStatusLine_() {
+  var st = payWatchLoad_();
+  if (!st.started_at) return 'Payment watcher: has not run yet.';
+  var days = Math.floor((Date.now() - st.started_at) / 86400000);
+  return 'Payment watcher: running ' + days + ' day(s); payment-looking emails seen so far: ' + (st.seen_total || 0) + '; known non-payment skipped: ' + (st.noise_total || 0) + (st.seen_total ? '' : '; it will ask you after 30 days of nothing (next ask about ' + Utilities.formatDate(new Date((st.last_ask || st.started_at) + PAY_WATCH_ASK_AFTER_MS), 'America/New_York', 'yyyy-MM-dd HH:mm u').slice(0, 10) + ')') + '.';
+}
+// Read-only proof that Gmail access works and the search finds real payment emails. Used by setup()'s preview and by paymentWatchPreview().
+function payWatchCheck_() {
+  try {
+    var scan = payWatchScan_(Date.now() - 365 * 24 * 3600000, []);
+    if (scan.errors.length) return { ok: false, line: scan.errors.join(' | ') };
+    var vp = scan.items.filter(function (i) { return i.kind === 'vendor_payment'; }).length, newest = scan.items[0];
+    return { ok: true, scan: scan, line: 'Gmail read access works. Looking back 365 days it would have flagged ' + scan.items.length + ' payment-looking email(s) (' + vp + ' AppFolio vendor payment(s)) and skipped ' + scan.noiseIds.length + ' known non-payment one(s)' + (newest ? '; the newest is "' + payWatchClean_(newest.subject) + '" on ' + newest.dateText : '') + '. Nothing was sent or changed.' };
+  } catch (e) { return { ok: false, line: payWatchHint_(e) }; }
+}
+// From the dropdown: shows what the watcher finds in the last year, item by item. Sends nothing, changes nothing.
+function paymentWatchPreview() {
+  var c = payWatchCheck_();
+  Logger.log(c.line);
+  if (c.ok) c.scan.items.forEach(function (it, i) { Logger.log(payWatchItemText_(it, i + 1)); });
+  return c;
+}
+
 // GitHub: press "Run workflow". The workflow keeps its own logic; only its timer moved here.
 function ghHeaders_(job) { return { Authorization: 'Bearer ' + props_().getProperty(ghTokenProp_(job)), Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }; }
 function runGithub_(job) {
@@ -750,6 +947,7 @@ function checkScriptJob_(job) {
       var o = http_('get', BRETTOS_URL + '/integration-log', { 'X-Secret': p.getProperty('BRETTOS_SECRET') });
       return o.ok ? { ok: true, line: 'BrettOS accepted the secret.' } : { ok: false, line: 'BrettOS ' + o.problem };
     }
+    if (job.run === 'gmail_watch') return payWatchCheck_();
   } catch (err) { return { ok: false, line: 'check failed: ' + err }; }
   return { ok: false, line: 'unknown job type' };
 }
@@ -935,6 +1133,7 @@ function statusReport() {
     Logger.log((od ? '!! OVERDUE ' : 'ok         ') + job.name + ' — ' + describe_(job) + ' — last success: ' + (js.last_ok || 'never') + (js.last_status === 'dispatched' ? ' — waiting for GitHub to finish' : '') + (js.last_error ? ' — last error: ' + js.last_error : '') + (js.last_note ? ' — ' + js.last_note : '') + (od ? ' — ' + od : ''));
   });
   Logger.log(over.length ? 'OTHER JOBS OVERDUE: ' + over.join(', ') : 'None of the other jobs is overdue.');
+  if (JOBS.some(function (j) { return j.run === 'gmail_watch' && j.enabled; })) Logger.log(payWatchStatusLine_());
 }
 // Turns the scheduler OFF. Nothing will run on a schedule afterwards (there is no cron fallback by design).
 // To turn it back on, run approveAndStart.

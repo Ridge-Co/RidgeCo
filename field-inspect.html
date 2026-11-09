@@ -811,16 +811,28 @@ function viewHome(){
   h += '<button class="btn primary block" style="min-height:56px;font-size:17px" onclick="startNew()">＋ New inspection</button>';
   h += '<div class="btns"><button class="btn" onclick="openBrands()">🎨 Brands (Ridge Co, Premier…)</button></div>';
   var items = {};
-  S.list.forEach(function(i){ items[i.id] = { id:i.id, address:i.address, date:i.date, status:i.status, issues:i.issue_count, server:true, rev:i.rev, brand:i.brand_id, updated:i.updated_at }; });
+  S.list.forEach(function(i){ items[i.id] = { id:i.id, address:i.address, date:i.date, status:i.status, issues:i.issue_count, server:true, rev:i.rev, brand:i.brand_id, updated:i.updated_at, billed:!!i.billed }; });
   Object.keys(localOnly).forEach(function(id){ var r = localOnly[id]; var it = items[id] || { id:id, server:false }; it.address = r.doc.property.address; it.date = r.meta.inspection_date; it.local = true; it.dirty = r.dirty; it.issues = r.doc.areas.reduce(function(n,a){return n+(a.issues||[]).length;},0); it.status = it.status || 'draft'; it.updated = r.doc.updated || it.updated; items[id]=it; });
   var arr = Object.keys(items).map(function(k){return items[k];}).sort(function(a,b){ return String(b.updated||'').localeCompare(String(a.updated||'')); });
   h += '<h2>Inspections</h2>';
   if (!arr.length) h += '<div class="card muted">None yet. Tap “New inspection” to start one.</div>';
-  arr.forEach(function(it){
+  // Nov 5 2026: billing is the last step. Published + billed inspections are tucked into a collapsed section at the bottom (still listed, tap to open one).
+  // Anything with unsaved changes or not on the server stays up top so it can never be hidden by accident.
+  var isDone = function(it){ return it.status==='published' && it.billed && it.server && !it.dirty; };
+  var card = function(it){
     var pill = it.status==='published' ? '<span class="pill ok">Published</span>' : '<span class="pill">Draft</span>';
+    if (it.billed) pill += ' <span class="pill ok">Billed</span>';
     var sync = it.dirty ? ' <span class="pill warn">unsaved changes</span>' : (!it.server ? ' <span class="pill bad">only on this phone</span>' : '');
-    h += '<div class="card" style="cursor:pointer" onclick="openInspection(\''+esc(it.id)+'\')"><div class="row"><b>'+esc(it.address||'(no address)')+'</b>'+pill+'</div><div class="muted">'+esc(it.date||'')+' · '+(it.issues||0)+' issue'+((it.issues||0)===1?'':'s')+sync+'</div></div>';
-  });
+    return '<div class="card" style="cursor:pointer" onclick="openInspection(\''+esc(it.id)+'\')"><div class="row"><b>'+esc(it.address||'(no address)')+'</b><span>'+pill+'</span></div><div class="muted">'+esc(it.date||'')+' · '+(it.issues||0)+' issue'+((it.issues||0)===1?'':'s')+sync+'</div></div>';
+  };
+  var active = arr.filter(function(it){ return !isDone(it); }), done = arr.filter(isDone);
+  active.forEach(function(it){ h += card(it); });
+  if (!active.length && done.length) h += '<div class="card muted">Nothing open — everything is submitted and billed.</div>';
+  if (done.length){
+    h += '<details id="fi-billed"'+(S.billedOpen?' open':'')+' ontoggle="S.billedOpen=this.open" style="margin-top:14px"><summary style="cursor:pointer;font-weight:600">Submitted &amp; billed ('+done.length+')</summary>';
+    done.forEach(function(it){ h += card(it); });
+    h += '</details>';
+  }
   return h;
 }
 
@@ -1244,6 +1256,8 @@ function openInspection(id){
 function typeLabel(t){ for (var i=0;i<INSP_TYPES.length;i++) if (INSP_TYPES[i][0]===t) return INSP_TYPES[i][1]; return t||''; }
 function condPill(c){ var cls = c==='good'||c==='nothing_to_do' ? 'ok' : c==='poor' ? 'bad' : c==='fair' ? 'warn' : ''; return '<span class="pill '+cls+'">'+esc(COND_LABEL[c]||'Not inspected')+'</span>'; }
 function leaveInsp(){
+  try { stopDictation(); } catch(e){}   // Nov 5 2026: also reachable straight from the area / review / voice screens
+  S.selMode=false; S.sel={};
   var go2 = function(){ S.rec=null; S.areaId=null; S.view='home'; refreshList().then(render); render(); };
   if (S.rec && S.rec.dirty){ syncNow(true).then(function(){ if (S.rec && S.rec.dirty){ toast('Not saved to the server yet — it is kept on this phone'); } go2(); }); } else go2();
 }
@@ -1436,7 +1450,7 @@ function rollup(doc){
 function openReview(){ stopDictation(); S.view='review'; S.emailPreview=null; render(); }
 function viewReview(){
   var rec = S.rec, doc = rec.doc, chk = localChecks(doc), ro = rollup(doc), b = brandById(rec.meta.brand_id) || defaultBrand();
-  var h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button>'+(rec.status==='published'?'<span class="pill ok">Published</span>':'<span class="pill">Draft</span>')+'</div><h1>Review &amp; report</h1><div class="muted">'+esc(doc.property.address)+'</div>';
+  var h = '<div class="row"><span><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button> <button class="btn sm ghost" onclick="leaveInsp()">‹ All inspections</button></span>'+(rec.status==='published'?'<span class="pill ok">Published</span>':'<span class="pill">Draft</span>')+'</div><h1>Review &amp; report</h1><div class="muted">'+esc(doc.property.address)+'</div>';
   h += '<div class="card"><b>Overall condition</b><div class="seg">'+[['good','Good','good'],['fair','Fair','fair'],['poor','Poor','poor']].map(function(c){ return '<button class="'+(doc.overall.condition===c[0]?'sel '+c[2]:'')+'" onclick="setOverall(\''+c[0]+'\')">'+c[1]+'</button>'; }).join('')+'</div><label class="fld">Overall notes (in the report)</label><textarea id="ov-notes" style="min-height:80px" oninput="mut(function(d){d.overall.notes=this.value}.bind(this))">'+esc(doc.overall.notes||'')+'</textarea></div>';
   h += '<div class="card"><b>Report details</b><label class="fld">Brand</label><div class="row"><span>'+(b?'<span class="sw" style="background:'+esc(b.primary_color)+'"></span> '+esc(b.name):'—')+'</span><button class="btn sm" onclick="brandSheet()">Switch brand</button></div><div class="muted">Switching re-skins the whole report instantly — nothing is rebuilt.</div>'
     +'<label class="fld">On behalf of (owner)</label><div class="row"><span>'+(doc.owner&&doc.owner.name?esc(doc.owner.name):'<span style="color:var(--warn)">not chosen — required to publish</span>')+'</span><button class="btn sm" onclick="propOwnerSheet()">'+(doc.owner&&doc.owner.name?'Change':'Choose')+'</button></div>'
@@ -2171,7 +2185,7 @@ function backToInsp(){ stopDictation(); S.selMode=false; S.sel={}; S.view='insp'
 // ---- area ----
 function viewArea(){
   var a = curArea(); var doc = S.rec.doc, idx = doc.areas.filter(function(x){return !x.excluded;}).map(function(x){return x.id;}).indexOf(a.id);
-  var h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button><button class="btn sm" onclick="areaMenu()">⋯ Edit area</button></div>';
+  var h = '<div class="row"><span><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button> <button class="btn sm ghost" onclick="leaveInsp()">‹ All inspections</button></span><button class="btn sm" onclick="areaMenu()">⋯ Edit area</button></div>';
   h += '<h1>'+esc(a.name)+'</h1>';
   h += '<div class="seg" id="cond-seg">'+CONDS.map(function(c){ return '<button class="'+(a.condition===c[0]?'sel '+c[2]:'')+'" onclick="setCond(\''+c[0]+'\')">'+c[1]+'</button>'; }).join('')+'</div>';
   h += accessHtml(a);
@@ -2651,7 +2665,7 @@ function markUnrouted(id){ mut(function(doc){ (doc.voice_notes||[]).forEach(func
 function viewVoice(){
   var doc = S.rec.doc, notes = voiceItems(), pending = Object.keys(voiceState).filter(function(k){ return voiceState[k].rec===S.rec; });
   var unsorted = notes.filter(function(n){ return !n.routed && String(n.transcript||'').trim(); });
-  var h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button></div><h1>Voice notes</h1>';
+  var h = '<div class="row"><span><button class="btn sm ghost" onclick="backToInsp()">‹ Areas</button> <button class="btn sm ghost" onclick="leaveInsp()">‹ All inspections</button></span></div><h1>Voice notes</h1>';
   h += '<div class="muted">Upload the recordings of your inspection notes. Each one is turned into text, then sorted into the right areas — even when you jumped between rooms and floors. You review everything before it is added.</div>';
   h += '<div class="btns"><button class="btn primary" onclick="pickAudio()">🎙 Add recordings</button><button class="btn" onclick="typedNoteSheet()">✍ Type or paste notes</button></div>';
   h += routeResumeHtml();

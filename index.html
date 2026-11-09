@@ -334,14 +334,22 @@ window.addEventListener('pageshow', function(e){
   .table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
   #key-search-table{overflow-x:auto;-webkit-overflow-scrolling:touch}
 }
-/* Hub header (index.html only): its 17 nav buttons wrap into a sticky block that is already ~320px tall at 360px wide; 44px rows would make it ~485px, so on a phone the nav becomes ONE swipeable row of 44px buttons instead. */
-@media (hover:none) and (pointer:coarse) and (max-width:600px){
-  header{flex-wrap:wrap;padding:8px 12px;row-gap:4px}
-  header nav{order:3;flex:1 1 100%;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;gap:2px}
-  .nav-btn{flex:none;white-space:nowrap}
+/* Hub header on a phone (Nov 6 2026, Brett: "long scroll to get to tools"): the nav is a hamburger. The sticky header shows the current page + a menu
+   button; tapping it opens a 2-column grid of big buttons right under the header (header stays pinned, the page scrolls underneath). */
+.nav-toggle{display:none}
+@media (max-width:768px){
+  header{flex-wrap:wrap;padding:8px 12px;row-gap:6px}
+  .logo{flex:0 0 auto}
+  .nav-toggle{display:flex;align-items:center;gap:8px;order:2;flex:1 1 auto;justify-content:flex-end;background:var(--surface2);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);padding:0 14px;min-height:44px;font-family:var(--font);font-size:13px;letter-spacing:.08em;cursor:pointer}
+  .nav-toggle .nav-burger{font-size:20px;line-height:1}
+  header > div:last-child{order:3}
+  header nav{display:none;order:4;flex:1 1 100%;width:100%;max-height:calc(100vh - 120px);overflow-y:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px}
+  header.nav-open nav{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  header.nav-open .nav-btn{min-height:48px;white-space:normal;text-align:center;background:var(--surface2);border:1px solid var(--border);font-size:12px;display:flex;align-items:center;justify-content:center}
+  header.nav-open .nav-btn.active{border-color:var(--accent)}
 }
 </style>
-</head>
+<link rel="manifest" href="manifest-admin.webmanifest"><script src="push-client.js" defer></script></head>
 <body>
 
 <div id="login-screen">
@@ -357,24 +365,18 @@ window.addEventListener('pageshow', function(e){
 <div id="app">
   <header>
     <div class="logo"><svg width="22" height="22" viewBox="0 0 22 22" fill="none" style="display:inline;vertical-align:middle;margin-right:7px;position:relative;top:-1px"><rect x="1" y="1" width="20" height="20" rx="3.5" fill="#f3f5f8" stroke="#1d4ed8" stroke-width="1.5"/><polygon points="11,4 19,17 3,17" fill="none" stroke="#1d4ed8" stroke-width="1.4" stroke-linejoin="round"/><polygon points="11,9 15.5,17 6.5,17" fill="#1d4ed8" fill-opacity="0.4"/></svg>RIDGE CO <span>/ HUB</span></div>
-    <nav>
+    <button type="button" class="nav-toggle" id="nav-toggle" aria-expanded="false" aria-controls="main-nav" onclick="toggleNav()"><span class="nav-burger" aria-hidden="true">&#9776;</span> <span id="nav-current">DASHBOARD</span></button>
+    <nav id="main-nav">
       <button class="nav-btn active" onclick="showPage('dashboard',this)">DASHBOARD</button>
       <button class="nav-btn" onclick="showPage('workorders',this)">WORK ORDERS</button>
       <button class="nav-btn" onclick="showPage('properties',this)">PROPERTIES</button>
       <button class="nav-btn" onclick="showPage('vendors',this)">VENDORS</button>
       <button class="nav-btn" onclick="showPage('tenants',this)">TENANTS</button>
-      <button class="nav-btn" onclick="showPage('invoices',this)">INVOICES</button>
       <button class="nav-btn" onclick="showPage('owners',this)">OWNERS</button>
       <button class="nav-btn" onclick="showPage('shopping',this)">🛒 SHOPPING</button>
       <button class="nav-btn" onclick="showPage('invoice-review',this)">💰 REVIEW BILLS</button>
-      <button class="nav-btn" onclick="showPage('qb-send',this)">💵 SEND TO QB</button>
-      <button class="nav-btn" onclick="showPage('qb-map',this)">🔗 QB MAPPING</button>
       <button class="nav-btn" onclick="showPage('payables',this)">💸 WHO TO PAY</button>
-      <button class="nav-btn" onclick="showPage('vendor-performance',this)">📊 VENDOR PERFORMANCE</button>
-      <button class="nav-btn" onclick="showPage('vendor-onboarding',this)">📋 VENDOR ONBOARDING</button>
       <button class="nav-btn" onclick="showPage('devlog',this)">TOOLS &amp; LOG <span id="devlog-nav-badge" style="display:none;background:var(--danger);color:#fff;border-radius:10px;padding:0 6px;font-size:10px;margin-left:4px">0</span></button>
-      <button class="nav-btn" onclick="showPage('portals',this)">PORTALS</button>
-      <button class="nav-btn" onclick="showPage('messaging',this)">📢 MESSAGING</button>
     </nav>
     <div><span class="status-dot"></span><span style="color:var(--muted);font-size:11px">LIVE</span></div>
   </header>
@@ -899,6 +901,10 @@ window.addEventListener('pageshow', function(e){
     <details class="dl-group" data-dl-key="work" data-tools="1" open>
       <summary><span class="dl-h">Daily work</span><span class="dl-sub">Pages you open to get things done</span><span class="dl-count"></span></summary>
       <div class="dl-body"><div class="dl-grid">
+        <div class="dl-tool" data-tool="portals" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="showPage('portals',null)">🚪 Portals</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Quick links to every Ridge Co page and portal.</p></div>
+        <div class="dl-tool" data-tool="messaging" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="showPage('messaging',null)">📢 Messaging</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Edit the texts and emails the Hub sends, and send a notice to a property's tenants.</p></div>
+        <div class="dl-tool" data-tool="vendor-performance" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="showPage('vendor-performance',null)">📊 Vendor Performance</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Ranks vendors by reliability, speed, volume and cost.</p></div>
+        <div class="dl-tool" data-tool="vendor-onboarding" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="showPage('vendor-onboarding',null)">📋 Vendor Onboarding</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Active vendors missing a phone, billing email, address or tax ID.</p></div>
         <div class="dl-tool" data-tool="scope-creator" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('scope-creator.html','_blank')">📝 Scope Creator</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Turn your notes into a scope, then a work order and a proposal.</p></div>
         <div class="dl-tool" data-tool="inspection-scheduler" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('inspect.html','_blank')">🔍 Inspection Scheduler</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Set your availability and manage inspection customers and properties.</p></div>
         <div class="dl-tool" data-tool="shift-appointments" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="window.open('shift.html','_blank')">⏱ Shift Appointments</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Running late, or re-laying a day? Move your inspections and work-order windows, and tell the right people.</p></div>
@@ -1228,6 +1234,7 @@ window.addEventListener('pageshow', function(e){
         <div class="cl-quick"><input type="text" id="wo-checklist-quick" placeholder="Type an item, press Enter — or paste a whole list here" autocomplete="off" onkeydown="clQuickKey(event,'wo-checklist')" onpaste="clQuickPaste(event,'wo-checklist')"><button type="button" class="btn" onclick="clQuickAdd('wo-checklist')">Add</button></div>
         <textarea id="wo-checklist" class="cl-area" oninput="checklistRefresh('wo-checklist')" placeholder="One per line, e.g.&#10;Replace faucet cartridge&#10;Re-caulk around sink&#10;Run water & check for leaks"></textarea>
         <div class="cl-hint">One item per line. Pasted bullets / numbers / checkboxes are cleaned up; items are added to the end, never replacing what is here.</div></div>
+      <div class="form-group" id="wo-max-price-block"><label>Max price <span style="color:var(--muted);font-weight:normal">(optional — vendor sees it; never on the description or invoice)</span></label><input type="text" inputmode="decimal" id="wo-max-price" placeholder="e.g. 350" autocomplete="off"></div>
       <div class="form-group"><label>Assign Vendor <span style="color:var(--muted);font-weight:normal">(optional)</span></label><select id="wo-vendor-opt" onchange="woVendorOptChanged()" style="width:100%"><option value="">Assign after creation</option></select></div>
       <div class="form-group" id="wo-vendor-notify-group" style="display:none"><label style="cursor:pointer;display:flex;align-items:center;gap:6px;margin-top:22px"><input type="checkbox" id="wo-vendor-notify" checked style="width:auto"> Notify vendor + tenant now</label></div>
       <div class="form-group"><label>Schedule Date <span style="color:var(--muted);font-weight:normal">(optional)</span></label><input type="date" id="wo-sched-date-opt"></div>
@@ -2421,17 +2428,22 @@ function _loadAllFallback() {
     api('GET','/workorders?include_voided=1', null, 20000), api('GET','/invoices', null, 20000),
     api('GET','/owners', null, 20000), api('GET','/keys', null, 20000)
   ]).then(function(results) {
+    var okCount = results.filter(function(r){return r.status==='fulfilled';}).length;
     results.forEach(function(r,i) {
       if (r.status === 'fulfilled') {
         state[_names8[i]] = Array.isArray(r.value) ? r.value : [];
         if (!Array.isArray(r.value)) logError('Load '+_names8[i], 'Not array: '+JSON.stringify(r.value).substring(0,100));
       } else {
         state[_names8[i]] = [];
-        logError('Load '+_names8[i], r.reason?.message || 'Failed');
+        var rmsg = (r.reason && r.reason.message) || 'Failed';
+        // A network-type failure is only logged when the whole load failed (below), once.
+        if (!_isNetworkDrop(rmsg)) logError('Load '+_names8[i], rmsg);
+        else if (okCount > 0) _countNetworkDrop();
       }
     });
-    var okCount = results.filter(function(r){return r.status==='fulfilled';}).length;
     if (okCount === 0) {
+      var firstFail = results[0] && results[0].reason && results[0].reason.message;
+      if (_isNetworkDrop(firstFail)) logError('hub-bootstrap', 'No connection: all data loads failed (' + firstFail + ')');
       var msg = '<div class="loading" style="color:var(--danger)">Couldn\'t load data — check your connection. '
         + '<span style="cursor:pointer;color:var(--info);text-decoration:underline" onclick="loadAll()">Retry</span></div>';
       var d1 = document.getElementById('dashboard-wo-list'); if (d1) d1.innerHTML = msg;
@@ -2472,12 +2484,46 @@ function loadAll() {
     });
     _loadAllFinish(loaded);
   }).catch(function(e) {
-    logError('hub-bootstrap', (e && e.message) || 'Failed — falling back to per-tab loads');
+    // Nov 6 2026 (Brett): a plain phone network drop (weak signal, Chrome waking up, wifi/cell
+    // handoff) is not a Hub problem and was filling the 50-slot Error log. A network-type failure
+    // is NOT logged on its own: the per-tab fallback runs, and only if THAT also loads nothing is
+    // one entry logged (see _loadAllFallback). Real errors (HTTP 500, bad response) still log.
+    var msg = (e && e.message) || 'Failed — falling back to per-tab loads';
+    if (!_isNetworkDrop(msg)) logError('hub-bootstrap', msg);
+    else _countNetworkDrop();
     return _loadAllFallback();
   });
 }
 
+function toggleNav(force) {
+  var h = document.querySelector('header'); if (!h) return;
+  var open = (typeof force === 'boolean') ? force : !h.classList.contains('nav-open');
+  h.classList.toggle('nav-open', open);
+  var t = document.getElementById('nav-toggle'); if (t) t.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+// The label next to the menu button = the nav button that opens this page; pages with no nav button (Portals, Messaging, ... are reached from Tools) show their name.
+function navLabelFor(name) {
+  var b = Array.prototype.find.call(document.querySelectorAll('.nav-btn'), function(x){ return (x.getAttribute('onclick') || '').indexOf("showPage('" + name + "'") !== -1; });
+  if (b) return (b.childNodes[0] && b.childNodes[0].textContent || b.textContent).trim();
+  var names = { 'portals': 'PORTALS', 'messaging': 'MESSAGING', 'vendor-performance': 'VENDOR PERFORMANCE', 'vendor-onboarding': 'VENDOR ONBOARDING', 'qb-map': 'QB MAPPING', 'qb-send': 'SEND TO QB', 'invoices': 'INVOICES' };
+  return names[name] || String(name || '').toUpperCase().replace(/-/g, ' ');
+}
+// True for the browser-side "could not reach the server" messages: Chrome "Failed to fetch",
+// Safari/iOS "Load failed", Firefox "NetworkError...", and api()'s own "Request timed out after Ns".
+function _isNetworkDrop(msg) {
+  return /failed to fetch|load failed|networkerror|network request failed|network connection was lost|timed out after/i.test(String(msg || ''));
+}
+// Dropped-but-recovered loads are counted (not hidden): mh_net_drops = {count, last}.
+function _countNetworkDrop() {
+  try {
+    var d = JSON.parse(localStorage.getItem('mh_net_drops') || '{}');
+    localStorage.setItem('mh_net_drops', JSON.stringify({ count: (d.count || 0) + 1, last: new Date().toISOString() }));
+  } catch (err) { /* counter only; the load itself already continues via the fallback */ }
+}
+
 function showPage(name, btn) {
+  var _nc = document.getElementById('nav-current'); if (_nc) _nc.textContent = navLabelFor(name);
+  toggleNav(false);
   document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});
   document.querySelectorAll('.nav-btn').forEach(function(b){b.classList.remove('active');});
   document.getElementById('page-'+name).classList.add('active');
@@ -3149,7 +3195,18 @@ function openWODetail(woId) {
     '<div style="font-size:10px;color:var(--muted);margin-top:8px">Trade defaults are set in Config → Access_Trade_Defaults. Trades not listed default to YES.</div>' +
     '</div>';
 
-  document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + vaSection);
+  // Max price (Nov 5 2026) — what the vendor may bill; shown to the vendor, never on the description or invoice.
+  var mpVal = String(wo.Max_Price || '');
+  var mpSection = '<div style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:10px">MAX PRICE (vendor sees this · never on invoices)</div>' +
+    '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+    '<input type="text" inputmode="decimal" id="detail-max-price" value="' + esc(mpVal) + '" placeholder="No max set" autocomplete="off" style="max-width:160px">' +
+    '<button class="btn small" onclick="saveWoMaxPrice(\'' + woId + '\')">Save</button>' +
+    (mpVal ? '<button class="btn small secondary" onclick="saveWoMaxPrice(\'' + woId + '\',true)">Clear</button>' : '') +
+    '</div>' +
+    '<div style="font-size:10px;color:var(--muted);margin-top:8px">A vendor invoice over this is blocked until they accept the max or send a new estimate with a reason and you approve it.</div>' +
+    '</div>';
+  document.getElementById('detail-body').insertAdjacentHTML('beforeend', tvSection + vaSection + mpSection);
   // Vendor Task Requests (CAP-036 #12) -- its own section/insert, deliberately separate
   // from the addBtn(...) action-buttons block above so it never collides with that code.
   var vtrSection = wo.Vendor_ID ? (
@@ -4028,6 +4085,7 @@ function openNewWOModal() {
   var priority = document.getElementById('wo-priority'); if(priority) priority.value='normal';
   var type = document.getElementById('wo-type'); if(type) type.value='manual';
   var ownerRef = document.getElementById('wo-owner-ref'); if(ownerRef) ownerRef.value='';
+  var _mpIn = document.getElementById('wo-max-price'); if(_mpIn) _mpIn.value='';
   var clTa = document.getElementById('wo-checklist'); if(clTa) clTa.value='';
   var clQ = document.getElementById('wo-checklist-quick'); if(clQ) clQ.value='';
   // Hide conditional sections
@@ -4119,9 +4177,9 @@ function hubChecklistHtml(wo){
   var CODES={na:'Not applicable',separate:'Separate WO',estimate:'Needs estimate',access:'Couldn’t access',parts:'Needs parts'};
   var done=items.filter(function(i){return i.done;}).length;
   var rows=items.map(function(it){
-    var mark=it.done?'<span style="color:var(--accent2)">✓</span>':(it.code?'<span style="color:var(--warn)">●</span>':'<span style="color:var(--muted)">○</span>');
+    var mark=it.done?'<span style="color:var(--accent2);font-size:18px;font-weight:bold;line-height:1">✓</span>':(it.code?'<span style="color:var(--warn);font-size:18px;line-height:1">●</span>':'<span style="color:var(--muted);font-size:18px;line-height:1">○</span>');
     var reason=(!it.done&&it.code)?' <span style="color:var(--warn);font-size:10px">— '+esc(CODES[it.code]||it.code)+(it.why?': '+esc(it.why):'')+'</span>':'';
-    return '<div style="font-size:12px;padding:3px 0">'+mark+' <span style="'+(it.done?'text-decoration:line-through;color:var(--muted)':'')+'">'+esc(it.t||'')+'</span>'+reason+'</div>';
+    return '<div style="font-size:14px;padding:5px 0">'+mark+' <span style="'+(it.done?'text-decoration:line-through;color:var(--muted)':'')+'">'+esc(it.t||'')+'</span>'+reason+'</div>';
   }).join('');
   // Nov 2 2026 (Brett): admin-only "Mark all resolved" — ticks every item that has no vendor reason code, so the
   // invoice can list the work as done. Items with a reason code stay as the vendor left them. Never shown on the vendor pages.
@@ -4223,6 +4281,7 @@ function submitNewWO() {
     room:(document.getElementById('wo-room')||{value:''}).value.trim(),
     checklist:checklistFromText((document.getElementById('wo-checklist')||{value:''}).value),
     owner_wo_ref:document.getElementById('wo-owner-ref').value.trim(),
+    max_price:((document.getElementById('wo-max-price')||{value:''}).value||'').trim(),
     vendor_needs_access:(document.getElementById('wo-vendor-access')||{value:'auto'}).value,
     tenant_visible: tvVisible, tenant_notify_created: tvCreated, tenant_notify_updates: tvUpdates,
     created_by:'admin'
@@ -6567,6 +6626,17 @@ function toggleTenantField(woId, field, newVal) {
   });
 }
 
+// Max price (Nov 5 2026): vendor-facing ceiling. Saved through the admin-only /wo/max-price route, which reads the value back before it says saved.
+function saveWoMaxPrice(woId, clear) {
+  var el = document.getElementById('detail-max-price');
+  var v = clear ? '' : (el ? String(el.value || '').trim() : '');
+  api('POST','/wo/max-price',{wo_id:woId, max_price:v}).then(function(res){
+    if (!res || res.error || res.saved === false) { toast('Max price not saved: '+((res && res.error) || 'unknown error'),'error'); return; }
+    toast(v ? 'Max price saved: $'+res.max_price+' (vendor can see it)' : 'Max price cleared','success');
+    loadAll().then(function(){ openWODetail(woId); });
+  }).catch(function(e){ toast('Max price not saved: '+e.message,'error'); });
+}
+
 function setVendorAccess(woId, value) {
   // value: 'TRUE' | 'FALSE' | 'auto'
   api('POST','/workorder/update',{id:woId, fields:{Vendor_Needs_Access:value}}).then(function(res){
@@ -8902,7 +8972,7 @@ function unitLinkTemplate(tid, propId, unitId, action) {
 
 // Resets the Add/Edit Template modal to ADD mode (blank form, no tmpl-id).
 function openAddTemplateModal() {
-  ['tmpl-id','tmpl-name','tmpl-desc','tmpl-link-url','tmpl-link-label'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
+  ['tmpl-id','tmpl-name','tmpl-desc','tmpl-link-url','tmpl-link-label','tmpl-max-price'].forEach(function(id){ var e=document.getElementById(id); if(e) e.value=''; });
   var sel = document.getElementById('tmpl-owner');
   if (sel) sel.innerHTML = ownerOptionsHtml('', '<option value="">Global (all owners)</option>');
   var trade = document.getElementById('tmpl-trade'); if (trade) trade.value = '';
@@ -8927,6 +8997,7 @@ function openEditTemplateModal(id) {
   document.getElementById('tmpl-desc').value = t.Description || '';
   document.getElementById('tmpl-link-url').value = t.Link_URL || '';
   document.getElementById('tmpl-link-label').value = t.Link_Label || '';
+  document.getElementById('tmpl-max-price').value = t.Max_Price || '';
   recurFillForm(t);
   var title = document.getElementById('tmpl-modal-title'); if (title) title.textContent = 'EDIT WO TEMPLATE';
   var saveBtn = document.getElementById('tmpl-save-btn'); if (saveBtn) saveBtn.textContent = 'SAVE CHANGES';
@@ -8943,6 +9014,7 @@ function submitAddTemplate() {
     Description: document.getElementById('tmpl-desc').value.trim(),
     Link_URL: document.getElementById('tmpl-link-url').value.trim(),
     Link_Label: document.getElementById('tmpl-link-label').value.trim()||'View',
+    Max_Price: document.getElementById('tmpl-max-price').value.trim(),   // blank clears it
   };
   var rec = recurReadForm();
   if (rec.error) { toast(rec.error,'error'); return; }
@@ -8984,6 +9056,7 @@ function applySheetTemplate(id) {
     document.getElementById('wo-trade').value = t.Trade || document.getElementById('wo-trade').value;
     document.getElementById('wo-priority').value = t.Priority || document.getElementById('wo-priority').value;
     document.getElementById('wo-desc').value = desc;
+    var _tmx = document.getElementById('wo-max-price'); if (_tmx && t.Max_Price) _tmx.value = t.Max_Price;   // template max price carries onto the new WO
   } else if (editModal && editModal.classList.contains('open')) {
     var ta = document.getElementById('ewo-description');
     if (ta) { ta.value = (ta.value?ta.value+'\n\n':'')+desc; ta.style.height='auto'; ta.style.height=Math.max(140,ta.scrollHeight)+'px'; }
@@ -10909,6 +10982,13 @@ function renderHubEstimateView(woId, estimates, holder) {
         'v' + e.Version + ' — $' + parseFloat(e.Subtotal).toFixed(2) + (e.Change_Reason ? ' — ' + esc(e.Change_Reason) + (e.Change_Reason_EN ? ' (English: ' + esc(e.Change_Reason_EN) + ')' : '') : '') + ' — ' + esc(e.Created_By || '') + '</div>';
     }).join('') : '';
 
+    // Max price (Nov 5 2026): flag an estimate that is over the WO's max, with the vendor's reason (English copy beneath when translated).
+    var _mpWO = (state.workorders || []).find(function(w){ return w.ID === woId; }) || {};
+    var _mpNum = parseFloat(String(_mpWO.Max_Price || '').replace(/[$,\s]/g, '')) || 0;
+    if (_mpNum && parseFloat(current.Subtotal || 0) > _mpNum + 0.004) {
+      reasonBlock += '<div style="margin-top:8px;background:#fff4e5;border:1px solid #d97706;border-radius:6px;padding:8px 10px;font-size:11px;color:#7c3a00"><b>⚠ OVER MAX PRICE</b> ($' + _mpNum.toFixed(2) + ' max) — vendor’s reason: ' + esc(current.Over_Max_Reason || '(none given)') +
+        (current.Over_Max_Reason_EN && current.Over_Max_Reason_EN !== current.Over_Max_Reason ? '<div class="est-en" style="color:var(--accent2)"><b>English:</b> ' + esc(current.Over_Max_Reason_EN) + '</div>' : '') + '</div>';
+    }
     var approvalBlock = (isApproved || isConverted)
       ? '<div style="margin-top:10px;background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:8px 10px">' +
         '<span style="color:var(--accent2);font-weight:bold;font-size:11px">' + (isConverted ? '✓ APPROVED — IN A PROPOSAL' : '✓ APPROVED') + '</span>' +
@@ -15478,6 +15558,7 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
       <div class="form-group full"><label>Description Template</label><textarea id="tmpl-desc" placeholder="Text to insert into WO description. The link will be appended below this." style="min-height:80px;resize:vertical"></textarea></div>
       <div class="form-group"><label>Link URL <span style="font-weight:normal;color:var(--muted)">(Google Sheet, doc, checklist)</span></label><input type="url" id="tmpl-link-url" placeholder="https://docs.google.com/…"></div>
       <div class="form-group"><label>Link Label</label><input type="text" id="tmpl-link-label" placeholder="Inspection Checklist"></div>
+      <div class="form-group"><label>Max price <span style="font-weight:normal;color:var(--muted)">(optional — vendor sees it; never on the description or invoice)</span></label><input type="text" inputmode="decimal" id="tmpl-max-price" placeholder="e.g. 350" autocomplete="off"></div>
       <div class="form-group full" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <select id="tmpl-snippet" style="flex:1;min-width:150px"><option value="">📎 Insert saved text snippet…</option></select>
         <button class="btn small secondary" type="button" onclick="insertTemplateSnippet()">Insert</button>
@@ -17861,7 +17942,7 @@ function loadPortalAttachments(woId, opts) {
           // Real thumbnail, tap opens the in-app lightbox at this photo -- with a small
           // delete "x" overlay in the corner (admin-only capability this page already had).
           var thumb = document.createElement('span');
-          thumb.style.cssText = 'position:relative;display:inline-block;width:56px;height:56px;border-radius:5px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid var(--border);margin:2px 4px 2px 0;vertical-align:top';
+          thumb.style.cssText = 'position:relative;display:inline-block;width:64px;height:64px;border-radius:5px;overflow:hidden;cursor:pointer;background:var(--surface);border:1px solid var(--border);margin:2px 4px 2px 0;vertical-align:top';
           thumb.onclick = (function(woIdC, idxC){ return function(){ rcOpenLightbox(_rcWoItems[woIdC], idxC); }; })(woId, itemIdx);
           // Internal (receipt/bill/invoice) files are never Drive-shared (rule 13), so the
           // public thumbnail endpoint always fails for them -- go straight to the authenticated
@@ -17874,7 +17955,13 @@ function loadPortalAttachments(woId, opts) {
           var del = document.createElement('button');
           del.textContent = '\u00d7';
           del.title = 'Remove from work order';
-          del.style.cssText = 'position:absolute;right:2px;top:2px;background:rgba(0,0,0,.6);border:none;border-radius:3px;color:#fff;cursor:pointer;font-size:12px;line-height:1;padding:1px 4px';
+          // Nov 5 2026: the phone/Chromebook touch-target rule near the top of this file gives EVERY button a
+          // 44x44 minimum (!important), which blew this corner "x" up to cover the whole 56px thumbnail, so
+          // any tap meant to open the photo landed on delete. The inline !important here beats that sheet rule
+          // (inline !important wins over stylesheet !important); the 22px corner stays tappable but leaves the
+          // rest of the photo free to open the viewer. The two-step "confirm" tap in deleteAttachment() is unchanged.
+          del.className = 'wo-photo-del';
+          del.style.cssText = 'position:absolute;right:2px;top:2px;background:rgba(0,0,0,.6);border:none;border-radius:11px;color:#fff;cursor:pointer;font-size:13px;line-height:1;padding:0 6px;height:22px !important;min-height:22px !important;min-width:22px !important;white-space:nowrap';
           del.onclick = function(ev) { ev.stopPropagation(); deleteAttachment(f.ID, woId, thumb); };
           thumb.appendChild(del);
           el.appendChild(thumb);
