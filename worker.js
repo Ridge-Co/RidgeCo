@@ -1260,6 +1260,7 @@ const _hubWorkerCore = {
         if (path === '/str/admin/pending/send-now') return await strAdminPendingSendNow(env, body);
         if (path === '/str/admin/offer-now')       return await strAdminOfferNow(env, body);
         if (path === '/str/admin/alert/ack')       return await strAdminAlertAck(env, body);
+        if (path === '/str/admin/cancel-decision') return await strAdminCancelDecision(env, body);
         if (path === '/str/admin/run')             return await strAdminRun(env, body);
         if (path === '/str/admin/digest-run')      { try { const r = await strRunDigest(env, { dry: !!(body && body.dry) }); return json(Object.assign({ ok: r.ok }, r)); } catch (e) { return await strHandleErr(env, e, 'digest'); } }
         if (path === '/insp-book/slots')           return await inspBookSlots(env, body);
@@ -39655,19 +39656,102 @@ function strWindowText(daysOut, S) { const w = strReplyWindow(daysOut, S); retur
 
 // Bookings-feed stays -> the turnovers that need a cleaner. kind 'checkout': the clean after a guest leaves.
 // kind 'prearrival': when the gap to the next guest is longer than preGap days a second clean the day before they arrive.
+// Pre-arrival cleans hang off the PREVIOUS checkout, which is already in the past on the days before the arrival. Both the
+// feed window (strReadFeed) and the task builder look back this far so a pre-arrival clean does not vanish when that checkout
+// rolls into the past (the Nov 11 2026 clean was dropped at midnight on Nov 9 for exactly this reason).
+function strPreLookback(S) { return Math.max(14, ((S && S.preGap) > 0 ? S.preGap : 0) + 2); }
+const STR_CANCEL_GRACE_MS = 3 * 3600 * 1000; // a booking gone for minutes is a feed glitch, not a cancellation
+function strIsHeld(r) { return /^CANCEL HELD/.test(String((r && r.Note) || '')); }
+// Plain-English reason a turnover has no booking behind it any more (shown to Brett when a cancel is held for his OK).
+function strWhyGone(feed, r, S) {
+  const stays = (feed && feed.stays) || [], parts = String((r && r.Task_Key) || '').split('|'), kind = parts[1], dt = parts[2] || '';
+  if (kind === 'prearrival') {
+    if (!stays.some(s => s.start === dt)) return `the booking arriving ${strFmtDate(dt)} is no longer on the bookings calendar`;
+    const near = stays.filter(s => s.end <= dt && strDaysBetween(s.end, dt) <= ((S && S.preGap) || 0)).sort((a, b) => b.end.localeCompare(a.end))[0];
+    return near ? `the ${strFmtDate(dt)} arrival is still booked, but another stay now ends ${strFmtDate(near.end)} (${strDaysBetween(near.end, dt)} day(s) before it), so the extra clean the day before may not be needed` : `the ${strFmtDate(dt)} arrival is still booked, but the scheduler no longer lists a clean the day before it`;
+  }
+  return stays.some(s => s.end === dt) ? `the stay ending ${strFmtDate(dt)} is still booked, but the scheduler no longer lists this clean` : `the stay ending ${strFmtDate(dt)} is no longer on the bookings calendar`;
+}
+// A turnover with a cleaner on it is NEVER cancelled by the engine on its own (Brett, Nov 9 2026): keep it, say nothing to the cleaner, ask Brett.
+async function strHoldCancel(ctx, r, feed, miss) {
+  const who = ctx.st.cmap[r.Assigned_Cleaner_ID], first = who ? strFirst(who) : 'The cleaner', why = strWhyGone(feed, r, ctx.S);
+  await strSetTurnover(ctx, r, { Missing_Count: String(miss), Note: 'CANCEL HELD - waiting for Brett: ' + why });
+  await strLog(ctx, r.Task_Key, r.Assigned_Cleaner_ID, 'cancel_held', why);
+  await strRaiseAlert(ctx, { key: `cancelhold|${r.Task_Key}`, kind: 'event', severity: 'high', taskKey: r.Task_Key,
+    message: [`CHECK THIS: the ${strFmtDate(r.Date)} clean may no longer be needed - ${why}.`, `${first} is still assigned and has NOT been told. Nothing was cancelled and the calendar entry is still there.`, 'Keep it or cancel it on the cleaning board: https://ridge-co.github.io/RidgeCo/str-cleaning.html'].join('\n'),
+    sms: `Check the ${strFmtDate(r.Date)} cleaning: ${why}. ${first} is still assigned and was NOT told. Nothing cancelled - keep or cancel it on the cleaning board.` });
+}
+// The booking is back (or Brett kept it): drop the hold and its open alert.
+async function strClearHold(ctx, r) {
+  const a = ctx.st.alerts.find(x => x.Alert_Key === `cancelhold|${r.Task_Key}` && !x.Resolved_At);
+  if (a) await strSetRow(ctx.env, 'STR_Alerts', a.ID, { Resolved_At: new Date(ctx.now).toISOString() });
+}
+// A row the engine cancelled by itself has its booking back on the feed. Put the cleaner back on it and tell them (they were told it was cancelled).
+async function strRestoreCancelled(ctx, r, patch) {
+  const who = r.Assigned_Cleaner_ID ? ctx.st.cmap[r.Assigned_Cleaner_ID] : null, auto = /no longer on the feed/.test(String(r.Note || ''));
+  if (!who || !auto) { patch.Status = 'open'; patch.Note = 'booking restored'; return; }
+  patch.Status = 'covered'; patch.Note = 'booking restored - ' + strFirst(who) + ' is covering again';
+  await strLog(ctx, r.Task_Key, r.Assigned_Cleaner_ID, 'task_restored', 'booking is back on the feed; ' + strFirst(who) + ' covers it again');
+  let told = 'has NOT been told yet (outside the texting hours or texts are off)';
+  if (strInSendWindow(ctx.now, ctx.S)) {
+    const t = await strTextCleaner(ctx, who, 'str_task_restored', strTokens(ctx, who, strRowToTask(r)), strRowToTask(r));
+    if (t.ok) told = 'was told by text'; else if (!t.off) ctx.errors.push({ step: 'restore_text', error: `Could not tell ${who.Name} the ${r.Date} clean is back on: ${t.detail}` });
+  }
+  await strRaiseAlert(ctx, { key: `restored|${r.Task_Key}|${ctx.now}`, kind: 'event', severity: 'high', taskKey: r.Task_Key,
+    message: [`RESTORED: the ${strFmtDate(r.Date)} clean is back on - the booking is still on the calendar.`, `${strFirst(who)} is covering it again and ${told}.`].join('\n'),
+    sms: `Restored: ${strFmtDate(r.Date)} clean is back on; ${strFirst(who)} ${told}.` });
+}
+// Cancel a turnover for real (Brett said so, or the engine cancels one with no cleaner on it). Tells the cleaner when there is one.
+async function strCancelTurnover(ctx, r, note, tell) {
+  const iso = new Date(ctx.now).toISOString(), was = r.Status, who = ctx.st.cmap[r.Assigned_Cleaner_ID];
+  for (const o of ctx.st.offers.filter(o => o.Task_Key === r.Task_Key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Note: 'booking cancelled', Responded_At: iso });
+  await strSetTurnover(ctx, r, { Status: 'cancelled', Note: note });
+  await strLog(ctx, r.Task_Key, r.Assigned_Cleaner_ID, 'task_cancelled', note + ' (was ' + was + ')');
+  if (tell && who && (was === 'covered')) {
+    if (strInSendWindow(ctx.now, ctx.S)) { const t = await strTextCleaner(ctx, who, 'str_task_cancelled', strTokens(ctx, who, strRowToTask(r)), strRowToTask(r)); if (!t.ok && !t.off) ctx.errors.push({ step: 'cancel_text', error: `Could not tell ${who.Name} the booking was cancelled: ${t.detail}` }); }
+  }
+}
+// POST /str/admin/cancel-decision {task_key, action:'keep'|'cancel', notify?}
+async function strAdminCancelDecision(env, body) {
+  try {
+    body = body || {};
+    const ctx = await strHandlerCtx(env), r = ctx.st.turnovers.find(x => x.Task_Key === body.task_key);
+    if (!r) return json({ ok: false, error: 'not_found', message: 'That turnover was not found.' }, 404);
+    if (!strIsHeld(r)) return json({ ok: true, already: true, message: 'That turnover is not waiting on a cancel decision. Nothing changed.' });
+    if (body.action === 'keep') {
+      const until = new Date(Date.parse(String(r.Date).slice(0, 10) + 'T23:59:00Z') + 2 * 86400000).toISOString();
+      await strSetTurnover(ctx, r, { Manual_Until: until, Missing_Count: '0', Note: 'kept by Brett - the clean stays on even though the bookings show no reason for it' });
+      await strLog(ctx, r.Task_Key, r.Assigned_Cleaner_ID, 'cancel_kept', 'Brett kept the clean');
+    } else if (body.action === 'cancel') {
+      await strCancelTurnover(ctx, r, 'cancelled by Brett (' + String(r.Note || '').replace(/^CANCEL HELD - waiting for Brett: /, '') + ')', body.notify !== false);
+    } else return json({ ok: false, error: 'bad_action', message: 'action must be "keep" or "cancel".' }, 400);
+    await strClearHold(ctx, r);
+    return json({ ok: true, action: body.action, warnings: ctx.warnings, errors: ctx.errors });
+  } catch (e) { return await strHandleErr(env, e, 'cancel decision'); }
+}
 function strBuildTasks(stays, today, S) {
   const maxDate = inspAddDays(today, S.lookahead), starts = [...new Set((stays || []).map(s => s.start))].sort(), byOut = new Map(), out = [], seen = new Set();
-  for (const s of (stays || [])) { if (!s || s.end < today || s.end > maxDate) continue; if (!byOut.has(s.end)) byOut.set(s.end, []); byOut.get(s.end).push(s); }
+  const back = inspAddDays(today, -strPreLookback(S));
+  for (const s of (stays || [])) { if (!s || s.end < back || s.end > maxDate) continue; if (!byOut.has(s.end)) byOut.set(s.end, []); byOut.get(s.end).push(s); }
   for (const [date, list] of [...byOut.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     const next = starts.find(d => d >= date) || null, gap = next ? strDaysBetween(date, next) : null;
     const pre = !!(S.preGap > 0 && next && gap > S.preGap);
     const guests = [...new Set(list.map(x => x.guest).filter(Boolean))].join(', ');
     const winEnd = next ? (pre ? inspAddDays(date, 2) : next) : inspAddDays(date, 3);
     const ck = `${STR_PROP}|checkout|${date}`;
-    if (!seen.has(ck)) { seen.add(ck); out.push({ key: ck, kind: 'checkout', date, winStart: date, winEnd, next, guests }); }
+    if (date >= today && !seen.has(ck)) { seen.add(ck); out.push({ key: ck, kind: 'checkout', date, winStart: date, winEnd, next, guests }); }
     if (pre) {
       const pd = inspAddDays(next, -1), pk = `${STR_PROP}|prearrival|${next}`;
       if (pd >= today && pd <= maxDate && !seen.has(pk)) { seen.add(pk); out.push({ key: pk, kind: 'prearrival', date: pd, winStart: pd, winEnd: next, next, guests: '' }); }
+    }
+  }
+  // A future arrival with no checkout inside the look-back window before it has a long gap, so it still gets its pre-arrival clean.
+  if (S.preGap > 0) {
+    const endDates = [...byOut.keys()];
+    for (const next of starts) {
+      const pd = inspAddDays(next, -1), pk = `${STR_PROP}|prearrival|${next}`;
+      if (pd < today || pd > maxDate || seen.has(pk) || endDates.some(e => e <= next)) continue;
+      seen.add(pk); out.push({ key: pk, kind: 'prearrival', date: pd, winStart: pd, winEnd: next, next, guests: '' });
     }
   }
   return out.sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
@@ -39786,6 +39870,7 @@ const STR_DEFAULT_TEXTS = {
   str_assigned: "{FirstName}, you're set for the {DateShort} turnover at {Property}. Checkout is 11 AM{NextLine}. Details and calendar invite: {Link}",
   str_checkout_day: "Hi {FirstName}, it's {AssistantName} with Ridge Co. {TodayLine} {NextLine2} Your schedule and details: {Link}",
   str_task_cancelled: "Hi {FirstName}, it's {AssistantName} with Ridge Co. The {DateShort} booking at {Property} was cancelled, so there is no turnover clean that day. Thank you - your schedule: {Link}",
+  str_task_restored: "Hi {FirstName}, it's {AssistantName} with Ridge Co. Sorry for the mix-up - the {DateShort} turnover clean at {Property} is back on (the booking is still active) and you're still covering it. Your schedule: {Link}",
   // Oct 20 2026 (admin swap / bulk). Friendly confirmations; never a rank word. The displaced cleaner is marked backup directly, so no reply is needed.
   str_assigned_multi: "{FirstName}, you're set for these turnovers at {Property}: {DateList}. Checkout is 11 AM. Details and calendar invite: {Link}",
   str_swapped_backup: "Hi {FirstName}, it's {AssistantName} with Ridge Co. {NewFirst}'s going to cover the {DateShort} turnover at {Property}, so you're off the hook - could you be the backup in case anything changes? No reply needed.",
@@ -39955,15 +40040,15 @@ async function strReadFeed(ctx) {
   const { env, cfg, S } = ctx, sc = inspStrConfig(env, cfg);
   if (sc.problems.length) throw strErr('feed_config', sc.problems.join(' '), 503);
   if (!sc.fixture && sc.missing.length) throw strErr('feed_not_configured', 'Not set up yet: ' + sc.missing.join(' and ') + ' (Config STR_GUARD_BOOKING_SOURCES / STR_GUARD_CLEANING_CAL).', 503);
-  const today = inspEtDate(ctx.now), fromDay = inspAddDays(today, -1), toDay = inspAddDays(today, S.lookahead + 20);
+  const today = inspEtDate(ctx.now), fromDay = inspAddDays(today, -1), stayFrom = inspAddDays(today, -strPreLookback(S)), toDay = inspAddDays(today, S.lookahead + 20);
   let stayEvents = [], cal = [];
   if (sc.fixture) {
     stayEvents = (sc.fixture.stays || []).map(s => ({ summary: s.guest || 'Guest', start: { date: s.start }, end: { date: s.end } }));
     cal = (sc.fixture.cleaning || []).map(c => ({ summary: c.title, status: '', start: { date: c.date }, end: { date: inspAddDays(c.date, 1) }, id: 'fx', ext: {} }));
   } else {
     for (const src of sc.sources) {
-      if (/^https?:\/\//i.test(src)) stayEvents.push(...await inspStrReadIcs(env, src, fromDay, toDay));
-      else stayEvents.push(...await inspStrReadGoogle(env, cfg, src, fromDay, toDay));
+      if (/^https?:\/\//i.test(src)) stayEvents.push(...await inspStrReadIcs(env, src, stayFrom, toDay));
+      else stayEvents.push(...await inspStrReadGoogle(env, cfg, src, stayFrom, toDay));
     }
     cal = await strReadCleaningCal(env, cfg, sc.cleaningCal, fromDay, toDay);
   }
@@ -40375,7 +40460,8 @@ async function strTick(env, opts) {
       const b = builtMap.get(r.Task_Key);
       if (b) {
         const patch = {};
-        if (r.Status === 'cancelled') { patch.Status = 'open'; patch.Note = 'booking restored'; }
+        if (r.Status === 'cancelled') await strRestoreCancelled(ctx, r, patch);
+        if (strIsHeld(r)) { patch.Note = ''; await strClearHold(ctx, r); } // the booking is back: drop the held cancel
         if ((parseInt(r.Missing_Count, 10) || 0) > 0) patch.Missing_Count = '0';
         if (r.Manual_Until) patch.Manual_Until = ''; // the feed has caught up with a "Mark as booked now" turnover
         if ((r.Next_Arrival || '') !== (b.next || '')) patch.Next_Arrival = b.next || '';
@@ -40385,6 +40471,9 @@ async function strTick(env, opts) {
       } else if (!anomaly && r.Date >= today && r.Status !== 'cancelled' && !strManualHold(r, ctx.now)) {
         const miss = (parseInt(r.Missing_Count, 10) || 0) + 1;
         if (miss < 2) { await strSetTurnover(ctx, r, { Missing_Count: String(miss) }); continue; }
+        if (strIsHeld(r)) continue; // already waiting for Brett's answer
+        if (r.Assigned_Via !== 'pending_converted' && Date.parse(r.Updated_At || '') > ctx.now - STR_CANCEL_GRACE_MS) continue; // first missed less than 3 h ago: wait, it may just be a feed glitch
+        if ((r.Status === 'covered' || r.Status === 'ext_covered') && r.Assigned_Via !== 'pending_converted') { await strHoldCancel(ctx, r, feed, miss); continue; } // never cancel a clean with a cleaner on it without Brett's OK
         const was = r.Status, who = st.cmap[r.Assigned_Cleaner_ID];
         for (const o of st.offers.filter(o => o.Task_Key === r.Task_Key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Note: 'booking cancelled', Responded_At: iso });
         await strSetTurnover(ctx, r, { Status: 'cancelled', Missing_Count: String(miss), Note: 'booking no longer on the feed' });
@@ -40625,7 +40714,7 @@ async function strAdminState(env) {
     if (feed) for (const t of strBuildTasks(feed.stays, today, ctx.S)) if (!stored.has(t.key)) tasks.push({ key: t.key, kind: t.kind, date: t.date, label: strFmtDate(t.date), days_out: strDaysBetween(today, t.date), next_arrival: t.next || '', next_label: t.next ? strNextDate(t.date, t.next) : '', guests: t.guests, status: 'new', covered: false, via: '', assigned_id: '', assigned_name: '', note: 'not picked up by the scheduler yet', offers: [], backups: { can: [], out: [], unknown: [] }, uncovered_alert: false });
     tasks.sort((a, b) => a.date.localeCompare(b.date) || a.kind.localeCompare(b.kind));
     const log = (await fetchTab(env, 'STR_Log')).slice(-40).reverse();
-    return json({ ok: true, build: BUILD_VERSION, today, settings: strSettingsOut(ctx.cfg), feed_error: feedError, feed_ok: !!feed, pending: strPendingBoard(ctx, act), cleaners: ctx.st.cleaners.map(c => strCleanerOut(c, ctx.st.pool)).sort((a, b) => (a.priority || 999) - (b.priority || 999)), tasks, alerts: ctx.st.alerts.filter(a => !a.Resolved_At && a.Kind !== 'info').map(a => ({ id: a.ID, kind: a.Kind, severity: a.Severity, message: a.Message, sent: parseInt(a.Send_Count, 10) || 0, last_sent: a.Last_Sent_At, acked: !!a.Acked_At, created: a.Created_At })), log: log.map(l => ({ time: l.Timestamp, task: l.Task_Key, cleaner: (ctx.st.cmap[l.Cleaner_ID] || {}).Name || '', event: l.Event, detail: l.Detail })), unfinished_changes: ctx.st.changes.filter(c => c.Status === 'applying').map(c => ({ plan_id: c.Plan_ID, summary: c.Summary, stage: c.Stage, started: c.Created_At })), parked_texts: ctx.st.outbox.filter(o => o.Status === 'parked' || o.Status === 'sending').map(o => ({ id: o.ID, cleaner: (ctx.st.cmap[o.Cleaner_ID] || {}).Name || o.Cleaner_ID, kind: o.Kind, not_before: o.Not_Before, status: o.Status, dates: strOutboxDates(o) })), coming_soon: STR_COMING_SOON });
+    return json({ ok: true, build: BUILD_VERSION, today, settings: strSettingsOut(ctx.cfg), feed_error: feedError, feed_ok: !!feed, pending: strPendingBoard(ctx, act), cleaners: ctx.st.cleaners.map(c => strCleanerOut(c, ctx.st.pool)).sort((a, b) => (a.priority || 999) - (b.priority || 999)), tasks, alerts: ctx.st.alerts.filter(a => !a.Resolved_At && a.Kind !== 'info').map(a => ({ id: a.ID, kind: a.Kind, severity: a.Severity, message: a.Message, sent: parseInt(a.Send_Count, 10) || 0, last_sent: a.Last_Sent_At, acked: !!a.Acked_At, created: a.Created_At })), log: log.map(l => ({ time: l.Timestamp, task: l.Task_Key, cleaner: (ctx.st.cmap[l.Cleaner_ID] || {}).Name || '', event: l.Event, detail: l.Detail })), cancel_holds: ctx.st.turnovers.filter(r => strIsHeld(r) && r.Status !== 'cancelled').map(r => ({ task_key: r.Task_Key, date: r.Date, label: strFmtDate(r.Date), kind: r.Kind, cleaner: (ctx.st.cmap[r.Assigned_Cleaner_ID] || {}).Name || '', why: String(r.Note || '').replace(/^CANCEL HELD - waiting for Brett: /, '') })), unfinished_changes: ctx.st.changes.filter(c => c.Status === 'applying').map(c => ({ plan_id: c.Plan_ID, summary: c.Summary, stage: c.Stage, started: c.Created_At })), parked_texts: ctx.st.outbox.filter(o => o.Status === 'parked' || o.Status === 'sending').map(o => ({ id: o.ID, cleaner: (ctx.st.cmap[o.Cleaner_ID] || {}).Name || o.Cleaner_ID, kind: o.Kind, not_before: o.Not_Before, status: o.Status, dates: strOutboxDates(o) })), coming_soon: STR_COMING_SOON });
   } catch (e) { return await strHandleErr(env, e, 'admin state'); }
 }
 function strPhone10(p) { const n = normalizePhone(p); return /^\+1\d{10}$/.test(n) ? n : ''; }

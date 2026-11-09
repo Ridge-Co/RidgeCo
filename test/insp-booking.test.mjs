@@ -362,7 +362,7 @@ t('grace: the exact message Brett got is recognised as transient', TF(new Error(
 t('grace: 502/503, 408, 429, "could not reach" are transient; also with the tries suffix', ['502', '503', '408', '429'].every(c => TF(new Error('Bookings feed (https://x/…(link hidden)) answered ' + c + '. (tried 3 times)'))) && TF(new Error('Could not reach the bookings feed (https://x/…(link hidden)): boom')));
 t('grace: 404/401/403, "not a calendar", "must be https", sheet-permission errors are NOT transient (alert at once)', ['404', '401', '403', '410'].every(c => !TF(new Error('Bookings feed (https://x/…(link hidden)) answered ' + c + '.'))) && !TF(new Error('Bookings feed (https://x/…(link hidden)) did not return a calendar.')) && !TF(new Error('Bookings feed must be an https:// iCal link: x')) && !TF(new Error('Sheets API error: The caller does not have permission')) && !TF(null));
 t('grace: feed transients log telemetry (…_feed) and only alert after the 45-min grace, wording names the feed', /isFeed \? 'bookings feed for ' \+ mins/.test(src) && /'Bookings feed unreadable'/.test(src));
-t('feed: both readers (guard tick/slot requests AND the cleaning scheduler) share the one retrying reader', (src.match(/await inspStrReadIcs\(env, src, fromDay, toDay\)/g) || []).length === 2);
+t('feed: both readers (guard tick/slot requests AND the cleaning scheduler) share the one retrying reader', (src.match(/await inspStrReadIcs\(env, src, (?:fromDay|stayFrom), toDay\)/g) || []).length === 2);
 
 console.log(`insp-booking: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
