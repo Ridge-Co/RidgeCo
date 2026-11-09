@@ -33,5 +33,5 @@ for (const f of late) {
   const txt = fs.readFileSync(notesDir + f, 'utf8');
   t(`${f}: has "## Pre-build gate"`, /^## Pre-build gate\s*$/m.test(txt));
 }
-console.log(`\n${pass} passed, ${fail} failed (${late.length} note(s) dated 20261104+ checked)`);
+console.log(`\n${pass} passed, ${fail} failed (${late.length} note(s) dated 20261110+ checked)`);
 process.exit(fail ? 1 : 0);
