@@ -3150,6 +3150,48 @@ function statementLineMatch(line, existingReceipts, existingQueueRows) {
   return { confidence: null };
 }
 
+// ── judge() on statement "possible" matches (queue #55; B-211's first real call site; Nov 3 2026) ──────────
+// A 'possible' match is a heuristic guess (same amount, within 3 days, vendor roughly the same). Before it is trusted, judge() gets a
+// fresh verdict. Two PURE helpers decide WHAT judge() is shown and WHEN it is not asked at all:
+//   statementJudgeEvidence - the matched record's own data (store/date/amount/work order...), never just its id: a verifier that cannot see
+//     the existing receipt can only guess, and a rubber-stamp here would silently drop a statement line that is a different purchase.
+//   statementWindowCount - how many existing records fit the same amount and +-3 day window. More than one means a yes/no cannot say WHICH
+//     one this line is, so it goes to Brett's manual queue without a model call (fail closed).
+function statementJudgeEvidence(match, receipts, queueRows) {
+  if (!match) return null;
+  const has = v => v !== undefined && v !== null && v !== '';
+  if (has(match.receipt_id)) {
+    const r = (receipts || []).find(x => String(x.ID) === String(match.receipt_id));
+    return r ? { record: 'receipt', id: r.ID, store: r.Store || '', date: r.Date || '', amount: r.Amount || '', work_order: r.WO_ID || '', description: String(r.Description || '').slice(0, 200) } : null;
+  }
+  if (has(match.queue_id)) {
+    const r = (queueRows || []).find(x => String(x.ID) === String(match.queue_id));
+    return r ? { record: 'receipt_queue_row', id: r.ID, status: r.Status || '', vendor: r.Vendor || '', date: r.Receipt_Date || '', amount: r.Total || '', work_order: r.Confirmed_WO_ID || '', po_reference: r.PO_Reference || '', invoice_number: r.Invoice_Number || '' } : null;
+  }
+  return null;
+}
+function statementWindowCount(line, receipts, queueRows) {
+  const amt = (Number(line && line.amount) || 0).toFixed(2);
+  const d = new Date(String((line && line.date) || '') + 'T00:00:00Z');
+  if (isNaN(d)) return 0;
+  const from = d.getTime() - 3 * 86400000, to = d.getTime() + 3 * 86400000;
+  const inWin = s => { const t = new Date(String(s || '') + 'T00:00:00Z').getTime(); return !isNaN(t) && t >= from && t <= to; };
+  let n = 0;
+  const counted = new Set();
+  for (const r of (receipts || [])) { if (r.Active === 'FALSE') continue; if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue; if (inWin(r.Date)) { n++; counted.add(String(r.ID)); } }
+  for (const r of (queueRows || [])) {
+    if ((r.Status || 'pending') === 'pending') continue;
+    if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
+    if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
+    if (!inWin(r.Receipt_Date)) continue;
+    // A confirmed queue row and the Receipts row it created are ONE purchase (found on the Nov 3 staging run: every receipt that went
+    // through the reconciler counted twice, so judge() would have been skipped on all of them). Count the pair once.
+    if (r.Confirmed_Receipt_ID && counted.has(String(r.Confirmed_Receipt_ID))) continue;
+    n++;
+  }
+  return n;
+}
+
 // POST /receipt-recon/scan (also called by the daily cron) — pull new files from the inbox
 // folder, OCR + reconcile each one, append to the confirm-first queue. Never writes a Receipt.
 async function receiptReconScan(env, body) {
@@ -3320,9 +3362,16 @@ async function receiptReconImportStatement(env, body) {
   const nextOffset = offset + toProcess.length;
   const remaining = Math.max(0, workingRows.length - nextOffset);
 
-  let matched_confirmed = 0, flagged_possible = 0, inserted = 0, skipped_invalid = 0;
+  let matched_confirmed = 0, flagged_possible = 0, inserted = 0, skipped_invalid = 0, judge_confirmed = 0, judge_skipped = 0;
   const errors = [];
   const today = new Date().toISOString().split('T')[0];
+  // judge() on 'possible' matches (queue #55). Each judged line costs an AI call plus two telemetry writes (routeAI's and judge's own), and this
+  // route already writes up to 100 rows per call, so judging is capped per call; everything past the cap, and everything judge() cannot be
+  // trusted on this run, goes to the manual queue exactly as before (fail closed).
+  const JUDGE_MAX_PER_CALL = 5;
+  let judged = 0, judgeOff = '';
+  const amountCount = {};
+  for (const l of workingRows) { const a = (Number(l && l.amount) || 0).toFixed(2); amountCount[a] = (amountCount[a] || 0) + 1; }
 
   for (const line of toProcess) {
     const amt = Number(line && line.amount);
@@ -3335,10 +3384,50 @@ async function receiptReconImportStatement(env, body) {
     catch (e) { errors.push('match failed: ' + (e && e.message || e)); match = { confidence: null }; }
 
     if (match.confidence === 'confirmed') { matched_confirmed++; continue; }
-    if (match.confidence === 'possible') flagged_possible++;
+    let judgeNote = '';
+    if (match.confidence === 'possible') {
+      flagged_possible++;
+      const ev = statementJudgeEvidence(match, receipts, queueRows);
+      let whyNot = '';
+      if (judgeOff) whyNot = judgeOff;
+      else if (judged >= JUDGE_MAX_PER_CALL) whyNot = 'per-call verifier limit reached';
+      else if (!ev) whyNot = 'matched record not found to show the verifier';
+      else if (amountCount[amt.toFixed(2)] > 1) whyNot = 'another line on this statement has the same amount';
+      else if (statementWindowCount(normLine, receipts, queueRows) > 1) whyNot = 'more than one existing record fits';
+      if (whyNot) judge_skipped++;
+      else {
+        judged++;
+        try {
+          const verdict = await judge(env, {
+            action: `statement_possible_match_autoconfirm: ${lineVendor} $${amt.toFixed(2)} ${date} ~ ${ev.record} #${ev.id}`.slice(0, 200),
+            intent: 'Confirm that this vendor-statement line is the SAME purchase as the one existing record shown, so the line does not need manual review.',
+            proposedChange: { statement_line: { vendor: lineVendor, date, amount: amt.toFixed(2), reference: normLine.ref, description: String((line && line.description) || '').slice(0, 200) }, existing_record: ev, matched_by: match.type },
+            acceptanceCriteria: [
+              'Same vendor (allowing for store-name formatting differences), the same amount to the cent, and dates within 3 days.',
+              'Nothing in the two records points to a different purchase: a different reference or PO number, a different work order, a refund or negative amount, or a split or repeat charge.',
+              'If the evidence is thin, or the two records disagree on anything that matters, reject.',
+            ],
+            riskClass: 'SAFE',
+            source: 'receiptReconImportStatement',
+          });
+          if (verdict && verdict.verdict === 'approve') { matched_confirmed++; judge_confirmed++; continue; }
+          judgeNote = ' Verifier did not confirm: ' + String((verdict && verdict.reason) || 'no reason given').slice(0, 200);
+          if (verdict && /^judge model call failed/.test(String(verdict.reason || ''))) {
+            judgeOff = 'verifier unavailable this run';
+            errors.push('judge() unavailable, remaining possible matches filed to the manual queue: ' + String(verdict.reason).slice(0, 200));
+          }
+        } catch (e) {
+          judgeOff = 'verifier errored this run';
+          const msg = 'judge() threw on a possible match, filed to the manual queue: ' + (e && e.message || e);
+          errors.push(msg);
+          try { await logTelemetry(env, { Source: 'receiptReconImportStatement', Job_Type: 'statement_judge_error', Skill_Or_Endpoint: 'receiptReconImportStatement', Success: 'FALSE', Notes: msg.slice(0, 200) }); }
+          catch (e2) { errors.push('could not record that judge() failure in telemetry: ' + (e2 && e2.message || e2)); }
+        }
+      }
+    }
 
     const noteBase = `From ${vendor} statement upload (${sourceFileName || 'uploaded ' + today}).`;
-    const notes = noteBase + (match.confidence === 'possible' ? ' ⚠️ Possibly matches an existing entry within 3 days — check before billing.' : '');
+    const notes = noteBase + (match.confidence === 'possible' ? ' ⚠️ Possibly matches an existing entry within 3 days — check before billing.' : '') + judgeNote;
     try {
       await addRow(env, 'Receipt_Recon_Queue', {
         Source_File_ID: sourceFileId || '', Source_File_URL: sourceFileUrl || '', File_Name: sourceFileName || '',
@@ -3355,7 +3444,7 @@ async function receiptReconImportStatement(env, body) {
 
   return json({
     success: true, vendor, vendor_detected: detectedVendor || undefined, total_lines: workingRows.length,
-    matched_confirmed, flagged_possible, inserted, skipped_invalid, remaining, next_offset: nextOffset, errors,
+    matched_confirmed, flagged_possible, judge_confirmed, judge_skipped, inserted, skipped_invalid, remaining, next_offset: nextOffset, errors,
   });
 }
 
