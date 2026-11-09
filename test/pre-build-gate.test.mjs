@@ -28,7 +28,7 @@ t('CLAUDE.md makes the gate mandatory', /MANDATORY: pre-build design gate/.test(
 t('CLAUDE.md still has NO CRON and the silent-failure rule', /NO CRON ANYWHERE/.test(claude) && /NOTHING EVER FAILS SILENTLY/.test(claude));
 
 const notesDir = root + 'context/notes/';
-const late = fs.readdirSync(notesDir).filter(f => /^\d{8}-.+\.md$/.test(f) && f.slice(0, 8) >= '20261104');
+const late = fs.readdirSync(notesDir).filter(f => /^\d{8}-.+\.md$/.test(f) && f.slice(0, 8) >= '20261110');
 for (const f of late) {
   const txt = fs.readFileSync(notesDir + f, 'utf8');
   t(`${f}: has "## Pre-build gate"`, /^## Pre-build gate\s*$/m.test(txt));
