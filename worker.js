@@ -39738,7 +39738,7 @@ function strBuildTasks(stays, today, S) {
     const guests = [...new Set(list.map(x => x.guest).filter(Boolean))].join(', ');
     const winEnd = next ? (pre ? inspAddDays(date, 2) : next) : inspAddDays(date, 3);
     const ck = `${STR_PROP}|checkout|${date}`;
-    if (!seen.has(ck)) { seen.add(ck); out.push({ key: ck, kind: 'checkout', date, winStart: date, winEnd, next, guests }); }
+    if (date >= today && !seen.has(ck)) { seen.add(ck); out.push({ key: ck, kind: 'checkout', date, winStart: date, winEnd, next, guests }); }
     if (pre) {
       const pd = inspAddDays(next, -1), pk = `${STR_PROP}|prearrival|${next}`;
       if (pd >= today && pd <= maxDate && !seen.has(pk)) { seen.add(pk); out.push({ key: pk, kind: 'prearrival', date: pd, winStart: pd, winEnd: next, next, guests: '' }); }
