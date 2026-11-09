@@ -40038,7 +40038,7 @@ async function strReadFeed(ctx) {
   const { env, cfg, S } = ctx, sc = inspStrConfig(env, cfg);
   if (sc.problems.length) throw strErr('feed_config', sc.problems.join(' '), 503);
   if (!sc.fixture && sc.missing.length) throw strErr('feed_not_configured', 'Not set up yet: ' + sc.missing.join(' and ') + ' (Config STR_GUARD_BOOKING_SOURCES / STR_GUARD_CLEANING_CAL).', 503);
-  const today = inspEtDate(ctx.now), fromDay = inspAddDays(today, -1), toDay = inspAddDays(today, S.lookahead + 20);
+  const today = inspEtDate(ctx.now), fromDay = inspAddDays(today, -1), stayFrom = inspAddDays(today, -strPreLookback(S)), toDay = inspAddDays(today, S.lookahead + 20);
   let stayEvents = [], cal = [];
   if (sc.fixture) {
     stayEvents = (sc.fixture.stays || []).map(s => ({ summary: s.guest || 'Guest', start: { date: s.start }, end: { date: s.end } }));
