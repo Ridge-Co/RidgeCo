@@ -273,6 +273,71 @@ const resJson = async r => { const o = await r; return typeof o.json === 'functi
   t('empty feed with turnovers on file: flagged, nothing cancelled', !r.ok && r.errors.some(e => e.step === 'feed_anomaly') && rowsOf(W, 'STR_Turnovers').find(x => x.Task_Key.endsWith('checkout|2026-10-16')).Status === 'covered', r.errors);
 }
 {
+  // ── Nov 9 2026: (1) a pre-arrival clean must survive its previous checkout rolling into the past; (2) a clean with a cleaner on it is never cancelled by the engine ──
+  const KEY = 'milam-ridge|prearrival|2026-11-12', PREV = { start: '2026-11-05', end: '2026-11-08', guest: 'Prev' }, NEXT = { start: '2026-11-12', end: '2026-11-15', guest: 'Next' }, LATER = { start: '2026-11-18', end: '2026-11-21', guest: 'Later' };
+  const fx = stays => JSON.stringify({ stays, cleaning: [] });
+  const setRow = (W, tab, pred, f) => { const [h, ...rows] = W.tabs.get(tab); const i = rows.findIndex(r => pred(Object.fromEntries(h.map((k, j) => [k, r[j] || ''])))); for (const [k, v] of Object.entries(f)) W.tabs.get(tab)[i + 1][h.indexOf(k)] = v; };
+  const row = W => rowsOf(W, 'STR_Turnovers').find(x => x.Task_Key === KEY);
+  const mk = async () => { const W = makeWorld(); seed(W, { STR_GUARD_FIXTURE: fx([PREV, NEXT, LATER]) }); const E = build(W); clock = at(E, '2026-11-08', '10:00'); await E.strTick({}, {}); setRow(W, 'STR_Turnovers', x => x.Task_Key === KEY, { Status: 'covered', Assigned_Cleaner_ID: '1', Assigned_Via: 'offer' }); return { W, E }; };
+  { // (1) the rollover
+    const { W, E } = await mk();
+    t('pre-arrival clean for the Nov 12 arrival exists while the previous checkout is today', !!row(W));
+    clock = at(E, '2026-11-09', '00:16'); await E.strTick({}, {}); clock += 5 * 60000; await E.strTick({}, {});
+    t('Nov 9 00:16 (previous checkout now yesterday): the covered pre-arrival clean is NOT touched', row(W).Status === 'covered' && (row(W).Missing_Count || '0') === '0', row(W));
+    W.cfg.STR_GUARD_FIXTURE = fx([NEXT, LATER]); // previous stay has dropped out of the feed entirely
+    clock = at(E, '2026-11-10', '10:00'); await E.strTick({}, {}); clock += 5 * 60000; await E.strTick({}, {}); clock += 4 * 3600000; await E.strTick({}, {});
+    t('previous stay gone from the feed: the pre-arrival clean is still there and still covered', row(W).Status === 'covered' && !strHeldNote(row(W)), row(W));
+    t('and nobody was told it was cancelled', !W.sms.some(m => m.type === 'str_task_cancelled'), W.sms.map(m => m.type));
+  }
+  { // (2) the booking really disappears -> hold, ask Brett, tell nobody
+    const { W, E } = await mk();
+    W.cfg.STR_GUARD_FIXTURE = fx([PREV, LATER]); // the Nov 12 stay is gone
+    clock = at(E, '2026-11-09', '10:00'); W.sms.length = 0; const b0 = W.brett.length;
+    await E.strTick({}, {}); clock += 15 * 60000; await E.strTick({}, {});
+    t('booking gone for minutes: nothing happens yet (grace)', row(W).Status === 'covered' && !strHeldNote(row(W)), row(W));
+    clock += 3 * 3600000; await E.strTick({}, {});
+    t('booking gone for 3 h+: the covered clean is HELD, not cancelled', row(W).Status === 'covered' && strHeldNote(row(W)), row(W));
+    t('the cleaner is NOT texted while it is held', !W.sms.some(m => /cancel/i.test(m.type)), W.sms);
+    t('Brett is asked, with the reason and a plain statement that nothing was cancelled', W.brett.slice(b0).some(m => /Check the Wed, Nov 11 cleaning/.test(m.text) && /NOT told|NOT/.test(m.text)), W.brett.slice(b0));
+    const nB = W.brett.length; clock += 30 * 60000; await E.strTick({}, {});
+    t('further ticks keep it held without re-alerting or cancelling', row(W).Status === 'covered' && strHeldNote(row(W)) && W.brett.length === nB, row(W));
+    const keep = await resJson(E.strAdminCancelDecision({}, { task_key: KEY, action: 'keep' }));
+    t('Brett chooses Keep: clean stays covered, hold cleared', keep.ok && row(W).Status === 'covered' && !strHeldNote(row(W)) && /kept by Brett/.test(row(W).Note) && !!row(W).Manual_Until, { keep, r: row(W) });
+    clock += 60 * 60000; await E.strTick({}, {}); clock += 60 * 60000; await E.strTick({}, {});
+    t('after Keep the engine leaves it alone (manual hold)', row(W).Status === 'covered' && !strHeldNote(row(W)), row(W));
+    t('the unanswered-decision alert is resolved', !rowsOf(W, 'STR_Alerts').some(a => a.Alert_Key === 'cancelhold|' + KEY && !a.Resolved_At));
+  }
+  { // (3) Brett chooses Cancel -> cancelled, cleaner told
+    const { W, E } = await mk();
+    W.cfg.STR_GUARD_FIXTURE = fx([PREV, LATER]);
+    clock = at(E, '2026-11-09', '10:00'); await E.strTick({}, {}); clock += 15 * 60000; await E.strTick({}, {}); clock += 3 * 3600000; await E.strTick({}, {});
+    W.sms.length = 0;
+    const c = await resJson(E.strAdminCancelDecision({}, { task_key: KEY, action: 'cancel' }));
+    t('Brett chooses Cancel: turnover cancelled and Gina told', c.ok && row(W).Status === 'cancelled' && W.sms.some(m => m.type === 'str_task_cancelled' && m.to === 'Regina Seville'), { c, r: row(W), sms: W.sms });
+    t('deciding on a turnover that is not held changes nothing', (await resJson(E.strAdminCancelDecision({}, { task_key: 'milam-ridge|checkout|2026-11-15', action: 'cancel' }))).already === true);
+  }
+  { // (4) booking comes back while held -> hold dropped on its own
+    const { W, E } = await mk();
+    W.cfg.STR_GUARD_FIXTURE = fx([PREV, LATER]);
+    clock = at(E, '2026-11-09', '10:00'); await E.strTick({}, {}); clock += 15 * 60000; await E.strTick({}, {}); clock += 3 * 3600000; await E.strTick({}, {});
+    t('(setup) held', strHeldNote(row(W)));
+    W.cfg.STR_GUARD_FIXTURE = fx([NEXT, LATER]); clock += 15 * 60000; await E.strTick({}, {});
+    t('booking back: hold dropped, still covered, alert resolved', row(W).Status === 'covered' && !strHeldNote(row(W)) && !rowsOf(W, 'STR_Alerts').some(a => a.Alert_Key === 'cancelhold|' + KEY && !a.Resolved_At), row(W));
+  }
+  { // (5) the exact production state: engine already cancelled it and told Gina; booking is on the feed -> restored + Gina told
+    const { W, E } = await mk();
+    setRow(W, 'STR_Turnovers', x => x.Task_Key === KEY, { Status: 'cancelled', Missing_Count: '2', Note: 'booking no longer on the feed' });
+    clock = at(E, '2026-11-09', '10:00'); W.sms.length = 0; const b0 = W.brett.length;
+    await E.strTick({}, {});
+    t('cancelled-by-mistake clean is put back: covered by Gina again', row(W).Status === 'covered' && row(W).Assigned_Cleaner_ID === '1' && row(W).Missing_Count === '0', row(W));
+    t('Gina is told it is back on', W.sms.some(m => m.type === 'str_task_restored' && m.to === 'Regina Seville' && /back on/.test(m.text)), W.sms);
+    t('Brett is told it was restored', W.brett.slice(b0).some(m => /Restored: Wed, Nov 11 clean is back on/.test(m.text)), W.brett.slice(b0));
+    t('a clean Brett cancelled himself (different note) is NOT auto-restored to covered', await (async () => { const x = await mk(); setRow(x.W, 'STR_Turnovers', r => r.Task_Key === KEY, { Status: 'cancelled', Missing_Count: '2', Note: 'cancelled by Brett (x)' }); clock = at(x.E, '2026-11-09', '10:00'); await x.E.strTick({}, {}); return row(x.W).Status !== 'covered'; })());
+  }
+  t('look-back is at least 14 days and widens with the pre-arrival gap', (() => { const E = build(makeWorld()); return E.strPreLookback({ preGap: 3 }) === 14 && E.strPreLookback({ preGap: 20 }) === 22; })());
+}
+function strHeldNote(r) { return /^CANCEL HELD/.test(String((r && r.Note) || '')); }
+{
   // ── queue exhausted + alert, red block plan, hand-entered calendar entry ──
   const W = makeWorld(); seed(W, { STR_CAL_WRITE_ENABLED: 'TRUE', STR_GUARD_FIXTURE: JSON.stringify({ stays: [{ start: '2026-10-10', end: '2026-10-16', guest: 'A' }, { start: '2026-10-18', end: '2026-10-20', guest: 'B' }], cleaning: [] }) });
   const E = build(W); clock = at(E, '2026-10-14', '10:00'); await E.strTick({}, {});
