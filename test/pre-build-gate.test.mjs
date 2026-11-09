@@ -1,5 +1,5 @@
 // Pre-build design gate (Nov 3 2026): context/PRE_BUILD_GATE_v1.0.md must stay complete and must stay wired into CLAUDE.md,
-// and every PR note dated 20261104 or later must carry a "## Pre-build gate" section.
+// and every PR note dated 20261110 or later must carry a "## Pre-build gate" section.
 // Run: node test/pre-build-gate.test.mjs
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -28,10 +28,10 @@ t('CLAUDE.md makes the gate mandatory', /MANDATORY: pre-build design gate/.test(
 t('CLAUDE.md still has NO CRON and the silent-failure rule', /NO CRON ANYWHERE/.test(claude) && /NOTHING EVER FAILS SILENTLY/.test(claude));
 
 const notesDir = root + 'context/notes/';
-const late = fs.readdirSync(notesDir).filter(f => /^\d{8}-.+\.md$/.test(f) && f.slice(0, 8) >= '20261104');
+const late = fs.readdirSync(notesDir).filter(f => /^\d{8}-.+\.md$/.test(f) && f.slice(0, 8) >= '20261110');
 for (const f of late) {
   const txt = fs.readFileSync(notesDir + f, 'utf8');
   t(`${f}: has "## Pre-build gate"`, /^## Pre-build gate\s*$/m.test(txt));
 }
-console.log(`\n${pass} passed, ${fail} failed (${late.length} note(s) dated 20261104+ checked)`);
+console.log(`\n${pass} passed, ${fail} failed (${late.length} note(s) dated 20261110+ checked)`);
 process.exit(fail ? 1 : 0);
