@@ -264,7 +264,9 @@ const resJson = async r => { const o = await r; return typeof o.json === 'functi
   await E.strTick({}, {});
   t('one miss does not cancel (feed blip protection)', rowsOf(W, 'STR_Turnovers').find(x => x.Task_Key === o21.Task_Key).Status !== 'cancelled');
   clock += 15 * 60000; await E.strTick({}, {});
-  t('second miss cancels the turnover and supersedes its pending offer', rowsOf(W, 'STR_Turnovers').find(x => x.Task_Key === o21.Task_Key).Status === 'cancelled' && !rowsOf(W, 'STR_Offers').some(o => o.Task_Key === o21.Task_Key && o.Status === 'pending'));
+  t('a second miss minutes later still does not cancel (3 h feed-glitch grace, Nov 9 2026)', rowsOf(W, 'STR_Turnovers').find(x => x.Task_Key === o21.Task_Key).Status !== 'cancelled');
+  clock += 3 * 3600000; await E.strTick({}, {});
+  t('still missing after 3 h: an UNASSIGNED turnover is cancelled and its pending offer superseded', rowsOf(W, 'STR_Turnovers').find(x => x.Task_Key === o21.Task_Key).Status === 'cancelled' && !rowsOf(W, 'STR_Offers').some(o => o.Task_Key === o21.Task_Key && o.Status === 'pending'));
   // anomaly: feed returns zero stays -> nothing cancelled, alert
   W.cfg.STR_GUARD_FIXTURE = JSON.stringify({ stays: [], cleaning: [] });
   const bf = W.brett.length; clock += 15 * 60000; r = await E.strTick({}, {});
