@@ -40458,7 +40458,8 @@ async function strTick(env, opts) {
       const b = builtMap.get(r.Task_Key);
       if (b) {
         const patch = {};
-        if (r.Status === 'cancelled') { patch.Status = 'open'; patch.Note = 'booking restored'; }
+        if (r.Status === 'cancelled') await strRestoreCancelled(ctx, r, patch);
+        if (strIsHeld(r)) { patch.Note = ''; await strClearHold(ctx, r); } // the booking is back: drop the held cancel
         if ((parseInt(r.Missing_Count, 10) || 0) > 0) patch.Missing_Count = '0';
         if (r.Manual_Until) patch.Manual_Until = ''; // the feed has caught up with a "Mark as booked now" turnover
         if ((r.Next_Arrival || '') !== (b.next || '')) patch.Next_Arrival = b.next || '';
