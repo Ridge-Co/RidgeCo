@@ -1260,6 +1260,7 @@ const _hubWorkerCore = {
         if (path === '/str/admin/pending/send-now') return await strAdminPendingSendNow(env, body);
         if (path === '/str/admin/offer-now')       return await strAdminOfferNow(env, body);
         if (path === '/str/admin/alert/ack')       return await strAdminAlertAck(env, body);
+        if (path === '/str/admin/cancel-decision') return await strAdminCancelDecision(env, body);
         if (path === '/str/admin/run')             return await strAdminRun(env, body);
         if (path === '/str/admin/digest-run')      { try { const r = await strRunDigest(env, { dry: !!(body && body.dry) }); return json(Object.assign({ ok: r.ok }, r)); } catch (e) { return await strHandleErr(env, e, 'digest'); } }
         if (path === '/insp-book/slots')           return await inspBookSlots(env, body);
