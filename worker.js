@@ -40045,8 +40045,8 @@ async function strReadFeed(ctx) {
     cal = (sc.fixture.cleaning || []).map(c => ({ summary: c.title, status: '', start: { date: c.date }, end: { date: inspAddDays(c.date, 1) }, id: 'fx', ext: {} }));
   } else {
     for (const src of sc.sources) {
-      if (/^https?:\/\//i.test(src)) stayEvents.push(...await inspStrReadIcs(env, src, fromDay, toDay));
-      else stayEvents.push(...await inspStrReadGoogle(env, cfg, src, fromDay, toDay));
+      if (/^https?:\/\//i.test(src)) stayEvents.push(...await inspStrReadIcs(env, src, stayFrom, toDay));
+      else stayEvents.push(...await inspStrReadGoogle(env, cfg, src, stayFrom, toDay));
     }
     cal = await strReadCleaningCal(env, cfg, sc.cleaningCal, fromDay, toDay);
   }
