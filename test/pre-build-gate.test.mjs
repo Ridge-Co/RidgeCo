@@ -1,5 +1,5 @@
 // Pre-build design gate (Nov 3 2026): context/PRE_BUILD_GATE_v1.0.md must stay complete and must stay wired into CLAUDE.md,
-// and every PR note dated 20261104 or later must carry a "## Pre-build gate" section.
+// and every PR note dated 20261110 or later must carry a "## Pre-build gate" section.
 // Run: node test/pre-build-gate.test.mjs
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
