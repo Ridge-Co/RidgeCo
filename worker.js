@@ -40468,6 +40468,9 @@ async function strTick(env, opts) {
       } else if (!anomaly && r.Date >= today && r.Status !== 'cancelled' && !strManualHold(r, ctx.now)) {
         const miss = (parseInt(r.Missing_Count, 10) || 0) + 1;
         if (miss < 2) { await strSetTurnover(ctx, r, { Missing_Count: String(miss) }); continue; }
+        if (strIsHeld(r)) continue; // already waiting for Brett's answer
+        if (r.Assigned_Via !== 'pending_converted' && Date.parse(r.Updated_At || '') > ctx.now - STR_CANCEL_GRACE_MS) continue; // first missed less than 3 h ago: wait, it may just be a feed glitch
+        if ((r.Status === 'covered' || r.Status === 'ext_covered') && r.Assigned_Via !== 'pending_converted') { await strHoldCancel(ctx, r, feed, miss); continue; } // never cancel a clean with a cleaner on it without Brett's OK
         const was = r.Status, who = st.cmap[r.Assigned_Cleaner_ID];
         for (const o of st.offers.filter(o => o.Task_Key === r.Task_Key && STR_OFFER_ACTIVE.includes(o.Status))) await strSetOffer(ctx, o, { Status: 'superseded', Note: 'booking cancelled', Responded_At: iso });
         await strSetTurnover(ctx, r, { Status: 'cancelled', Missing_Count: String(miss), Note: 'booking no longer on the feed' });
