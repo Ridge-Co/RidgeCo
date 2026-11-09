@@ -39730,7 +39730,8 @@ async function strAdminCancelDecision(env, body) {
 }
 function strBuildTasks(stays, today, S) {
   const maxDate = inspAddDays(today, S.lookahead), starts = [...new Set((stays || []).map(s => s.start))].sort(), byOut = new Map(), out = [], seen = new Set();
-  for (const s of (stays || [])) { if (!s || s.end < today || s.end > maxDate) continue; if (!byOut.has(s.end)) byOut.set(s.end, []); byOut.get(s.end).push(s); }
+  const back = inspAddDays(today, -strPreLookback(S));
+  for (const s of (stays || [])) { if (!s || s.end < back || s.end > maxDate) continue; if (!byOut.has(s.end)) byOut.set(s.end, []); byOut.get(s.end).push(s); }
   for (const [date, list] of [...byOut.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     const next = starts.find(d => d >= date) || null, gap = next ? strDaysBetween(date, next) : null;
     const pre = !!(S.preGap > 0 && next && gap > S.preGap);
