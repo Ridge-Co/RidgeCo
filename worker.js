@@ -799,6 +799,11 @@ const _hubWorkerCore = {
         if (callerRole) {
           const _mmb = sessionIdentityMismatch(callerRole, callerSessionId, null, body);
           if (_mmb) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mmb);
+          // Owner WRITE scope (Nov 10 2026): an owner session may only write to its own properties / jobs.
+          if (callerRole === 'owner') {
+            const _owd = await ownerWriteScopeDenied(env, path, body, callerSessionId);
+            if (_owd) return _owd;
+          }
         }
         // HUB_TEST_TOKEN record-level guard (test-infrastructure build, Sep 19 2026): the path
         // allow-list in the auth gate above only proves the ROUTE is test-safe — this proves the
