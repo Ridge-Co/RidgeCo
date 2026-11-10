@@ -799,6 +799,11 @@ const _hubWorkerCore = {
         if (callerRole) {
           const _mmb = sessionIdentityMismatch(callerRole, callerSessionId, null, body);
           if (_mmb) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mmb);
+          // Owner WRITE scope (Nov 10 2026): an owner session may only write to its own properties / jobs.
+          if (callerRole === 'owner') {
+            const _owd = await ownerWriteScopeDenied(env, path, body, callerSessionId);
+            if (_owd) return _owd;
+          }
         }
         // HUB_TEST_TOKEN record-level guard (test-infrastructure build, Sep 19 2026): the path
         // allow-list in the auth gate above only proves the ROUTE is test-safe — this proves the
@@ -2184,6 +2189,53 @@ async function woKeyedReadDenied(env, path, url, role, sessionId) {
   if (attachmentScopeAllows(role, sessionId, findWO(workorders, woId), tenants, properties)) return null;
   await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_scope_denied', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `role=${role} session=${sessionId} wo=${woId}` });
   return json({ error: 'Not found' }, 404);
+}
+
+// ── OWNER WRITE SCOPE (Nov 10 2026, Brett: "fix the owner ID hole first"; groundwork for the demo owner portal) ──
+// The Oct 14 identity binding stops an owner session from NAMING another owner's id. It did not stop an owner
+// session from WRITING to another owner's records, because these handlers trusted the request body:
+//   - POST /workorder let an owner session create a job on ANY property_id (which texts that property's tenants/owner),
+//     and accepted extra body fields (tenant ids, parent_wo_id, contact phone/name, approval_*, recurring_*, max_price...).
+//   - /wo/add-note and /wo/append-description only checked ownership when the CLIENT said author_role=owner AND sent
+//     owner_id; /wo/set-tenant-visibility, /log-attachment and /create-upload-session checked nothing.
+//   - author_role was self-declared, so a note could be posted "as a tenant" (which texts Brett).
+//   - /wishlist/add is Brett's internal dev wishlist, not an owner feature.
+// One gate, OWNER sessions only (admin secret and internal tokens never reach it). Every denial is a 4xx plus a FAILED
+// Ops_Telemetry row (`owner_write_scope_denied`) - never silent. Tenant and vendor write scopes are separate (BACKLOG).
+const OWNER_WO_WRITE_PATHS = ['/wo/add-note', '/wo/append-description', '/wo/owner-update', '/wo/set-tenant-visibility', '/log-attachment', '/create-upload-session'];
+const OWNER_WO_CREATE_FIELDS = ['property_id', 'unit_id', 'trade', 'priority', 'description', 'type', 'owner_wo_ref', 'tenant_visible', 'tenant_notify_created', 'tenant_notify_updates', 'created_by', 'notes', 'room'];
+async function ownerWriteScopeDenied(env, path, body, ownerId) {
+  if (path !== '/workorder' && path !== '/wishlist/add' && !OWNER_WO_WRITE_PATHS.includes(path)) return null;
+  const sid = String(ownerId || '');
+  const b = (body && typeof body === 'object') ? body : null;
+  const deny = async (status, error, why) => {
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_write_scope_denied', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `owner=${sid} ${why}`.slice(0, 480) });
+    return json({ error }, status);
+  };
+  if (path === '/wishlist/add') return await deny(403, 'Forbidden', 'wishlist is not an owner feature');
+  if (!sid || !b) return await deny(403, 'Forbidden', 'no owner id or no body');
+  const [workorders, tenants, properties, units] = await fetchTabs(env, ['Work_Orders', 'Tenants', 'Properties', 'Units']);
+  if (path === '/workorder') {
+    const propId = String(b.property_id || '').trim();
+    const prop = properties.find(p => String(p.ID) === propId);
+    if (!prop || String(prop.Owner_ID || '') !== sid) return await deny(403, 'Forbidden', `property=${propId.slice(0, 40)}`);
+    const unitId = String(b.unit_id || '').trim();
+    if (unitId) {
+      const u = units.find(x => String(x.ID) === unitId);
+      if (!u || String(u.Property_ID || '') !== propId) return await deny(403, 'Forbidden', `unit=${unitId.slice(0, 40)} not on property=${propId.slice(0, 40)}`);
+    }
+    // Only the fields the owner portal form sends survive. Anything else (tenant ids, parent_wo_id, contact phone/name,
+    // approval_*, recurring_*, owner_notify_override, max_price...) is dropped, and the type is forced to 'owner'.
+    for (const k of Object.keys(b)) if (!OWNER_WO_CREATE_FIELDS.includes(k)) delete b[k];
+    b.type = 'owner';
+    return null;
+  }
+  const woId = String(b.wo_id || b.wo || '').trim();
+  if (!woId || !attachmentScopeAllows('owner', sid, findWO(workorders, woId), tenants, properties)) return await deny(404, 'Not found', `wo=${woId.slice(0, 40)}`);
+  // The identity is the session's, never the client's: no posting a note "as a tenant", no omitting owner_id to skip a check.
+  b.owner_id = sid;
+  if (path === '/wo/add-note' || path === '/wo/append-description') b.author_role = 'owner';
+  return null;
 }
 
 async function getAttachments(env, url, callerRole, callerSessionId) {
