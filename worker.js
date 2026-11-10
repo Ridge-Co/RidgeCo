@@ -142,7 +142,7 @@ function buildVersionJson(env, ctx) {
 }
 // BUILD_VERSION: FROZEN base label, do not edit it in a PR (explained in the block above buildVersion()).
 // Portals poll GET /version, which Cloudflare stamps on every deploy, and refresh themselves when that changes (B-093).
-const BUILD_VERSION = '2026-11-10.01-owner-write-scope';
+const BUILD_VERSION = '2026-10-30.01-delivery-cotenants-keep-yes';
 // Oct 14 2026 (Brett): tenant-facing first-touch texts (welcome, PIN, "job received") end with an opt-out
 // line, worded to say what they'd stop getting so fewer people opt out. Applied at send time (not just in
 // the editable template) so an edited template or custom message can't drop it. A message that already
