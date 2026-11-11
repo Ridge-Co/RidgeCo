@@ -17658,7 +17658,7 @@ async function smsGatedSend(env, opts) {
     }
     const _o = smsSendOutcome(result);
     sent = _o.sent; errorCode = _o.errorCode; errorReason = _o.reason;
-    outcome = sent ? 'sent' : (_o.duplicate ? 'duplicate_suppressed' : 'failed');
+    outcome = sent ? 'sent' : (_o.duplicate ? 'duplicate_suppressed' : (_o.demoBlocked ? 'demo_blocked' : 'failed'));
     const _fin = { Status: _o.status, Delivered_To: sent ? deliveredTo : '', Sent_Date: new Date().toISOString(), Twilio_Message_SID: _o.sid };
     if (!sent) { _fin.Error_Code = _o.errorCode; _fin.Error_Reason = _o.reason; }
     const _sentSaved = await updateMessageQueueRow(env, id, _fin, mqOpts);
