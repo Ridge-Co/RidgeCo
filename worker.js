@@ -24514,6 +24514,7 @@ function _utf8B64url(str) {
 
 async function gmailSendEmail(env, { to, subject, html, _demoChecked, recipientType }) {
   if (!to) throw new Error('gmailSendEmail: to required');
+  if (!_demoChecked) { const _dg = await demoGuardEmail(env, { to, subject, html, recipientType }); if (_dg) return { sent: false, skipped: true, demo_blocked: true, limit: !!_dg.limit, reason: 'email not sent: ' + _dg.reason }; }   // Nov 11 2026 demo safety guard
   if (env.__STAGING__ ?? isStaging(env)) {
     // Staging Gmail policy (test-infrastructure build, Sep 19 2026): default stays fully
     // stubbed (no real send, ever) — same behavior as before this build. Setting Config key
