@@ -24512,7 +24512,7 @@ function _utf8B64url(str) {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-async function gmailSendEmail(env, { to, subject, html }) {
+async function gmailSendEmail(env, { to, subject, html, _demoChecked, recipientType }) {
   if (!to) throw new Error('gmailSendEmail: to required');
   if (env.__STAGING__ ?? isStaging(env)) {
     // Staging Gmail policy (test-infrastructure build, Sep 19 2026): default stays fully
