@@ -36371,7 +36371,7 @@ async function deliveryRelay(env, body) {
   if (tenantEmail) {
     try {
       const subject = 'Delivery update' + (d.Store ? (' — ' + d.Store) : '');
-      await gmailSendEmail(env, { to: tenantEmail, subject, html: '<p>' + message.replace(/\n/g, '<br>') + '</p>' });
+      await gmailSendEmail(env, { to: tenantEmail, subject, html: '<p>' + message.replace(/\n/g, '<br>') + '</p>', recipientType: 'tenant' });
       emailSent = true;
     } catch (e) { emailSent = false; }
   }
