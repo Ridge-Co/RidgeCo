@@ -11442,7 +11442,7 @@ async function sendPropertyNotice(env, body) {
   }
   if (channels.includes('email')) {
     for (const tenant of emailRecipients) {
-      try { await gmailSendEmail(env, { to: tenant.Email, subject: emailSubject, html: emailBody }); results.email_sent++; }
+      try { await gmailSendEmail(env, { to: tenant.Email, subject: emailSubject, html: emailBody, recipientType: 'tenant' }); results.email_sent++; }
       catch (e) { results.email_failed++; }
     }
   }
