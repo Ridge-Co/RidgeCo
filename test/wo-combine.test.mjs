@@ -280,6 +280,7 @@ function build(db, fetchOpts) {
     vendorBillLockSrc, findLockedVendorBillSrc,
     combineFieldsConstSrc, combineMergeConstSrc, mergeTextFieldSrc, resolveCombineSrc, woCombineSrc,
     isTenantCurrentSrc, currentTenantSrc, tenantsForDispatchSrc, isBackgroundWOSrc, isTenantNotifiableSrc,
+    'const demoGuardSend = async () => null; /* Nov 11 2026: the demo safety guard is driven by test/demo-guard.test.mjs; this suite exercises the send path itself */',
     'const smsPropertyGateFlags = () => ({}); const ppResolveGateProperty = async () => null; /* Oct 24 2026 (rule 231): real ones are driven by test/property-toggles.test.mjs */',
     smsGateDecisionSrc, smsToggleOnSrc, normalizePhoneSrc, grab(wsrc, 'function tenantMovedOut('),
     msgQueueTabSrc, msgQueueColsSrc, smsInfraStateSrc, ensureSmsInfraSrc,
