@@ -24821,7 +24821,7 @@ async function gmailSendEmailWithAttachment(env, { to, subject, html, attachment
 async function gmailSendEmailMulti(env, { to, cc, subject, html, attachments }) {
   if (!to) throw new Error('gmailSendEmailMulti: to required');
   const atts = Array.isArray(attachments) ? attachments : [];
-  if (env.__STAGING__ ?? isStaging(env)) return await gmailSendEmail(env, { to, subject: (subject || '') + (atts.length ? ' [' + atts.length + ' photo(s) not attached on staging]' : ''), html });
+  if (env.__STAGING__ ?? isStaging(env)) return await gmailSendEmail(env, { to, subject: (subject || '') + (atts.length ? ' [' + atts.length + ' photo(s) not attached on staging]' : ''), html, _demoChecked: true });
   const accessToken = await gmailAccessToken(env);
   const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
   const subjectEncoded = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject || '')))}?=`;
