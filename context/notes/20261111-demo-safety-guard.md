@@ -1,4 +1,4 @@
-# Demo safety guard: no demo text or email can reach a real person (Nov 11 2026) — PR #(see PR) into main, head `feat/demo-safety-guard-nov11` (cut from main tip 2d0c652), merged: no
+# Demo safety guard: no demo text or email can reach a real person (Nov 11 2026) — PR #530 into main (staging twin #531), head `feat/demo-safety-guard-nov11` (cut from main tip 2d0c652), merged: no
 
 Phase 1 of the demo owner portal + demo tenant portal (design: Continuous Improvement project doc `claude/demo-owner-portal-design-nov10.md`). This PR ships ONLY the safety net. It adds no demo data, no slots, no logins and no UI, so on its own it changes nothing for real customers. It does have to be live before anything demo exists.
 
