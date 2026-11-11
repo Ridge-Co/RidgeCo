@@ -25,6 +25,7 @@ export function d16Real(world) {
     normalizePhone, COLS_OK_MS: 600000, isStaging: () => false, isMissingTabError: () => false,
     ensureColumns: async () => {}, ensureTab: async () => {}, sheetsRequest: async () => ({ values: [['ID']], updates: { updatedRange: 'x' } }),
     reportFailure: async (env, o) => { rec.reports.push(o); }, fetch: async () => { throw new Error('fetch not stubbed'); },
+    demoGuardSend: async () => null,   // Nov 11 2026: the demo safety guard is driven by test/demo-guard.test.mjs; this suite exercises the transport itself
   }, world);
   const names = Object.keys(stubs);
   const fns = new Function(...names, D16_BLOCK + '\n' + D16_GATED + '\nreturn {' + NAMES.join(',') + '};')(...names.map(k => stubs[k]));
