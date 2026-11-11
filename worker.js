@@ -24790,7 +24790,7 @@ async function gmailSendEmailWithAttachment(env, { to, subject, html, attachment
   const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
   const subjectEncoded = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject || '')))}?=`;
   if (!attachment || !attachment.base64Data) {
-    return await gmailSendEmail(env, { to, subject, html });
+    return await gmailSendEmail(env, { to, subject, html, _demoChecked: true });
   }
   const boundary = 'ridgeco_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2);
   const safeName = String(attachment.filename || 'receipt').replace(/[^\w .-]/g, '_').slice(0, 80);
