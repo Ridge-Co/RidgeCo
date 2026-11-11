@@ -16204,6 +16204,11 @@ async function sendSMSRaw(env, to, message, opts) {
       return { skipped: true, duplicate: true, reason: 'the same text to the same number was already sent ' + Math.round(d.ageMs / 1000) + 's ago' };
     }
   }
+  const _demoG = await demoGuardSend(env, { channel: 'sms', to: [to], text: message, woId: ctx.wo_id || '', recipientType: ctx.recipient_type || '' });   // Nov 11 2026: demo safety guard (see DEMO SAFETY GUARD above)
+  if (_demoG) {
+    await smsLogRecord(env, Object.assign({}, logBase, { Status: 'blocked_demo', Note: _demoG.reason }));
+    return { skipped: true, demo_blocked: true, limit: !!_demoG.limit, reason: 'text not sent: ' + _demoG.reason };
+  }
   smsDedupeRemember(__smsRecent, key, nowMs);   // marked BEFORE the call, so a second caller in the same isolate cannot slip in while Twilio is answering
   if (env.__STAGING__ ?? isStaging(env)) {
     console.log(`🧪 STAGING — SMS stubbed (not sent via Twilio) → ${to}: ${message}`);
