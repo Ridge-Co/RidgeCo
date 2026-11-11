@@ -5689,7 +5689,7 @@ async function scopeProposalSend(env, body) {
   const subject = `Ridge Co — your estimate for ${addr}`;
 
   try {
-    await gmailSendEmail(env, { to: email, subject, html });
+    await gmailSendEmail(env, { to: email, subject, html, recipientType: 'owner' });
   } catch (e) {
     try {
       await ensureTab(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
