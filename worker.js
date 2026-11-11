@@ -8935,7 +8935,7 @@ async function addonOwnerNotice(env, body) {
   let emailResult = { sent: false, reason: 'no owner email' };
   if (ownerEmail && !emailGate.ok) emailResult = { sent: false, reason: emailGate.reason };
   else if (ownerEmail) {
-    try { const _er = await gmailSendEmail(env, { to: ownerEmail, subject: msg.subject, html: msg.html }); emailResult = (_er && _er.sent === false) ? { sent: false, staged: !!_er.staged, reason: _er.note || 'not sent' } : { sent: true }; }
+    try { const _er = await gmailSendEmail(env, { to: ownerEmail, subject: msg.subject, html: msg.html, recipientType: 'owner' }); emailResult = (_er && _er.sent === false) ? { sent: false, staged: !!_er.staged, reason: _er.note || 'not sent' } : { sent: true }; }
     catch (e) { emailResult = { sent: false, reason: String((e && e.message) || e) }; }
   }
   const anyOut = !!(smsResult && (smsResult.sent || smsResult.held_for_quiet_hours)) || emailResult.sent;
