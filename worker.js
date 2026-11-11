@@ -46376,6 +46376,7 @@ async function insbSendMail(env, o) {
   const to = (o.to || []).filter(Boolean), cc = (o.cc || []).filter(Boolean);
   // Every throw below carries `definite`: true = Gmail did NOT send it (safe to try again), false = unknown (it may have been delivered: never resend on its own).
   if (!to.length) throw Object.assign(new Error('insbSendMail: no recipient'), { definite: true });
+  { const _dg = await demoGuardEmail(env, { to: to, cc: cc, subject: o.subject, html: o.html }); if (_dg) throw Object.assign(new Error('email not sent: ' + _dg.reason), { definite: true, demo_blocked: true }); }   // Nov 11 2026 demo safety guard (loud: an invoice mail must never silently vanish)
   let realTo = to, realCc = cc, subject = o.subject;
   if (env.__STAGING__ ?? isStaging(env)) {
     const cfg = await fetchConfig(env);
