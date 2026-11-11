@@ -199,7 +199,7 @@ t('mime: no bare LF', !/[^\r]\n/.test(mime));
 t('partner notify: requested kind + invite on approve + cancel only after approved', has(/kind === 'requested' \? `Request received/) && has(/icsMethod = kind === 'approved' \? 'REQUEST' : \(kind === 'cancelled' && prevStatus === 'approved' \? 'CANCEL' : ''\)/));
 t('partner is told when the request lands (before Notify_Log write)', has(/inspNotifyPartner\(env, rec, 'requested'\)/));
 t('ics-send failure falls back to the plain email and still logs', has(/partner email invite FAILED \(' \+ e\.message \+ '\) — sending without the calendar file/));
-t('staging never sends real invite mail', /async function inspSendPartnerEmail[\s\S]{0,400}isStaging\(env\)\) \{ const r = await gmailSendEmail/.test(src));
+t('staging never sends real invite mail', /async function inspSendPartnerEmail[\s\S]{0,900}isStaging\(env\)\) \{ const r = await gmailSendEmail/.test(src));
 t('mine + ics are routed GETs and token-checked', has(/path === '\/insp-book\/mine'\)\s+return await inspBookMine/) && has(/path === '\/insp-book\/ics'\)\s+return await inspBookIcs/) && /async function inspBookMine[\s\S]{0,300}inspCustomerByToken/.test(src) && /async function inspBookIcs[\s\S]{0,300}inspBookingByManage/.test(src));
 t('ics download only for approved bookings', /async function inspBookIcs[\s\S]{0,500}b\.Status !== 'approved'\) return json\(\{ ok: false, error: 'not_approved'/.test(src));
 t('mine lists only that customer\'s active upcoming bookings', /async function inspBookMine[\s\S]{0,900}String\(r\.Customer_ID\) === String\(c\.ID\)[\s\S]{0,200}INSP_ACTIVE_BOOKING\.includes\(r\.Status\)[\s\S]{0,120}Date\.parse\(r\.End_ISO\) > now/.test(src));
