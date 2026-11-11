@@ -60,7 +60,7 @@ Columns: **ID - check (answer Y / N / n-a)** | shapes | default if Brett is not 
 - **B11 Message words, length and cost** - Does each text name the specific job/item, fit in ONE or at most two SMS pieces in plain ASCII, and use a short link instead of a long one?  
   *shapes:* `message` | *default:* One SMS piece, plain ASCII, names the specific job, short link.  
   *evidence:* rule 163 (two same-trade jobs at one address read identically); FL-20261023-d16 rule 6 (templates must stay 2 pieces, GSM-7; a test checks all); rule 232 addendum 2 (terse text + stateless short link).
-- **B12 Message timing** - Is each message urgent (goes now) or batchable and subject to quiet hours (hold 7pm-9am ET; cleaners 8am-9pm)? What does "urgent" mean for this one?  
+- **B12 Message timing** - Is each message urgent (goes now) or batchable and subject to quiet hours (hold 8pm-8am ET, per Brett Nov 11 2026; cleaners 8am-9pm)? What does "urgent" mean for this one?  
   *shapes:* `message` | *default:* Urgent (same-day schedule) goes now; everything else obeys quiet hours.  
   *evidence:* rule 166; B-20261023-0302-mb (urgency by content: same-day schedule is urgent); rule 225 (STR_Outbox parks texts outside window).
 - **B13 Will it actually send? (hold visibility)** - If a switch, opt-out, quiet hours or test mode will hold the message, does the screen say so BEFORE he taps Send, and show the real outcome after?  
