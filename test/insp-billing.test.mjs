@@ -79,6 +79,7 @@ function world(opts = {}) {
     updateRow: async (env, t, id, f) => { w.plainUpdates = (w.plainUpdates || []).concat([f]); return { body: { ok: true }, status: 200 }; },
     json: (body, status) => ({ body, status: status || 200 }), _escHtml: s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'),
     _b64urlBytes: bytes => Buffer.from(bytes).toString('base64url'),
+    demoGuardEmail: async () => null,   // Nov 11 2026: the demo safety guard is driven by test/demo-guard.test.mjs
     gmailAccessToken: async () => 'gtok', _utf8B64url: s => Buffer.from(s, 'utf8').toString('base64url'),
     inspNotAvailable: null,
     fetch: async (url, o) => {
