@@ -24820,6 +24820,7 @@ async function gmailSendEmailWithAttachment(env, { to, subject, html, attachment
 // it goes through gmailSendEmail's stub/redirect policy unchanged (recipient overridden, nothing reaches a real requester).
 async function gmailSendEmailMulti(env, { to, cc, subject, html, attachments }) {
   if (!to) throw new Error('gmailSendEmailMulti: to required');
+  { const _dg = await demoGuardEmail(env, { to, cc, subject, html }); if (_dg) return { sent: false, skipped: true, demo_blocked: true, limit: !!_dg.limit, reason: 'email not sent: ' + _dg.reason }; }   // Nov 11 2026 demo safety guard
   const atts = Array.isArray(attachments) ? attachments : [];
   if (env.__STAGING__ ?? isStaging(env)) return await gmailSendEmail(env, { to, subject: (subject || '') + (atts.length ? ' [' + atts.length + ' photo(s) not attached on staging]' : ''), html, _demoChecked: true });
   const accessToken = await gmailAccessToken(env);
