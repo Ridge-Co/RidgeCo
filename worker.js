@@ -42695,7 +42695,7 @@ async function inspSendPartnerEmail(env, { to, subject, html, ics, method }) {
   if (!ics) return await gmailSendEmail(env, { to, subject, html });
   { const _dg = await demoGuardEmail(env, { to, subject, html }); if (_dg) return { sent: false, skipped: true, demo_blocked: true, limit: !!_dg.limit, reason: 'email not sent: ' + _dg.reason }; }   // Nov 11 2026 demo safety guard
   // Staging never sends real mail (same policy as gmailSendEmail); the MIME builder is covered by unit tests.
-  if (env.__STAGING__ ?? isStaging(env)) { const r = await gmailSendEmail(env, { to, subject, html }); return Object.assign({}, r, { ics_attached: false, ics_staged: true }); }
+  if (env.__STAGING__ ?? isStaging(env)) { const r = await gmailSendEmail(env, { to, subject, html, _demoChecked: true }); return Object.assign({}, r, { ics_attached: false, ics_staged: true }); }
   const accessToken = await gmailAccessToken(env);
   const raw = inspBuildInviteMime({ from: inspSenderAddr(env), to, subject, html, ics, method });
   const resp = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', { method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ raw: _utf8B64url(raw) }) });
