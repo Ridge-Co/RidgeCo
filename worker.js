@@ -1490,6 +1490,125 @@ async function clearPinLockout(env, pin) {
 const PORTAL_LOGIN_COLS = ['First_Login_Date', 'Last_Login_Date', 'Login_Count', 'Login_Evidence'];
 const PORTAL_PIN_COLS = ['PIN_Sent_Date', 'PIN_Sent_Count', 'PIN_Send_Result'];
 const PORTAL_WELCOME_COLS = ['Welcome_Sent', 'Welcome_Sent_Date', 'Welcome_Send_Result'];
+// ── DEMO SAFETY GUARD (Nov 11 2026; Brett's demo owner/tenant portal, design brief claude/demo-owner-portal-design-nov10) ──────────────────────────────────────────────
+// Brett's rule: no text, email or push may ever reach a real tenant, vendor, Brett or a random number because of a demo record. The ONLY real contact in a demo is the
+// prospect's own phone/email, and only up to DEMO_SMS_CAP texts and DEMO_EMAIL_CAP emails PER TEST (owner test and tenant test are counted separately).
+// Demo rows carry Is_Demo = TRUE (Owners, Tenants, Properties, Work_Orders; Work_Orders also count as demo when their Property_ID is a demo property, so a request the
+// prospect submits is demo without anyone remembering to flag it). The guard sits in the TRANSPORT functions (sendSMSRaw, every Gmail send, pushSendOne), so it holds for every
+// one of the ~45 call sites at once, including ones nobody remembers to classify:
+//   1. The recipient is a demo contact (a flagged owner/tenant's Phone or Email): allowed only while that slot is live (Demo_Expires not past) and that test's counter is below
+//      its cap; the counter is bumped and read back BEFORE the send, so a failed bump blocks the send (fail closed).
+//   2. Otherwise, if the text names a demo work order (its WO number, or ctx.wo_id) or a demo property address, it is blocked: this is the net for texts to Brett / vendors /
+//      real tenants triggered by something a prospect did in the demo.
+//   3. Otherwise it passes untouched. If the registry cannot be read the send is blocked (fail closed), except a text to Brett's own number.
+// Every block writes an Ops_Telemetry row (Job_Type demo_send_blocked) and, for SMS, an SMS_Logs row (Status blocked_demo). Nothing here is silent.
+const DEMO_SMS_CAP = 2, DEMO_EMAIL_CAP = 5;
+function demoTrue(v) { return String(v == null ? '' : v).trim().toUpperCase() === 'TRUE'; }
+function demoEmailKey(a) { const m = /<([^>]+)>/.exec(String(a || '')); return String(m ? m[1] : a || '').trim().toLowerCase(); }
+function demoEmailList(v) { return (Array.isArray(v) ? v : String(v || '').split(/[,;]/)).map(demoEmailKey).filter(x => x.indexOf('@') > 0); }
+// Pure. Build the registry from raw tab rows. null when the sheet has no demo rows at all (the common case: a fast pass).
+function demoBuildRegistry(owners, tenants, workorders, properties, nowMs) {
+  const demoProps = (properties || []).filter(p => demoTrue(p.Is_Demo));
+  const demoOwners = (owners || []).filter(o => demoTrue(o.Is_Demo)), demoTenants = (tenants || []).filter(t => demoTrue(t.Is_Demo));
+  if (!demoProps.length && !demoOwners.length && !demoTenants.length && !(workorders || []).some(w => demoTrue(w.Is_Demo))) return null;
+  const propIds = new Set(demoProps.map(p => String(p.ID)));
+  const reg = { phones: new Map(), emails: new Map(), fakePhones: new Set(), fakeEmails: new Set(), ownerIds: new Set(), tenantIds: new Set(), woIds: new Set(), addrs: [] };
+  const add = (map, key, e) => { if (!key) return; if (!map.has(key)) map.set(key, []); map.get(key).push(e); };
+  const entry = (role, tab, r) => {
+    const slot = String(r.Demo_Slot || '1'), exp = String(r.Demo_Expires || '').trim(), expMs = exp ? Date.parse(exp) : NaN;
+    const live = !exp || (Number.isFinite(expMs) && expMs > nowMs);   // a missing expiry means "not started yet" (the 10 days begin at first login); an UNPARSEABLE one is treated as expired
+    return { role, tab, rowId: String(r.ID), slot, live, sms: parseInt(r.Demo_SMS_Count, 10) || 0, email: parseInt(r.Demo_Email_Count, 10) || 0 };
+  };
+  // Only a row marked Demo_Prospect = TRUE (the slot's owner and demo tenant, set by "Add demo prospect") holds a real, reachable contact. Any OTHER demo row
+  // (a fake tenant, a fake vendor) that has a phone/email anyway is a FAKE contact: it is never sent to, whatever the counters say.
+  const put = (r, e) => {
+    const ph = normalizePhone(r.Phone), ems = demoEmailList(r.Email);
+    if (demoTrue(r.Demo_Prospect)) { add(reg.phones, ph, e); for (const m of ems) add(reg.emails, m, e); }
+    else { if (ph) reg.fakePhones.add(ph); for (const m of ems) reg.fakeEmails.add(m); }
+  };
+  for (const o of demoOwners) { reg.ownerIds.add(String(o.ID)); put(o, entry('owner', 'Owners', o)); }
+  for (const t of demoTenants) { reg.tenantIds.add(String(t.ID)); put(t, entry('tenant', 'Tenants', t)); }
+  for (const w of (workorders || [])) if (demoTrue(w.Is_Demo) || propIds.has(String(w.Property_ID))) reg.woIds.add(String(w.ID).toUpperCase());
+  for (const p of demoProps) { const a = String(p.Address || '').trim().toLowerCase(); if (a.length >= 8) reg.addrs.push(a); }
+  return reg;
+}
+// Pure. Does this text/context point at a demo record?
+function demoRefersToDemo(reg, text, woId) {
+  if (!reg) return false;
+  if (woId && reg.woIds.has(String(woId).toUpperCase())) return true;
+  const t = String(text || ''), re = /\bWO[-\s#]?(\d+)\b/gi; let m;
+  while ((m = re.exec(t))) if (reg.woIds.has('WO-' + m[1])) return true;
+  const low = t.toLowerCase();
+  return reg.addrs.some(a => low.indexOf(a) >= 0);
+}
+// Pure. q = { channel: 'sms'|'email', to: [normalized phone | lowercase email], text, woId, recipientType }.
+// -> { action: 'pass' } | { action: 'block', reason } | { action: 'count', entry, cap, field }
+function demoGuardDecide(reg, q) {
+  if (!reg) return { action: 'pass' };
+  const map = q.channel === 'sms' ? reg.phones : reg.emails, fake = q.channel === 'sms' ? reg.fakePhones : reg.fakeEmails, hits = [], strangers = [];
+  if ((q.to || []).some(a => fake.has(a) && !map.has(a))) return { action: 'block', reason: 'demo record with a fake contact: fake demo contacts are never sent to' };
+  for (const a of (q.to || [])) { const e = map.get(a); if (e && e.length) hits.push(e); else strangers.push(a); }
+  if (!hits.length) return demoRefersToDemo(reg, q.text, q.woId) ? { action: 'block', reason: 'demo record named in a message to someone who is not the demo prospect' } : { action: 'pass' };
+  if (strangers.length) return { action: 'block', reason: 'a demo prospect contact was mixed with other recipients' };
+  const cands = hits[0];
+  // The caller says which test this is (owner or tenant). If it did not and the same contact sits on both the owner and the tenant row, use the one closest to its cap: over-blocking is the safe error.
+  const usedOf = e => q.channel === 'sms' ? e.sms : e.email;
+  const entry = q.recipientType ? (cands.find(e => e.role === q.recipientType) || cands[0]) : cands.reduce((a, b) => (usedOf(b) > usedOf(a) ? b : a));
+  if (!entry.live) return { action: 'block', reason: 'demo login expired: this prospect contact is no longer active' };
+  const cap = q.channel === 'sms' ? DEMO_SMS_CAP : DEMO_EMAIL_CAP, used = q.channel === 'sms' ? entry.sms : entry.email;
+  if (used >= cap) return { action: 'block', reason: 'test limit reached (' + cap + ' ' + (q.channel === 'sms' ? 'texts' : 'emails') + ' for the ' + entry.role + ' test)', limit: true };
+  return { action: 'count', entry, cap, field: q.channel === 'sms' ? 'Demo_SMS_Count' : 'Demo_Email_Count' };
+}
+async function demoRegistry(env) {
+  let rows;
+  try { rows = await fetchTabs(env, ['Owners', 'Tenants', 'Work_Orders', 'Properties']); }
+  catch (e) {
+    // A tab that does not exist yet (a brand-new or test sheet) holds no demo rows: read the tabs one by one and treat ONLY a missing tab as empty. Any other error still throws (fail closed).
+    if (!isMissingTabError(e)) throw e;
+    rows = [];
+    for (const t of ['Owners', 'Tenants', 'Work_Orders', 'Properties']) { try { rows.push(await fetchTab(env, t)); } catch (e2) { if (!isMissingTabError(e2)) throw e2; rows.push([]); } }
+  }
+  return demoBuildRegistry(rows[0], rows[1], rows[2], rows[3], Date.now());
+}
+async function demoBlockLog(env, channel, reason, ref) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'demo_send_blocked', Skill_Or_Endpoint: channel, Success: 'TRUE', Notes: String(reason + (ref ? ' [' + ref + ']' : '')).slice(0, 480) }); }
+  catch (e) { console.error('demo guard: telemetry write failed:', e && e.message); }
+}
+// The whole guard for one outbound message. -> null (go ahead) or { demo_blocked: true, reason }. Throws nothing.
+async function demoGuardSend(env, q) {
+  try {
+    let reg;
+    try { reg = await demoRegistry(env); }
+    catch (e) {
+      // Cannot tell whether this touches a demo record: fail closed, except a text to Brett's own number (that can never reach a stranger).
+      let own = false, ownErr = '';
+      if (q.channel === 'sms') { try { own = !!(q.to && q.to[0]) && smsIsOwnNumber(q.to[0], await fetchConfig(env), null); } catch (e2) { own = false; ownErr = ' (and Config could not be read either: ' + String((e2 && e2.message) || e2).slice(0, 80) + ')'; } }
+      if (own) return null;
+      await demoBlockLog(env, q.channel, 'demo guard could not read the demo registry, so the message was held back: ' + String((e && e.message) || e).slice(0, 160) + ownErr, q.channel === 'sms' ? 'to ***' + String(q.to && q.to[0] || '').slice(-4) : '');
+      return { demo_blocked: true, reason: 'demo guard unavailable (could not read the sheet): message held back' };
+    }
+    const d = demoGuardDecide(reg, q);
+    if (d.action === 'pass') return null;
+    const tail = q.channel === 'sms' ? 'to ***' + String(q.to && q.to[0] || '').slice(-4) : 'email';
+    if (d.action === 'block') { await demoBlockLog(env, q.channel, d.reason, tail); return { demo_blocked: true, reason: d.reason, limit: !!d.limit }; }
+    // count: re-read the row fresh, bump, read back. A failure to bump blocks the send (never an unmetered one).
+    invalidateTabCache(d.entry.tab);
+    const fresh = (await fetchTab(env, d.entry.tab)).find(r => String(r.ID) === d.entry.rowId);
+    const used = fresh ? (parseInt(fresh[d.field], 10) || 0) : 0;
+    if (!fresh || used >= d.cap) { const why = !fresh ? 'demo row not found' : 'test limit reached (' + d.cap + ' ' + (q.channel === 'sms' ? 'texts' : 'emails') + ' for the ' + d.entry.role + ' test)'; await demoBlockLog(env, q.channel, why, tail); return { demo_blocked: true, reason: why, limit: !!fresh }; }
+    const upd = {}; upd[d.field] = String(used + 1);
+    await updateRowVerified(env, d.entry.tab, d.entry.rowId, upd);
+    return null;
+  } catch (e) {
+    await demoBlockLog(env, q.channel, 'demo guard error, message held back: ' + String((e && e.message) || e).slice(0, 200), '');
+    return { demo_blocked: true, reason: 'demo guard error: message held back' };
+  }
+}
+async function demoGuardEmail(env, o) {
+  const to = demoEmailList(o.to).concat(demoEmailList(o.cc));
+  return demoGuardSend(env, { channel: 'email', to, text: String(o.subject || '') + ' ' + String(o.html || ''), woId: o.woId || '', recipientType: o.recipientType || '' });
+}
+
 const PORTAL_TAB_BY_TYPE = { tenant: 'Tenants', vendor: 'Vendors', owner: 'Owners', owner_user: 'Owner_Users' };
 
 // Pure: did Twilio really accept this text? Takes whatever sendSMS returned.
