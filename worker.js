@@ -17377,6 +17377,9 @@ async function pushMyRows(env, type, id) {
 async function pushSendOne(env, row, payload, opts) {
   opts = opts || {};
   try {
+    // Nov 11 2026 demo safety guard: the demo never uses push (its real messages are one text and one email, counted). A demo owner/tenant device is never pushed to.
+    { const _t = String(row.Recipient_Type || ''), _i = String(row.Recipient_ID || '');
+      if (_t === 'owner' || _t === 'tenant') { const _reg = await demoRegistry(env); if (_reg && (_t === 'owner' ? _reg.ownerIds : _reg.tenantIds).has(_i)) { await demoBlockLog(env, 'push', 'push is not used in the demo', _t + ' ' + _i); return { ok: false, status: 0, gone: false, demo_blocked: true, error: 'push is not used for demo accounts' }; } } }
     if (!pushEndpointOk(row.Endpoint)) return { ok: false, status: 0, gone: true, error: 'endpoint is not a push service address' };
     if (env.__STAGING__ ?? isStaging(env)) return { ok: true, status: 0, staged: true, gone: false, error: '' };   // staging never reaches a real phone
     const body = await pushEncrypt(new TextEncoder().encode(JSON.stringify(payload)), row.P256dh, row.Auth);
