@@ -17279,6 +17279,7 @@ const SMS_KNOWN_BAD_WINDOW_MS = 30 * 86400000;    // a number Twilio said is inv
 function smsSendOutcome(result) {
   if (result && result.sid) return { sent: true, status: 'sent', sid: result.sid, errorCode: '', reason: '' };
   if (result && result.duplicate) return { sent: false, status: 'skipped', sid: '', errorCode: '', reason: 'duplicate: ' + (result.reason || 'the same text was already sent'), duplicate: true };
+  if (result && result.demo_blocked) return { sent: false, status: 'skipped', sid: '', errorCode: 'blocked_demo', reason: 'demo: ' + (result.reason || 'text not sent: demo safety guard'), demoBlocked: true };   // Nov 11 2026: a calm, logged hold - not a Twilio failure, never a P0
   if (result && result.region_blocked) return { sent: false, status: 'failed', sid: '', errorCode: 'blocked_region', reason: result.reason || 'text not sent: destination outside enabled regions', regionBlocked: true };
   if (result && result.staged) return { sent: false, status: 'failed', sid: '', errorCode: '', reason: 'staging stub: nothing was really sent' };
   const e = smsErrorInfo(result);
