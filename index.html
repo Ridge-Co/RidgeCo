@@ -15713,6 +15713,26 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   </div>
 </div>
 
+<!-- DEMO PROSPECTS MODAL (Nov 11 2026, demo owner/tenant portals phase 2b). Admin only; every call is /demo/* on the Worker (admin token). -->
+<div class="modal-overlay" id="modal-demo-prospects">
+  <div class="modal" style="max-width:600px">
+    <div class="modal-header"><div class="modal-title">DEMO PROSPECTS</div><button class="modal-close" onclick="closeModal('modal-demo-prospects')">✕</button></div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:10px">Gives a prospective owner a demo login with sample data. The same name + PIN works on the demo owner portal and the demo tenant portal. Their <b>10 days start at their first login</b>. Nothing is texted or emailed when you add them: you give them the name and PIN yourself. Demo data never shows up in your real lists, digest or reports.</p>
+    <div id="dp-slots"><div class="loading">Loading…</div></div>
+    <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+      <div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">ADD A PROSPECT</div>
+      <div class="form-grid">
+        <div class="form-group"><label>First name <span style="font-weight:normal;color:var(--muted)">(their login name)</span></label><input type="text" id="dp-name" autocomplete="off"></div>
+        <div class="form-group"><label>Cell phone <span style="font-weight:normal;color:var(--muted)">(demo texts go only here)</span></label><input type="tel" id="dp-phone" autocomplete="off"></div>
+        <div class="form-group full"><label>Email <span style="font-weight:normal;color:var(--muted)">(demo emails go only here)</span></label><input type="email" id="dp-email" autocomplete="off"></div>
+      </div>
+      <div id="dp-msg"></div>
+      <div id="dp-result"></div>
+      <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-demo-prospects')">Close</button><button class="btn" id="dp-add-btn" onclick="addDemoProspect()">Add prospect</button></div>
+    </div>
+  </div>
+</div>
+
 <!-- EDIT OWNER MODAL (Aug 20, 2026 — replaces the old "edit via the Sheet" toast; real edit like Vendor/Tenant/Property) -->
 <div class="modal-overlay" id="modal-edit-owner">
   <div class="modal" style="max-width:480px">
