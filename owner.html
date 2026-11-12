@@ -535,6 +535,8 @@ function onLoginSuccess(data, persist){
   if (data.token) SECRET = data.token;
   var displayName = data.user_name || data.owner_name || '';
   var displayCo = data.is_sub_user && data.owner_company ? data.owner_company : (data.owner_company || 'Owner Portal');
+  if (data.demo) displayCo = 'DEMO · ' + displayCo;
+  demoBanner(!!data.demo);
   var n=document.getElementById('ownerName'); if(n) n.textContent = displayName;
   var c=document.getElementById('ownerCompany'); if(c) c.textContent = displayCo;
   show('screenLogin', false);
