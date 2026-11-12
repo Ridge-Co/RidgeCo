@@ -2189,6 +2189,7 @@ async function tenantByPin(env, url) {
     }
     const tFirst = (tenant.First_Name||'').toLowerCase();
     if (tFirst !== name && !tFirst.startsWith(name)) return null;
+    { const _dg = await demoLoginGate(env, 'Tenants', tenant); if (_dg) return _dg; }   // demo login: refuses after the 10 days, starts the clock on the first login
     _m.login = { tab: 'Tenants', id: tenant.ID, row: tenant };
     const [props, units, owners] = await fetchTabs(env, ['Properties','Units','Owners']);
     const unit = units.find(u => u.ID === tenant.Unit_ID) || {};
