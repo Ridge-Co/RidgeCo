@@ -106,7 +106,7 @@ function build(db) {
     'const CORS = {};',
     cacheSrc, srSrc, ensureSrc, idcSrc, colSrc, jsonSrc, fetchTabSrc, findWOSrc,
     updateWOFieldsSrc, nextSafeIdSrc, logAuditSrc, logAuditManySrc,
-    reasonsSrc, columnsSrc, woVoidSrc, woUnvoidSrc, getListSrc,
+    reasonsSrc, columnsSrc, woVoidSrc, woUnvoidSrc, demoHideSrc, getListSrc,
     'return { woVoid, woUnvoid, getWorkOrdersList };',
   ].join('\n');
   return new Function('getAccessToken', 'fetch', 'setTimeout',
