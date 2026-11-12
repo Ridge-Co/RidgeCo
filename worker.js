@@ -546,6 +546,7 @@ const _hubWorkerCore = {
           if (_session.stg && !isStaging(env, url)) return json({ error: 'Unauthorized' }, 401);
           callerRole = _session.role;
           callerSessionId = _session.id;
+          if (_session.demo) { callerDemoSlot = String(_session.demo); const _dd = await demoSessionDenied(env, _session); if (_dd) return _dd; }   // a demo session dies the moment its slot is cleared or expires
         }
       }
     }
