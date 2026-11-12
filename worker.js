@@ -2282,7 +2282,7 @@ async function ownerByPin(env, url) {
       owner_id: owner.ID, owner_name: `${owner.First_Name} ${owner.Last_Name||''}`.trim(),
       owner_company: owner.Company||'', owner_phone: owner.Phone||'',
       user_name: `${owner.First_Name} ${owner.Last_Name||''}`.trim(), is_sub_user: false,
-      token: await makeSessionToken({ role: 'owner', id: owner.ID }, env.WORKER_SECRET),
+      token: await makeSessionToken({ role: 'owner', id: owner.ID, ...demoTokenClaim(owner) }, env.WORKER_SECRET),
     });
   });
 }
