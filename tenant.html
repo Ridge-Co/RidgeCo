@@ -405,6 +405,7 @@ function onLoginSuccess(data, persist){
 
 function doLogout() {
   session = null; allWOs = [];
+  demoBanner(false);
   SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
   document.getElementById('pinInput').value = '';
   var ni = document.getElementById('nameInput'); if(ni) ni.value = '';
