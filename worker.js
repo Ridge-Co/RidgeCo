@@ -807,6 +807,10 @@ const _hubWorkerCore = {
             const _owd = await ownerWriteScopeDenied(env, path, body, callerSessionId);
             if (_owd) return _owd;
           }
+          if (callerRole === 'tenant' && callerDemoSlot) {   // a demo tenant may write only inside its own demo slot
+            const _dtw = await demoTenantWriteDenied(env, path, body, callerSessionId, callerDemoSlot);
+            if (_dtw) return _dtw;
+          }
         }
         // HUB_TEST_TOKEN record-level guard (test-infrastructure build, Sep 19 2026): the path
         // allow-list in the auth gate above only proves the ROUTE is test-safe — this proves the
