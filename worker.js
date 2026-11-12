@@ -9975,7 +9975,7 @@ async function getWorkOrdersList(env, url) {
   const filtered = voidedOnly ? rows.filter(r => r.Voided === 'TRUE')
     : includeVoided ? rows
     : rows.filter(r => r.Voided !== 'TRUE');
-  return json(filtered.filter(r => String(r.Addon_Status || '') !== 'Draft'));   // additional-work drafts are never listed
+  return json(demoHide(filtered.filter(r => String(r.Addon_Status || '') !== 'Draft')));   // additional-work drafts are never listed; demo work orders live only in their demo portals
 }
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // DUPLICATE WORK ORDER + BID GROUPS  (Oct 12 2026, Brett)
