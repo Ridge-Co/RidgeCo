@@ -2088,7 +2088,8 @@ async function stampPinSend(env, type, id, verdict) {
 async function portalAccessList(env, url) {
   const cfg = await fetchConfig(env);
   const opt = { amberDays: parseInt(cfg.PORTAL_FOLLOWUP_AMBER_DAYS, 10) || 14, redDays: parseInt(cfg.PORTAL_FOLLOWUP_RED_DAYS, 10) || 30 };
-  const [tenants, vendors, owners, ownerUsers] = await fetchTabs(env, ['Tenants', 'Vendors', 'Owners', 'Owner_Users']);
+  const [tenants0, vendors, owners0, ownerUsers] = await fetchTabs(env, ['Tenants', 'Vendors', 'Owners', 'Owner_Users']);
+  const tenants = demoHide(tenants0), owners = demoHide(owners0);   // demo prospects are never on the follow-up list
   const now = Date.now(), people = [];
   const add = (type, r, name, extra) => people.push(Object.assign({ type, id: String(r.ID), name: name || '', has_phone: !!String(r.Phone || '').trim(), has_pin: !!String(r.PIN || '').trim() }, extra || {}, portalAccessStatus(r, now, opt)));
   const full = (r) => ((r.First_Name || '') + ' ' + (r.Last_Name || '')).trim();
