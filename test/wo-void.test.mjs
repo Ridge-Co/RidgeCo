@@ -50,6 +50,7 @@ const columnsSrc         = grabConst(wsrc, 'const WO_VOID_COLUMNS');
 const woVoidSrc          = grab(wsrc, 'async function woVoid(');
 const woUnvoidSrc        = grab(wsrc, 'async function woUnvoid(');
 const getListSrc         = grab(wsrc, 'async function getWorkOrdersList(');
+const demoHideSrc        = ['function demoTrue(v)', 'function demoIsDemoRow(r)', 'function demoHide(rows)'].map(sig => { const a = wsrc.indexOf(sig); if (a < 0) throw new Error('not found: ' + sig); const re = /\n(?=function |async function |const |\/\/)/g; re.lastIndex = a + 1; const m = re.exec(wsrc); return wsrc.slice(a, m ? m.index : wsrc.length); }).join('\n');
 
 // ── In-memory fake Sheets backend (same shape/behavior as turnover.test.mjs's mock) ──────
 const WO_HEADERS = ['ID','Property_ID','Unit_ID','Vendor_ID','Trade','Description','Status','Notes',
