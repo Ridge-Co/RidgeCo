@@ -922,6 +922,10 @@ const _hubWorkerCore = {
         if (path === '/owner/add')                { await ensureColumns(env, 'Owners', OWNER_BILLING_COLS); return await addOwnerWithQBSync(env, body); }
         if (path === '/owner/update')             { await ensureColumns(env, 'Owners', OWNER_BILLING_COLS); return await updateRow(env, 'Owners', body.id, body.fields); }
         if (path === '/owner/tenant-wo-toggle')   return await setOwnerTenantWOToggle(env, body);
+        if (path === '/demo/add')                 return await demoAddProspect(env, body);      // demo portals: admin only (in no role scope)
+        if (path === '/demo/reset')               return await demoResetEndpoint(env, body);
+        if (path === '/demo/convert')             return await demoConvert(env, body);
+        if (path === '/demo/sweep')               return json({ success: true, ...(await demoSweep(env)) });
         if (path === '/property/tenant-wo-toggle') return await setPropertyTenantWOToggle(env, body);
         if (path === '/property/toggle')          return await propertyToggleSet(env, body);
         if (path === '/property/info-save')       return await propertyInfoSave(env, body);
