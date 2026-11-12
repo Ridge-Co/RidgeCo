@@ -28434,7 +28434,7 @@ async function fetchTabs(env, tabs, opts) {
 async function hubBootstrap(env) {
   const [properties, units, tenants, vendors, workorders, invoices, owners, keys] =
     await fetchTabs(env, ['Properties','Units','Tenants','Vendors','Work_Orders','Invoices','Owners','Keys']);
-  return json({ properties, units, tenants, vendors, workorders: workorders.filter(w => String(w.Addon_Status || '') !== 'Draft'), invoices, owners, keys });
+  return json({ properties: demoHide(properties), units: demoHide(units), tenants: demoHide(tenants), vendors, workorders: demoHide(workorders.filter(w => String(w.Addon_Status || '') !== 'Draft')), invoices, owners: demoHide(owners), keys });   // demo rows are managed on the Owners page (Demo prospects), not listed with real data
 }
 
 // GET /twilio/message-status?sid=SM...,SM...  — admin-gated diagnostic. Message_Queue's
