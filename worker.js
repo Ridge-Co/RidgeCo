@@ -20721,7 +20721,7 @@ function activeRows(rows) { return rows.filter(r => String(r.Active||'').toUpper
 
 async function buildDigest(env) {
   const today = etTodayISO();
-  const [wos, bills, props, vendors, tenants] = await Promise.all([
+  const [wos0, bills, props0, vendors, tenants0] = await Promise.all([
     fetchTab(env,'Work_Orders').catch(()=>[]),
     fetchTab(env,'Vendor_Bills').catch(()=>[]),
     fetchTab(env,'Properties').catch(()=>[]),
