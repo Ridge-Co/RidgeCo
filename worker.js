@@ -2268,6 +2268,8 @@ async function ownerByPin(env, url) {
     }
     const owner = owners.find(o => o.PIN && o.PIN.toLowerCase() === p.toLowerCase() && o.Active !== 'FALSE');
     if (!owner) return null;
+    if (demoTrue(owner.Is_Demo)) { const _f = String(owner.First_Name || '').toLowerCase(); if (_f !== enteredName && !_f.startsWith(enteredName)) return null; }   // demo owners log in with first name + PIN like tenants do
+    { const _dg = await demoLoginGate(env, 'Owners', owner); if (_dg) return _dg; }   // demo login: refuses after the 10 days, starts the clock on the first login
     _m.login = { tab: 'Owners', id: owner.ID, row: owner };
     return json({
       owner_id: owner.ID, owner_name: `${owner.First_Name} ${owner.Last_Name||''}`.trim(),
