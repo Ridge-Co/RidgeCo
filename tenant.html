@@ -387,7 +387,8 @@ function onLoginSuccess(data, persist){
   session = data;
   if (data.token) SECRET = data.token;
   var n=document.getElementById('tenantName'); if(n) n.textContent = data.tenant_name || '';
-  var a=document.getElementById('tenantAddr'); if(a) a.textContent = (data.property_address||'') + (data.unit_label ? ' · Unit ' + data.unit_label : '');
+  var a=document.getElementById('tenantAddr'); if(a) a.textContent = (data.demo ? 'DEMO · ' : '') + (data.property_address||'') + (data.unit_label ? ' · Unit ' + data.unit_label : '');
+  demoBanner(!!data.demo);
   var fb=document.getElementById('feedbackFloatBtn'); if(fb) fb.style.display = '';
   // Tenant-work-order-submission toggle (built Aug 20 2026, wired into this portal Sep 16
   // 2026): server resolves the owner/property/unit hierarchy and hands back a plain boolean
