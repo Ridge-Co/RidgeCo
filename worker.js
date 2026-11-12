@@ -1678,6 +1678,16 @@ function demoSweepReason(ownerRow, nowMs) {
   return '';
 }
 function demoTokenClaim(row) { return (row && demoTrue(row.Is_Demo)) ? { demo: String(row.Demo_Slot || '1') } : {}; }
+// Phase 2b (Nov 11 2026): demo rows (fixed IDs DO<n>/DT<n>/DP<n>A../DU<n>A.., Is_Demo=TRUE, or a work order on a demo property) never show up in the
+// admin Hub lists, the daily digest or the portal-access list. Deliberately NOT applied to the message sweeps: a queued demo message whose
+// recipient row was hidden would look like "recipient not found" and alarm Brett; the transport guard already turns those into quiet skips.
+function demoIsDemoRow(r) {
+  if (!r) return false;
+  if (demoTrue(r.Is_Demo)) return true;
+  const id = String(r.ID == null ? '' : r.ID), pid = String(r.Property_ID == null ? '' : r.Property_ID);
+  return /^D[OT]\d+$/.test(id) || /^DP\d+[A-Z]$/.test(id) || /^DU\d+[A-Z]\d+$/.test(id) || /^DP\d+[A-Z]$/.test(pid);
+}
+function demoHide(rows) { return Array.isArray(rows) ? rows.filter(r => !demoIsDemoRow(r)) : rows; }
 async function demoTelemetry(env, type, ok, notes) {
   try { await logTelemetry(env, { Source: 'worker', Job_Type: type, Skill_Or_Endpoint: 'demo', Success: ok ? 'TRUE' : 'FALSE', Notes: String(notes).slice(0, 480) }); }
   catch (e) { console.error('demo telemetry failed:', e && e.message); }
