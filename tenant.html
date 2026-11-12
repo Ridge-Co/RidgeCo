@@ -374,6 +374,15 @@ function doLogin() {
     .catch(function(){ btn.disabled=false; btn.textContent='SIGN IN'; showLoginMsg('Connection error.','error'); });
 }
 
+// Phase 2b (Nov 11 2026): demo logins get a visible DEMO strip at the top of the page and a DEMO tag in the header, so nobody mistakes the sample data for real.
+function demoBanner(on) {
+  var old = document.getElementById('demoBanner'); if (old) old.parentNode.removeChild(old);
+  if (!on) return;
+  var b = document.createElement('div'); b.id = 'demoBanner';
+  b.style.cssText = 'background:#b45309;color:#fff;text-align:center;padding:8px 12px;font:700 13px/1.35 system-ui,-apple-system,sans-serif;letter-spacing:.04em';
+  b.textContent = 'DEMO — sample data only. Nothing here is a real property, tenant, bill or message.';
+  document.body.insertBefore(b, document.body.firstChild);
+}
 function onLoginSuccess(data, persist){
   session = data;
   if (data.token) SECRET = data.token;
