@@ -213,6 +213,7 @@ const _hubWorkerCore = {
     // own signed session instead, so a valid tenant session can't submit a WO tagged to a
     // different property/unit/tenant than their own.
     let callerSessionId = null;
+    let callerDemoSlot = '';
     // Set true only when this request was authenticated via HUB_TEST_TOKEN (test-infrastructure
     // build, Sep 19 2026) — the narrow, staging-only token that lets a Cowork session run real
     // smoke tests without ever holding WORKER_SECRET. Declared here (outer scope) rather than
