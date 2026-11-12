@@ -20728,6 +20728,7 @@ async function buildDigest(env) {
     fetchTab(env,'Vendors').catch(()=>[]),
     fetchTab(env,'Tenants').catch(()=>[]),
   ]);
+  const wos = demoHide(wos0), props = demoHide(props0), tenants = demoHide(tenants0);   // demo work orders/properties never reach Brett's digest
   const open = wos.filter(w => OPEN_WO_STATUSES.includes(w.Status));
   const isUrgent = w => String(w.Priority||'').toLowerCase()==='urgent';
   const label = w => `WO-${w.ID||'?'} · ${w.Property_Address||('prop '+(w.Property_ID||'?'))}${w.Unit_Label?(' '+w.Unit_Label):''} · ${w.Status}${isUrgent(w)?' · URGENT':''}${w.Description?(' · '+String(w.Description).slice(0,55)):''}`;
