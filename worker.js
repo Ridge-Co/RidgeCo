@@ -1609,6 +1609,312 @@ async function demoGuardEmail(env, o) {
   return demoGuardSend(env, { channel: 'email', to, text: String(o.subject || '') + ' ' + String(o.html || ''), woId: o.woId || '', recipientType: o.recipientType || '' });
 }
 
+// ── DEMO SLOTS AND ADMIN (Nov 11 2026, Phase 2a of Brett's demo owner/tenant portal; design brief claude/demo-owner-portal-design-nov10) ───────────────────────────────
+// A small fixed pool of demo SLOTS. Each slot = one demo owner + one demo tenant (they share the prospect's first name + one PIN) + a clone of the same fictional
+// properties/units. "Add demo prospect" takes the next free slot and puts the prospect's name, phone and email on that slot's owner and tenant; the 10-day clock
+// starts at the prospect's FIRST LOGIN (both rows get the same Demo_Expires); convert or expiry clears the contact (so nothing can ever reach her again), wipes what she
+// created, and frees the slot. An idle slot has Active = FALSE, so nobody can log into it. Nothing here calls QuickBooks except Convert (the normal owner path).
+// Nothing fails silently: every step is read back, a failed step throws a plain-words error, and every reset writes an Ops_Telemetry row.
+const DEMO_SLOT_COUNT = 3, DEMO_LOGIN_DAYS = 10, DEMO_NEVER_LOGGED_DAYS = 30, DEMO_WIPE_CAP = 200;
+const DEMO_COLS = ['Is_Demo', 'Demo_Slot', 'Demo_Prospect', 'Demo_First_Login', 'Demo_Expires', 'Demo_Added', 'Demo_SMS_Count', 'Demo_Email_Count', 'Demo_Converted_Owner_ID'];
+const DEMO_FIXED_TABS = ['Owners', 'Tenants', 'Properties', 'Units'];
+const DEMO_OWNER_IDLE = { First_Name: 'Demo', Last_Name: 'Owner', Phone: '', Email: '', PIN: '', Active: 'FALSE', Demo_Prospect: 'FALSE', Demo_First_Login: '', Demo_Expires: '', Demo_Added: '', Demo_SMS_Count: '0', Demo_Email_Count: '0', Demo_Converted_Owner_ID: '' };
+const DEMO_TENANT_IDLE = { First_Name: 'Demo', Last_Name: 'Tenant', Phone: '', Email: '', PIN: '', Active: 'FALSE', Demo_Prospect: 'FALSE', Demo_First_Login: '', Demo_Expires: '', Demo_Added: '', Demo_SMS_Count: '0', Demo_Email_Count: '0' };
+// Pure. The fictional rows for one slot (fictional names and addresses only; no real person, business or street). Same data in every slot.
+function demoFixture(slot) {
+  const n = String(slot), ownerId = 'DO' + n;
+  const props = [
+    { k: 'A', Address: '1200 Fakeview Lane, Demoville, MD 21999', Units: ['1', '2'] },
+    { k: 'B', Address: '48 Pretend Court, Demoville, MD 21999', Units: ['1', '2'] },
+    { k: 'C', Address: '315 Sample Row, Demoville, MD 21999', Units: ['1', '2'] },
+  ];
+  const flag = { Is_Demo: 'TRUE', Demo_Slot: n };
+  return {
+    ownerId, tenantId: 'DT' + n,
+    owner: { ID: ownerId, Company: 'Sample Demo Properties', ...DEMO_OWNER_IDLE, ...flag, Demo_Prospect: 'FALSE' },
+    props: props.map(p => ({ ID: 'DP' + n + p.k, Address: p.Address, Owner_ID: ownerId, Tenant_WO_Toggle: 'ON', ...flag })),   // 'ON' so the demo tenant can try the request form
+    units: props.flatMap(p => p.Units.map(u => ({ ID: 'DU' + n + p.k + u, Property_ID: 'DP' + n + p.k, Unit_Label: 'Unit ' + u, ...flag }))),
+    tenant: { ID: 'DT' + n, ...DEMO_TENANT_IDLE, ...flag, Property_ID: 'DP' + n + 'A', Unit_ID: 'DU' + n + 'A1' },
+  };
+}
+// Pure. "Maria Lopez" / {first_name,last_name} -> { first, last } or null.
+function demoParseName(body) {
+  let first = String((body && (body.first_name || '')) || '').trim(), last = String((body && (body.last_name || '')) || '').trim();
+  if (!first && body && body.name) { const p = String(body.name).trim().split(/\s+/); first = p.shift() || ''; last = p.join(' '); }
+  if (!/^[A-Za-z][A-Za-z'\-. ]{0,39}$/.test(first)) return null;
+  return { first, last: /^[A-Za-z][A-Za-z'\-. ]{0,59}$/.test(last) ? last : '' };
+}
+function demoIso(ms) { return new Date(ms).toISOString(); }
+// Pure. State of a slot from its owner row (+ now).
+function demoSlotState(ownerRow, nowMs) {
+  if (!ownerRow) return 'not set up';
+  if (!demoTrue(ownerRow.Demo_Prospect)) return 'free';
+  const exp = String(ownerRow.Demo_Expires || '').trim();
+  if (!exp) return 'waiting for first login';
+  const ms = Date.parse(exp);
+  return (Number.isFinite(ms) && ms > nowMs) ? 'active' : 'expired';
+}
+// Pure. Should the sweep clear this prospect now? -> '' | reason
+function demoSweepReason(ownerRow, nowMs) {
+  if (!ownerRow || !demoTrue(ownerRow.Is_Demo) || !demoTrue(ownerRow.Demo_Prospect)) return '';
+  const st = demoSlotState(ownerRow, nowMs);
+  if (st === 'expired') return 'expired: the ' + DEMO_LOGIN_DAYS + ' days after first login are over';
+  if (st === 'waiting for first login') {
+    const added = Date.parse(String(ownerRow.Demo_Added || ''));
+    if (!Number.isFinite(added)) return 'never logged in and the added date is missing or unreadable';
+    if (nowMs - added > DEMO_NEVER_LOGGED_DAYS * 86400000) return 'never logged in within ' + DEMO_NEVER_LOGGED_DAYS + ' days of being added';
+  }
+  return '';
+}
+function demoTokenClaim(row) { return (row && demoTrue(row.Is_Demo)) ? { demo: String(row.Demo_Slot || '1') } : {}; }
+async function demoTelemetry(env, type, ok, notes) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: type, Skill_Or_Endpoint: 'demo', Success: ok ? 'TRUE' : 'FALSE', Notes: String(notes).slice(0, 480) }); }
+  catch (e) { console.error('demo telemetry failed:', e && e.message); }
+}
+// Append rows (objects) to a tab by header name; skips IDs that already exist (so it is safe to repeat); reads everything back. `required` = fields that must
+// exist as columns AND read back identical (a formula-backed or missing column must fail loudly, never silently drop a value).
+async function demoAppendRows(env, tab, rows, required) {
+  if (!rows.length) return 0;
+  const data = await sheetsRequest(env, 'GET', `/values/${tab}`);
+  const all = data.values || [], headers = all[0] || [];
+  if (!headers.length) throw new Error(`Sheet tab "${tab}" has no header row`);
+  const miss = (required || []).filter(h => !headers.includes(h));
+  if (miss.length) throw new Error(`${tab} has no column ${miss.join(', ')}; demo rows cannot be saved`);
+  const idc = idColIndex(headers), have = new Set(all.slice(1).map(r => String((r && r[idc]) || '')));
+  const fresh = rows.filter(r => !have.has(String(r.ID)));
+  if (fresh.length) await sheetsRequest(env, 'POST', `/values/${tab}:append?valueInputOption=RAW`, { values: fresh.map(r => headers.map(h => r[h] !== undefined ? String(r[h]) : '')) });
+  invalidateTabCache(tab);
+  const back = await fetchTab(env, tab), bad = [];
+  for (const r of rows) {
+    const b = back.find(x => String(x.ID) === String(r.ID));
+    if (!b) { bad.push(r.ID + ' (missing)'); continue; }
+    for (const h of (required || [])) if (r[h] !== undefined && String(b[h] == null ? '' : b[h]) !== String(r[h])) bad.push(r.ID + '.' + h);
+  }
+  if (bad.length) throw new Error(`${tab}: demo rows did not save as written (${bad.slice(0, 6).join(', ')})`);
+  return fresh.length;
+}
+// Delete the rows of one tab that match pred. Capped; re-checks the target rows right before deleting; reads back that exactly those rows are gone and nothing else.
+async function demoDeleteRows(env, tab, pred, cap) {
+  let data;
+  try { data = await sheetsRequest(env, 'GET', `/values/${tab}`); } catch (e) { if (isMissingTabError(e)) return 0; throw e; }
+  const rows = data.values || [], headers = rows[0] || [];
+  if (!headers.length) return 0;
+  const idc = idColIndex(headers), obj = (r) => { const o = {}; headers.forEach((h, k) => { o[h] = r && r[k] != null ? r[k] : ''; }); return o; };
+  const target = []; for (let i = 1; i < rows.length; i++) if (pred(obj(rows[i]))) target.push({ i, id: String((rows[i] || [])[idc] || '') });
+  if (!target.length) return 0;
+  if (target.length > cap) throw new Error(`${tab}: ${target.length} demo rows to delete is more than the safety cap of ${cap}; nothing was deleted`);
+  const again = (await sheetsRequest(env, 'GET', `/values/${tab}`)).values || [];
+  if (target.some(t => String((again[t.i] || [])[idc] || '') !== t.id || !pred(obj(again[t.i])))) throw new Error(`${tab}: the sheet changed while clearing demo rows; nothing was deleted, try again`);
+  const meta = await sheetsRequest(env, 'GET', `?fields=sheets.properties(sheetId,title)`);
+  const sm = (meta.sheets || []).find(s => s.properties && s.properties.title === tab);
+  if (!sm) throw new Error(`${tab}: could not find the tab to delete demo rows`);
+  await sheetsRequest(env, 'POST', ':batchUpdate', { requests: target.slice().reverse().map(t => ({ deleteDimension: { range: { sheetId: sm.properties.sheetId, dimension: 'ROWS', startIndex: t.i, endIndex: t.i + 1 } } })) });
+  invalidateTabCache(tab);
+  const after = await fetchTab(env, tab), afterIds = new Set(after.map(r => String(r.ID))), gone = new Set(target.map(t => t.id));
+  const lost = rows.slice(1).map(r => String((r || [])[idc] || '')).filter(id => id && !gone.has(id) && !afterIds.has(id));
+  if (after.some(r => pred(r)) || lost.length) throw new Error(`${tab}: demo rows were not cleared as expected (${after.some(r => pred(r)) ? 'some are still there' : lost.length + ' other row(s) went missing: ' + lost.slice(0, 5).join(', ')})`);
+  return target.length;
+}
+async function demoReadSlots(env) {
+  const [owners, tenants, props, units] = await fetchTabs(env, DEMO_FIXED_TABS);
+  const slots = [];
+  for (let n = 1; n <= DEMO_SLOT_COUNT; n++) {
+    const s = String(n), mine = (r) => demoTrue(r.Is_Demo) && String(r.Demo_Slot) === s;
+    slots.push({ slot: n, owner: owners.find(mine) || null, tenant: tenants.find(mine) || null, props: props.filter(mine), units: units.filter(mine) });
+  }
+  return slots;
+}
+async function demoEnsureColumns(env) { for (const t of DEMO_FIXED_TABS) await ensureColumns(env, t, DEMO_COLS); }
+// Make sure the slot's fixed rows exist (idempotent).
+async function demoEnsureSlot(env, n) {
+  await demoEnsureColumns(env);
+  const f = demoFixture(n);
+  await demoAppendRows(env, 'Owners', [f.owner], ['Is_Demo', 'Demo_Slot', 'First_Name', 'Active', 'Demo_Prospect']);
+  await ensureColumns(env, 'Properties', ['Tenant_WO_Toggle']);
+  await demoAppendRows(env, 'Properties', f.props, ['Is_Demo', 'Demo_Slot', 'Address', 'Owner_ID', 'Tenant_WO_Toggle']);
+  await demoAppendRows(env, 'Units', f.units, ['Is_Demo', 'Demo_Slot', 'Property_ID', 'Unit_Label']);
+  await demoAppendRows(env, 'Tenants', [f.tenant], ['Is_Demo', 'Demo_Slot', 'First_Name', 'Active', 'Unit_ID', 'Property_ID', 'Demo_Prospect']);
+  return f;
+}
+// Delete what a prospect created in a slot: work orders on the slot's properties and their attachments. Run when a slot is reset AND again before it is handed out.
+async function demoWipeSlotData(env, f) {
+  const propIds = new Set(f.props.map(p => String(p.ID)));
+  const woIds = new Set((await fetchTab(env, 'Work_Orders')).filter(w => propIds.has(String(w.Property_ID))).map(w => String(w.ID)));
+  let n = 0;
+  const bare = (x) => String(x == null ? '' : x).trim().replace(/^WO-/i, '');
+  const woBare = new Set([...woIds].map(bare));
+  n += await demoDeleteRows(env, 'Attachments', (a) => bare(a.WO_ID) !== '' && woBare.has(bare(a.WO_ID)), DEMO_WIPE_CAP);
+  n += await demoDeleteRows(env, 'Work_Orders', (w) => propIds.has(String(w.Property_ID)), DEMO_WIPE_CAP);
+  return n;
+}
+// Clear the prospect's name/contact/PIN/counters/clock from the slot's owner and tenant FIRST (so nothing can reach her any more), then wipe what she created.
+async function demoResetSlot(env, n, reason) {
+  const f = demoFixture(n), rows = (await demoReadSlots(env))[n - 1];
+  if (!rows.owner && !rows.tenant) return { slot: n, reset: false, note: 'slot was never set up' };
+  const errs = [];
+  if (rows.owner) { try { await updateRowVerified(env, 'Owners', rows.owner.ID, DEMO_OWNER_IDLE); } catch (e) { errs.push('owner: ' + e.message); } }
+  if (rows.tenant) { try { await updateRowVerified(env, 'Tenants', rows.tenant.ID, DEMO_TENANT_IDLE); } catch (e) { errs.push('tenant: ' + e.message); } }
+  let wiped = 0;
+  try { wiped = await demoWipeSlotData(env, f); } catch (e) { errs.push('wipe: ' + e.message); }
+  if (errs.length) { await demoTelemetry(env, 'demo_slot_reset', false, `slot ${n} (${reason}) FAILED: ${errs.join(' | ')}`); throw new Error(`Demo slot ${n} was NOT fully cleared (${errs.join(' | ')})`); }
+  await demoTelemetry(env, 'demo_slot_reset', true, `slot ${n} cleared (${reason}); ${wiped} prospect-created row(s) removed`);
+  return { slot: n, reset: true, wiped };
+}
+function demoSlotSummary(s, nowMs) {
+  const o = s.owner || {}, t = s.tenant || {};
+  return { slot: s.slot, state: demoSlotState(s.owner, nowMs), prospect: demoTrue(o.Demo_Prospect) ? { first_name: o.First_Name || '', last_name: o.Last_Name || '', phone: o.Phone || '', email: o.Email || '', pin: o.PIN || '' } : null,
+    added: o.Demo_Added || '', first_login: o.Demo_First_Login || '', expires: o.Demo_Expires || '', owner_id: o.ID || '', tenant_id: t.ID || '',
+    owner_test: { texts: parseInt(o.Demo_SMS_Count, 10) || 0, emails: parseInt(o.Demo_Email_Count, 10) || 0, text_cap: DEMO_SMS_CAP, email_cap: DEMO_EMAIL_CAP },
+    tenant_test: { texts: parseInt(t.Demo_SMS_Count, 10) || 0, emails: parseInt(t.Demo_Email_Count, 10) || 0, text_cap: DEMO_SMS_CAP, email_cap: DEMO_EMAIL_CAP } };
+}
+async function demoListSlots(env) { const now = Date.now(); return json({ slots: (await demoReadSlots(env)).map(s => demoSlotSummary(s, now)), pool_size: DEMO_SLOT_COUNT, login_days: DEMO_LOGIN_DAYS }); }
+async function demoAddProspect(env, body) {
+  const nm = demoParseName(body);
+  if (!nm) return json({ error: 'First name is required (letters only).' }, 400);
+  const phone = normalizePhone(body && body.phone), email = demoEmailKey(body && body.email);
+  if (!/^\+1\d{10}$/.test(phone)) return json({ error: 'A valid US phone number is required (the demo texts only this number).' }, 400);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json({ error: 'A valid email address is required (the demo emails only this address).' }, 400);
+  await demoSweep(env);   // free any slot whose time is up first (throws loudly if that cannot be done)
+  let slots = await demoReadSlots(env), now = Date.now();
+  const clash = slots.find(s => demoTrue(s.owner && s.owner.Demo_Prospect) && (normalizePhone(s.owner.Phone) === phone || demoEmailKey(s.owner.Email) === email));
+  if (clash) return json({ error: `That phone or email is already in demo slot ${clash.slot}. Clear that one first.` }, 409);
+  const want = body && body.slot ? parseInt(body.slot, 10) : 0;
+  if (want && !(want >= 1 && want <= DEMO_SLOT_COUNT)) return json({ error: 'slot must be 1-' + DEMO_SLOT_COUNT }, 400);
+  const free = slots.find(s => (!want || s.slot === want) && (!s.owner || demoSlotState(s.owner, now) === 'free'));
+  if (!free) return json({ error: want ? `Demo slot ${want} is not free.` : `All ${DEMO_SLOT_COUNT} demo slots are in use. Clear one first.`, slots: slots.map(s => demoSlotSummary(s, now)) }, 409);
+  const n = free.slot, f = await demoEnsureSlot(env, n);
+  await demoWipeSlotData(env, f);   // a slot is always handed out clean, even if an earlier wipe failed
+  const taken = new Set((await ooPinHolders(env)).keys());
+  const pin = ownerPinPropose(phone, taken).pin;
+  if (!pin) throw new Error('Could not find an unused PIN for the demo; nothing was changed');
+  const common = { First_Name: nm.first, Phone: phone, Email: email, PIN: pin, Active: 'TRUE', Demo_Prospect: 'TRUE', Demo_First_Login: '', Demo_Expires: '', Demo_Added: demoIso(now), Demo_SMS_Count: '0', Demo_Email_Count: '0' };
+  try {
+    await updateRowVerified(env, 'Owners', f.ownerId, { ...common, Last_Name: nm.last });
+    await updateRowVerified(env, 'Tenants', f.tenantId, { ...common, Last_Name: nm.last ? nm.last + ' (demo tenant)' : 'Demo Tenant' });
+  } catch (e) {
+    try { await demoResetSlot(env, n, 'add failed half-way'); } catch (e2) { throw new Error(`Adding the prospect failed (${e.message}) and the slot could not be cleaned up (${e2.message}). Clear slot ${n} before using it.`); }
+    throw new Error(`Adding the prospect failed and slot ${n} was cleared: ${e.message}`);
+  }
+  await demoTelemetry(env, 'demo_prospect_added', true, `slot ${n} assigned (contact ***${phone.slice(-4)})`);
+  return json({ success: true, slot: n, pin, login_name: nm.first, owner_id: f.ownerId, tenant_id: f.tenantId, note: `Give them the first name "${nm.first}" and PIN ${pin}. The ${DEMO_LOGIN_DAYS} days start at their first login.` });
+}
+async function demoResetEndpoint(env, body) {
+  const n = parseInt(body && body.slot, 10);
+  if (!(n >= 1 && n <= DEMO_SLOT_COUNT)) return json({ error: 'slot (1-' + DEMO_SLOT_COUNT + ') is required' }, 400);
+  return json({ success: true, ...(await demoResetSlot(env, n, 'cleared by admin')) });
+}
+// Convert a prospect into a REAL owner through the normal QuickBooks path. The slot is cleared ONLY after the real owner exists AND has a QuickBooks customer; on any
+// failure the prospect stays in the slot and the error says exactly what happened (a retry reuses the real owner it already created).
+async function demoConvert(env, body) {
+  const n = parseInt(body && body.slot, 10);
+  if (!(n >= 1 && n <= DEMO_SLOT_COUNT)) return json({ error: 'slot (1-' + DEMO_SLOT_COUNT + ') is required' }, 400);
+  const s = (await demoReadSlots(env))[n - 1], o = s.owner;
+  if (!o || !demoTrue(o.Demo_Prospect)) return json({ error: `Demo slot ${n} has no prospect to convert.` }, 409);
+  await ensureColumns(env, 'Owners', OWNER_BILLING_COLS);
+  let realId = String(o.Demo_Converted_Owner_ID || '').trim(), created = false, pin = '';
+  if (!realId) {
+    const taken = new Set((await ooPinHolders(env)).keys());
+    pin = ownerPinPropose(o.Phone, taken).pin;
+    if (!pin) throw new Error('Could not find an unused PIN for the new owner; nothing was changed');
+    const rd = await (await addRow(env, 'Owners', { First_Name: o.First_Name, Last_Name: o.Last_Name || '', Phone: o.Phone, Email: o.Email, PIN: pin, Active: 'TRUE' })).clone().json();
+    realId = rd && rd.id ? String(rd.id) : '';
+    if (!realId) throw new Error('The real owner could not be created: ' + ((rd && rd.error) || 'no id returned') + '. The prospect is still in slot ' + n);
+    created = true;
+    invalidateTabCache('Owners');
+    const row = (await fetchTab(env, 'Owners')).find(r => String(r.ID) === realId);
+    if (!row || demoTrue(row.Is_Demo) || normalizePhone(row.Phone) !== normalizePhone(o.Phone)) throw new Error(`The new owner ${realId} did not read back correctly. The prospect is still in slot ${n}; check Owners row ${realId}.`);
+    try { await updateRowVerified(env, 'Owners', o.ID, { Demo_Converted_Owner_ID: realId }); }
+    catch (e) { throw new Error(`Real owner ${realId} was created but could not be linked to the demo slot (${e.message}). Do NOT press Convert again; fix by hand or clear slot ${n}.`); }
+  }
+  const real = (await fetchTab(env, 'Owners')).find(r => String(r.ID) === realId);
+  if (!real) throw new Error(`Real owner ${realId} was not found. The prospect is still in slot ${n}.`);
+  let qbId = '';
+  try {
+    const dn = qbOwnerDisplayName(real);
+    qbId = String(await qbFindOrCreateCustomer(env, real, dn, await qbAccessToken(env)) || '');
+    invalidateTabCache('Owners');
+    const back = (await fetchTab(env, 'Owners')).find(r => String(r.ID) === realId);
+    if (!qbId || !back || String(back.QBO_Customer_ID || '').trim() !== qbId) throw new Error('QuickBooks customer ' + (qbId || '(none)') + ' was not saved on the owner row');
+  } catch (e) {
+    await demoTelemetry(env, 'demo_convert', false, `slot ${n} real owner ${realId}: QuickBooks step failed: ${e.message}`);
+    throw new Error(`Real owner ${realId} exists but the QuickBooks customer step failed (${e.message}). The prospect is still in slot ${n}; fix QuickBooks and press Convert again (it will reuse owner ${realId}).`);
+  }
+  const reset = await demoResetSlot(env, n, 'converted to real owner ' + realId);
+  await demoTelemetry(env, 'demo_convert', true, `slot ${n} converted to owner ${realId} (QuickBooks ${qbId})`);
+  return json({ success: true, slot: n, owner_id: realId, qb_customer_id: qbId, new_pin: created ? pin : (real.PIN || ''), reset });
+}
+// Clear every slot whose time is up. Never stops at the first failure; throws one error listing every slot that could not be cleared.
+async function demoSweep(env) {
+  const now = Date.now(), slots = await demoReadSlots(env), done = [], errs = [];
+  for (const s of slots) {
+    const why = demoSweepReason(s.owner, now);
+    if (!why) continue;
+    try { await demoResetSlot(env, s.slot, why); done.push({ slot: s.slot, reason: why }); } catch (e) { errs.push('slot ' + s.slot + ': ' + e.message); }
+  }
+  if (errs.length) throw new Error('Demo sweep could not clear: ' + errs.join(' | '));
+  return { checked: slots.length, cleared: done };
+}
+// Login gate for a demo owner/tenant row. null = go ahead (also for every non-demo row); a Response = refuse. The FIRST login starts the slot's 10-day clock on BOTH rows.
+async function demoLoginGate(env, tab, row) {
+  if (!row || !demoTrue(row.Is_Demo)) return null;
+  const ended = () => json({ error: 'This demo has ended.', demo_ended: true }, 403);
+  try {
+    invalidateTabCache(tab);
+    const fresh = (await fetchTab(env, tab)).find(r => String(r.ID) === String(row.ID));
+    if (!fresh || !demoTrue(fresh.Demo_Prospect) || fresh.Active === 'FALSE') return ended();
+    const exp = String(fresh.Demo_Expires || '').trim();
+    if (exp) { const ms = Date.parse(exp); return (Number.isFinite(ms) && ms > Date.now()) ? null : ended(); }
+    // First login of this slot (via owner OR tenant): stamp both rows with the same clock. If the other row already carries one, copy it.
+    const other = tab === 'Owners' ? 'Tenants' : 'Owners';
+    const f = demoFixture(fresh.Demo_Slot || '1'), otherId = tab === 'Owners' ? f.tenantId : f.ownerId;
+    invalidateTabCache(other);
+    const o = (await fetchTab(env, other)).find(r => String(r.ID) === otherId);
+    const otherExp = o ? String(o.Demo_Expires || '').trim() : '';
+    const now = Date.now(), stamp = otherExp ? { Demo_First_Login: String(o.Demo_First_Login || demoIso(now)), Demo_Expires: otherExp } : { Demo_First_Login: demoIso(now), Demo_Expires: demoIso(now + DEMO_LOGIN_DAYS * 86400000) };
+    await updateRowVerified(env, tab, fresh.ID, stamp);
+    if (o && !otherExp) await updateRowVerified(env, other, otherId, stamp);
+    await demoTelemetry(env, 'demo_first_login', true, `slot ${fresh.Demo_Slot || '1'} ${tab === 'Owners' ? 'owner' : 'tenant'} logged in; expires ${stamp.Demo_Expires}`);
+    return null;
+  } catch (e) {
+    await demoTelemetry(env, 'demo_login_gate', false, 'could not start or check the demo clock: ' + ((e && e.message) || e));
+    return json({ error: 'The demo login could not be checked right now. Please try again in a minute.', demo_unavailable: true }, 503);
+  }
+}
+// Per-request check for a session minted by a demo login (token carries demo:slot): the session dies the moment the slot is cleared or expires. A real session is never touched.
+async function demoSessionDenied(env, session) {
+  if (!session || !session.demo) return null;
+  const tab = session.role === 'owner' ? 'Owners' : session.role === 'tenant' ? 'Tenants' : '';
+  const dead = () => json({ error: 'This demo has ended.', demo_ended: true, session_invalid: true }, 401);
+  if (!tab) return dead();
+  try {
+    const row = (await fetchTab(env, tab)).find(r => String(r.ID) === String(session.id));
+    if (!row || !demoTrue(row.Is_Demo) || !demoTrue(row.Demo_Prospect) || row.Active === 'FALSE' || String(row.Demo_Slot || '1') !== String(session.demo)) return dead();
+    const exp = String(row.Demo_Expires || '').trim(), ms = Date.parse(exp);
+    return (exp && Number.isFinite(ms) && ms > Date.now()) ? null : dead();
+  } catch (e) {
+    await demoTelemetry(env, 'demo_session_check', false, 'could not check a demo session, request refused: ' + ((e && e.message) || e));
+    return json({ error: 'Could not check the demo session right now. Please try again.' }, 503);
+  }
+}
+// A demo TENANT session may write only inside its own slot: submit a request on the slot's properties and add a note on a slot work order. Everything else is refused.
+async function demoTenantWriteDenied(env, path, body, tenantId, slot) {
+  const deny = async (why) => { await logTelemetry(env, { Source: 'worker', Job_Type: 'demo_write_denied', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `slot=${slot} tenant=${tenantId} ${why}`.slice(0, 480) }); return json({ error: 'Forbidden' }, 403); };
+  if (path !== '/workorder' && path !== '/wo/add-note') return await deny('path not available in the demo');
+  const b = (body && typeof body === 'object') ? body : null;
+  if (!b) return await deny('no body');
+  const [props, units, wos] = await fetchTabs(env, ['Properties', 'Units', 'Work_Orders']);
+  const mineProp = (id) => props.some(p => String(p.ID) === String(id) && demoTrue(p.Is_Demo) && String(p.Demo_Slot) === String(slot));
+  if (path === '/workorder') {
+    const pid = String(b.property_id || '').trim(), uid = String(b.unit_id || '').trim();
+    if (!mineProp(pid)) return await deny('property=' + pid.slice(0, 40));
+    if (uid) { const u = units.find(x => String(x.ID) === uid); if (!u || String(u.Property_ID) !== pid) return await deny('unit=' + uid.slice(0, 40)); }
+    return null;
+  }
+  const wid = String(b.wo_id || b.wo || '').trim(), w = findWO(wos, wid);
+  if (!w || !mineProp(w.Property_ID)) return await deny('wo=' + wid.slice(0, 40));
+  return null;
+}
+
 const PORTAL_TAB_BY_TYPE = { tenant: 'Tenants', vendor: 'Vendors', owner: 'Owners', owner_user: 'Owner_Users' };
 
 // Pure: did Twilio really accept this text? Takes whatever sendSMS returned.
