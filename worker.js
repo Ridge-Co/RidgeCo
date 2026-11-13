@@ -1547,8 +1547,8 @@ function demoBuildRegistry(owners, tenants, workorders, properties, nowMs) {
 function demoRefersToDemo(reg, text, woId) {
   if (!reg) return false;
   if (woId && reg.woIds.has(String(woId).toUpperCase())) return true;
-  const t = String(text || ''), re = /\bWO[-\s#]?(\d+)\b/gi; let m;
-  while ((m = re.exec(t))) if (reg.woIds.has('WO-' + m[1])) return true;
+  const t = String(text || ''), re = /\bWO[-\s#]?(D?\d+)\b/gi; let m;   // a sample work order is WO-D<slot><nn> (Nov 12 2026), so allow the D
+  while ((m = re.exec(t))) if (reg.woIds.has('WO-' + m[1].toUpperCase())) return true;
   const low = t.toLowerCase();
   return reg.addrs.some(a => low.indexOf(a) >= 0);
 }
