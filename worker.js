@@ -631,6 +631,7 @@ const _hubWorkerCore = {
         if (path === '/wo/bid-group')           return await woBidGroupGet(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
         if (path === '/demo/slots')             return await demoListSlots(env);   // admin only (in no role scope)
+        if (path === '/demo/test-status')       return await demoTestStatus(env, callerRole, callerSessionId, callerDemoSlot);   // demo owner / demo tenant sessions only (the handler refuses anything else)
         if (path === '/portal-access')          return await portalAccessList(env, url);
         if (path === '/portal-access/backfill-preview') return await portalBackfillPreview(env);
         // Session-flag refresh (Sep 21 2026, Brett's ask): can_submit_wo and the rest of the
