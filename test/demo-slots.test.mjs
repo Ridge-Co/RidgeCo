@@ -242,7 +242,7 @@ r = await adminCall('GET', '/demo/slots');
 t('slots list after expiry: slot 1 free, slot 2 active, slot 3 waiting for first login', r.json.slots[0].state === 'free' && r.json.slots[1].state === 'active' && r.json.slots[2].state === 'waiting for first login', r.json.slots.map(s => s.state));
 
 // ===== 8. A freed slot is handed to the next prospect clean =====
-store.tabs.get('Attachments').push(['3', '0', 'orphan.jpg', 'TRUE']);
+store.tabs.get('Attachments').push(['3', '0', 'orphan.jpg', '', '', 'TRUE']);
 store.tabs.get('Work_Orders').push(['5000', 'DP1B', '', 'New', 'leftover from a failed wipe']);
 r = await adminCall('POST', '/demo/add', { name: 'Eve Next', phone: '4105550199', email: 'eve@prospect.example' });
 t('next prospect gets slot 1 (the freed one)', r.status === 200 && r.json.slot === 1, r.json);
