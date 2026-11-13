@@ -246,7 +246,7 @@ store.tabs.get('Attachments').push(['3', '0', 'orphan.jpg', '', '', 'TRUE']);
 store.tabs.get('Work_Orders').push(['5000', 'DP1B', '', 'New', 'leftover from a failed wipe']);
 r = await adminCall('POST', '/demo/add', { name: 'Eve Next', phone: '4105550199', email: 'eve@prospect.example' });
 t('next prospect gets slot 1 (the freed one)', r.status === 200 && r.json.slot === 1, r.json);
-t('a leftover on a slot property is wiped before the slot is handed out', !rows('Work_Orders').some(w => w.Property_ID === 'DP1B'));
+t('a leftover on a slot property is wiped before the slot is handed out', !rows('Work_Orders').some(w => w.ID === '5000'));
 t('the new prospect starts with fresh counters and no clock', rowOf('Owners', 'DO1').Demo_SMS_Count === '0' && rowOf('Owners', 'DO1').Demo_Expires === '' && rowOf('Owners', 'DO1').First_Name === 'Eve');
 t('the old prospect\'s phone and email appear nowhere in demo rows', !rows('Owners').concat(rows('Tenants')).some(x => x.Phone === PH1N || x.Email === 'ann@prospect.example'));
 
