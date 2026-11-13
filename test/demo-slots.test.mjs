@@ -89,7 +89,7 @@ tab('Tenants', TH, [{ ID: '40', First_Name: 'Tess', Last_Name: 'Real', Phone: '+
 tab('Properties', ['ID', 'Owner_ID', 'Address', 'Active'], [{ ID: '7', Owner_ID: '12', Address: '500 Real Street', Active: 'TRUE' }]);
 tab('Units', ['ID', 'Property_ID', 'Unit_Label', 'Active'], [{ ID: '9', Property_ID: '7', Unit_Label: '1', Active: 'TRUE' }]);
 tab('Work_Orders', ['ID', 'Property_ID', 'Unit_ID', 'Status', 'Description'], [{ ID: '100', Property_ID: '7', Unit_ID: '9', Status: 'Assigned', Description: 'real leak' }]);
-tab('Attachments', ['ID', 'WO_ID', 'File_Name', 'Active'], [{ ID: '1', WO_ID: '100', File_Name: 'real.jpg', Active: 'TRUE' }]);
+tab('Attachments', ['ID', 'WO_ID', 'File_Name', 'File_Type', 'Drive_URL', 'Active'], [{ ID: '1', WO_ID: '100', File_Name: 'real.jpg', Active: 'TRUE' }]);
 tab('Owner_Users', ['ID', 'Owner_ID', 'First_Name', 'Last_Name', 'Phone', 'PIN', 'Active'], []);
 tab('Vendors', ['ID', 'Name', 'Phone', 'PIN', 'Active'], [{ ID: '3', Name: 'Real Vendor', Phone: '+14105550177', PIN: 'VEN12345', Active: 'TRUE' }]);
 store.tabs.set('Config', [['TWILIO_ENABLED', 'TRUE'], ['admin_phone', '+14105550111'], ['SMS_TEST_MODE', 'FALSE']]);
@@ -229,7 +229,7 @@ r = await adminCall('POST', '/demo/sweep');
 t('sweep: clears the expired slot 1, leaves live slot 2 and never-logged-in slot 3 (added < 30 days ago)', r.status === 200 && r.json.cleared.length === 1 && r.json.cleared[0].slot === 1, r.json);
 const o1c = rowOf('Owners', 'DO1'), t1c = rowOf('Tenants', 'DT1');
 t('after expiry slot 1: names, phone, email, PIN, clock and counters are empty; the rows cannot log in', o1c.First_Name === 'Demo' && o1c.Phone === '' && o1c.Email === '' && o1c.PIN === '' && o1c.Active === 'FALSE' && o1c.Demo_Prospect === 'FALSE' && o1c.Demo_Expires === '' && o1c.Demo_SMS_Count === '0' && t1c.Phone === '' && t1c.Email === '' && t1c.PIN === '' && t1c.Active === 'FALSE' && t1c.Demo_Prospect === 'FALSE', { o1c, t1c });
-t('after expiry slot 1: the request the prospect created and its photo are gone', !rows('Work_Orders').some(w => w.Property_ID === 'DP1A') && !rows('Attachments').some(a => a.File_Name === 'leak.jpg'));
+t('after expiry slot 1: the request the prospect created and its photo are gone', !rows('Work_Orders').some(w => w.Property_ID === 'DP1A' && !/^WO-D1\d\d$/.test(w.ID)) && !rows('Attachments').some(a => a.File_Name === 'leak.jpg'));   // the sample work orders (WO-D1nn) are rebuilt; nothing the prospect made is left
 t('after expiry slot 1: real work order and real attachment are untouched', rowOf('Work_Orders', '100') && rows('Attachments').some(a => a.File_Name === 'real.jpg'));
 t('after expiry slot 1: the 3 properties and 6 units are still there (pristine fake data stays)', rows('Properties').filter(p => p.Demo_Slot === '1').length === 3 && rows('Units').filter(p => p.Demo_Slot === '1').length === 6);
 t('slot 2 untouched by the sweep', rowOf('Owners', 'DO2').Phone === PH2N && rowOf('Owners', 'DO2').PIN === PIN2);
@@ -242,11 +242,11 @@ r = await adminCall('GET', '/demo/slots');
 t('slots list after expiry: slot 1 free, slot 2 active, slot 3 waiting for first login', r.json.slots[0].state === 'free' && r.json.slots[1].state === 'active' && r.json.slots[2].state === 'waiting for first login', r.json.slots.map(s => s.state));
 
 // ===== 8. A freed slot is handed to the next prospect clean =====
-store.tabs.get('Attachments').push(['3', '0', 'orphan.jpg', 'TRUE']);
+store.tabs.get('Attachments').push(['3', '0', 'orphan.jpg', '', '', 'TRUE']);
 store.tabs.get('Work_Orders').push(['5000', 'DP1B', '', 'New', 'leftover from a failed wipe']);
 r = await adminCall('POST', '/demo/add', { name: 'Eve Next', phone: '4105550199', email: 'eve@prospect.example' });
 t('next prospect gets slot 1 (the freed one)', r.status === 200 && r.json.slot === 1, r.json);
-t('a leftover on a slot property is wiped before the slot is handed out', !rows('Work_Orders').some(w => w.Property_ID === 'DP1B'));
+t('a leftover on a slot property is wiped before the slot is handed out', !rows('Work_Orders').some(w => w.ID === '5000'));
 t('the new prospect starts with fresh counters and no clock', rowOf('Owners', 'DO1').Demo_SMS_Count === '0' && rowOf('Owners', 'DO1').Demo_Expires === '' && rowOf('Owners', 'DO1').First_Name === 'Eve');
 t('the old prospect\'s phone and email appear nowhere in demo rows', !rows('Owners').concat(rows('Tenants')).some(x => x.Phone === PH1N || x.Email === 'ann@prospect.example'));
 
