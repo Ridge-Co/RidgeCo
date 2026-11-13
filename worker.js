@@ -1768,6 +1768,44 @@ async function demoWipeSlotData(env, f) {
   n += await demoDeleteRows(env, 'Work_Orders', (w) => propIds.has(String(w.Property_ID)), DEMO_WIPE_CAP);
   return n;
 }
+// ── DEMO SAMPLE DATA (Nov 12 2026, Phase 3a) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// Each slot gets 8 sample work orders in mixed states, 3 of them finished with before/after photos and a fictional receipt, so the prospect sees a lived-in portal.
+// Everything is fictional: WO-D<slot><nn> ids, fake addresses (see demoFixture), no vendor (Vendor_ID blank, so nothing can ever text a vendor), Tenant_Notify_* FALSE and
+// Owner_Notify_Override 'off' (so nothing about them queues a message). Photos and the receipt are plain SVG pictures hosted in this repo under /demo/ and say SAMPLE on them.
+// They are written when a slot is handed out and again after every reset (a reset deletes every work order on the slot's properties first, so the seed is always rebuilt clean).
+const DEMO_ASSET_BASE = 'https://ridge-co.github.io/RidgeCo/demo/';
+// Pure. { wos, atts } for one slot.
+function demoSeedRows(slot, nowMs) {
+  const n = String(slot), day = (d) => new Date(nowMs + d * 86400000).toISOString().split('T')[0], iso = (d) => new Date(nowMs + d * 86400000).toISOString();
+  const P = (k) => 'DP' + n + k, U = (k, u) => 'DU' + n + k + u;
+  const wo = (nn, o) => Object.assign({ ID: 'WO-D' + n + nn, Type: 'manual', Priority: 'normal', Tenant_ID: '', Vendor_ID: '', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Tenant_Visible: 'FALSE', Tenant_Notify_Created: 'FALSE', Tenant_Notify_Updates: 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notify_Override: 'off', Owner_Notified: 'FALSE', Created_By: 'demo', Notes: '', Is_Demo: 'TRUE' }, o);
+  const mine = { Tenant_ID: 'DT' + n, Tenant_Visible: 'TRUE' };
+  const wos = [
+    wo('01', { ...mine, Type: 'tenant', Property_ID: P('A'), Unit_ID: U('A', '1'), Trade: 'Plumbing', Description: 'Kitchen faucet drips at the base when running', Status: 'New', Created_Date: iso(-1) }),
+    wo('02', { Property_ID: P('B'), Unit_ID: U('B', '1'), Trade: 'HVAC', Description: 'Furnace running but no warm air from the vents', Priority: 'urgent', Status: 'Assigned', Created_Date: iso(-3) }),
+    wo('03', { Property_ID: P('A'), Unit_ID: U('A', '2'), Trade: 'Electrical', Description: 'Replace two cracked outlets in the living room', Status: 'Accepted', Scheduled_Date: day(2), Scheduled_Window: '9am - 12pm', Created_Date: iso(-4) }),
+    wo('04', { Property_ID: P('C'), Unit_ID: U('C', '1'), Trade: 'General', Description: 'Patch drywall and repaint the hallway after the leak repair', Status: 'In Progress', Created_Date: iso(-6) }),
+    wo('05', { Property_ID: P('B'), Unit_ID: U('B', '2'), Trade: 'Appliance', Description: 'Dishwasher will not drain', Status: 'On Hold', Notes: 'On hold: waiting on a replacement drain pump (sample note).', Created_Date: iso(-8) }),
+    wo('06', { ...mine, Type: 'tenant', Property_ID: P('A'), Unit_ID: U('A', '1'), Trade: 'Plumbing', Description: 'Toilet keeps running after flushing', Status: 'Complete', Scheduled_Date: day(-9), Scheduled_Window: '1pm - 4pm', Completed_Date: day(-9), Created_Date: iso(-12) }),
+    wo('07', { Property_ID: P('B'), Unit_ID: U('B', '2'), Trade: 'General', Description: 'Clear gutters and downspouts', Status: 'Complete', Scheduled_Date: day(-14), Scheduled_Window: '9am - 12pm', Completed_Date: day(-14), Created_Date: iso(-18) }),
+    wo('08', { Property_ID: P('C'), Unit_ID: U('C', '2'), Trade: 'Locks', Description: 'Rekey the front door after tenant turnover', Status: 'Complete', Scheduled_Date: day(-20), Scheduled_Window: '9am - 12pm', Completed_Date: day(-20), Created_Date: iso(-23) }),
+  ];
+  const att = (seq, nn, type, file, name, mime) => ({ ID: 'DA' + n + seq, WO_ID: 'WO-D' + n + nn, File_Name: name, File_Type: type, Drive_File_ID: '', Drive_URL: DEMO_ASSET_BASE + file, Mime_Type: mime || 'image/svg+xml', Created_Date: day(-1), Active: 'TRUE', Uploaded_By: 'demo' });
+  const atts = [
+    att('01', '06', 'before', 'photo-before.svg', 'before-sample.svg'), att('02', '06', 'after', 'photo-after.svg', 'after-sample.svg'), att('03', '06', 'receipt', 'receipt-sample.svg', 'receipt-sample.svg'),
+    att('04', '07', 'before', 'photo-before.svg', 'before-sample.svg'), att('05', '07', 'after', 'photo-after.svg', 'after-sample.svg'),
+    att('06', '08', 'after', 'photo-after.svg', 'after-sample.svg'), att('07', '08', 'receipt', 'receipt-sample.svg', 'receipt-sample.svg'),
+  ];
+  return { wos, atts };
+}
+// Write the slot's sample work orders and attachments (idempotent by ID, every row read back). Throws a plain-words error on failure.
+async function demoSeedSlot(env, n) {
+  await ensureColumns(env, 'Work_Orders', ['Is_Demo']);
+  const s = demoSeedRows(n, Date.now());
+  const a = await demoAppendRows(env, 'Work_Orders', s.wos, ['Is_Demo', 'Property_ID', 'Status']);
+  const b = await demoAppendRows(env, 'Attachments', s.atts, ['WO_ID', 'Drive_URL', 'File_Type']);
+  return { work_orders: s.wos.length, attachments: s.atts.length, written: a + b };
+}
 // Clear the prospect's name/contact/PIN/counters/clock from the slot's owner and tenant FIRST (so nothing can reach her any more), then wipe what she created.
 async function demoResetSlot(env, n, reason) {
   const f = demoFixture(n), rows = (await demoReadSlots(env))[n - 1];
