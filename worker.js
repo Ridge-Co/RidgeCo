@@ -15765,7 +15765,7 @@ async function scheduleWO(env, body) {
     if(isTenantNotifiable(tenant,wo)){
       const dateStr=new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
       // woJobLabel keeps two same-trade/same-address jobs distinguishable in the text.
-      const msg=isWithinHour?`Hi ${tenant.First_Name}, your technician is on the way and will arrive within 1 hour for your ${woJobLabel(wo)} at ${address}. Ref: ${body.wo_id}.`:`Hi ${tenant.First_Name}, your ${woJobLabel(wo)} at ${address} is scheduled for ${dateStr}, ${body.window}. Ref: ${body.wo_id}.`;
+      const msg=SMS_MSG.tenantJobScheduled({ first: tenant.First_Name, label: woJobLabel(wo), address, dateStr, window: body.window, woId: body.wo_id, withinHour: !!isWithinHour });
       const now=new Date(), tomorrow=new Date(now); tomorrow.setDate(tomorrow.getDate()+1); const tomorrowStr=tomorrow.toISOString().split('T')[0];
       // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_scheduled. Same-day/within-hour sends
       // immediately through the gate; anything further out still uses the pre-existing
