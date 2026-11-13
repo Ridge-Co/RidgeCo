@@ -15799,7 +15799,7 @@ async function scheduleWO(env, body) {
     const notify = await shouldNotifyOwner(env, wo, 'Scheduled');
     if (notify) {
       const dateStr = new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
-      const ownerMsg = `Hi ${owner.First_Name}, ${body.wo_id} (${woJobLabel(wo)}) at ${propUnitText(property, unit)} is scheduled for ${dateStr}, ${body.window}, subject to change.`;   // D-16: shortened
+      const ownerMsg = SMS_MSG.ownerJobScheduled({ first: owner.First_Name, woId: body.wo_id, label: woJobLabel(wo), where: propUnitText(property, unit), dateStr, window: body.window });
       const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'owner_job_scheduled', recipient_type: 'owner', owner, property, message_body: ownerMsg });
       ownerSMSSent = r.sent;
       if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
