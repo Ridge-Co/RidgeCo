@@ -1816,8 +1816,13 @@ async function demoResetSlot(env, n, reason) {
   let wiped = 0;
   try { wiped = await demoWipeSlotData(env, f); } catch (e) { errs.push('wipe: ' + e.message); }
   if (errs.length) { await demoTelemetry(env, 'demo_slot_reset', false, `slot ${n} (${reason}) FAILED: ${errs.join(' | ')}`); throw new Error(`Demo slot ${n} was NOT fully cleared (${errs.join(' | ')})`); }
-  await demoTelemetry(env, 'demo_slot_reset', true, `slot ${n} cleared (${reason}); ${wiped} prospect-created row(s) removed`);
-  return { slot: n, reset: true, wiped };
+  // Rebuild the sample data. The slot is already cleared and idle (Active FALSE) at this point, so a failure here is safe but loud: it is reported, and the next
+  // "Add demo prospect" on this slot wipes and reseeds again (and refuses to hand the slot out if that fails).
+  let seeded = true, seedError = '';
+  try { await demoSeedSlot(env, n); } catch (e) { seeded = false; seedError = String((e && e.message) || e).slice(0, 300); }
+  await demoTelemetry(env, 'demo_slot_reset', true, `slot ${n} cleared (${reason}); ${wiped} prospect-created row(s) removed; sample data ${seeded ? 'rebuilt' : 'NOT rebuilt: ' + seedError}`);
+  if (!seeded) await demoTelemetry(env, 'demo_slot_seed', false, `slot ${n}: sample data could not be rebuilt after a reset: ${seedError}`);
+  return { slot: n, reset: true, wiped, seeded, ...(seeded ? {} : { seed_error: seedError }) };
 }
 function demoSlotSummary(s, nowMs) {
   const o = s.owner || {}, t = s.tenant || {};
