@@ -1547,8 +1547,8 @@ function demoBuildRegistry(owners, tenants, workorders, properties, nowMs) {
 function demoRefersToDemo(reg, text, woId) {
   if (!reg) return false;
   if (woId && reg.woIds.has(String(woId).toUpperCase())) return true;
-  const t = String(text || ''), re = /\bWO[-\s#]?(\d+)\b/gi; let m;
-  while ((m = re.exec(t))) if (reg.woIds.has('WO-' + m[1])) return true;
+  const t = String(text || ''), re = /\bWO[-\s#]?(D?\d+)\b/gi; let m;   // a sample work order is WO-D<slot><nn> (Nov 12 2026), so allow the D
+  while ((m = re.exec(t))) if (reg.woIds.has('WO-' + m[1].toUpperCase())) return true;
   const low = t.toLowerCase();
   return reg.addrs.some(a => low.indexOf(a) >= 0);
 }
@@ -1768,6 +1768,44 @@ async function demoWipeSlotData(env, f) {
   n += await demoDeleteRows(env, 'Work_Orders', (w) => propIds.has(String(w.Property_ID)), DEMO_WIPE_CAP);
   return n;
 }
+// ── DEMO SAMPLE DATA (Nov 12 2026, Phase 3a) ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// Each slot gets 8 sample work orders in mixed states, 3 of them finished with before/after photos and a fictional receipt, so the prospect sees a lived-in portal.
+// Everything is fictional: WO-D<slot><nn> ids, fake addresses (see demoFixture), no vendor (Vendor_ID blank, so nothing can ever text a vendor), Tenant_Notify_* FALSE and
+// Owner_Notify_Override 'off' (so nothing about them queues a message). Photos and the receipt are plain SVG pictures hosted in this repo under /demo/ and say SAMPLE on them.
+// They are written when a slot is handed out and again after every reset (a reset deletes every work order on the slot's properties first, so the seed is always rebuilt clean).
+const DEMO_ASSET_BASE = 'https://ridge-co.github.io/RidgeCo/demo/';
+// Pure. { wos, atts } for one slot.
+function demoSeedRows(slot, nowMs) {
+  const n = String(slot), day = (d) => new Date(nowMs + d * 86400000).toISOString().split('T')[0], iso = (d) => new Date(nowMs + d * 86400000).toISOString();
+  const P = (k) => 'DP' + n + k, U = (k, u) => 'DU' + n + k + u;
+  const wo = (nn, o) => Object.assign({ ID: 'WO-D' + n + nn, Type: 'manual', Priority: 'normal', Tenant_ID: '', Vendor_ID: '', Scheduled_Date: '', Scheduled_Window: '', Completed_Date: '', Invoice_ID: '', Tenant_Visible: 'FALSE', Tenant_Notify_Created: 'FALSE', Tenant_Notify_Updates: 'FALSE', Vendor_SMS_Sent: 'FALSE', Tenant_SMS_Sent: 'FALSE', Owner_Notify_Override: 'off', Owner_Notified: 'FALSE', Created_By: 'demo', Notes: '', Is_Demo: 'TRUE' }, o);
+  const mine = { Tenant_ID: 'DT' + n, Tenant_Visible: 'TRUE' };
+  const wos = [
+    wo('01', { ...mine, Type: 'tenant', Property_ID: P('A'), Unit_ID: U('A', '1'), Trade: 'Plumbing', Description: 'Kitchen faucet drips at the base when running', Status: 'New', Created_Date: iso(-1) }),
+    wo('02', { Property_ID: P('B'), Unit_ID: U('B', '1'), Trade: 'HVAC', Description: 'Furnace running but no warm air from the vents', Priority: 'urgent', Status: 'Assigned', Created_Date: iso(-3) }),
+    wo('03', { Property_ID: P('A'), Unit_ID: U('A', '2'), Trade: 'Electrical', Description: 'Replace two cracked outlets in the living room', Status: 'Accepted', Scheduled_Date: day(2), Scheduled_Window: '9am - 12pm', Created_Date: iso(-4) }),
+    wo('04', { Property_ID: P('C'), Unit_ID: U('C', '1'), Trade: 'General', Description: 'Patch drywall and repaint the hallway after the leak repair', Status: 'In Progress', Created_Date: iso(-6) }),
+    wo('05', { Property_ID: P('B'), Unit_ID: U('B', '2'), Trade: 'Appliance', Description: 'Dishwasher will not drain', Status: 'On Hold', Notes: 'On hold: waiting on a replacement drain pump (sample note).', Created_Date: iso(-8) }),
+    wo('06', { ...mine, Type: 'tenant', Property_ID: P('A'), Unit_ID: U('A', '1'), Trade: 'Plumbing', Description: 'Toilet keeps running after flushing', Status: 'Complete', Scheduled_Date: day(-9), Scheduled_Window: '1pm - 4pm', Completed_Date: day(-9), Created_Date: iso(-12) }),
+    wo('07', { Property_ID: P('B'), Unit_ID: U('B', '2'), Trade: 'General', Description: 'Clear gutters and downspouts', Status: 'Complete', Scheduled_Date: day(-14), Scheduled_Window: '9am - 12pm', Completed_Date: day(-14), Created_Date: iso(-18) }),
+    wo('08', { Property_ID: P('C'), Unit_ID: U('C', '2'), Trade: 'Locks', Description: 'Rekey the front door after tenant turnover', Status: 'Complete', Scheduled_Date: day(-20), Scheduled_Window: '9am - 12pm', Completed_Date: day(-20), Created_Date: iso(-23) }),
+  ];
+  const att = (seq, nn, type, file, name, mime) => ({ ID: 'DA' + n + seq, WO_ID: 'WO-D' + n + nn, File_Name: name, File_Type: type, Drive_File_ID: '', Drive_URL: DEMO_ASSET_BASE + file, Mime_Type: mime || 'image/svg+xml', Created_Date: day(-1), Active: 'TRUE', Uploaded_By: 'demo' });
+  const atts = [
+    att('01', '06', 'before', 'photo-before.svg', 'before-sample.svg'), att('02', '06', 'after', 'photo-after.svg', 'after-sample.svg'), att('03', '06', 'receipt', 'receipt-sample.svg', 'receipt-sample.svg'),
+    att('04', '07', 'before', 'photo-before.svg', 'before-sample.svg'), att('05', '07', 'after', 'photo-after.svg', 'after-sample.svg'),
+    att('06', '08', 'after', 'photo-after.svg', 'after-sample.svg'), att('07', '08', 'receipt', 'receipt-sample.svg', 'receipt-sample.svg'),
+  ];
+  return { wos, atts };
+}
+// Write the slot's sample work orders and attachments (idempotent by ID, every row read back). Throws a plain-words error on failure.
+async function demoSeedSlot(env, n) {
+  await ensureColumns(env, 'Work_Orders', ['Is_Demo']);
+  const s = demoSeedRows(n, Date.now());
+  const a = await demoAppendRows(env, 'Work_Orders', s.wos, ['Is_Demo', 'Property_ID', 'Status']);
+  const b = await demoAppendRows(env, 'Attachments', s.atts, ['WO_ID', 'Drive_URL', 'File_Type']);
+  return { work_orders: s.wos.length, attachments: s.atts.length, written: a + b };
+}
 // Clear the prospect's name/contact/PIN/counters/clock from the slot's owner and tenant FIRST (so nothing can reach her any more), then wipe what she created.
 async function demoResetSlot(env, n, reason) {
   const f = demoFixture(n), rows = (await demoReadSlots(env))[n - 1];
@@ -1778,8 +1816,13 @@ async function demoResetSlot(env, n, reason) {
   let wiped = 0;
   try { wiped = await demoWipeSlotData(env, f); } catch (e) { errs.push('wipe: ' + e.message); }
   if (errs.length) { await demoTelemetry(env, 'demo_slot_reset', false, `slot ${n} (${reason}) FAILED: ${errs.join(' | ')}`); throw new Error(`Demo slot ${n} was NOT fully cleared (${errs.join(' | ')})`); }
-  await demoTelemetry(env, 'demo_slot_reset', true, `slot ${n} cleared (${reason}); ${wiped} prospect-created row(s) removed`);
-  return { slot: n, reset: true, wiped };
+  // Rebuild the sample data. The slot is already cleared and idle (Active FALSE) at this point, so a failure here is safe but loud: it is reported, and the next
+  // "Add demo prospect" on this slot wipes and reseeds again (and refuses to hand the slot out if that fails).
+  let seeded = true, seedError = '';
+  try { await demoSeedSlot(env, n); } catch (e) { seeded = false; seedError = String((e && e.message) || e).slice(0, 300); }
+  await demoTelemetry(env, 'demo_slot_reset', true, `slot ${n} cleared (${reason}); ${wiped} prospect-created row(s) removed; sample data ${seeded ? 'rebuilt' : 'NOT rebuilt: ' + seedError}`);
+  if (!seeded) await demoTelemetry(env, 'demo_slot_seed', false, `slot ${n}: sample data could not be rebuilt after a reset: ${seedError}`);
+  return { slot: n, reset: true, wiped, seeded, ...(seeded ? {} : { seed_error: seedError }) };
 }
 function demoSlotSummary(s, nowMs) {
   const o = s.owner || {}, t = s.tenant || {};
@@ -1805,6 +1848,7 @@ async function demoAddProspect(env, body) {
   if (!free) return json({ error: want ? `Demo slot ${want} is not free.` : `All ${DEMO_SLOT_COUNT} demo slots are in use. Clear one first.`, slots: slots.map(s => demoSlotSummary(s, now)) }, 409);
   const n = free.slot, f = await demoEnsureSlot(env, n);
   await demoWipeSlotData(env, f);   // a slot is always handed out clean, even if an earlier wipe failed
+  try { await demoSeedSlot(env, n); } catch (e) { throw new Error(`The sample data for demo slot ${n} could not be written, so nothing was assigned: ${(e && e.message) || e}`); }
   const taken = new Set((await ooPinHolders(env)).keys());
   const pin = ownerPinPropose(phone, taken).pin;
   if (!pin) throw new Error('Could not find an unused PIN for the demo; nothing was changed');
