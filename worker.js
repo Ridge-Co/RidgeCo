@@ -631,6 +631,7 @@ const _hubWorkerCore = {
         if (path === '/wo/bid-group')           return await woBidGroupGet(env, url);
         if (path === '/tenant-by-pin')          return await tenantByPin(env, url);
         if (path === '/demo/slots')             return await demoListSlots(env);   // admin only (in no role scope)
+        if (path === '/demo/test-status')       return await demoTestStatus(env, callerRole, callerSessionId, callerDemoSlot);   // demo owner / demo tenant sessions only (the handler refuses anything else)
         if (path === '/portal-access')          return await portalAccessList(env, url);
         if (path === '/portal-access/backfill-preview') return await portalBackfillPreview(env);
         // Session-flag refresh (Sep 21 2026, Brett's ask): can_submit_wo and the rest of the
@@ -931,6 +932,7 @@ const _hubWorkerCore = {
         if (path === '/demo/reset')               return await demoResetEndpoint(env, body);
         if (path === '/demo/convert')             return await demoConvert(env, body);
         if (path === '/demo/sweep')               return json({ success: true, ...(await demoSweep(env)) });
+        if (path === '/demo/test-send')           return await demoTestSend(env, body, callerRole, callerSessionId, callerDemoSlot);   // demo owner / demo tenant sessions only
         if (path === '/property/tenant-wo-toggle') return await setPropertyTenantWOToggle(env, body);
         if (path === '/property/toggle')          return await propertyToggleSet(env, body);
         if (path === '/property/info-save')       return await propertyInfoSave(env, body);
@@ -1832,6 +1834,107 @@ function demoSlotSummary(s, nowMs) {
     tenant_test: { texts: parseInt(t.Demo_SMS_Count, 10) || 0, emails: parseInt(t.Demo_Email_Count, 10) || 0, text_cap: DEMO_SMS_CAP, email_cap: DEMO_EMAIL_CAP } };
 }
 async function demoListSlots(env) { const now = Date.now(); return json({ slots: (await demoReadSlots(env)).map(s => demoSlotSummary(s, now)), pool_size: DEMO_SLOT_COUNT, login_days: DEMO_LOGIN_DAYS }); }
+// ── DEMO "SEND ME A TEST" (Nov 12 2026, demo Phase 3b) ───────────────────────────────────────────────────────────────────────────────────────
+// A demo owner / demo tenant taps a button and gets ONE real-wording text on their OWN phone (texts only; Brett's decision: owner = new request, job scheduled, job
+// complete; tenant = request received, assigned, scheduled, completed). Everything comes from the SESSION (who, which slot, which phone): the request body carries
+// only `event`, so nothing the browser sends can aim the text anywhere else. The text goes through the normal gated sender with the recipient forced to the prospect's
+// own number; the Phase 1 guard then enforces the cap (2 texts per test, owner and tenant counted separately) and counts it BEFORE sending. Nothing here emails.
+const DEMO_TEST_EVENTS = {
+  owner: [
+    { key: 'received', label: 'A tenant sends a new request', type: 'owner_job_received', wo: '01' },
+    { key: 'scheduled', label: 'A job gets scheduled', type: 'owner_job_scheduled', wo: '03' },
+    { key: 'complete', label: 'A job is completed', type: 'owner_job_complete', wo: '07' },
+  ],
+  tenant: [
+    { key: 'received', label: 'Your request is received', type: 'tenant_job_received', wo: '01' },
+    { key: 'assigned', label: 'Your request is assigned to a technician', type: 'tenant_job_assigned', wo: '01' },
+    { key: 'scheduled', label: 'Your visit is scheduled', type: 'tenant_job_scheduled', wo: '03' },
+    { key: 'completed', label: 'Your job is completed', type: 'tenant_job_completed', wo: '06' },
+  ],
+};
+const DEMO_TEST_VENDOR = { name: 'Sample Home Services', phone: '(410) 555-0142' };   // fictional (555-01xx numbers are reserved for fiction)
+// Pure. The real wording for one test event, built by the same SMS_MSG builders the real handlers use. ctx = { first, wo, property, unit }. '' for an unknown event.
+function demoTestText(role, key, ctx) {
+  const first = ctx.first, wo = ctx.wo, property = ctx.property, unit = ctx.unit, woId = wo.ID, label = woJobLabel(wo);
+  const address = property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : ''), where = propUnitText(property, unit);
+  const day = (style) => new Date(String(wo.Scheduled_Date) + 'T12:00:00').toLocaleDateString('en-US', { weekday: style, month: 'short', day: 'numeric' });
+  let msg = '';
+  if (role === 'owner') {
+    if (key === 'received') msg = SMS_MSG.ownerJobReceived({ first, trade: wo.Trade, where, description: wo.Description, woId });
+    else if (key === 'scheduled') msg = SMS_MSG.ownerJobScheduled({ first, woId, label, where, dateStr: day('short'), window: wo.Scheduled_Window });
+    else if (key === 'complete') msg = SMS_MSG.ownerJobComplete({ first, woId, label, address });
+  } else if (role === 'tenant') {
+    if (key === 'received') msg = SMS_MSG.tenantJobReceived({ first, trade: wo.Trade, address, woId });
+    else if (key === 'assigned') msg = SMS_MSG.tenantJobAssigned({ first, label, vendorName: DEMO_TEST_VENDOR.name, vendorPhone: DEMO_TEST_VENDOR.phone, woId });
+    else if (key === 'scheduled') msg = SMS_MSG.tenantJobScheduled({ first, label, address, dateStr: day('long'), window: wo.Scheduled_Window, woId, withinHour: false });
+    else if (key === 'completed') msg = SMS_MSG.tenantJobCompleted({ first, label, address, woId });
+  }
+  if (!msg) return '';
+  return 'DEMO: ' + (/\bSTOP\b/i.test(msg) ? msg : msg + ' Reply STOP to stop demo texts.');
+}
+// The caller's own demo row, from the session only. -> { row, tab } or { err: Response }.
+async function demoTestRow(env, role, id, slot) {
+  const no = () => ({ err: json({ error: 'Test texts are only available in a demo login.' }, 403) });
+  if (!slot || (role !== 'owner' && role !== 'tenant')) return no();
+  const tab = role === 'owner' ? 'Owners' : 'Tenants';
+  invalidateTabCache(tab);
+  const row = (await fetchTab(env, tab)).find(r => String(r.ID) === String(id));
+  if (!row || !demoTrue(row.Is_Demo) || !demoTrue(row.Demo_Prospect) || String(row.Demo_Slot || '1') !== String(slot)) return no();
+  return { row, tab };
+}
+async function demoTestStatus(env, role, id, slot) {
+  try {
+    const g = await demoTestRow(env, role, id, slot);
+    if (g.err) return g.err;
+    const used = parseInt(g.row.Demo_SMS_Count, 10) || 0;
+    return json({ ok: true, role, texts_used: used, texts_cap: DEMO_SMS_CAP, limit_reached: used >= DEMO_SMS_CAP, events: DEMO_TEST_EVENTS[role].map(e => ({ key: e.key, label: e.label })) });
+  } catch (e) {
+    await demoTelemetry(env, 'demo_test_status', false, 'could not read the demo test status: ' + String((e && e.message) || e).slice(0, 200));
+    return json({ error: 'Test texts are unavailable right now. Please try again in a minute.' }, 503);
+  }
+}
+async function demoTestSend(env, body, role, id, slot) {
+  let key = '';
+  const done = async (ok, code, message, extra) => {
+    await demoTelemetry(env, 'demo_test_send', ok, `slot=${slot || ''} role=${role || ''} event=${key} outcome=${code}`);
+    return json(Object.assign({ ok, sent: ok, code, message }, extra || {}));
+  };
+  try {
+    const g = await demoTestRow(env, role, id, slot);
+    if (g.err) return g.err;
+    key = String((body && body.event) || '').trim();
+    const ev = DEMO_TEST_EVENTS[role].find(e => e.key === key);
+    if (!ev) return json({ error: 'Pick one of the test messages from the list.' }, 400);
+    const row = g.row, used = parseInt(row.Demo_SMS_Count, 10) || 0, left = { texts_used: used, texts_cap: DEMO_SMS_CAP };
+    const phone = normalizePhone(row.Phone);
+    if (!/^\+1\d{10}$/.test(phone)) return await done(false, 'no_phone', 'There is no phone number on file for this demo, so no text was sent.', left);
+    if (String(row.SMS_OptOut || '').toUpperCase() === 'TRUE') return await done(false, 'opted_out', 'You replied STOP, so no more test texts will be sent to this number.', left);
+    if (used >= DEMO_SMS_CAP) return await done(false, 'limit_reached', 'Test limit reached: you have used all ' + DEMO_SMS_CAP + ' of your test texts.', left);
+    const [wos, props, units] = await fetchTabs(env, ['Work_Orders', 'Properties', 'Units']);
+    const wo = wos.find(w => String(w.ID).toUpperCase() === 'WO-D' + slot + ev.wo);
+    const property = wo && props.find(p => String(p.ID) === String(wo.Property_ID));
+    const unit = wo && units.find(u => String(u.ID) === String(wo.Unit_ID));
+    if (!wo || !demoTrue(wo.Is_Demo) || !property || !demoTrue(property.Is_Demo) || String(property.Demo_Slot) !== String(slot)) return await done(false, 'no_sample_data', 'The sample data for this demo is missing, so no text was sent. Please let us know and we will reset it.', left);
+    const text = demoTestText(role, key, { first: row.First_Name, wo, property, unit });
+    if (!text) return json({ error: 'Pick one of the test messages from the list.' }, 400);
+    const opts = { wo_id: wo.ID, message_type: ev.type, recipient_type: role, property, message_body: text, redirectTo: phone, bypassQuietHours: true, allowRepeat: true };
+    opts[role] = row;
+    const r = await smsGatedSend(env, opts);
+    let after = used;
+    try { invalidateTabCache(g.tab); const fresh = (await fetchTab(env, g.tab)).find(x => String(x.ID) === String(id)); after = fresh ? (parseInt(fresh.Demo_SMS_Count, 10) || 0) : used; } catch (e) { /* the count shown is best-effort; the guard already enforced the cap */ }
+    const info = { texts_used: after, texts_cap: DEMO_SMS_CAP };
+    if (r && r.sent) return await done(true, 'sent', 'Sent. Check your phone: this is the real wording a ' + role + ' receives.', info);
+    const why = String((r && (r.error_reason || '')) || '');
+    if (r && r.error_code === 'blocked_demo' && /limit/i.test(why)) return await done(false, 'limit_reached', 'Test limit reached: you have used all ' + DEMO_SMS_CAP + ' of your test texts.', info);
+    if (r && r.error_code === 'blocked_demo') return await done(false, 'held', 'The demo safety check held this text back, so nothing was sent.', info);
+    if (r && String(r.error_code) === '21610') return await done(false, 'opted_out', 'You replied STOP, so no more test texts will be sent to this number.', info);
+    if (r && r.send_ok === false) return await done(false, 'switched_off', 'Texting is switched off right now, so nothing was sent.', info);
+    return await done(false, 'failed', 'The text did not go through. It may still count toward your test limit.', info);
+  } catch (e) {
+    await demoTelemetry(env, 'demo_test_send', false, `slot=${slot || ''} role=${role || ''} event=${key} threw: ${String((e && e.message) || e).slice(0, 200)}`);
+    return json({ error: 'The test text could not be sent right now. Please try again in a minute.' }, 503);
+  }
+}
 async function demoAddProspect(env, body) {
   const nm = demoParseName(body);
   if (!nm) return json({ error: 'First name is required (letters only).' }, 400);
@@ -1964,6 +2067,7 @@ async function demoSessionDenied(env, session) {
 // A demo TENANT session may write only inside its own slot: submit a request on the slot's properties and add a note on a slot work order. Everything else is refused.
 async function demoTenantWriteDenied(env, path, body, tenantId, slot) {
   const deny = async (why) => { await logTelemetry(env, { Source: 'worker', Job_Type: 'demo_write_denied', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `slot=${slot} tenant=${tenantId} ${why}`.slice(0, 480) }); return json({ error: 'Forbidden' }, 403); };
+  if (path === '/demo/test-send') return null;   // the "send me a test" button: the handler ignores the body except `event` and takes the person, slot and phone from the session
   if (path !== '/workorder' && path !== '/wo/add-note') return await deny('path not available in the demo');
   const b = (body && typeof body === 'object') ? body : null;
   if (!b) return await deny('no body');
@@ -8526,7 +8630,7 @@ async function createWorkOrder(env, body) {
     if ((body.type || '') === 'tenant' && owner?.Phone && property) {
       const notify = await shouldNotifyOwner(env, woLike, 'Received');
       if (notify) {
-        const msg = `Hi ${owner.First_Name}, new ${woLike.Trade || 'General'} request from your tenant at ${propUnitText(property, unit)}: ${smsShort(woLike.Description, 80) || '(no description)'}. We'll update you once it's scheduled. Ref: ${woId}.`;   // D-16: shortened, description cut to 80
+        const msg = SMS_MSG.ownerJobReceived({ first: owner.First_Name, trade: woLike.Trade, where: propUnitText(property, unit), description: woLike.Description, woId });
         const r = await smsGatedSend(env, { wo_id: woId, message_type: 'owner_job_received', recipient_type: 'owner', owner, property, message_body: msg });
         if (r.sent) await updateWOFields(env, woId, { Owner_Notified: 'TRUE' });
       }
@@ -8542,7 +8646,7 @@ async function createWorkOrder(env, body) {
     if (tenantNotifyCreated) for (const tenant of tenantsForDispatch(tenants, unit, woLike)) {
       if (!isTenantNotifiable(tenant, woLike)) continue;
       const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your unit';
-      const msg = `Hi ${tenant.First_Name}, we've received your ${woLike.Trade || 'General'} request at ${address} and it's pending assignment and scheduling. We'll be in touch. Ref: ${woId}. ${TENANT_STOP_NOTE}`;
+      const msg = SMS_MSG.tenantJobReceived({ first: tenant.First_Name, trade: woLike.Trade, address, woId });
       const sendAfter = new Date(Date.now() + 1*3600000).toISOString();
       await queueNotification(env, woId, 'tenant_received', tenant.Phone, msg, sendAfter, { message_type: 'tenant_job_received', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
     }
@@ -10940,7 +11044,7 @@ async function assignVendor(env, body, internal) {
     for (const tenant of woTenants) {
       if (!tenant?.Phone || !isTenantNotifiable(tenant, wo)) continue;
       const vendorPhoneDisplay = formatPhoneDisplay(vendor.Phone);
-      const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} has been assigned to ${vendor.Name || 'a technician'}${vendorPhoneDisplay ? ' (' + vendorPhoneDisplay + ')' : ''}. They will contact you to schedule. Ref: ${body.wo_id}.`;
+      const msg = SMS_MSG.tenantJobAssigned({ first: tenant.First_Name, label: woJobLabel(wo), vendorName: vendor.Name, vendorPhone: vendorPhoneDisplay, woId: body.wo_id });
       const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
       if (r.sent) tenantSMSSent = true;
     }
@@ -11114,7 +11218,7 @@ async function updateStatus(env, body) {
       // number currently dead-ends into handleInboundSMS's vendor-only lookup ("Sorry, we
       // could not find your vendor record"), so this was promising a channel that doesn't
       // actually route anywhere yet. Revisit once a real tenant contact path exists.
-      const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} at ${address} is complete. Thank you! Ref: ${body.wo_id}.`;
+      const msg = SMS_MSG.tenantJobCompleted({ first: tenant.First_Name, label: woJobLabel(wo), address, woId: body.wo_id });
       await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_completed', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
     // D-16: the same status posted again (a double tap, a retry) must not text Brett twice. The transport also refuses an identical text inside 10 minutes.
@@ -11158,7 +11262,7 @@ async function updateStatus(env, body) {
     const notify = await shouldNotifyOwner(env, wo, ownerEvent);
     if (notify) {
       const ownerMsgs = {
-        Complete: `Hi ${owner.First_Name}, ${body.wo_id} (${woJobLabel(wo)}) at ${address} is complete.`,
+        Complete: SMS_MSG.ownerJobComplete({ first: owner.First_Name, woId: body.wo_id, label: woJobLabel(wo), address }),
         On_Hold: `Hi ${owner.First_Name}, ${body.wo_id} (${woJobLabel(wo)}) at ${address} is on hold: ${smsShort(holdReason, 80)}.`,   // D-16: shortened
       };
       const msg = ownerMsgs[ownerEvent];
@@ -15765,7 +15869,7 @@ async function scheduleWO(env, body) {
     if(isTenantNotifiable(tenant,wo)){
       const dateStr=new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'long',month:'short',day:'numeric'});
       // woJobLabel keeps two same-trade/same-address jobs distinguishable in the text.
-      const msg=isWithinHour?`Hi ${tenant.First_Name}, your technician is on the way and will arrive within 1 hour for your ${woJobLabel(wo)} at ${address}. Ref: ${body.wo_id}.`:`Hi ${tenant.First_Name}, your ${woJobLabel(wo)} at ${address} is scheduled for ${dateStr}, ${body.window}. Ref: ${body.wo_id}.`;
+      const msg=SMS_MSG.tenantJobScheduled({ first: tenant.First_Name, label: woJobLabel(wo), address, dateStr, window: body.window, woId: body.wo_id, withinHour: !!isWithinHour });
       const now=new Date(), tomorrow=new Date(now); tomorrow.setDate(tomorrow.getDate()+1); const tomorrowStr=tomorrow.toISOString().split('T')[0];
       // TWILIO_SMS_BUILD_BRIEF_v1.0 — tenant_job_scheduled. Same-day/within-hour sends
       // immediately through the gate; anything further out still uses the pre-existing
@@ -15799,7 +15903,7 @@ async function scheduleWO(env, body) {
     const notify = await shouldNotifyOwner(env, wo, 'Scheduled');
     if (notify) {
       const dateStr = new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
-      const ownerMsg = `Hi ${owner.First_Name}, ${body.wo_id} (${woJobLabel(wo)}) at ${propUnitText(property, unit)} is scheduled for ${dateStr}, ${body.window}, subject to change.`;   // D-16: shortened
+      const ownerMsg = SMS_MSG.ownerJobScheduled({ first: owner.First_Name, woId: body.wo_id, label: woJobLabel(wo), where: propUnitText(property, unit), dateStr, window: body.window });
       const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'owner_job_scheduled', recipient_type: 'owner', owner, property, message_body: ownerMsg });
       ownerSMSSent = r.sent;
       if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
@@ -27749,8 +27853,8 @@ const ROLE_SCOPES = {
     '/vendor-bill/add-standalone','/vendor/request-property-access','/workorder/self-serve','/properties',
     // Web push (Nov 5 2026): a session manages only ITS OWN devices (identity comes from the session inside pushRoute). /push/send is admin-only and is in no role scope.
     '/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
-  tenant: ['/tenant-by-pin','/tenant-session-refresh','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo','/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
-  owner:  ['/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo','/owner-file/view','/owner/tenant-roster','/owner/tenant-roster/preview','/owner/tenant-roster/apply','/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
+  tenant: ['/demo/test-send','/demo/test-status','/tenant-by-pin','/tenant-session-refresh','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo','/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
+  owner:  ['/demo/test-send','/demo/test-status','/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo','/owner-file/view','/owner/tenant-roster','/owner/tenant-roster/preview','/owner/tenant-roster/apply','/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
 };
 function isPathAllowedForRole(path, role){ const s = ROLE_SCOPES[role]; return !!(s && s.includes(path)); }
 
@@ -39383,6 +39487,18 @@ function formatPhoneDisplay(phone) {
 // just enough that two jobs at the same address/trade never read the same. No trade -> falls
 // back to "General" (matches the same default used elsewhere for an unset Trade).
 // Pure. Cuts pulled-in text (a tenant's description, a hold reason) to n characters with a plain "..." (first line only). D-16.
+// ── The seven demo-covered text wordings (Nov 12 2026, demo Phase 3b) ──────────────────────────────────────────────────────────────────────────
+// ONE place for the wording of the texts the demo "send me a test" button can send. The real handlers and the test button both build their text here,
+// so a test text is always the real copy and a wording change cannot drift between the two. Pure: every value arrives as a plain argument.
+const SMS_MSG = {
+  ownerJobReceived: (o) => `Hi ${o.first}, new ${o.trade || 'General'} request from your tenant at ${o.where}: ${smsShort(o.description, 80) || '(no description)'}. We'll update you once it's scheduled. Ref: ${o.woId}.`,   // D-16: shortened, description cut to 80
+  tenantJobReceived: (o) => `Hi ${o.first}, we've received your ${o.trade || 'General'} request at ${o.address} and it's pending assignment and scheduling. We'll be in touch. Ref: ${o.woId}. ${TENANT_STOP_NOTE}`,
+  tenantJobAssigned: (o) => `Hi ${o.first}, your ${o.label} has been assigned to ${o.vendorName || 'a technician'}${o.vendorPhone ? ' (' + o.vendorPhone + ')' : ''}. They will contact you to schedule. Ref: ${o.woId}.`,
+  tenantJobScheduled: (o) => o.withinHour ? `Hi ${o.first}, your technician is on the way and will arrive within 1 hour for your ${o.label} at ${o.address}. Ref: ${o.woId}.` : `Hi ${o.first}, your ${o.label} at ${o.address} is scheduled for ${o.dateStr}, ${o.window}. Ref: ${o.woId}.`,
+  tenantJobCompleted: (o) => `Hi ${o.first}, your ${o.label} at ${o.address} is complete. Thank you! Ref: ${o.woId}.`,
+  ownerJobScheduled: (o) => `Hi ${o.first}, ${o.woId} (${o.label}) at ${o.where} is scheduled for ${o.dateStr}, ${o.window}, subject to change.`,   // D-16: shortened
+  ownerJobComplete: (o) => `Hi ${o.first}, ${o.woId} (${o.label}) at ${o.address} is complete.`,
+};
 function smsShort(s, n) {
   const first = String(s == null ? '' : s).split(/\r?\n/)[0].trim();
   return first.length > n ? first.slice(0, n).trim() + '...' : first;

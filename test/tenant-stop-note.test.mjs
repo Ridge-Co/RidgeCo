@@ -40,7 +40,7 @@ ok(withTenantStopNote(withWelcomeRatesNote('Hi Sam.')) === 'Hi Sam. Msg&data rat
 ok(!/withWelcomeRatesNote/.test(src.slice(src.indexOf("const message = (m => type === 'tenant'"), src.indexOf("const message = (m => type === 'tenant'") + 200)), 'PIN text does not get the rates note');
 ok(/BUILD_VERSION = '2026-10-\d\d\.\d+-[a-z-]+'/.test(src), 'BUILD_VERSION format');
 ok(src.includes("const message = (m => type === 'tenant' ? withTenantStopNote(m) : m)("), 'tenant PIN text gets the note');
-ok(/Ref: \$\{woId\}\. \$\{TENANT_STOP_NOTE\}`;/.test(src), 'tenant job-received text gets the note');
+ok(/tenantJobReceived: \(o\) =>[^\n]*Ref: \$\{o\.woId\}\. \$\{TENANT_STOP_NOTE\}`/.test(src) && /const msg = SMS_MSG\.tenantJobReceived\(/.test(src), 'tenant job-received text gets the note');
 // vendors/owners are untouched
 ok(!/vendor_welcome[\s\S]{0,400}withTenantStopNote/.test(src.slice(src.indexOf("getMessageTemplate(env, 'vendor_welcome'"), src.indexOf("getMessageTemplate(env, 'vendor_welcome'") + 600)), 'vendor welcome not changed');
 

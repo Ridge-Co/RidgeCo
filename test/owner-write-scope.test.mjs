@@ -172,12 +172,12 @@ const snapshot = (n) => JSON.stringify(store.tabs.get(n));
 // ── wiring tripwires ─────────────────────────────────────────────────────────────────────────────
 t('router calls ownerWriteScopeDenied for owner sessions on POST', /callerRole === 'owner'\) \{\s*const _owd = await ownerWriteScopeDenied\(env, path, body, callerSessionId\)/.test(wsrc));
 t('every owner-reachable write path in ROLE_SCOPES.owner is covered or deliberately read-only/identity-bound', (() => {
-  const line = wsrc.split('\n').find(l => /^\s*owner:\s*\['\/owner-by-pin'/.test(l)) || '';
+  const line = wsrc.split('\n').find(l => /^\s*owner:\s*\['\/(demo\/test-send','\/demo\/test-status','\/)?owner-by-pin'/.test(l)) || '';
   const paths = [...line.matchAll(/'(\/[^']+)'/g)].map(m => m[1]);
   const covered = new Set(['/wo/add-note', '/wo/append-description', '/wo/owner-update', '/wo/set-tenant-visibility', '/log-attachment', '/create-upload-session', '/workorder', '/wishlist/add']);
   // POST paths that are identity-bound elsewhere (body owner_id forced equal to session) or session-bound by design
-  const other = new Set(['/owner-by-pin', '/owner/notifications', '/owner/billing', '/owner/tenant-roster/preview', '/owner/tenant-roster/apply', '/upload-photo', '/push/subscribe', '/push/device', '/push/remove', '/push/test']);
-  const getOnly = new Set(['/owner-workorders', '/owner-properties', '/owner-notifications', '/attachments', '/wo-audit', '/owner/get-billing', '/owner-file/view', '/owner/tenant-roster', '/push/vapid-key', '/push/devices']);
+  const other = new Set(['/owner-by-pin', '/owner/notifications', '/owner/billing', '/owner/tenant-roster/preview', '/owner/tenant-roster/apply', '/upload-photo', '/push/subscribe', '/push/device', '/push/remove', '/push/test', '/demo/test-send']);   // Nov 12 2026: /demo/test-send takes the person, slot and phone from the session only (demo logins; see demo-test-send.test.mjs)
+  const getOnly = new Set(['/owner-workorders', '/owner-properties', '/owner-notifications', '/attachments', '/wo-audit', '/owner/get-billing', '/owner-file/view', '/owner/tenant-roster', '/push/vapid-key', '/push/devices', '/demo/test-status']);
   const unknown = paths.filter(p => !covered.has(p) && !other.has(p) && !getOnly.has(p));
   if (unknown.length) console.log('UNCLASSIFIED owner paths:', unknown);
   return paths.length > 20 && unknown.length === 0;
