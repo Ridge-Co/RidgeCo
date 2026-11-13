@@ -382,6 +382,43 @@ function demoBanner(on) {
   b.style.cssText = 'background:#b45309;color:#fff;text-align:center;padding:8px 12px;font:700 13px/1.35 system-ui,-apple-system,sans-serif;letter-spacing:.04em';
   b.textContent = 'DEMO — sample data only. Nothing here is a real property, tenant, bill or message.';
   document.body.insertBefore(b, document.body.firstChild);
+  demoTestPanel('tenant');
+}
+// Phase 3b (Nov 12 2026): the demo "text me a test" panel. Only demo logins get it (demoBanner calls it), right under the DEMO strip. The server decides everything
+// (which phone, which slot, the 2-text limit): the browser sends only which message to try.
+function demoTestPanel(role) {
+  var old = document.getElementById('demoTest'); if (old) old.parentNode.removeChild(old);
+  var bar = document.getElementById('demoBanner'); if (!bar) return;
+  var box = document.createElement('div'); box.id = 'demoTest';
+  box.style.cssText = 'background:#fffbeb;color:#78350f;border-bottom:1px solid #f59e0b;padding:10px 12px;font:14px/1.4 system-ui,-apple-system,sans-serif;text-align:center';
+  var title = document.createElement('div'); title.style.cssText = 'font-weight:700;margin-bottom:6px'; title.textContent = 'Want to see what you would get by text?';
+  var sel = document.createElement('select'); sel.style.cssText = 'font-size:14px;padding:6px;max-width:100%;margin-right:6px';
+  var btn = document.createElement('button'); btn.type = 'button'; btn.textContent = 'Text me this'; btn.disabled = true; btn.style.cssText = 'font-size:14px;padding:6px 12px;font-weight:700;cursor:pointer';
+  var msg = document.createElement('div'); msg.style.cssText = 'margin-top:6px;font-weight:600';
+  var count = document.createElement('div'); count.style.cssText = 'margin-top:2px;font-size:13px';
+  var fine = document.createElement('div'); fine.style.cssText = 'margin-top:4px;font-size:12px;opacity:.85';
+  fine.textContent = 'By tapping the button you agree to receive demo texts at the number you gave us. Reply STOP to stop. Message and data rates may apply.';
+  box.appendChild(title); box.appendChild(sel); box.appendChild(btn); box.appendChild(msg); box.appendChild(count); box.appendChild(fine);
+  bar.parentNode.insertBefore(box, bar.nextSibling);
+  var filled = false;
+  function refresh() {
+    return api('GET', '/demo/test-status').then(function(d) {
+      if (!d || d.error || !d.events) { msg.textContent = 'Test texts are unavailable right now.'; btn.disabled = true; return; }
+      if (!filled) { filled = true; d.events.forEach(function(e) { var o = document.createElement('option'); o.value = e.key; o.textContent = e.label; sel.appendChild(o); }); }
+      count.textContent = 'Texts used: ' + d.texts_used + ' of ' + d.texts_cap;
+      fine.textContent = 'By tapping the button you agree to receive up to ' + d.texts_cap + ' demo texts at the number you gave us. Reply STOP to stop. Message and data rates may apply.';
+      btn.disabled = !!d.limit_reached;
+      if (d.limit_reached) msg.textContent = 'Test limit reached: you have used all ' + d.texts_cap + ' of your test texts.';
+    }).catch(function() { msg.textContent = 'Test texts are unavailable right now.'; btn.disabled = true; });
+  }
+  btn.onclick = function() {
+    btn.disabled = true; msg.textContent = 'Sending...';
+    api('POST', '/demo/test-send', { event: sel.value }).then(function(d) {
+      msg.textContent = (d && (d.message || d.error)) || 'The text could not be sent. Please try again.';
+      return refresh();
+    }).catch(function() { msg.textContent = 'The text could not be sent. Please try again.'; btn.disabled = false; });
+  };
+  refresh();
 }
 function onLoginSuccess(data, persist){
   session = data;
