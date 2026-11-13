@@ -1848,6 +1848,7 @@ async function demoAddProspect(env, body) {
   if (!free) return json({ error: want ? `Demo slot ${want} is not free.` : `All ${DEMO_SLOT_COUNT} demo slots are in use. Clear one first.`, slots: slots.map(s => demoSlotSummary(s, now)) }, 409);
   const n = free.slot, f = await demoEnsureSlot(env, n);
   await demoWipeSlotData(env, f);   // a slot is always handed out clean, even if an earlier wipe failed
+  try { await demoSeedSlot(env, n); } catch (e) { throw new Error(`The sample data for demo slot ${n} could not be written, so nothing was assigned: ${(e && e.message) || e}`); }
   const taken = new Set((await ooPinHolders(env)).keys());
   const pin = ownerPinPropose(phone, taken).pin;
   if (!pin) throw new Error('Could not find an unused PIN for the demo; nothing was changed');
