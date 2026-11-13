@@ -114,6 +114,12 @@ t('the heating card offers furnace, boiler, heat pump and other', ctx.HEAT_KINDS
   t('equipment heard with no unit does not guess between two unit cards', ctx.findBlankCard(d, heat, 'furnace', '') === null);
   heat.equipment[1].brand = 'Goodman';
   t('a filled card is never overwritten', ctx.findBlankCard(d, heat, 'furnace', u2.id) === null);
+  const base = d.areas.find(a => a.name === 'Basement'), whA = d.areas.find(a => a.name === 'Water Heater');
+  t('"in the basement" still fills the empty Apt 1 water heater card in the Water Heater area', ctx.findBlankCardNear(d, base, 'water_heater', u1.id) === whA.equipment[0]);
+  t('with no unit it does not pick between two cards next door', ctx.findBlankCardNear(d, base, 'water_heater', '') === null);
+  t('it never reaches into a different part of the building', ctx.findBlankCardNear(d, d.areas.find(a => a.name === 'Apt 2 - Bathroom'), 'water_heater', u2.id) === null && ctx.findBlankCardNear(d, d.areas.find(a => a.name === 'Apt 2 - Bathroom'), 'range', '') === d.areas.find(a => a.name === 'Apt 2 - Kitchen').equipment[0]);
+  { const home = { areas: ctx.buildAreas({ beds: 1, baths: 1, sides: false, laundry: false, basement: true, attic: false }) }; const hb = home.areas.find(a => a.name === 'Basement'), hh = home.areas.find(a => a.name === 'Heating / HVAC');
+    t('one home: a furnace heard "in the basement" fills the one empty furnace card', ctx.findBlankCardNear(home, hb, 'furnace', '') === hh.equipment[0]); }
   t('a kitchen range heard by voice fills the kitchen\'s empty range card', ctx.findBlankCard(d, d.areas.find(a => a.name === 'Apt 1 - Kitchen'), 'range', '').kind === 'range');
 }
 

@@ -2168,6 +2168,13 @@ function findBlankCard(doc, a, kind, serves){
   if (serves){ var m = list.filter(function(x){ return (x.serves||'')===serves; })[0]; if (m) return m; return list.filter(function(x){ return !x.serves; })[0] || null; }
   return list.filter(function(x){ return !x.serves; })[0] || (list.length===1 ? list[0] : null);
 }
+// Said "in the basement" while the empty card sits in the Heating area next to it: use that card when it is the only empty match in the same part of the building.
+function findBlankCardNear(doc, a, kind, serves){
+  var c = findBlankCard(doc, a, kind, serves); if (c) return c;
+  var sec = areaSection(doc, a), hits = [];
+  (doc.areas||[]).forEach(function(x){ if (x===a || x.excluded || areaSection(doc, x)!==sec) return; (x.equipment||[]).forEach(function(e){ if (e.kind===kind && !equipHasInfo(e) && (serves ? (e.serves||'')===serves : !e.serves)) hits.push(e); }); });
+  return hits.length===1 ? hits[0] : null;
+}
 // ---- BUILDING-LAYOUT-END ----
 function buildAreas(o){
   if (o.building) return buildBuildingAreas(o, o.units);
@@ -3078,7 +3085,7 @@ function acceptRoute(){
       ['name','brand','model','serial','year','notes'].concat((EQUIP_KINDS[e.kind]||EQUIP_KINDS.other).extra).forEach(function(f){ var v = String(e[f]||'').trim(); if (v){ o[f] = v; if (f!=='name') any = true; } });
       if (!any) return;
       var sv = (isBuilding(doc) && (e.serves===SEC_BUILDING || unitById(doc, e.serves))) ? e.serves : '';
-      var card = findBlankCard(doc, a, e.kind, sv);   // fill the empty pre-attached card rather than adding a second one
+      var card = findBlankCardNear(doc, a, e.kind, sv);   // fill the empty pre-attached card (here, or the one empty match next door) rather than adding a second one
       if (card){ Object.keys(o).forEach(function(f){ if (f!=='id' && f!=='photo_ids' && f!=='kind') card[f] = o[f]; }); if (sv) card.serves = sv; }
       else { if (sv) o.serves = sv; (a.equipment = a.equipment||[]).push(o); }
       eqN++;
