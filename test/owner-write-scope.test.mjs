@@ -172,7 +172,7 @@ const snapshot = (n) => JSON.stringify(store.tabs.get(n));
 // ── wiring tripwires ─────────────────────────────────────────────────────────────────────────────
 t('router calls ownerWriteScopeDenied for owner sessions on POST', /callerRole === 'owner'\) \{\s*const _owd = await ownerWriteScopeDenied\(env, path, body, callerSessionId\)/.test(wsrc));
 t('every owner-reachable write path in ROLE_SCOPES.owner is covered or deliberately read-only/identity-bound', (() => {
-  const line = wsrc.split('\n').find(l => /^\s*owner:\s*\['\/owner-by-pin'/.test(l)) || '';
+  const line = wsrc.split('\n').find(l => /^\s*owner:\s*\['\/(demo\/test-send','\/demo\/test-status','\/)?owner-by-pin'/.test(l)) || '';
   const paths = [...line.matchAll(/'(\/[^']+)'/g)].map(m => m[1]);
   const covered = new Set(['/wo/add-note', '/wo/append-description', '/wo/owner-update', '/wo/set-tenant-visibility', '/log-attachment', '/create-upload-session', '/workorder', '/wishlist/add']);
   // POST paths that are identity-bound elsewhere (body owner_id forced equal to session) or session-bound by design
