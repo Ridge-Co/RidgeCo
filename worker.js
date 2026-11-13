@@ -1964,6 +1964,7 @@ async function demoSessionDenied(env, session) {
 // A demo TENANT session may write only inside its own slot: submit a request on the slot's properties and add a note on a slot work order. Everything else is refused.
 async function demoTenantWriteDenied(env, path, body, tenantId, slot) {
   const deny = async (why) => { await logTelemetry(env, { Source: 'worker', Job_Type: 'demo_write_denied', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `slot=${slot} tenant=${tenantId} ${why}`.slice(0, 480) }); return json({ error: 'Forbidden' }, 403); };
+  if (path === '/demo/test-send') return null;   // the "send me a test" button: the handler ignores the body except `event` and takes the person, slot and phone from the session
   if (path !== '/workorder' && path !== '/wo/add-note') return await deny('path not available in the demo');
   const b = (body && typeof body === 'object') ? body : null;
   if (!b) return await deny('no body');
