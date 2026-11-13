@@ -11114,7 +11114,7 @@ async function updateStatus(env, body) {
       // number currently dead-ends into handleInboundSMS's vendor-only lookup ("Sorry, we
       // could not find your vendor record"), so this was promising a channel that doesn't
       // actually route anywhere yet. Revisit once a real tenant contact path exists.
-      const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} at ${address} is complete. Thank you! Ref: ${body.wo_id}.`;
+      const msg = SMS_MSG.tenantJobCompleted({ first: tenant.First_Name, label: woJobLabel(wo), address, woId: body.wo_id });
       await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_completed', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
     // D-16: the same status posted again (a double tap, a retry) must not text Brett twice. The transport also refuses an identical text inside 10 minutes.
