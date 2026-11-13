@@ -89,7 +89,7 @@ tab('Tenants', TH, [{ ID: '40', First_Name: 'Tess', Last_Name: 'Real', Phone: '+
 tab('Properties', ['ID', 'Owner_ID', 'Address', 'Active'], [{ ID: '7', Owner_ID: '12', Address: '500 Real Street', Active: 'TRUE' }]);
 tab('Units', ['ID', 'Property_ID', 'Unit_Label', 'Active'], [{ ID: '9', Property_ID: '7', Unit_Label: '1', Active: 'TRUE' }]);
 tab('Work_Orders', ['ID', 'Property_ID', 'Unit_ID', 'Status', 'Description'], [{ ID: '100', Property_ID: '7', Unit_ID: '9', Status: 'Assigned', Description: 'real leak' }]);
-tab('Attachments', ['ID', 'WO_ID', 'File_Name', 'Active'], [{ ID: '1', WO_ID: '100', File_Name: 'real.jpg', Active: 'TRUE' }]);
+tab('Attachments', ['ID', 'WO_ID', 'File_Name', 'File_Type', 'Drive_URL', 'Active'], [{ ID: '1', WO_ID: '100', File_Name: 'real.jpg', Active: 'TRUE' }]);
 tab('Owner_Users', ['ID', 'Owner_ID', 'First_Name', 'Last_Name', 'Phone', 'PIN', 'Active'], []);
 tab('Vendors', ['ID', 'Name', 'Phone', 'PIN', 'Active'], [{ ID: '3', Name: 'Real Vendor', Phone: '+14105550177', PIN: 'VEN12345', Active: 'TRUE' }]);
 store.tabs.set('Config', [['TWILIO_ENABLED', 'TRUE'], ['admin_phone', '+14105550111'], ['SMS_TEST_MODE', 'FALSE']]);
