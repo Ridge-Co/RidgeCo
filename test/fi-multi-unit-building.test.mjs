@@ -106,6 +106,8 @@ t('the heating card offers furnace, boiler, heat pump and other', ctx.HEAT_KINDS
   t('a room moved out of a unit drops the unit name', bath.name === 'Bathroom' && bath.section === 'common');
   ctx.moveAreaToSection(d, bath, u1.id);
   t('a room moved into a unit takes that unit name', bath.name === 'Apt 1 - Bathroom' && bath.section === u1.id);
+  const k2 = d.areas.find(a => a.name === 'Unit B - Kitchen'); ctx.moveAreaToSection(d, k2, u1.id);
+  t('moving a second kitchen into a unit never makes two areas with one name', k2.name === 'Apt 1 - Kitchen (2)' && new Set(d.areas.map(a => a.name)).size === d.areas.length, k2.name);
 }
 // voice-found equipment fills the empty card
 {
@@ -115,11 +117,17 @@ t('the heating card offers furnace, boiler, heat pump and other', ctx.HEAT_KINDS
   heat.equipment[1].brand = 'Goodman';
   t('a filled card is never overwritten', ctx.findBlankCard(d, heat, 'furnace', u2.id) === null);
   const base = d.areas.find(a => a.name === 'Basement'), whA = d.areas.find(a => a.name === 'Water Heater');
-  t('"in the basement" still fills the empty Apt 1 water heater card in the Water Heater area', ctx.findBlankCardNear(d, base, 'water_heater', u1.id) === whA.equipment[0]);
+  const near = ctx.findBlankCardNear(d, base, 'water_heater', u1.id);
+  t('"in the basement" still fills the empty Apt 1 water heater card in the Water Heater area, and says which area', near && near.card === whA.equipment[0] && near.area === whA);
+  t('no unit heard never takes the last empty card that belongs to a unit', ctx.findBlankCard(d, heat, 'furnace', '') === null && heat.equipment.filter(x => !ctx.equipHasInfo(x)).length === 1);
   t('with no unit it does not pick between two cards next door', ctx.findBlankCardNear(d, base, 'water_heater', '') === null);
-  t('it never reaches into a different part of the building', ctx.findBlankCardNear(d, d.areas.find(a => a.name === 'Apt 2 - Bathroom'), 'water_heater', u2.id) === null && ctx.findBlankCardNear(d, d.areas.find(a => a.name === 'Apt 2 - Bathroom'), 'range', '') === d.areas.find(a => a.name === 'Apt 2 - Kitchen').equipment[0]);
+  t('it never reaches into a different part of the building', ctx.findBlankCardNear(d, d.areas.find(a => a.name === 'Apt 2 - Bathroom'), 'water_heater', u2.id) === null);
+  t('an appliance heard in another room is NOT moved into the kitchen card (a second refrigerator stays where he said)', ctx.findBlankCardNear(d, d.areas.find(a => a.name === 'Apt 2 - Bathroom'), 'refrigerator', '') === null);
   { const home = { areas: ctx.buildAreas({ beds: 1, baths: 1, sides: false, laundry: false, basement: true, attic: false }) }; const hb = home.areas.find(a => a.name === 'Basement'), hh = home.areas.find(a => a.name === 'Heating / HVAC');
-    t('one home: a furnace heard "in the basement" fills the one empty furnace card', ctx.findBlankCardNear(home, hb, 'furnace', '') === hh.equipment[0]); }
+    t('one home: a furnace heard "in the basement" fills the one empty furnace card', ctx.findBlankCardNear(home, hb, 'furnace', '').card === hh.equipment[0]);
+    t('one home: a refrigerator heard in the basement is not put on the kitchen card', ctx.findBlankCardNear(home, hb, 'refrigerator', '') === null);
+    hb.equipment.push({ id: 'e9', kind: 'furnace', brand: 'Old' });
+    t('if the area he approved already has a furnace, nothing is redirected next door', ctx.findBlankCardNear(home, hb, 'furnace', '') === null); }
   t('a kitchen range heard by voice fills the kitchen\'s empty range card', ctx.findBlankCard(d, d.areas.find(a => a.name === 'Apt 1 - Kitchen'), 'range', '').kind === 'range');
 }
 
@@ -191,6 +199,12 @@ const w = world();
   t('a single home\'s result has none of the unit keys', !('unit_assumed' in single.issues[0]) && !('serves' in single.equipment[0]) && !('last_unit' in single), single);
   t('units with a bad id or no name are ignored', w.fiRouteUnits({ units: [{ id: 'x', label: 'A' }, { id: 'un_good0001', label: ' ' }, { id: 'un_good0002', label: 'Apt 9' }, null] }).map(u => u.label).join() === 'Apt 9');
 }
+
+// limits are checked at Start, before anything is created
+t('12 units at 3 bed / 1 bath would pass the 80-area limit, and Start says so instead of creating it', ctx.buildBuildingAreas(opts, ctx.cleanUnits(Array.from({ length: 12 }, (_, i) => ({ label: 'Apt ' + (i + 1), beds: 3, baths: 1 }))).units).length > 80 && /if \(nA > 80\)\{ toast\('That layout makes '/.test(phone) && /if \(cu\.units\.length > 40\)\{ toast\(/.test(phone) && /cu\.units\.length > 30\)\{ toast\(/.test(phone));
+t('whole-unit no access leaves rooms with notes or filled equipment alone, and Clear only undoes its own marks', /String\(a\.notes\|\|''\)\.trim\(\) \|\| \(a\.equipment\|\|\[\]\)\.some\(equipHasInfo\)/.test(phone) && /a\.access\.no_access && a\.access\.by_unit\)\{ delete a\.access;/.test(phone));
+t('moving a card first keeps what is typed in the open sheet', /a\.equipment\[i\] = e;   \/\/ what is typed in the open sheet/.test(phone));
+t('the accept message says when a detail was put on a card in another area', /Filled the empty card: /.test(phone));
 
 // ── 6. the phone page wiring ──
 t('the start screen has a multi-unit switch', /id="bld-on"/.test(phone) && /onchange="setBuilding\(this\.checked\)"/.test(phone));

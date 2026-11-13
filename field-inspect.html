@@ -1062,7 +1062,7 @@ function pickProp(id, unitId, chosen){
   S.newOwner = p.owner_id ? { id:p.owner_id, name:p.owner_name, source:'hub' } : null; S.ownerQ='';
   var hl = hubUnitLabels(id);
   if (!u && chosen && hl.length > 1){ setBuilding(true, hl); toast('Set up as a '+hl.length+'-unit building — check the units below'); return; }
-  if (u && S.newOpts.building) S.newOpts.building = false;
+  if ((u || hl.length <= 1) && S.newOpts.building && !S.newBooking){ S.newOpts.building = false; S.newOpts.units = []; }   // a different, single property: the old building set-up does not carry over
   render();
 }
 // ---- owners ----
@@ -1238,7 +1238,7 @@ function convertBuildingSheet(){
 // Whole unit not accessed: marks every room of that unit that has nothing recorded yet. Rooms already inspected are left alone.
 function unitAccessSheet(sec){
   var doc = S.rec.doc, u = unitById(doc, sec); if (!u) return;
-  var rooms = doc.areas.filter(function(a){ return !a.excluded && areaSection(doc, a)===sec; }), marked = rooms.filter(function(a){ return a.access && a.access.no_access; }).length;
+  var rooms = doc.areas.filter(function(a){ return !a.excluded && areaSection(doc, a)===sec; }), marked = rooms.filter(function(a){ return a.access && a.access.no_access && a.access.by_unit; }).length;
   openSheet('<h2>No access to '+esc(u.label)+'</h2><div class="muted">Marks every room in this unit that has nothing recorded yet. Rooms you already inspected are left alone.</div><label class="fld">Reason</label><select id="ua-reason">'+ACCESS_REASONS.map(function(r){ return '<option value="'+r[0]+'">'+esc(r[1])+'</option>'; }).join('')+'</select><label class="fld">Note (needed for “Other”)</label><input id="ua-note" maxlength="500">'
     +'<div class="btns"><button class="btn primary" onclick="unitAccessApply(\''+sec+'\',true)">Mark no access</button>'+(marked?'<button class="btn" onclick="unitAccessApply(\''+sec+'\',false)">Clear no access ('+marked+')</button>':'')+'<button class="btn" onclick="closeSheet()">Cancel</button></div>');
 }
@@ -1248,10 +1248,11 @@ function unitAccessApply(sec, on){
   var n = 0;
   mut(function(d){ d.areas.forEach(function(a){
     if (a.excluded || areaSection(d, a)!==sec) return;
-    if (!on){ if (a.access && a.access.no_access){ delete a.access; n++; } return; }
-    var touched = (a.condition && a.condition!=='not_inspected') || (a.issues||[]).length || (a.photo_ids||[]).length || String(a.pending_text||'').trim();
+    if (!on){ if (a.access && a.access.no_access && a.access.by_unit){ delete a.access; n++; } return; }   // only what this button set; a room he marked by hand keeps its own reason
+    if (a.access && a.access.no_access) return;
+    var touched = (a.condition && a.condition!=='not_inspected') || (a.issues||[]).length || (a.photo_ids||[]).length || String(a.pending_text||'').trim() || String(a.notes||'').trim() || (a.equipment||[]).some(equipHasInfo);
     if (touched) return;
-    a.access = { no_access:true, reason:reason, note:note }; n++;
+    a.access = { no_access:true, reason:reason, note:note, by_unit:true }; n++;
   }); });
   closeSheet(); render(); toast(n+' room'+(n===1?'':'s')+(on?' marked no access':' cleared'));
 }
@@ -1327,7 +1328,9 @@ function organizeDrive(){
 }
 function createInspection(){
   var o = S.newOpts, p = S.newProp, lay = null;
-  if (o.building){ var cu = cleanUnits(o.units); if (cu.errors.length){ toast(cu.errors[0]); return; } o.units = cu.units; lay = { kind:'building', units:cu.units.map(function(u){ var x = { id:u.id, label:u.label }; if (u.alias) x.alias = u.alias; return x; }) }; }
+  if (o.building){ var cu = cleanUnits(o.units); if (cu.errors.length){ toast(cu.errors[0]); return; } o.units = cu.units; lay = { kind:'building', units:cu.units.map(function(u){ var x = { id:u.id, label:u.label }; if (u.alias) x.alias = u.alias; return x; }) }; if (cu.units.length > 40){ toast('The limit is 40 units in one inspection — split the building into two inspections.'); return; }
+    if (o.sysWhere!=='unit' && cu.units.length > 30){ toast('With more than 30 units, choose “Inside each unit” for furnaces, water heaters and panels (a shared area holds 30 cards).'); return; }
+    var nA = buildBuildingAreas(o, cu.units).length; if (nA > 80){ toast('That layout makes '+nA+' areas — the limit is 80. Use fewer rooms per unit, or inspect the building as two inspections.'); return; } }
   if (!claim('create')) return; $('start-btn').disabled = true;
   lsSet('fi_inspector', o.inspector);
   var id = S.newInspId || newId(); S.route = null; S.newInspId = '';
@@ -1367,7 +1370,7 @@ function addAreaSheet(){
   var presets = [['Bedroom','interior'],['Bathroom','interior'],['Half Bath','interior'],['Garage','exterior'],['Porch / Deck','exterior'],['Shed','exterior'],['Yard / Fence','exterior'],['Basement','interior'],['Attic','interior'],['Other','other']];
   openSheet('<h2>Add an area</h2>'+addSecPick()+'<div class="seg">'+presets.map(function(p){ return '<button onclick="addAreaPreset(\''+p[0]+'\',\''+p[1]+'\')">'+p[0]+'</button>'; }).join('')+'</div><label class="fld">Or type a name</label><input id="aa-name" placeholder="e.g. Sunroom"><label class="fld">Group</label><select id="aa-group"><option value="interior">Interior</option><option value="exterior">Exterior</option><option value="systems">Systems</option><option value="other">Other</option></select><div class="btns"><button class="btn primary" onclick="addAreaCustom()">Add</button><button class="btn" onclick="closeSheet()">Cancel</button></div>');
 }
-function addSecPick(){ var doc = S.rec.doc; if (!isBuilding(doc)) return ''; return '<label class="fld" style="margin-top:0">Where is it?</label><select id="aa-sec" onchange="S.addSec=this.value">'+sectionKeys(doc).map(function(k){ return '<option value="'+k+'"'+(S.addSec===k?' selected':'')+'>'+esc(sectionLabel(doc, k))+'</option>'; }).join('')+'</select><div class="muted" style="margin-bottom:8px">Then pick what it is:</div>'; }
+function addSecPick(){ var doc = S.rec.doc; if (!isBuilding(doc)) return ''; if (sectionKeys(doc).indexOf(S.addSec)<0) S.addSec = SEC_COMMON; return '<label class="fld" style="margin-top:0">Where is it?</label><select id="aa-sec" onchange="S.addSec=this.value">'+sectionKeys(doc).map(function(k){ return '<option value="'+k+'"'+(S.addSec===k?' selected':'')+'>'+esc(sectionLabel(doc, k))+'</option>'; }).join('')+'</select><div class="muted" style="margin-bottom:8px">Then pick what it is:</div>'; }
 // In a building the new area takes the chosen section, and a room inside a unit takes the unit's label in its name.
 function placeNewArea(base, group){
   var doc = S.rec.doc, el = $('aa-sec'), sec = (isBuilding(doc) && el) ? el.value : '', u = unitById(doc, sec);
@@ -2159,20 +2162,25 @@ function renameUnitInDoc(doc, unitId, newLabel){
 // Move an area to another section. A room moved into a unit takes that unit's label; moved out, it drops it.
 function moveAreaToSection(doc, a, sec){
   var base = areaShortName(doc, a), u = unitById(doc, sec);
-  a.section = sec; a.name = u ? unitAreaName(u.label, base) : base; return a;
+  var want = u ? unitAreaName(u.label, base) : base, name = want, k = 2;
+  while ((doc.areas||[]).some(function(x){ return x!==a && x.name===name; })) name = want + ' (' + (k++) + ')';   // never two areas with one name
+  a.section = sec; a.name = name; return a;
 }
 // Voice sorting found equipment: fill the matching empty pre-attached card instead of adding a second one.
 function findBlankCard(doc, a, kind, serves){
   var list = (a.equipment||[]).filter(function(x){ return x.kind===kind && !equipHasInfo(x); });
   if (!list.length) return null;
   if (serves){ var m = list.filter(function(x){ return (x.serves||'')===serves; })[0]; if (m) return m; return list.filter(function(x){ return !x.serves; })[0] || null; }
-  return list.filter(function(x){ return !x.serves; })[0] || (list.length===1 ? list[0] : null);
+  return list.filter(function(x){ return !x.serves; })[0] || null;   // no unit heard: never take a card that belongs to a unit
 }
 // Said "in the basement" while the empty card sits in the Heating area next to it: use that card when it is the only empty match in the same part of the building.
+// Only for the building's systems (a second refrigerator in the basement stays in the basement), and only when the area he approved has no card of that kind.
+var NEAR_KINDS = ['furnace','boiler','heat_pump','water_heater','electrical_panel'];
 function findBlankCardNear(doc, a, kind, serves){
-  var c = findBlankCard(doc, a, kind, serves); if (c) return c;
+  var c = findBlankCard(doc, a, kind, serves); if (c) return { card:c, area:a };
+  if (NEAR_KINDS.indexOf(kind)<0 || (a.equipment||[]).some(function(x){ return x.kind===kind; })) return null;
   var sec = areaSection(doc, a), hits = [];
-  (doc.areas||[]).forEach(function(x){ if (x===a || x.excluded || areaSection(doc, x)!==sec) return; (x.equipment||[]).forEach(function(e){ if (e.kind===kind && !equipHasInfo(e) && (serves ? (e.serves||'')===serves : !e.serves)) hits.push(e); }); });
+  (doc.areas||[]).forEach(function(x){ if (x===a || x.excluded || areaSection(doc, x)!==sec) return; (x.equipment||[]).forEach(function(e){ if (e.kind===kind && !equipHasInfo(e) && (serves ? (e.serves||'')===serves : !e.serves)) hits.push({ card:e, area:x }); }); });
   return hits.length===1 ? hits[0] : null;
 }
 // ---- BUILDING-LAYOUT-END ----
@@ -2531,7 +2539,7 @@ function eqField(f, full){
 function renderEquipSheet(){
   var e = eqEdit, a = curArea(), k = EQUIP_KINDS[e.kind] || EQUIP_KINDS.other;
   var doc = S.rec.doc, h = '<h2>'+esc(k.label)+(e.isNew?'':' details')+'</h2><div class="muted">'+esc(a.name)+'</div>';
-  if (e.kind!=='other' ? HEAT_KINDS.indexOf(e.kind)>-1 : /heat|hvac|furnace|boiler/i.test(a.name)) h += '<label class="fld">Type of heating system</label><select id="eq-kind" onchange="setEquipKind(this.value)">'+HEAT_KINDS.map(function(x){ return '<option value="'+x+'"'+(e.kind===x?' selected':'')+'>'+esc(x==='other'?'Other heating system':EQUIP_KINDS[x].label)+'</option>'; }).join('')+'</select>';
+  if (e.kind!=='other' ? HEAT_KINDS.indexOf(e.kind)>-1 : /heating|hvac|furnace|boiler/i.test(a.name)) h += '<label class="fld">Type of heating system</label><select id="eq-kind" onchange="setEquipKind(this.value)">'+HEAT_KINDS.map(function(x){ return '<option value="'+x+'"'+(e.kind===x?' selected':'')+'>'+esc(x==='other'?'Other heating system':EQUIP_KINDS[x].label)+'</option>'; }).join('')+'</select>';
   if (isBuilding(doc)){
     var cur = equipServes(doc, a, e);
     h += '<label class="fld">Which unit does it serve?</label><select id="eq-serves" onchange="eqEdit.serves=this.value">'+(cur?'':'<option value="" selected>Not set</option>')+layoutUnits(doc).map(function(u){ return '<option value="'+u.id+'"'+(cur===u.id?' selected':'')+'>'+esc(u.label)+'</option>'; }).join('')+'<option value="'+SEC_BUILDING+'"'+(cur===SEC_BUILDING?' selected':'')+'>Building / common areas</option></select>';
@@ -2573,8 +2581,13 @@ function moveEquipInDoc(doc, equipId, fromId, toId){
   return true;
 }
 function moveEquipTo(toId){
-  if (!toId) return; var from = S.areaId, id = eqEdit.id, ok = false;
-  mut(function(doc){ ok = moveEquipInDoc(doc, id, from, toId); });
+  if (!toId) return; var from = S.areaId, id = eqEdit.id, ok = false, e = eqEdit;
+  delete e.isNew;
+  ['name','brand','model','serial','year','notes','fuel','filter_size','tonnage','capacity','amperage','spaces'].forEach(function(f){ if (e[f]===undefined) return; e[f] = String(e[f]).trim(); if (!e[f]) delete e[f]; });
+  if (e.not_owned) ['brand','model','serial','year','fuel','filter_size','tonnage','capacity','amperage','spaces'].forEach(function(f){ delete e[f]; });
+  if (e.serves==='') delete e.serves;
+  mut(function(doc){ var a = findArea(doc, from); if (a) for (var i=0;i<(a.equipment||[]).length;i++) if (a.equipment[i].id===id) a.equipment[i] = e;   // what is typed in the open sheet (and a label photo just added) goes with it
+    ok = moveEquipInDoc(doc, id, from, toId); });
   closeSheet(); render(); var to = findArea(S.rec.doc, toId); toast(ok ? 'Moved to '+(to?to.name:'the other area') : 'Could not move it — it is still here');
 }
 function toggleEquipPhoto(p){ var l = eqEdit.photo_ids = eqEdit.photo_ids||[]; var i = l.indexOf(p); if (i>-1) l.splice(i,1); else l.push(p); renderEquipSheet(); }
@@ -3061,7 +3074,7 @@ function viewRoute(){
   return h;
 }
 function routeSetArea(i, areaId){ S.route.issues[i].area_id = areaId; render(); }
-function routeCreateArea(i){ var n = S.route.new_areas[i]; if (!n) return; var a = mkArea(n.name, 'interior'); mut(function(doc){ doc.areas.push(a); }); S.route.new_areas.splice(i,1); render(); toast('Area “'+a.name+'” created'); }
+function routeCreateArea(i){ var n = S.route.new_areas[i]; if (!n) return; var a = mkArea(n.name, 'interior'); if (isBuilding(S.rec.doc)) a.section = SEC_COMMON; mut(function(doc){ doc.areas.push(a); }); S.route.new_areas.splice(i,1); render(); toast(isBuilding(S.rec.doc) ? 'Area “'+a.name+'” created under Common areas — move it into a unit from its Edit area menu if it belongs to one' : 'Area “'+a.name+'” created'); }
 function unassignedSend(i){
   var u = S.route.unassigned[i], sel = $('ua-'+i); if (!u || !sel || !sel.value) return; var a = findArea(S.rec.doc, sel.value); if (!a) return;
   mut(function(){ a.pending_text = (a.pending_text ? a.pending_text.replace(/\s*$/,'')+'\n' : '') + u.text; });
@@ -3070,7 +3083,7 @@ function unassignedSend(i){
 function unassignedDismiss(i){ S.route.unassigned.splice(i,1); render(); }
 function discardRoute(){ S.route = null; dropRouteDraft(); S.view = 'voice'; render(); }
 function acceptRoute(){
-  if (!claim('racc')) return; var r = S.route, added = [], eqN = 0, condN = 0, now = new Date().toISOString();
+  if (!claim('racc')) return; var r = S.route, added = [], eqN = 0, condN = 0, now = new Date().toISOString(), eqElsewhere = [];
   var failedNotes = {}; r.errors.forEach(function(e){ failedNotes[e.chunk.noteId] = true; });
   mut(function(doc){
     r.issues.forEach(function(i){
@@ -3085,8 +3098,8 @@ function acceptRoute(){
       ['name','brand','model','serial','year','notes'].concat((EQUIP_KINDS[e.kind]||EQUIP_KINDS.other).extra).forEach(function(f){ var v = String(e[f]||'').trim(); if (v){ o[f] = v; if (f!=='name') any = true; } });
       if (!any) return;
       var sv = (isBuilding(doc) && (e.serves===SEC_BUILDING || unitById(doc, e.serves))) ? e.serves : '';
-      var card = findBlankCardNear(doc, a, e.kind, sv);   // fill the empty pre-attached card (here, or the one empty match next door) rather than adding a second one
-      if (card){ Object.keys(o).forEach(function(f){ if (f!=='id' && f!=='photo_ids' && f!=='kind') card[f] = o[f]; }); if (sv) card.serves = sv; }
+      var hit = findBlankCardNear(doc, a, e.kind, sv), card = hit && hit.card;   // fill the empty pre-attached card (here, or the one empty match next door) rather than adding a second one
+      if (card){ Object.keys(o).forEach(function(f){ if (f!=='id' && f!=='photo_ids' && f!=='kind') card[f] = o[f]; }); if (sv) card.serves = sv; if (hit.area!==a) eqElsewhere.push((EQUIP_KINDS[e.kind]||EQUIP_KINDS.other).label+' → '+hit.area.name); }
       else { if (sv) o.serves = sv; (a.equipment = a.equipment||[]).push(o); }
       eqN++;
     });
@@ -3094,7 +3107,7 @@ function acceptRoute(){
     (doc.voice_notes||[]).forEach(function(n){ if (r.noteIds.indexOf(n.id)>-1 && !failedNotes[n.id]){ n.routed = true; n.routed_at = now; } });
   });
   S.route = null; dropRouteDraft(); S.view = 'insp'; release('racc'); render();
-  toast(added.length+' issue'+(added.length===1?'':'s')+(eqN?', '+eqN+' equipment':'')+(condN?', '+condN+' condition'+(condN===1?'':'s'):'')+' added');
+  toast(added.length+' issue'+(added.length===1?'':'s')+(eqN?', '+eqN+' equipment':'')+(condN?', '+condN+' condition'+(condN===1?'':'s'):'')+' added'+(eqElsewhere.length?'. Filled the empty card: '+eqElsewhere.join('; '):''));
   touchTypes(added);
 }
 </script>

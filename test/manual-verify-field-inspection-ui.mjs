@@ -746,7 +746,7 @@ await t('building: whole-unit "No access", empty cards only warn, and the publis
   await page.locator('.sec-head:has-text("Apt 1") button').click(); await page.waitForSelector('#ua-reason');
   await page.selectOption('#ua-reason', 'tenant_declined'); await page.click('.sheet button:has-text("Mark no access")');
   await page.waitForFunction(() => S.rec.doc.areas.filter(a => a.access && a.access.no_access).length >= 5);
-  const d1 = await docOnPhone(); assert.ok(d1.areas.filter(a => a.section === u1).every(a => a.access && a.access.no_access), 'every Apt 1 room marked'); assert.ok(d1.areas.filter(a => a.section !== u1).every(a => !a.access), 'no other room marked');
+  const d1 = await docOnPhone(); assert.ok(d1.areas.filter(a => a.section === u1 && a.name !== 'Apt 1 - Kitchen').every(a => a.access && a.access.no_access && a.access.by_unit), 'every untouched Apt 1 room marked'); assert.ok(!d1.areas.find(a => a.name === 'Apt 1 - Kitchen').access, 'the kitchen already has a recorded appliance, so it is left alone'); assert.ok(d1.areas.filter(a => a.section !== u1).every(a => !a.access), 'no other room marked');
   await page.evaluate(() => { mut(doc => { doc.areas.forEach(a => { if (!(a.access && a.access.no_access)) a.condition = 'good'; }); doc.overall = { condition: 'good', notes: '' }; doc.voice_notes.forEach(n => n.routed = true); }); });
   await page.evaluate(() => openReview()); await page.waitForSelector('#pub-btn');
   const rv = await page.locator('#view').innerText();
