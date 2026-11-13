@@ -11158,7 +11158,7 @@ async function updateStatus(env, body) {
     const notify = await shouldNotifyOwner(env, wo, ownerEvent);
     if (notify) {
       const ownerMsgs = {
-        Complete: `Hi ${owner.First_Name}, ${body.wo_id} (${woJobLabel(wo)}) at ${address} is complete.`,
+        Complete: SMS_MSG.ownerJobComplete({ first: owner.First_Name, woId: body.wo_id, label: woJobLabel(wo), address }),
         On_Hold: `Hi ${owner.First_Name}, ${body.wo_id} (${woJobLabel(wo)}) at ${address} is on hold: ${smsShort(holdReason, 80)}.`,   // D-16: shortened
       };
       const msg = ownerMsgs[ownerEvent];
