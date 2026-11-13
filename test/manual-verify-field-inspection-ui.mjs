@@ -93,10 +93,10 @@ await t('area: dictation text -> AI issues -> review -> add (human gate)', async
   await page.fill('#pending', 'leak under kitchen sink, probably the p trap, replace it. also peeling paint on the ceiling');
   w.h.ai = JSON.stringify({ issues: [{ title: 'Leak under kitchen sink', trade: 'plumbing', severity: 'urgent', detail: 'Active leak at P-trap.', likely_cause: 'Failed P-trap seal', recommended_fix: 'Replace P-trap', fix_source: 'inspector' }, { title: 'Peeling paint on ceiling', trade: 'drywall_paint', severity: 'high', detail: 'Pre-1978 property: possible lead-paint concern.', recommended_fix: 'Lead-safe scrape and repaint', fix_source: 'suggested' }], area_condition: 'poor', area_summary: 'Leak and paint.' });
   await page.click('#struct-btn'); await page.waitForSelector('text=Review before adding');
-  assert.equal(await page.locator('.issue').count(), 0, 'nothing added before human accepts');
+  assert.equal(await page.evaluate(() => curArea().issues.length), 0, 'nothing added before human accepts');   // Nov 13 2026: counts issues, not cards (the kitchen now starts with its range + refrigerator cards)
   await page.fill('input[placeholder="Title"] >> nth=0', 'Active leak under kitchen sink');
-  await page.click('#accept-btn'); await page.waitForSelector('.issue');
-  assert.equal(await page.locator('.issue').count(), 2);
+  await page.click('#accept-btn'); await page.waitForFunction(() => curArea().issues.length > 0);
+  assert.equal(await page.evaluate(() => curArea().issues.length), 2);
   assert.ok((await page.locator('#view').innerText()).includes('Active leak under kitchen sink'));
   assert.equal(await page.inputValue('#pending'), '', 'dictation cleared after accept');
   assert.ok(await page.locator('#cond-seg .sel.poor').count(), 'condition set from AI');
@@ -403,7 +403,7 @@ await t('photos: select several, move to another area; viewer prev/next; remove 
 await t('equipment: furnace model/serial/filter size, read label from photo fills blanks only, saved + shown', async () => {
   w.h.net = async (url) => (String(url).includes('alt=media') ? R2(200, JPEG, 'image/jpeg') : null);
   w.h.ai = JSON.stringify({ readable: true, kind: 'furnace', brand: 'Carrier', model: '59TP6A060', serial: '1008A12345', year: '10/2008', filter_size: '16x25x1', notes: '60,000 BTU' });
-  await page.click('button:has-text("＋ Furnace")'); await page.waitForSelector('#eqf-model');
+  await page.click('.issue:has-text("Furnace")'); await page.waitForSelector('#eqf-model');   // Nov 13 2026: the furnace card is already there - no "add" step
   await page.fill('#eqf-brand', 'Carier'); // typed by hand, slightly different on purpose
   await page.locator('.sheet .thumbs .thumb').first().click(); await page.click('#eq-read');
   await page.waitForSelector('text=Filled from the label');
@@ -606,7 +606,7 @@ await t('Add a new property: writes the PROPERTY and its OWNER to the Hub; dupli
   await page.fill('#np-addr', '31 fresh ave'); await page.fill('#np-oq', 'acme'); await page.click('#np-olist .propitem'); await page.click('#np-ok');
   await page.waitForSelector('#np-msg:has-text("Already in the Hub")'); assert.equal(w.h.tabs.Properties.rows.length, 4 - 0 === 4 ? 4 : 4);
   await page.click('#np-msg button:has-text("Use")'); await page.waitForSelector('#uq'); // it is a multi-unit building: asks which unit
-  await page.click('button:has-text("Whole property")'); await page.waitForSelector('#ownercard:has-text("Acme Holdings LLC")');
+  await page.click('button:has-text("Whole building")'); await page.waitForSelector('#ownercard:has-text("Acme Holdings LLC")');
   // same owner again, typed instead of picked
   await page.click('text=Change property'); await page.waitForSelector('#proplist .propitem');
   await page.locator('button:has-text("Add a new property to the Hub")').first().click(); await page.waitForSelector('#np-addr');
@@ -658,6 +658,113 @@ await t('Drive: a failing move is shown as an error, not "done"', async () => {
   const id = w.h.r3Insp; w.h.tabs.FI_Photos.rows.push(['ph_bad1', id, 'ghostfile', 'image/jpeg', '1', 'x', 'TRUE']);
   await page.click('#org-btn'); await page.waitForSelector('#org-msg .banner.err'); assert.ok(!(await page.locator('#org-msg').innerText()).includes('Done'));
   w.h.tabs.FI_Photos.rows.pop(); await page.click('.sheet button:has-text("Done")');
+});
+// ── Nov 13 2026: multi-unit building (Brett's 8 Cromarty Road shape: Apt 1 = 2 bed / 2 bath, Apt 2 = 3 bed / 1 bath, shared basement + laundry) ──
+await t('building: "whole building" on a multi-unit Hub property starts a building layout with the Hub unit names', async () => {
+  await home(); await page.click('text=＋ New inspection'); await page.waitForSelector('#proplist .propitem');
+  await page.fill('#pq', '5 main'); await page.click('.propitem'); await page.waitForSelector('#uq');
+  await page.click('button:has-text("Whole building")'); await page.waitForSelector('#bld-on:checked');
+  const o = await page.evaluate(() => JSON.parse(JSON.stringify(S.newOpts)));
+  assert.equal(o.building, true); assert.deepEqual(o.units.map(u => u.label), ['Unit 1A', 'Unit 1B']);
+  await page.evaluate(() => { S.newOpts.units[0].label = 'Apt 1'; S.newOpts.units[0].alias = 'first floor'; S.newOpts.units[0].beds = 2; S.newOpts.units[0].baths = 2; S.newOpts.units[1].label = 'Apt 2'; S.newOpts.units[1].alias = 'second floor'; S.newOpts.units[1].beds = 3; S.newOpts.units[1].baths = 1; render(); });
+  assert.ok((await page.locator('#view').innerText()).includes('Furnaces, water heaters and electrical panels are'));
+  await noHScroll(page, 'building start screen'); await shot(page, 'bld-start', true);
+  await page.click('#start-btn'); await page.waitForSelector('text=areas done');
+  const d = await docOnPhone();
+  assert.equal(d.layout.kind, 'building'); assert.deepEqual(d.layout.units.map(u => u.label), ['Apt 1', 'Apt 2']);
+  assert.equal(d.property.unit_id, '', 'a whole-building inspection is not tied to one unit');
+  const txt = await page.locator('#view').innerText();
+  for (const x of ['2-unit building', 'Building exterior', 'Common areas', 'Apt 1', 'Apt 2']) assert.ok(txt.includes(x), 'areas screen shows ' + x);
+  assert.equal(await page.locator('.sec-head').count(), 4, 'four sections');
+  assert.equal(d.areas.filter(a => /^Apt 1 - Bathroom/.test(a.name)).length, 2); assert.equal(d.areas.filter(a => /^Apt 2 - Bedroom/.test(a.name)).length, 3);
+  await noHScroll(page, 'building areas'); await shot(page, 'bld-areas', true);
+  await page.waitForFunction(() => S.rec && !S.rec.dirty && S.rec.base_rev > 0, null, { timeout: 15000 });   // the real server validation accepted the building document
+});
+await t('building: basement furnaces are tied to a unit; a third is added for Apt 1; the laundry water heater serves the building', async () => {
+  await page.click('.area-row:has-text("Heating / HVAC")'); await page.waitForSelector('h1:has-text("Heating / HVAC")');
+  assert.equal(await page.locator('.issue:has-text("Furnace")').count(), 2, 'one furnace card per unit already there');
+  const cards = await page.locator('.issue:has-text("Furnace")').allInnerTexts();
+  assert.ok(/Serves Apt 1/.test(cards[0]) && /Serves Apt 2/.test(cards[1]) && /No details yet/.test(cards[0]), cards.join(' | '));
+  // fill Apt 2's card: change the type to a boiler, no "add" step
+  await page.locator('.issue:has-text("Furnace")').nth(1).click(); await page.waitForSelector('#eq-kind');
+  await page.fill('#eqf-brand', 'Weil-McLain'); await page.fill('#eqf-filter_size', '16x25x1'); await page.selectOption('#eq-kind', 'boiler');
+  assert.equal(await page.inputValue('#eqf-brand'), 'Weil-McLain', 'brand kept when the type changes'); assert.equal(await page.locator('#eqf-filter_size').count(), 0, 'a boiler has no filter size box');
+  assert.equal(await page.inputValue('#eq-serves'), (await docOnPhone()).layout.units[1].id);
+  await boxOK(page.locator('#eq-kind'), 'heating type'); await boxOK(page.locator('label.toggle:has(#eq-notowned)'), 'not owned row'); await noHScroll(page, 'building equipment sheet'); await shot(page, 'bld-equip', false);
+  await page.click('.sheet .btn.primary:has-text("Save")'); await page.waitForSelector('.issue:has-text("Boiler")');
+  // a third unit: second furnace for Apt 1
+  await page.click('button:has-text("＋ Furnace")'); await page.waitForSelector('#eq-serves');
+  assert.equal(await page.inputValue('#eq-serves'), '', 'a new card in a shared area starts with no unit chosen');
+  await page.selectOption('#eq-serves', (await docOnPhone()).layout.units[0].id); await page.fill('#eqf-name', 'Rear'); await page.fill('#eqf-brand', 'Trane');
+  await page.click('.sheet .btn.primary:has-text("Save")'); await page.waitForSelector('.issue:has-text("Rear · Furnace")');
+  assert.ok(/Serves Apt 1/.test(await page.locator('.issue:has-text("Rear · Furnace")').innerText()));
+  await page.click('button:has-text("‹ Areas")'); await page.click('.area-row:has-text("Water Heater")'); await page.waitForSelector('h1:has-text("Water Heater")');
+  await page.click('button:has-text("＋ Water heater")'); await page.waitForSelector('#eq-serves');
+  await page.selectOption('#eq-serves', 'building'); await page.fill('#eqf-name', 'Laundry'); await page.fill('#eqf-capacity', '40');
+  await page.click('.sheet .btn.primary:has-text("Save")'); await page.waitForSelector('.issue:has-text("Laundry · Water heater")');
+  assert.ok(/Serves the building \/ common areas/.test(await page.locator('.issue:has-text("Laundry · Water heater")').innerText()));
+  const d = await docOnPhone(), hv = d.areas.find(a => a.name === 'Heating / HVAC');
+  assert.deepEqual(hv.equipment.map(e => e.kind), ['furnace', 'boiler', 'furnace']); assert.ok(!('filter_size' in hv.equipment[1]), 'dropped field is not saved');
+  await page.click('button:has-text("‹ Areas")'); await page.waitForSelector('text=areas done');
+});
+await t('building: a kitchen appliance can be marked "not owned by the landlord" (off by default) and an unused card removed', async () => {
+  await page.click('.area-row:has-text("Kitchen") >> nth=0'); await page.waitForSelector('h1:has-text("Apt 1 - Kitchen")');
+  assert.equal(await page.locator('.issue:has-text("Refrigerator")').count(), 1); assert.equal(await page.locator('.issue:has-text("Range / oven")').count(), 1);
+  await page.click('.issue:has-text("Refrigerator")'); await page.waitForSelector('#eq-notowned');
+  assert.equal(await page.isChecked('#eq-notowned'), false, 'landlord owns it unless told otherwise');
+  await page.fill('#eqf-brand', 'LG'); await page.check('#eq-notowned'); assert.equal(await page.locator('#eqf-brand').count(), 0, 'detail boxes go away');
+  await page.click('.sheet .btn.primary:has-text("Save")'); await page.waitForSelector('.issue:has-text("Not owned by landlord")');
+  const fr = (await docOnPhone()).areas.find(a => a.name === 'Apt 1 - Kitchen').equipment.find(e => e.kind === 'refrigerator');
+  assert.ok(fr.not_owned === true && !('brand' in fr), 'details of a not-owned appliance are not recorded');
+  await page.click('.issue:has-text("Range / oven")'); await page.waitForSelector('#eq-del');
+  assert.ok((await page.locator('#eq-del').innerText()).includes('Remove'), 'an empty pre-attached card offers Remove');
+  await page.click('#eq-del'); await page.click('#eq-del'); await page.waitForFunction(() => !S.rec.doc.areas.find(a => a.name === 'Apt 1 - Kitchen').equipment.some(e => e.kind === 'range'));
+  await page.click('button:has-text("‹ Areas")'); await page.waitForSelector('text=areas done');
+});
+await t('building: voice notes go to the right unit; no unit named = last unit, flagged; equipment fills the empty card', async () => {
+  const d0 = await docOnPhone(); const id = n => d0.areas.find(a => a.name === n).id, u1 = d0.layout.units[0].id, u2 = d0.layout.units[1].id;
+  await page.evaluate(() => { mut(doc => { doc.voice_notes = [{ id: 'vn_bld00001', name: 'Walk 1', transcript: 'apartment 2 bathroom the exhaust fan is dead. the tub drains slow. second floor water heater is a Rheem.', routed: false, at: new Date().toISOString() }]; }); });
+  w.h.ai = JSON.stringify({ issues: [
+    { area_id: id('Apt 2 - Bathroom'), note_id: 'vn_bld00001', quote: 'apartment 2 bathroom the exhaust fan is dead', title: 'Exhaust fan not working', trade: 'electrical', severity: 'medium', detail: 'Fan does not run.' },
+    { area_id: id('Apt 2 - Bathroom'), note_id: 'vn_bld00001', quote: 'the tub drains slow', title: 'Slow tub drain', trade: 'plumbing', severity: 'low', detail: 'Tub drains slowly.', unit_assumed: true }],
+    equipment: [{ area_id: id('Water Heater'), note_id: 'vn_bld00001', quote: 'second floor water heater is a Rheem', kind: 'water_heater', brand: 'Rheem', serves: u2 }],
+    conditions: [], new_areas: [], unassigned: [], last_unit: u2 });
+  await page.evaluate(() => openVoice()); await page.waitForSelector('#route-btn'); await page.click('#route-btn'); await page.waitForSelector('text=Review sorted notes');
+  const sent = w.h.aiCalls ? null : null;
+  const txt = await page.locator('#view').innerText();
+  assert.ok(txt.includes('1 item did not name a unit'), 'assumed-unit banner'); assert.ok(txt.includes('No unit was named for this'), 'the item itself is flagged');
+  assert.equal(await page.evaluate(() => S.route.lastUnit), u2, 'the last unit named is remembered for the next recording');
+  await noHScroll(page, 'building route review'); await shot(page, 'bld-route', true);
+  await page.click('#racc-btn'); await page.waitForSelector('text=areas done');
+  const d = await docOnPhone(), wh = d.areas.find(a => a.name === 'Water Heater'), b2 = d.areas.find(a => a.name === 'Apt 2 - Bathroom'), b1 = d.areas.filter(a => /^Apt 1 - Bathroom/.test(a.name));
+  assert.equal(b2.issues.length, 2, 'both findings in the Apt 2 bathroom'); assert.ok(b1.every(a => a.issues.length === 0), 'nothing leaked into Apt 1');
+  assert.equal(wh.equipment.length, 3, 'no fourth card: the empty Apt 2 card was filled'); const c = wh.equipment.find(e => e.serves === u2);
+  assert.ok(c && c.brand === 'Rheem', 'Apt 2 water heater card filled'); assert.ok(wh.equipment.find(e => e.serves === u1 && !e.brand), 'Apt 1 card untouched');
+});
+await t('building: whole-unit "No access", empty cards only warn, and the published report is grouped by section', async () => {
+  const d0 = await docOnPhone(), u1 = d0.layout.units[0].id;
+  await page.locator('.sec-head:has-text("Apt 1") button').click(); await page.waitForSelector('#ua-reason');
+  await page.selectOption('#ua-reason', 'tenant_declined'); await page.click('.sheet button:has-text("Mark no access")');
+  await page.waitForFunction(() => S.rec.doc.areas.filter(a => a.access && a.access.no_access).length >= 5);
+  const d1 = await docOnPhone(); assert.ok(d1.areas.filter(a => a.section === u1 && a.name !== 'Apt 1 - Kitchen').every(a => a.access && a.access.no_access && a.access.by_unit), 'every untouched Apt 1 room marked'); assert.ok(!d1.areas.find(a => a.name === 'Apt 1 - Kitchen').access, 'the kitchen already has a recorded appliance, so it is left alone'); assert.ok(d1.areas.filter(a => a.section !== u1).every(a => !a.access), 'no other room marked');
+  await page.evaluate(() => { mut(doc => { doc.areas.forEach(a => { if (!(a.access && a.access.no_access)) a.condition = 'good'; }); doc.overall = { condition: 'good', notes: '' }; doc.voice_notes.forEach(n => n.routed = true); }); });
+  await page.evaluate(() => openReview()); await page.waitForSelector('#pub-btn');
+  const rv = await page.locator('#view').innerText();
+  assert.ok(/equipment cards? ha(s|ve) no details and will be left off the report/.test(rv), 'empty cards are a warning: ' + rv.slice(0, 300));
+  await noHScroll(page, 'building review'); await shot(page, 'bld-review', true);
+  const pc = w.fiPublishChecks(await docOnPhone(), []); assert.ok(!pc.blocks.some(b => /equipment/.test(b.code)) && pc.warnings.some(x => x.code === 'equipment_blank'), 'server agrees: warning, not a block');
+  await page.waitForFunction(() => S.rec && !S.rec.dirty, null, { timeout: 15000 });
+  const tok = await page.evaluate(() => S.rec.token); assert.ok(tok, 'report token');
+  const pg = await newPage(); await pg.goto(BASE + 'inspection-report.html?r=' + tok + '&preview=1'); await pg.waitForSelector('h2.sec-h', { timeout: 15000 }).catch(() => {});
+  const secs = await pg.locator('h2.sec-h').allInnerTexts();
+  if (secs.length) {
+    assert.deepEqual(secs.map(x => x.toUpperCase()), ['BUILDING EXTERIOR', 'COMMON AREAS', 'APT 1', 'APT 2']);
+    const rt = await pg.locator('body').innerText();
+    assert.ok(rt.includes('Serves Apt 2') && rt.includes('Serves the building / common areas') && rt.includes('Not owned by the landlord. Details not recorded.'), 'equipment says what it serves');
+    assert.ok(!/No details yet/.test(rt), 'empty cards are not on the report');
+    await noHScroll(pg, 'building report'); await shot(pg, 'bld-report', true);
+  } else { console.log('   note: draft report not viewable in this harness (admin header) - report grouping is covered by test/fi-multi-unit-building.test.mjs'); }
+  await pg.close();
 });
 await t('no uncaught errors / console errors anywhere', async () => { assert.deepEqual(errs, []); });
 await browser.close(); server.close();
