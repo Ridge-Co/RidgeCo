@@ -1834,6 +1834,107 @@ function demoSlotSummary(s, nowMs) {
     tenant_test: { texts: parseInt(t.Demo_SMS_Count, 10) || 0, emails: parseInt(t.Demo_Email_Count, 10) || 0, text_cap: DEMO_SMS_CAP, email_cap: DEMO_EMAIL_CAP } };
 }
 async function demoListSlots(env) { const now = Date.now(); return json({ slots: (await demoReadSlots(env)).map(s => demoSlotSummary(s, now)), pool_size: DEMO_SLOT_COUNT, login_days: DEMO_LOGIN_DAYS }); }
+// ── DEMO "SEND ME A TEST" (Nov 12 2026, demo Phase 3b) ───────────────────────────────────────────────────────────────────────────────────────
+// A demo owner / demo tenant taps a button and gets ONE real-wording text on their OWN phone (texts only; Brett's decision: owner = new request, job scheduled, job
+// complete; tenant = request received, assigned, scheduled, completed). Everything comes from the SESSION (who, which slot, which phone): the request body carries
+// only `event`, so nothing the browser sends can aim the text anywhere else. The text goes through the normal gated sender with the recipient forced to the prospect's
+// own number; the Phase 1 guard then enforces the cap (2 texts per test, owner and tenant counted separately) and counts it BEFORE sending. Nothing here emails.
+const DEMO_TEST_EVENTS = {
+  owner: [
+    { key: 'received', label: 'A tenant sends a new request', type: 'owner_job_received', wo: '01' },
+    { key: 'scheduled', label: 'A job gets scheduled', type: 'owner_job_scheduled', wo: '03' },
+    { key: 'complete', label: 'A job is completed', type: 'owner_job_complete', wo: '07' },
+  ],
+  tenant: [
+    { key: 'received', label: 'Your request is received', type: 'tenant_job_received', wo: '01' },
+    { key: 'assigned', label: 'Your request is assigned to a technician', type: 'tenant_job_assigned', wo: '01' },
+    { key: 'scheduled', label: 'Your visit is scheduled', type: 'tenant_job_scheduled', wo: '03' },
+    { key: 'completed', label: 'Your job is completed', type: 'tenant_job_completed', wo: '06' },
+  ],
+};
+const DEMO_TEST_VENDOR = { name: 'Sample Home Services', phone: '(410) 555-0142' };   // fictional (555-01xx numbers are reserved for fiction)
+// Pure. The real wording for one test event, built by the same SMS_MSG builders the real handlers use. ctx = { first, wo, property, unit }. '' for an unknown event.
+function demoTestText(role, key, ctx) {
+  const first = ctx.first, wo = ctx.wo, property = ctx.property, unit = ctx.unit, woId = wo.ID, label = woJobLabel(wo);
+  const address = property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : ''), where = propUnitText(property, unit);
+  const day = (style) => new Date(String(wo.Scheduled_Date) + 'T12:00:00').toLocaleDateString('en-US', { weekday: style, month: 'short', day: 'numeric' });
+  let msg = '';
+  if (role === 'owner') {
+    if (key === 'received') msg = SMS_MSG.ownerJobReceived({ first, trade: wo.Trade, where, description: wo.Description, woId });
+    else if (key === 'scheduled') msg = SMS_MSG.ownerJobScheduled({ first, woId, label, where, dateStr: day('short'), window: wo.Scheduled_Window });
+    else if (key === 'complete') msg = SMS_MSG.ownerJobComplete({ first, woId, label, address });
+  } else if (role === 'tenant') {
+    if (key === 'received') msg = SMS_MSG.tenantJobReceived({ first, trade: wo.Trade, address, woId });
+    else if (key === 'assigned') msg = SMS_MSG.tenantJobAssigned({ first, label, vendorName: DEMO_TEST_VENDOR.name, vendorPhone: DEMO_TEST_VENDOR.phone, woId });
+    else if (key === 'scheduled') msg = SMS_MSG.tenantJobScheduled({ first, label, address, dateStr: day('long'), window: wo.Scheduled_Window, woId, withinHour: false });
+    else if (key === 'completed') msg = SMS_MSG.tenantJobCompleted({ first, label, address, woId });
+  }
+  if (!msg) return '';
+  return 'DEMO: ' + (/\bSTOP\b/i.test(msg) ? msg : msg + ' Reply STOP to stop demo texts.');
+}
+// The caller's own demo row, from the session only. -> { row, tab } or { err: Response }.
+async function demoTestRow(env, role, id, slot) {
+  const no = () => ({ err: json({ error: 'Test texts are only available in a demo login.' }, 403) });
+  if (!slot || (role !== 'owner' && role !== 'tenant')) return no();
+  const tab = role === 'owner' ? 'Owners' : 'Tenants';
+  invalidateTabCache(tab);
+  const row = (await fetchTab(env, tab)).find(r => String(r.ID) === String(id));
+  if (!row || !demoTrue(row.Is_Demo) || !demoTrue(row.Demo_Prospect) || String(row.Demo_Slot || '1') !== String(slot)) return no();
+  return { row, tab };
+}
+async function demoTestStatus(env, role, id, slot) {
+  try {
+    const g = await demoTestRow(env, role, id, slot);
+    if (g.err) return g.err;
+    const used = parseInt(g.row.Demo_SMS_Count, 10) || 0;
+    return json({ ok: true, role, texts_used: used, texts_cap: DEMO_SMS_CAP, limit_reached: used >= DEMO_SMS_CAP, events: DEMO_TEST_EVENTS[role].map(e => ({ key: e.key, label: e.label })) });
+  } catch (e) {
+    await demoTelemetry(env, 'demo_test_status', false, 'could not read the demo test status: ' + String((e && e.message) || e).slice(0, 200));
+    return json({ error: 'Test texts are unavailable right now. Please try again in a minute.' }, 503);
+  }
+}
+async function demoTestSend(env, body, role, id, slot) {
+  let key = '';
+  const done = async (ok, code, message, extra) => {
+    await demoTelemetry(env, 'demo_test_send', ok, `slot=${slot || ''} role=${role || ''} event=${key} outcome=${code}`);
+    return json(Object.assign({ ok, sent: ok, code, message }, extra || {}));
+  };
+  try {
+    const g = await demoTestRow(env, role, id, slot);
+    if (g.err) return g.err;
+    key = String((body && body.event) || '').trim();
+    const ev = DEMO_TEST_EVENTS[role].find(e => e.key === key);
+    if (!ev) return json({ error: 'Pick one of the test messages from the list.' }, 400);
+    const row = g.row, used = parseInt(row.Demo_SMS_Count, 10) || 0, left = { texts_used: used, texts_cap: DEMO_SMS_CAP };
+    const phone = normalizePhone(row.Phone);
+    if (!/^\+1\d{10}$/.test(phone)) return await done(false, 'no_phone', 'There is no phone number on file for this demo, so no text was sent.', left);
+    if (String(row.SMS_OptOut || '').toUpperCase() === 'TRUE') return await done(false, 'opted_out', 'You replied STOP, so no more test texts will be sent to this number.', left);
+    if (used >= DEMO_SMS_CAP) return await done(false, 'limit_reached', 'Test limit reached: you have used all ' + DEMO_SMS_CAP + ' of your test texts.', left);
+    const [wos, props, units] = await fetchTabs(env, ['Work_Orders', 'Properties', 'Units']);
+    const wo = wos.find(w => String(w.ID).toUpperCase() === 'WO-D' + slot + ev.wo);
+    const property = wo && props.find(p => String(p.ID) === String(wo.Property_ID));
+    const unit = wo && units.find(u => String(u.ID) === String(wo.Unit_ID));
+    if (!wo || !demoTrue(wo.Is_Demo) || !property || !demoTrue(property.Is_Demo) || String(property.Demo_Slot) !== String(slot)) return await done(false, 'no_sample_data', 'The sample data for this demo is missing, so no text was sent. Please let us know and we will reset it.', left);
+    const text = demoTestText(role, key, { first: row.First_Name, wo, property, unit });
+    if (!text) return json({ error: 'Pick one of the test messages from the list.' }, 400);
+    const opts = { wo_id: wo.ID, message_type: ev.type, recipient_type: role, property, message_body: text, redirectTo: phone, bypassQuietHours: true, allowRepeat: true };
+    opts[role] = row;
+    const r = await smsGatedSend(env, opts);
+    let after = used;
+    try { invalidateTabCache(g.tab); const fresh = (await fetchTab(env, g.tab)).find(x => String(x.ID) === String(id)); after = fresh ? (parseInt(fresh.Demo_SMS_Count, 10) || 0) : used; } catch (e) { /* the count shown is best-effort; the guard already enforced the cap */ }
+    const info = { texts_used: after, texts_cap: DEMO_SMS_CAP };
+    if (r && r.sent) return await done(true, 'sent', 'Sent. Check your phone: this is the real wording a ' + role + ' receives.', info);
+    const why = String((r && (r.error_reason || '')) || '');
+    if (r && r.error_code === 'blocked_demo' && /limit/i.test(why)) return await done(false, 'limit_reached', 'Test limit reached: you have used all ' + DEMO_SMS_CAP + ' of your test texts.', info);
+    if (r && r.error_code === 'blocked_demo') return await done(false, 'held', 'The demo safety check held this text back, so nothing was sent.', info);
+    if (r && String(r.error_code) === '21610') return await done(false, 'opted_out', 'You replied STOP, so no more test texts will be sent to this number.', info);
+    if (r && r.send_ok === false) return await done(false, 'switched_off', 'Texting is switched off right now, so nothing was sent.', info);
+    return await done(false, 'failed', 'The text did not go through. It may still count toward your test limit.', info);
+  } catch (e) {
+    await demoTelemetry(env, 'demo_test_send', false, `slot=${slot || ''} role=${role || ''} event=${key} threw: ${String((e && e.message) || e).slice(0, 200)}`);
+    return json({ error: 'The test text could not be sent right now. Please try again in a minute.' }, 503);
+  }
+}
 async function demoAddProspect(env, body) {
   const nm = demoParseName(body);
   if (!nm) return json({ error: 'First name is required (letters only).' }, 400);
