@@ -401,11 +401,12 @@ $('photo-in').addEventListener('change', function(ev){
         blobUrl[id] = URL.createObjectURL(blob); photoState[id] = { state:'pending', err:'' };
         mut(function(doc){ var a = findArea(doc, tg.areaId); (a.photo_ids = a.photo_ids||[]).push(id); if (f && f.name && f.size) (doc.photo_meta = doc.photo_meta||{})[id] = { n:String(f.name).slice(0,80), s:f.size }; });   // remembered so the duplicate check can compare file name + size
         if (tg.urgent && S.urg && S.urg.photoIds) S.urg.photoIds.push(id);
+        if (tg.equipId && eqEdit && eqEdit.id===tg.equipId){ eqEdit.photo_ids = eqEdit.photo_ids||[]; if (eqEdit.photo_ids.length < 12) eqEdit.photo_ids.push(id); }
         return queueOriginal(rec, id, f);
       });
     }).catch(function(e){ fails++; toast('Photo not added: '+e.message); });
   });
-  chain.then(function(){ render(); pumpPhotos(); if (tg.urgent && S.urg && S.urg.mode==='new') renderUrgentNew(); if (!fails) toast(files.length+' photo'+(files.length>1?'s':'')+' added'); });
+  chain.then(function(){ render(); pumpPhotos(); if (tg.equipId && eqEdit && eqEdit.id===tg.equipId && $('modal').classList.contains('open')) renderEquipSheet(); if (tg.urgent && S.urg && S.urg.mode==='new') renderUrgentNew(); if (!fails) toast(files.length+' photo'+(files.length>1?'s':'')+' added'); });
 });
 // ── attach full-size originals to EARLIER photos (Nov 2 2026, Brett) ───────────────────────────────────────────────────────────────────────────────────────
 // Photos added before the original-upload build only exist on the server at ~1600 px. The originals are still in the phone's gallery. Brett picks them (all at once, extras are fine);
@@ -840,7 +841,7 @@ function viewHome(){
 function startNew(){
   S.newProp = null; S.newOwner = null; S.ownerQ=''; S.pickUnitFor=''; S.propQ=''; S.view='new'; S.newBooking = null; S.newInspId = '';
   var d = defaultBrand();
-  S.newOpts = { type:'periodic', date:todayStr(), inspector:lsGet('fi_inspector','Brett Lambert'), client:'', email:'', pre1978:false, brand:(d&&d.id)||'', beds:3, baths:1, sides:true, laundry:true, basement:true, attic:false };
+  S.newOpts = { type:'periodic', date:todayStr(), inspector:lsGet('fi_inspector','Brett Lambert'), client:'', email:'', pre1978:false, brand:(d&&d.id)||'', beds:3, baths:1, sides:true, laundry:true, basement:true, attic:false, building:false, units:[], laundryWhere:'common', sysWhere:'common' };
   render(); loadProps(); loadBookings();
 }
 // ---- approved bookings (Oct 27 2026) ----
@@ -890,6 +891,9 @@ function applyBooking(r, id){
   S.newOwner = r.owner ? { id:r.owner.id, name:r.owner.name, source:'hub' } : null;
   S.pickUnitFor = ''; S.ownerQ = ''; if (!S.newProp) S.propQ = b.street||'';
   S.dir = S.dir || null; if (r.property_created) loadProps();
+  var bu = Math.min(40, Math.round(Number(b.units)||1));
+  if (bu > 1){ var hl = S.newProp ? hubUnitLabels(S.newProp.id) : []; var labs = []; for (var ui=0;ui<bu;ui++) labs.push(hl.length===bu ? hl[ui] : 'Apt '+(ui+1)); o.building = true; o.units = []; labs.forEach(function(l, i2){ o.units.push(newUnit(i2, l)); }); }
+  else { o.building = false; o.units = []; }
   render();
   toast(r.property_created ? 'Added to the Hub — check the layout, then start' : (S.newProp ? 'Booking opened — check the layout, then start' : 'Property not found in the Hub — pick or add it'));
 }
@@ -945,7 +949,7 @@ function viewNew(){
     var pp = propById(S.pickUnitFor), us = unitsOf(S.pickUnitFor);
     h += '<div class="card"><b>'+esc(pp?pp.address:'')+'</b><div class="muted">Which unit?</div>'
       +'<input id="uq" placeholder="Type to find a unit…" value="'+esc(S.unitQ)+'" oninput="S.unitQ=this.value;renderUnitList()" style="margin-top:8px"><div id="unitlist"></div>'
-      +'<div class="btns"><button class="btn" onclick="pickProp(\''+esc(S.pickUnitFor)+'\',\'\',true)">Whole property / no specific unit</button><button class="btn ghost" onclick="S.pickUnitFor=\'\';render()">‹ Back</button></div></div>';
+      +'<div class="btns"><button class="btn" onclick="pickProp(\''+esc(S.pickUnitFor)+'\',\'\',true)">Whole building (all units, one report)</button><button class="btn ghost" onclick="S.pickUnitFor=\'\';render()">‹ Back</button></div></div>';
     return h;
   }
   if (!S.newProp){
@@ -976,7 +980,9 @@ function viewNew(){
     +'<label class="fld">Brand for the report</label><select onchange="S.newOpts.brand=this.value;render()">'+S.brands.map(function(b){return '<option value="'+esc(b.id)+'"'+(o.brand===b.id?' selected':'')+'>'+esc(b.name)+(b.is_default?' (default)':'')+'</option>';}).join('')+'</select>'
     +logoNudge(brandById(o.brand))
     +'<div class="toggle"><span>Built before 1978<div class="muted">Adds lead-paint awareness to the notes</div></span><input type="checkbox"'+(o.pre1978?' checked':'')+' onchange="S.newOpts.pre1978=this.checked"></div></div>';
-  h += '<div class="card"><b>Layout</b><div class="muted">You can add, rename or exclude areas any time.</div>'
+  h += '<div class="card"><div class="toggle" style="border-top:0;padding-top:0"><span><b>Multi-unit building</b><div class="muted">One report for the whole building: exterior, common areas, then each unit</div></span><input type="checkbox" id="bld-on"'+(o.building?' checked':'')+' onchange="setBuilding(this.checked)"></div></div>';
+  if (o.building) h += buildingLayoutHtml();
+  else h += '<div class="card"><b>Layout</b><div class="muted">You can add, rename or exclude areas any time.</div>'
     +'<div class="toggle"><span>Bedrooms</span><span class="step"><button onclick="stepOpt(\'beds\',-1)">−</button><span class="n" id="n-beds">'+o.beds+'</span><button onclick="stepOpt(\'beds\',1)">＋</button></span></div>'
     +'<div class="toggle"><span>Bathrooms</span><span class="step"><button onclick="stepOpt(\'baths\',-1)">−</button><span class="n" id="n-baths">'+o.baths+'</span><button onclick="stepOpt(\'baths\',1)">＋</button></span></div>'
     +tgl('sides','Exterior sides (left &amp; right)','Turn off for rowhomes — front and rear only')+tgl('laundry','Laundry')+tgl('basement','Basement')+tgl('attic','Attic')+'</div>';
@@ -988,6 +994,33 @@ function logoNudge(b){
   return '<div class="banner info" style="margin:8px 0 0">“'+esc(b.name)+'” has no logo yet, so the report header shows text only. <a href="#" onclick="openBrands();return false">Add the logo</a> once and every report uses it.</div>';
 }
 function tgl(k,label,sub){ return '<div class="toggle"><span>'+label+(sub?'<div class="muted">'+sub+'</div>':'')+'</span><input type="checkbox"'+(S.newOpts[k]?' checked':'')+' onchange="S.newOpts.'+k+'=this.checked"></div>'; }
+// ---- multi-unit start screen (Nov 13 2026) ----
+function newUnit(i, label){ var o = S.newOpts; return { id:'un_'+rid(8), label:label || ('Apt '+(i+1)), alias:'', beds:o.beds, baths:o.baths }; }
+function setBuilding(on, labels){
+  var o = S.newOpts; o.building = !!on;
+  if (on && (labels || !o.units.length)){ var n = Math.max(2, (labels||[]).length); o.units = []; for (var i=0;i<n;i++) o.units.push(newUnit(i, labels && labels[i])); }
+  if (on && S.newProp && S.newProp.unit_id){ S.newProp.unit_id = ''; S.newProp.unit_label = ''; }   // a whole-building inspection is not tied to one unit
+  render();
+}
+function hubUnitLabels(propId){ return propId ? unitsOf(propId).map(function(u){ return unitText(u.label); }).filter(Boolean) : []; }
+function buildingLayoutHtml(){
+  var o = S.newOpts, h = '<div class="card"><b>Units</b><div class="muted">Each unit gets its own rooms and appliances. “Also called” is for the other way you say it out loud (e.g. first floor), so voice notes land in the right unit.</div>';
+  o.units.forEach(function(u, i){
+    h += '<div style="border-top:1px solid var(--border);padding:10px 0"><label class="fld" style="margin-top:0">Unit '+(i+1)+' name</label><input value="'+esc(u.label)+'" maxlength="40" oninput="S.newOpts.units['+i+'].label=this.value" placeholder="e.g. Apt 1">'
+      +'<label class="fld">Also called (optional)</label><input value="'+esc(u.alias)+'" maxlength="120" oninput="S.newOpts.units['+i+'].alias=this.value" placeholder="e.g. first floor, downstairs">'
+      +'<div class="toggle"><span>Bedrooms</span><span class="step"><button onclick="stepUnit('+i+',\'beds\',-1)">−</button><span class="n" id="n-u'+i+'-beds">'+u.beds+'</span><button onclick="stepUnit('+i+',\'beds\',1)">＋</button></span></div>'
+      +'<div class="toggle"><span>Bathrooms</span><span class="step"><button onclick="stepUnit('+i+',\'baths\',-1)">−</button><span class="n" id="n-u'+i+'-baths">'+u.baths+'</span><button onclick="stepUnit('+i+',\'baths\',1)">＋</button></span></div>'
+      +(o.units.length>1?'<button class="btn sm" onclick="S.newOpts.units.splice('+i+',1);render()">Remove this unit</button>':'')+'</div>';
+  });
+  h += '<button class="btn block" onclick="S.newOpts.units.push(newUnit(S.newOpts.units.length));render()">＋ Add a unit</button></div>';
+  h += '<div class="card"><b>Building &amp; common areas</b><div class="muted">You can add, rename, move or exclude areas any time.</div>'
+    +tgl('sides','Exterior sides (left &amp; right)','Turn off for rowhomes — front and rear only')+tgl('basement','Basement')+tgl('attic','Attic')
+    +'<label class="fld">Laundry</label><select onchange="S.newOpts.laundryWhere=this.value">'+[['common','Shared (common area)'],['unit','In each unit'],['none','None']].map(function(x){ return '<option value="'+x[0]+'"'+(o.laundryWhere===x[0]?' selected':'')+'>'+x[1]+'</option>'; }).join('')+'</select>'
+    +'<label class="fld">Furnaces, water heaters and electrical panels are…</label><select onchange="S.newOpts.sysWhere=this.value">'+[['common','In a shared area (e.g. the basement)'],['unit','Inside each unit']].map(function(x){ return '<option value="'+x[0]+'"'+(o.sysWhere===x[0]?' selected':'')+'>'+x[1]+'</option>'; }).join('')+'</select>'
+    +'<div class="muted" style="margin-top:6px">Either way each one is marked with the unit it serves, and you can add more or move one later.</div></div>';
+  return h;
+}
+function stepUnit(i,k,d){ var u = S.newOpts.units[i]; if (!u) return; var v = Math.max(0, Math.min(12, (Number(u[k])||0)+d)); if (k==='baths' && v<1) v=1; u[k]=v; var el=$('n-u'+i+'-'+k); if (el) el.textContent=v; }
 function stepOpt(k,d){ var v = Math.max(0, Math.min(12, S.newOpts[k]+d)); if (k==='baths' && v<1) v=1; S.newOpts[k]=v; $('n-'+k).textContent=v; }
 // Tokenised search: every word typed must appear in the address / city / owner (or the unit label for unit rows).
 function searchProps(q){
@@ -1027,6 +1060,9 @@ function pickProp(id, unitId, chosen){
   S.pickUnitFor = '';
   S.newProp = { id:p.id, address:propLabel(p), street:p.address, source:'hub', unit_id:u?u.id:'', unit_label:u?u.label:'' };
   S.newOwner = p.owner_id ? { id:p.owner_id, name:p.owner_name, source:'hub' } : null; S.ownerQ='';
+  var hl = hubUnitLabels(id);
+  if (!u && chosen && hl.length > 1){ setBuilding(true, hl); toast('Set up as a '+hl.length+'-unit building — check the units below'); return; }
+  if (u && S.newOpts.building) S.newOpts.building = false;
   render();
 }
 // ---- owners ----
@@ -1155,6 +1191,70 @@ function npUseDup(i){
 function npUseOwner(i){ var m = (S.ownDup||[])[i]; if (!m) return; NP.owner = { id:m.id, name:m.name }; npMsg(''); npOwnerPaint(); toast('Using the existing owner — tap Add again'); }
 
 // ---- inspection: property & owner card, change owner, Drive folder ----
+// ---- building layout on an inspection: units card, whole-unit "no access", edit units, convert (Nov 13 2026) ----
+function buildingCardHtml(doc){
+  var us = layoutUnits(doc);
+  return '<div class="card"><div class="row"><b>🏢 '+us.length+'-unit building</b><button class="btn sm" onclick="unitsSheet()">Edit units</button></div><div class="muted">'+us.map(function(u){ return esc(u.label)+(u.alias?' (also “'+esc(u.alias)+'”)':''); }).join(' · ')+'</div></div>';
+}
+function unitsSheet(){
+  var doc = S.rec.doc, h = '<h2>Units in this building</h2><div class="muted">Renaming a unit renames its rooms. “Also called” is the other way you say it in voice notes.</div>';
+  layoutUnits(doc).forEach(function(u, i){
+    h += '<label class="fld">Unit '+(i+1)+' name</label><input id="us-l-'+i+'" maxlength="40" value="'+esc(u.label)+'"><label class="fld">Also called (optional)</label><input id="us-a-'+i+'" maxlength="120" value="'+esc(u.alias||'')+'" placeholder="e.g. second floor, upstairs">';
+  });
+  h += '<div class="btns"><button class="btn primary" onclick="saveUnits()">Save</button><button class="btn" onclick="addUnitSheet()">＋ Add a unit</button><button class="btn" onclick="closeSheet()">Close</button></div>';
+  openSheet(h);
+}
+function saveUnits(){
+  var doc = S.rec.doc, us = layoutUnits(doc), next = us.map(function(u, i){ return { id:u.id, label:$('us-l-'+i).value, alias:$('us-a-'+i).value, beds:1, baths:1 }; });
+  var cu = cleanUnits(next); if (cu.errors.length){ toast(cu.errors[0]); return; }
+  mut(function(d){ cu.units.forEach(function(n){ var u = unitById(d, n.id); if (!u) return; if (u.label !== n.label) renameUnitInDoc(d, n.id, n.label); if (n.alias) u.alias = n.alias; else delete u.alias; }); });
+  closeSheet(); render(); toast('Units saved');
+}
+var addUnitOpts = null;
+function addUnitSheet(){
+  var doc = S.rec.doc; addUnitOpts = addUnitOpts || { beds:1, baths:1 };
+  openSheet('<h2>Add a unit</h2><label class="fld" style="margin-top:0">Unit name</label><input id="au-l" maxlength="40" value="Apt '+(layoutUnits(doc).length+1)+'"><label class="fld">Also called (optional)</label><input id="au-a" maxlength="120" placeholder="e.g. third floor">'
+    +'<div class="toggle"><span>Bedrooms</span><span class="step"><button onclick="stepAddUnit(\'beds\',-1)">−</button><span class="n" id="n-au-beds">'+addUnitOpts.beds+'</span><button onclick="stepAddUnit(\'beds\',1)">＋</button></span></div>'
+    +'<div class="toggle"><span>Bathrooms</span><span class="step"><button onclick="stepAddUnit(\'baths\',-1)">−</button><span class="n" id="n-au-baths">'+addUnitOpts.baths+'</span><button onclick="stepAddUnit(\'baths\',1)">＋</button></span></div>'
+    +'<div class="btns"><button class="btn primary" onclick="addUnitNow()">Add unit and its rooms</button><button class="btn" onclick="closeSheet()">Cancel</button></div>');
+}
+function stepAddUnit(k,d){ var v = Math.max(0, Math.min(12, addUnitOpts[k]+d)); if (k==='baths' && v<1) v=1; addUnitOpts[k]=v; $('n-au-'+k).textContent=v; }
+function addUnitNow(){
+  var doc = S.rec.doc, existing = layoutUnits(doc).map(function(u){ return { id:u.id, label:u.label, alias:u.alias||'', beds:1, baths:1 }; });
+  var cu = cleanUnits(existing.concat([{ label:$('au-l').value, alias:$('au-a').value, beds:addUnitOpts.beds, baths:addUnitOpts.baths }]));
+  if (cu.errors.length){ toast(cu.errors[0]); return; }
+  var nu = cu.units[cu.units.length-1];
+  if (doc.areas.length + nu.beds + nu.baths + 3 > 80){ toast('That would pass the 80-area limit — remove or exclude some areas first'); return; }
+  mut(function(d){
+    if (!isBuilding(d)){ d.layout = { kind:'building', units:[] }; d.areas.forEach(function(a){ if (!a.section) a.section = a.group==='exterior' ? SEC_BUILDING : SEC_COMMON; }); }
+    var x = { id:nu.id, label:nu.label }; if (nu.alias) x.alias = nu.alias; d.layout.units.push(x);
+    d.areas = d.areas.concat(unitRooms(nu, { laundryWhere:'none', sysWhere:'common' }));
+  });
+  addUnitOpts = null; closeSheet(); render(); toast(nu.label+' added with its rooms');
+}
+function convertBuildingSheet(){
+  openSheet('<h2>Multi-unit building</h2><p>This turns the inspection into a building report: the outside areas become <b>Building exterior</b>, everything else becomes <b>Common areas</b>, and you add each unit with its own rooms. Nothing already recorded is removed. You can then move any room into a unit from its “Edit area” menu.</p><div class="btns"><button class="btn primary" onclick="addUnitSheet()">Add the first unit</button><button class="btn" onclick="closeSheet()">Cancel</button></div>');
+}
+// Whole unit not accessed: marks every room of that unit that has nothing recorded yet. Rooms already inspected are left alone.
+function unitAccessSheet(sec){
+  var doc = S.rec.doc, u = unitById(doc, sec); if (!u) return;
+  var rooms = doc.areas.filter(function(a){ return !a.excluded && areaSection(doc, a)===sec; }), marked = rooms.filter(function(a){ return a.access && a.access.no_access; }).length;
+  openSheet('<h2>No access to '+esc(u.label)+'</h2><div class="muted">Marks every room in this unit that has nothing recorded yet. Rooms you already inspected are left alone.</div><label class="fld">Reason</label><select id="ua-reason">'+ACCESS_REASONS.map(function(r){ return '<option value="'+r[0]+'">'+esc(r[1])+'</option>'; }).join('')+'</select><label class="fld">Note (needed for “Other”)</label><input id="ua-note" maxlength="500">'
+    +'<div class="btns"><button class="btn primary" onclick="unitAccessApply(\''+sec+'\',true)">Mark no access</button>'+(marked?'<button class="btn" onclick="unitAccessApply(\''+sec+'\',false)">Clear no access ('+marked+')</button>':'')+'<button class="btn" onclick="closeSheet()">Cancel</button></div>');
+}
+function unitAccessApply(sec, on){
+  var doc = S.rec.doc, reason = on ? $('ua-reason').value : '', note = on ? $('ua-note').value.trim().slice(0,500) : '';
+  if (on && reason==='other' && !note){ toast('Say why (you chose Other)'); return; }
+  var n = 0;
+  mut(function(d){ d.areas.forEach(function(a){
+    if (a.excluded || areaSection(d, a)!==sec) return;
+    if (!on){ if (a.access && a.access.no_access){ delete a.access; n++; } return; }
+    var touched = (a.condition && a.condition!=='not_inspected') || (a.issues||[]).length || (a.photo_ids||[]).length || String(a.pending_text||'').trim();
+    if (touched) return;
+    a.access = { no_access:true, reason:reason, note:note }; n++;
+  }); });
+  closeSheet(); render(); toast(n+' room'+(n===1?'':'s')+(on?' marked no access':' cleared'));
+}
 function ownerCardHtml(doc){
   var ow = doc.owner && doc.owner.name;
   return '<div class="card"><div class="row"><b>Property &amp; owner</b><button class="btn sm" onclick="propOwnerSheet()">Edit</button></div>'
@@ -1226,12 +1326,14 @@ function organizeDrive(){
   }).catch(function(e){ release('org'); if (b) b.disabled = false; msg('Could not finish: '+esc(e.message||e)+' Tap again to continue where it stopped.', 'err'); });
 }
 function createInspection(){
+  var o = S.newOpts, p = S.newProp, lay = null;
+  if (o.building){ var cu = cleanUnits(o.units); if (cu.errors.length){ toast(cu.errors[0]); return; } o.units = cu.units; lay = { kind:'building', units:cu.units.map(function(u){ var x = { id:u.id, label:u.label }; if (u.alias) x.alias = u.alias; return x; }) }; }
   if (!claim('create')) return; $('start-btn').disabled = true;
-  var o = S.newOpts, p = S.newProp;
   lsSet('fi_inspector', o.inspector);
   var id = S.newInspId || newId(); S.route = null; S.newInspId = '';
   var doc = { v:1, id:id, property:{ source:p.source, id:String(p.id||''), address:p.address, street:p.street||String(p.address||'').split(',')[0].trim(), unit_id:String(p.unit_id||''), unit_label:p.unit_label||'' }, type:o.type, date:o.date, inspector:o.inspector, client:{ name:o.client, email:o.email }, pre1978:!!o.pre1978, overall:{ condition:'not_inspected', notes:'' }, areas:buildAreas(o), created:new Date().toISOString(), updated:new Date().toISOString() };
   if (S.newOwner && S.newOwner.name) doc.owner = { id:String(S.newOwner.id||''), name:S.newOwner.name, source:S.newOwner.source||'hub' };
+  if (lay) doc.layout = lay;
   doc.visit = { animals:{ present:null, items:[] }, access_cooperation:{ choice:'', note:'' } };
   if (S.newBooking){ doc.booking = S.newBooking; S.newBooking = null; }
   var rec = { id:id, doc:doc, meta:{ brand_id:o.brand, client_name:o.client, client_email:o.email, inspector:o.inspector, inspection_date:o.date, inspection_type:o.type }, base_rev:0, token:'', status:'draft', dirty:true, ver:1 };
@@ -1263,11 +1365,19 @@ function leaveInsp(){
 }
 function addAreaSheet(){
   var presets = [['Bedroom','interior'],['Bathroom','interior'],['Half Bath','interior'],['Garage','exterior'],['Porch / Deck','exterior'],['Shed','exterior'],['Yard / Fence','exterior'],['Basement','interior'],['Attic','interior'],['Other','other']];
-  openSheet('<h2>Add an area</h2><div class="seg">'+presets.map(function(p){ return '<button onclick="addAreaPreset(\''+p[0]+'\',\''+p[1]+'\')">'+p[0]+'</button>'; }).join('')+'</div><label class="fld">Or type a name</label><input id="aa-name" placeholder="e.g. Sunroom"><label class="fld">Group</label><select id="aa-group"><option value="interior">Interior</option><option value="exterior">Exterior</option><option value="systems">Systems</option><option value="other">Other</option></select><div class="btns"><button class="btn primary" onclick="addAreaCustom()">Add</button><button class="btn" onclick="closeSheet()">Cancel</button></div>');
+  openSheet('<h2>Add an area</h2>'+addSecPick()+'<div class="seg">'+presets.map(function(p){ return '<button onclick="addAreaPreset(\''+p[0]+'\',\''+p[1]+'\')">'+p[0]+'</button>'; }).join('')+'</div><label class="fld">Or type a name</label><input id="aa-name" placeholder="e.g. Sunroom"><label class="fld">Group</label><select id="aa-group"><option value="interior">Interior</option><option value="exterior">Exterior</option><option value="systems">Systems</option><option value="other">Other</option></select><div class="btns"><button class="btn primary" onclick="addAreaCustom()">Add</button><button class="btn" onclick="closeSheet()">Cancel</button></div>');
 }
-function nextNameFor(base){ var names = S.rec.doc.areas.map(function(a){return a.name;}); if (names.indexOf(base)<0 && base!=='Bedroom' && base!=='Bathroom') return base; var n=1; while (names.indexOf(base+' '+n)>-1) n++; return base+' '+n; }
-function addAreaPreset(name,group){ var nm = nextNameFor(name); var a = mkArea(nm,group); mut(function(doc){ doc.areas.push(a); }); closeSheet(); openArea(a.id); }
-function addAreaCustom(){ var nm = $('aa-name').value.trim(); if(!nm){ toast('Type a name'); return; } var a = mkArea(nm, $('aa-group').value); mut(function(doc){ doc.areas.push(a); }); closeSheet(); openArea(a.id); }
+function addSecPick(){ var doc = S.rec.doc; if (!isBuilding(doc)) return ''; return '<label class="fld" style="margin-top:0">Where is it?</label><select id="aa-sec" onchange="S.addSec=this.value">'+sectionKeys(doc).map(function(k){ return '<option value="'+k+'"'+(S.addSec===k?' selected':'')+'>'+esc(sectionLabel(doc, k))+'</option>'; }).join('')+'</select><div class="muted" style="margin-bottom:8px">Then pick what it is:</div>'; }
+// In a building the new area takes the chosen section, and a room inside a unit takes the unit's label in its name.
+function placeNewArea(base, group){
+  var doc = S.rec.doc, el = $('aa-sec'), sec = (isBuilding(doc) && el) ? el.value : '', u = unitById(doc, sec);
+  var a = mkArea(nextNameFor(u ? unitAreaName(u.label, base) : base), group); if (sec) a.section = sec;
+  preEquipKinds(base).forEach(function(k){ a.equipment.push(mkEquip(k, '')); });
+  return a;
+}
+function nextNameFor(base){ var names = S.rec.doc.areas.map(function(a){return a.name;}); if (names.indexOf(base)<0 && !/(^| - )(Bedroom|Bathroom)$/.test(base)) return base; var n=1; while (names.indexOf(base+' '+n)>-1) n++; return base+' '+n; }
+function addAreaPreset(name,group){ var a = placeNewArea(name, group); mut(function(doc){ doc.areas.push(a); }); closeSheet(); openArea(a.id); }
+function addAreaCustom(){ var nm = $('aa-name').value.trim(); if(!nm){ toast('Type a name'); return; } var a = placeNewArea(nm, $('aa-group').value); mut(function(doc){ doc.areas.push(a); }); closeSheet(); openArea(a.id); }
 
 // ---- area ----
 function curArea(){ return findArea(S.rec.doc, S.areaId); }
@@ -1281,8 +1391,10 @@ function clearPending(){ var a = curArea(); if (!(a.pending_text||'').trim()){ r
 function areaMenu(){
   var a = curArea();
   openSheet('<h2>'+esc(a.name)+'</h2><label class="fld" style="margin-top:0">Rename</label><input id="am-name" value="'+esc(a.name)+'"><div class="btns"><button class="btn primary" onclick="renameArea()">Save name</button></div>'
+    +(isBuilding(S.rec.doc) ? '<label class="fld">Part of the building</label><select id="am-sec" onchange="setAreaSection(this.value)">'+sectionKeys(S.rec.doc).map(function(k){ return '<option value="'+k+'"'+(areaSection(S.rec.doc, a)===k?' selected':'')+'>'+esc(sectionLabel(S.rec.doc, k))+'</option>'; }).join('')+'</select>' : '')
     +'<div class="btns"><button class="btn" onclick="excludeArea()">Exclude from this inspection</button><button class="btn danger" id="am-del" onclick="deleteAreaStep()">Delete area…</button><button class="btn" onclick="closeSheet()">Close</button></div>');
 }
+function setAreaSection(sec){ var a = curArea(); mut(function(d){ moveAreaToSection(d, a, sec); }); closeSheet(); render(); toast('Moved to '+sectionLabel(S.rec.doc, sec)); }
 function renameArea(){ var n = $('am-name').value.trim(); if (!n){ toast('Name cannot be empty'); return; } var a = curArea(); mut(function(){ a.name = n; }); closeSheet(); render(); }
 function excludeArea(){ var a = curArea(); mut(function(){ a.excluded = true; }); closeSheet(); backToInsp(); toast('Excluded — it will not appear in the report'); }
 function deleteAreaStep(){
@@ -1438,6 +1550,7 @@ function localChecks(doc){
   var dc = dupCheck(doc, (S.psz && S.rec && S.psz.id === S.rec.id) ? S.psz.map : {});
   if (dc.extra) warns.push(dc.extra+' duplicate photo cop'+(dc.extra===1?'y':'ies')+' in this draft — see “Duplicate photos” below for where');
   var npw = noPhotoWarn(dc); if (npw) warns.push(npw);
+  var bew = blankEquipWarn(doc); if (bew) warns.push(bew);
   var sm = doc.summary; if (sm && sm.fp && sm.fp !== fpOf(doc)) warns.push('The AI summary is out of date and will be left out of the report');
   if (sm && !sm.accepted) warns.push('The AI summary has not been approved and will be left out of the report');
   return { blocks:blocks, warns:warns };
@@ -1962,19 +2075,114 @@ function sortWalk(list){
   return keyed.map(function(x){ return x.a; });
 }
 function mkArea(name, group){ return { id:'ar_'+rid(8), name:name, group:group, condition:'not_inspected', excluded:false, issues:[], photo_ids:[], equipment:[], notes:'', pending_text:'', dictation:[] }; }
+// ---- BUILDING-LAYOUT-START (Nov 13 2026: multi-unit buildings, pre-attached equipment cards, "not owned by landlord") ----
+// doc.layout = {kind:'building', units:[{id,label,alias}]} only on a multi-unit inspection. Every area then has a section: 'building' (exterior, roof),
+// 'common' (basement, shared hallway, shared laundry) or a unit id. No layout = one home, exactly as before.
+var SEC_BUILDING = 'building', SEC_COMMON = 'common';
+function isBuilding(doc){ return !!(doc && doc.layout && doc.layout.kind==='building' && (doc.layout.units||[]).length); }
+function layoutUnits(doc){ return isBuilding(doc) ? doc.layout.units : []; }
+function unitById(doc, id){ var us = layoutUnits(doc); for (var i=0;i<us.length;i++) if (us[i].id===id) return us[i]; return null; }
+function sectionKeys(doc){ return [SEC_BUILDING, SEC_COMMON].concat(layoutUnits(doc).map(function(u){ return u.id; })); }
+function sectionLabel(doc, sec){ if (sec===SEC_BUILDING) return 'Building exterior'; if (sec===SEC_COMMON) return 'Common areas'; var u = unitById(doc, sec); return u ? u.label : 'Other areas'; }
+// An area with no (or an unknown) section is never lost: outside areas fall under the building, everything else under common areas.
+function areaSection(doc, a){ if (!isBuilding(doc)) return ''; var sc = a.section||''; if (sc===SEC_BUILDING || sc===SEC_COMMON || unitById(doc, sc)) return sc; return a.group==='exterior' ? SEC_BUILDING : SEC_COMMON; }
+// A room inside a unit carries the unit in its stored name ("Apt 2 - Bathroom"), so every place that prints an area name (report, urgent texts, AI sorting, warnings) is clear by itself.
+function unitAreaName(label, base){ return label + ' - ' + base; }
+function areaShortName(doc, a){ var u = unitById(doc, a.section||''), pre = u ? u.label + ' - ' : ''; return (pre && String(a.name).indexOf(pre)===0) ? a.name.slice(pre.length) : a.name; }
+function groupAreas(doc, list){
+  if (!isBuilding(doc)) return [{ key:'', label:'', areas:list.slice() }];
+  var by = {}; list.forEach(function(a){ var k = areaSection(doc, a); (by[k] = by[k]||[]).push(a); });
+  return sectionKeys(doc).filter(function(k){ return by[k]; }).map(function(k){ return { key:k, label:sectionLabel(doc, k), areas:by[k] }; });
+}
+// Equipment that is always there gets its card up front, so the inspector goes straight to the photo and the label. Remove it if it does not apply.
+function preEquipKinds(areaName){
+  var n = String(areaName||'').toLowerCase();
+  if (/water heater/.test(n)) return ['water_heater'];
+  if (/heating|hvac|furnace|boiler/.test(n)) return ['furnace'];
+  if (/electrical panel|breaker/.test(n)) return ['electrical_panel'];
+  if (/kitchen/.test(n)) return ['range','refrigerator'];
+  return [];
+}
+function mkEquip(kind, serves){ var e = { id:'eq_'+rid(8), kind:kind, photo_ids:[], auto:true }; if (serves) e.serves = serves; return e; }
+function preAttach(a, servesList){ var sv = (servesList && servesList.length) ? servesList : ['']; preEquipKinds(a.name).forEach(function(k){ sv.forEach(function(x){ a.equipment.push(mkEquip(k, x)); }); }); return a; }
+function equipHasInfo(e){ if (!e) return false; if (e.not_owned===true) return true; if ((e.photo_ids||[]).length) return true; return equipKeys(e.kind).concat(['notes']).some(function(f){ return String(e[f]||'').trim(); }); }
+function blankEquip(doc){
+  var out = []; (doc.areas||[]).forEach(function(a){ if (a.excluded || (a.access && a.access.no_access)) return; (a.equipment||[]).forEach(function(e){ if (!equipHasInfo(e)) out.push({ area:a.name, areaId:a.id, label:(EQUIP_KINDS[e.kind]||EQUIP_KINDS.other).label }); }); });
+  return out;
+}
+function blankEquipWarn(doc){ var b = blankEquip(doc); return b.length ? b.length+' equipment card'+(b.length===1?' has':'s have')+' no details and will be left off the report (fine if that is intended): '+b.slice(0,8).map(function(x){ return x.area+' ('+x.label+')'; }).join(', ')+(b.length>8?'…':'') : ''; }
+// What a piece of equipment serves is separate from where it sits. Inside a unit it serves that unit unless told otherwise.
+function equipServes(doc, a, e){ if (!isBuilding(doc)) return ''; var sv = (e && e.serves)||''; if (sv===SEC_BUILDING || unitById(doc, sv)) return sv; var sc = areaSection(doc, a); return unitById(doc, sc) ? sc : ''; }
+function equipServesText(doc, a, e){ var sv = equipServes(doc, a, e); if (!sv) return ''; return sv===SEC_BUILDING ? 'Serves the building / common areas' : 'Serves '+unitById(doc, sv).label; }
+function cleanUnits(list){
+  var seen = {}, errs = [], out = [];
+  (list||[]).forEach(function(u, i){
+    var label = String(u.label||'').replace(/\s+/g,' ').trim().slice(0,40), key = label.toLowerCase();
+    if (!label){ errs.push('Unit '+(i+1)+' needs a name'); return; }
+    if (seen[key]){ errs.push('Two units are both called “'+label+'”'); return; }
+    seen[key] = true;
+    out.push({ id:u.id || ('un_'+rid(8)), label:label, alias:String(u.alias||'').replace(/\s+/g,' ').trim().slice(0,120), beds:Math.max(0, Math.min(12, Number(u.beds)||0)), baths:Math.max(1, Math.min(12, Number(u.baths)||1)) });
+  });
+  if (!out.length && !errs.length) errs.push('Add at least one unit');
+  return { units:out, errors:errs };
+}
+function unitRooms(unit, o){
+  var out = [], mk = function(base, group){ var a = mkArea(unitAreaName(unit.label, base), group||'interior'); a.section = unit.id; preEquipKinds(base).forEach(function(k){ a.equipment.push(mkEquip(k, '')); }); return a; };
+  out.push(mk('Living Room')); out.push(mk('Kitchen'));
+  for (var b=1;b<=unit.beds;b++) out.push(mk(unit.beds>1?'Bedroom '+b:'Bedroom'));
+  for (var t=1;t<=unit.baths;t++) out.push(mk(unit.baths>1?'Bathroom '+t:'Bathroom'));
+  if (o.laundryWhere==='unit') out.push(mk('Laundry'));
+  if (o.sysWhere==='unit'){ out.push(mk('Heating / HVAC','systems')); out.push(mk('Water Heater','systems')); out.push(mk('Electrical Panel','systems')); }
+  out.push(mk('Smoke & CO Detectors','systems'));
+  return out;
+}
+function buildBuildingAreas(o, units){
+  var a = [], ids = units.map(function(u){ return u.id; });
+  var mk = function(name, group, sec, serves){ var x = mkArea(name, group); x.section = sec; if (serves) preAttach(x, serves); return x; };
+  a.push(mk('Exterior Front','exterior',SEC_BUILDING));
+  if (o.sides){ a.push(mk('Exterior Side (Left)','exterior',SEC_BUILDING)); a.push(mk('Exterior Side (Right)','exterior',SEC_BUILDING)); }
+  a.push(mk('Exterior Rear','exterior',SEC_BUILDING)); a.push(mk('Roof & Gutters','exterior',SEC_BUILDING));
+  a.push(mk('Hallway & Stairs','interior',SEC_COMMON));
+  if (o.basement) a.push(mk('Basement','interior',SEC_COMMON));
+  if (o.laundryWhere==='common') a.push(mk('Laundry','interior',SEC_COMMON));
+  if (o.attic) a.push(mk('Attic','interior',SEC_COMMON));
+  if (o.sysWhere!=='unit'){ a.push(mk('Heating / HVAC','systems',SEC_COMMON,ids)); a.push(mk('Water Heater','systems',SEC_COMMON,ids)); a.push(mk('Electrical Panel','systems',SEC_COMMON,ids)); }   // one card per unit, each marked with the unit it serves
+  units.forEach(function(u){ a = a.concat(unitRooms(u, o)); });
+  return a;
+}
+// Rename a unit: its rooms carry the label in their names, so they follow.
+function renameUnitInDoc(doc, unitId, newLabel){
+  var u = unitById(doc, unitId); if (!u) return 0; var old = u.label + ' - ', n = 0;
+  (doc.areas||[]).forEach(function(a){ if (a.section===unitId && String(a.name).indexOf(old)===0){ a.name = newLabel + ' - ' + a.name.slice(old.length); n++; } });
+  u.label = newLabel; return n;
+}
+// Move an area to another section. A room moved into a unit takes that unit's label; moved out, it drops it.
+function moveAreaToSection(doc, a, sec){
+  var base = areaShortName(doc, a), u = unitById(doc, sec);
+  a.section = sec; a.name = u ? unitAreaName(u.label, base) : base; return a;
+}
+// Voice sorting found equipment: fill the matching empty pre-attached card instead of adding a second one.
+function findBlankCard(doc, a, kind, serves){
+  var list = (a.equipment||[]).filter(function(x){ return x.kind===kind && !equipHasInfo(x); });
+  if (!list.length) return null;
+  if (serves){ var m = list.filter(function(x){ return (x.serves||'')===serves; })[0]; if (m) return m; return list.filter(function(x){ return !x.serves; })[0] || null; }
+  return list.filter(function(x){ return !x.serves; })[0] || (list.length===1 ? list[0] : null);
+}
+// ---- BUILDING-LAYOUT-END ----
 function buildAreas(o){
+  if (o.building) return buildBuildingAreas(o, o.units);
   var a = [];
   a.push(mkArea('Exterior Front','exterior'));
   if (o.sides){ a.push(mkArea('Exterior Side (Left)','exterior')); a.push(mkArea('Exterior Side (Right)','exterior')); }
   a.push(mkArea('Exterior Rear','exterior')); a.push(mkArea('Roof & Gutters','exterior'));
-  a.push(mkArea('Living Room','interior')); a.push(mkArea('Dining Room','interior')); a.push(mkArea('Kitchen','interior'));
+  a.push(mkArea('Living Room','interior')); a.push(mkArea('Dining Room','interior')); a.push(preAttach(mkArea('Kitchen','interior')));
   for (var b=1;b<=o.beds;b++) a.push(mkArea('Bedroom '+b,'interior'));
   for (var t=1;t<=o.baths;t++) a.push(mkArea(o.baths>1?'Bathroom '+t:'Bathroom','interior'));
   a.push(mkArea('Hallway & Stairs','interior'));
   if (o.laundry) a.push(mkArea('Laundry','interior'));
   if (o.basement) a.push(mkArea('Basement','interior'));
   if (o.attic) a.push(mkArea('Attic','interior'));
-  a.push(mkArea('Heating / HVAC','systems')); a.push(mkArea('Water Heater','systems')); a.push(mkArea('Electrical Panel','systems')); a.push(mkArea('Smoke & CO Detectors','systems'));
+  a.push(preAttach(mkArea('Heating / HVAC','systems'))); a.push(preAttach(mkArea('Water Heater','systems'))); a.push(preAttach(mkArea('Electrical Panel','systems'))); a.push(mkArea('Smoke & CO Detectors','systems'));
   return sortWalk(a);
 }
 function groupLabel(g){ return g==='exterior' ? 'Exterior' : g==='interior' ? 'Interior' : g==='systems' ? 'Systems' : ''; }
@@ -2089,7 +2297,16 @@ function viewInsp(){
   if (S.reorder) h += '<div class="card"><div class="muted">Hold and drag the <b>≡</b> handle to move an area, or tap ▲ / ▼. The report follows this order.</div><button class="btn block" style="margin-top:8px" onclick="autoOrderSheet()">✨ Auto-order for a walk-through…</button></div>';
   var npTot = noPhotoTotal(doc);
   if (npTot) h += '<div class="muted nophoto-sum" style="margin:0 0 8px"><span class="nophoto">⚠ '+npTot+' issue'+(npTot>1?'s have':' has')+' no photos</span> — marked on the areas below (fine if that is intended).</div>';
-  h += '<div class="card" style="padding:4px 12px">'+vis.map(function(a,i){ return areaRow(a, i, vis.length); }).join('')+'</div>';
+  if (isBuilding(doc) && !S.reorder){
+    h += buildingCardHtml(doc);
+    groupAreas(doc, vis).forEach(function(g){
+      var isUnit = !!unitById(doc, g.key), done = g.areas.filter(function(a){ return (a.condition && a.condition!=='not_inspected') || (a.access && a.access.no_access); }).length;
+      h += '<div class="row sec-head"><h3 style="margin:10px 0 4px">'+esc(g.label)+' <span class="muted" style="font-weight:400">'+done+' of '+g.areas.length+' done</span></h3>'+(isUnit?'<button class="btn sm" onclick="unitAccessSheet(\''+g.key+'\')">🚫 No access</button>':'')+'</div>';
+      h += '<div class="card" style="padding:4px 12px">'+g.areas.map(function(a,i){ return areaRow(a, i, g.areas.length).replace('<b>'+esc(a.name)+'</b>', '<b>'+esc(areaShortName(doc, a))+'</b>'); }).join('')+'</div>';
+    });
+  }
+  else h += '<div class="card" style="padding:4px 12px">'+vis.map(function(a,i){ return areaRow(a, i, vis.length); }).join('')+'</div>';
+  if (!isBuilding(doc)) h += '<div class="muted" style="margin:0 0 8px"><a href="#" onclick="convertBuildingSheet();return false">This is a multi-unit building…</a></div>';
   var ex = doc.areas.filter(function(a){return a.excluded;});
   if (ex.length){ h += '<h2>Excluded</h2><div class="card" style="padding:4px 12px">'+ex.map(function(a){ return '<div class="area-row ex" onclick="openArea(\''+a.id+'\')"><span>'+esc(a.name)+'</span><span class="muted">tap to include</span></div>'; }).join('')+'</div>'; }
   h += '<button class="btn block" onclick="addAreaSheet()">＋ Add an area (bedroom, bathroom, garage…)</button>';
@@ -2203,7 +2420,7 @@ function viewArea(){
   // equipment & model info
   var eqs = a.equipment||[], sug = equipSuggest(a.name);
   h += '<h2>Equipment &amp; model info ('+eqs.length+')</h2>';
-  eqs.forEach(function(e){ h += '<div class="issue info" onclick="editEquip(\''+e.id+'\')"><div class="t">'+esc(equipTitle(e))+'</div>'+(equipSummary(e)?'<div class="f">'+esc(equipSummary(e))+'</div>':'')+((e.photo_ids||[]).length?'<div class="f">📷 '+e.photo_ids.length+' label photo'+(e.photo_ids.length>1?'s':'')+'</div>':'')+'</div>'; });
+  eqs.forEach(function(e){ var svt = equipServesText(S.rec.doc, a, e); h += '<div class="issue info" onclick="editEquip(\''+e.id+'\')"><div class="t">'+esc(equipTitle(e))+(e.not_owned?' <span class="pill">Not owned by landlord</span>':'')+'</div>'+(svt?'<div class="f"><b>'+esc(svt)+'</b></div>':'')+(e.not_owned?'<div class="f">Details not recorded.</div>':(equipSummary(e)?'<div class="f">'+esc(equipSummary(e))+'</div>':''))+(!equipHasInfo(e)?'<div class="f" style="color:var(--warn)">No details yet — tap to add a label photo or details, or remove it if it is not here.</div>':'')+((e.photo_ids||[]).length?'<div class="f">📷 '+e.photo_ids.length+' label photo'+(e.photo_ids.length>1?'s':'')+'</div>':'')+'</div>'; });
   if (!eqs.length) h += '<div class="card muted">'+(sug.length?'Record the brand, model, serial number and filter size from the label.':'Furnace, water heater and appliance details go here.')+'</div>';
   h += '<div class="chips">'+sug.map(function(k){ return '<button class="btn sm" onclick="editEquip(\'\',\''+k+'\')">＋ '+esc(EQUIP_KINDS[k].label)+'</button>'; }).join('')+'<button class="btn sm" onclick="equipKindSheet()">＋ '+(sug.length?'Other…':'Add equipment')+'</button></div>';
   // photos
@@ -2306,24 +2523,59 @@ function eqField(f, full){
 }
 function renderEquipSheet(){
   var e = eqEdit, a = curArea(), k = EQUIP_KINDS[e.kind] || EQUIP_KINDS.other;
-  var h = '<h2>'+esc(k.label)+(e.isNew?'':' details')+'</h2><div class="muted">'+esc(a.name)+'</div>';
-  h += '<div class="eqgrid">'+eqField('name', true)+eqField('brand')+eqField('model')+eqField('serial')+eqField('year');
-  k.extra.forEach(function(f){ h += eqField(f); });
+  var doc = S.rec.doc, h = '<h2>'+esc(k.label)+(e.isNew?'':' details')+'</h2><div class="muted">'+esc(a.name)+'</div>';
+  if (e.kind!=='other' ? HEAT_KINDS.indexOf(e.kind)>-1 : /heat|hvac|furnace|boiler/i.test(a.name)) h += '<label class="fld">Type of heating system</label><select id="eq-kind" onchange="setEquipKind(this.value)">'+HEAT_KINDS.map(function(x){ return '<option value="'+x+'"'+(e.kind===x?' selected':'')+'>'+esc(x==='other'?'Other heating system':EQUIP_KINDS[x].label)+'</option>'; }).join('')+'</select>';
+  if (isBuilding(doc)){
+    var cur = equipServes(doc, a, e);
+    h += '<label class="fld">Which unit does it serve?</label><select id="eq-serves" onchange="eqEdit.serves=this.value">'+(cur?'':'<option value="" selected>Not set</option>')+layoutUnits(doc).map(function(u){ return '<option value="'+u.id+'"'+(cur===u.id?' selected':'')+'>'+esc(u.label)+'</option>'; }).join('')+'<option value="'+SEC_BUILDING+'"'+(cur===SEC_BUILDING?' selected':'')+'>Building / common areas</option></select>';
+  }
+  h += '<label class="toggle" style="cursor:pointer"><span>Not owned by the landlord<div class="muted">e.g. the tenant’s own appliance — it is listed as not owned and its details are not recorded</div></span><input type="checkbox" id="eq-notowned" style="width:26px;height:26px;flex:none"'+(e.not_owned?' checked':'')+' onchange="setEquipNotOwned(this.checked)"></label>';
+  h += '<div class="eqgrid">'+eqField('name', true);
+  if (!e.not_owned){ h += eqField('brand')+eqField('model')+eqField('serial')+eqField('year'); k.extra.forEach(function(f){ h += eqField(f); }); }
   h += '<div class="full"><label class="fld">'+esc(EQUIP_LABEL.notes)+'</label><textarea id="eqf-notes" style="min-height:70px" oninput="eqEdit.notes=this.value">'+esc(e.notes||'')+'</textarea></div></div>';
   var ph = a.photo_ids||[];
+  h += '<div class="btns"><button class="btn" onclick="equipAddPhoto()">📷 Add a photo of the label</button></div>';
   if (ph.length){
     h += '<label class="fld">Photo of the label / data plate (tap to attach)</label><div class="thumbs">'+ph.map(function(p){ var on=(e.photo_ids||[]).indexOf(p)>-1; return '<button class="thumb'+(on?' sel':'')+'" onclick="toggleEquipPhoto(\''+p+'\')" aria-label="photo">'+(photoSrc(p)?'<img src="'+esc(photoSrc(p))+'" alt="">':'')+(on?'<span class="b">✓</span>':'')+'</button>'; }).join('')+'</div>';
     if ((e.photo_ids||[]).length) h += '<div class="btns"><button class="btn" id="eq-read" onclick="readLabel()"'+(eqRead.busy?' disabled':'')+'>'+(eqRead.busy?'Reading the label…':'🔍 Read the label from the photo')+'</button></div><div class="muted">The AI reads what is printed and fills only the blank boxes. Always check model and serial numbers against the label.</div>';
-  } else h += '<div class="muted" style="margin-top:8px">Add a photo of the label to this area first, then attach it here and the app can read it for you.</div>';
+  } else h += '<div class="muted" style="margin-top:8px">Add a photo of the label and the app can read it for you.</div>';
   if (eqRead.msg) h += '<div class="banner info" style="margin-top:8px">'+esc(eqRead.msg)+'</div>';
   if (eqRead.diff && Object.keys(eqRead.diff).length) h += '<div class="banner warn" style="margin-top:8px">The label shows different values: '+Object.keys(eqRead.diff).map(function(f){ return esc((EQUIP_LABEL[f]||f).replace(/ \(.*/,''))+' “'+esc(eqRead.diff[f])+'” (you have “'+esc(e[f])+'”)'; }).join('; ')+'.<div class="btns"><button class="btn sm" onclick="useLabelValues()">Use the label values</button></div></div>';
-  h += '<div class="btns"><button class="btn primary" onclick="saveEquip()">Save</button><button class="btn" onclick="closeSheet()">Cancel</button>'+(e.isNew?'':'<button class="btn danger" id="eq-del" onclick="deleteEquipStep()">Delete</button>')+'</div>';
+  h += '<div class="btns"><button class="btn primary" onclick="saveEquip()">Save</button><button class="btn" onclick="closeSheet()">Cancel</button>'+(e.isNew?'':'<button class="btn danger" id="eq-del" onclick="deleteEquipStep()">'+(e.auto && !equipHasInfo(e)?'Remove — not here':'Delete')+'</button>')+'</div>';
+  if (!e.isNew && doc.areas.filter(function(x){ return !x.excluded; }).length > 1) h += '<label class="fld">It is actually in a different area</label><select id="eq-move" onchange="moveEquipTo(this.value)"><option value="">Move to another area…</option>'+doc.areas.filter(function(x){ return !x.excluded && x.id!==a.id; }).map(function(x){ return '<option value="'+x.id+'">'+esc(x.name)+'</option>'; }).join('')+'</select>';
   openSheet(h);
+}
+var HEAT_KINDS = ['furnace','boiler','heat_pump','other'];
+// Changing the type keeps what still applies (brand, model, serial, year, notes, label, photos) and drops boxes the new type does not have, so the save is never refused.
+function equipSetKind(e, kind){ if (!EQUIP_KINDS[kind]) return e; var keep = equipKeys(kind); ['fuel','filter_size','tonnage','capacity','amperage','spaces'].forEach(function(f){ if (keep.indexOf(f)<0) delete e[f]; }); e.kind = kind; return e; }
+function setEquipKind(kind){ equipSetKind(eqEdit, kind); renderEquipSheet(); }
+function setEquipNotOwned(on){ if (on) eqEdit.not_owned = true; else delete eqEdit.not_owned; renderEquipSheet(); }
+// Label photo straight from the equipment card: the photo joins the area's photos and is attached to this card in one step.
+function equipAddPhoto(){ photoTarget = { areaId:S.areaId, equipId:eqEdit.id }; var inp = $('photo-in'); inp.value=''; inp.click(); }
+// Same card (same id, photos, details) in another area. Its photos travel with it so the label photo is never left behind.
+function moveEquipInDoc(doc, equipId, fromId, toId){
+  var from = findArea(doc, fromId), to = findArea(doc, toId); if (!from || !to || from===to) return false;
+  var e = (from.equipment||[]).filter(function(x){ return x.id===equipId; })[0]; if (!e) return false;
+  from.equipment = from.equipment.filter(function(x){ return x.id!==equipId; }); (to.equipment = to.equipment||[]).push(e);
+  (e.photo_ids||[]).forEach(function(pid){
+    var usedHere = (from.issues||[]).some(function(is){ return (is.photo_ids||[]).indexOf(pid)>-1; }) || (from.equipment||[]).some(function(x){ return (x.photo_ids||[]).indexOf(pid)>-1; });
+    if (!usedHere) from.photo_ids = (from.photo_ids||[]).filter(function(x){ return x!==pid; });
+    to.photo_ids = to.photo_ids||[]; if (to.photo_ids.indexOf(pid)<0) to.photo_ids.push(pid);
+  });
+  if (isBuilding(doc) && !e.serves){ var was = areaSection(doc, from); if (unitById(doc, was) && areaSection(doc, to)!==was) e.serves = was; }   // it served the unit it sat in: keep that when it moves out
+  return true;
+}
+function moveEquipTo(toId){
+  if (!toId) return; var from = S.areaId, id = eqEdit.id, ok = false;
+  mut(function(doc){ ok = moveEquipInDoc(doc, id, from, toId); });
+  closeSheet(); render(); var to = findArea(S.rec.doc, toId); toast(ok ? 'Moved to '+(to?to.name:'the other area') : 'Could not move it — it is still here');
 }
 function toggleEquipPhoto(p){ var l = eqEdit.photo_ids = eqEdit.photo_ids||[]; var i = l.indexOf(p); if (i>-1) l.splice(i,1); else l.push(p); renderEquipSheet(); }
 function saveEquip(){
-  var e = eqEdit, any = equipKeys(e.kind).concat(['notes']).some(function(f){ return String(e[f]||'').trim(); });
-  if (!any){ toast('Fill in at least one detail (brand, model, serial…)'); return; }
+  var e = eqEdit;
+  if (e.isNew && !equipHasInfo(e)){ toast('Add a label photo or fill in at least one detail (brand, model, serial…)'); return; }
+  if (e.not_owned) ['brand','model','serial','year','fuel','filter_size','tonnage','capacity','amperage','spaces'].forEach(function(f){ delete e[f]; });   // not the landlord's: its details are not recorded
+  if (e.serves==='') delete e.serves;
   var a = curArea(), isNew = e.isNew; delete e.isNew;
   ['name','brand','model','serial','year','notes','fuel','filter_size','tonnage','capacity','amperage','spaces'].forEach(function(f){ if (e[f]===undefined) return; e[f] = String(e[f]).trim(); if (!e[f]) delete e[f]; });
   mut(function(){ a.equipment = a.equipment||[]; if (isNew) a.equipment.push(e); else for (var i=0;i<a.equipment.length;i++) if (a.equipment[i].id===e.id) a.equipment[i]=e; });
@@ -2696,7 +2948,8 @@ function routeResumeHtml(){
   if (!S.route || (S.rec && S.route.recId && S.route.recId!==S.rec.id)) return '';
   return '<div class="banner warn" style="margin-top:10px"><b>Sorted notes are waiting for your review</b> ('+routeCount(S.route)+' item'+(routeCount(S.route)===1?'':'s')+'). Nothing has been added yet.<div class="btns"><button class="btn sm primary" onclick="S.view=\'route\';render()">Resume review</button><button class="btn sm" onclick="discardRoute()">Discard</button></div></div>';
 }
-function routeAreas(){ return S.rec.doc.areas.filter(function(a){ return !a.excluded; }).map(function(a){ return { id:a.id, name:a.name, group:a.group, issues:(a.issues||[]).map(function(i){return i.title;}) }; }); }
+function routeAreas(){ var doc = S.rec.doc; return doc.areas.filter(function(a){ return !a.excluded; }).map(function(a){ var o = { id:a.id, name:a.name, group:a.group, issues:(a.issues||[]).map(function(i){return i.title;}) }; var sc = areaSection(doc, a); if (unitById(doc, sc)) o.unit_id = sc; return o; }); }
+function routeUnits(){ return layoutUnits(S.rec.doc).map(function(u){ return { id:u.id, label:u.label, alias:u.alias||'' }; }); }
 function chunkText(t){
   var out = [], cur = '', parts = String(t).split(/\n\s*\n/);
   parts.forEach(function(p){ while (p.length > 24000){ if (cur){ out.push(cur); cur=''; } out.push(p.slice(0,24000)); p = p.slice(24000); } if (cur.length + p.length + 2 > 24000){ out.push(cur); cur=''; } cur += (cur?'\n\n':'') + p; });
@@ -2723,7 +2976,8 @@ function runChunks(list, done, total){
       S.routeBusy = 'Sorting '+(done+1)+' of '+total+': '+ch.label+'…'; if (S.view==='voice') safeRender();
       var doc = S.rec.doc, r = S.route;
       var proposed = r.issues.map(function(i){return i.title;});
-      return api('POST','/fi/route',{ address:doc.property.address, pre1978:!!doc.pre1978, inspection_type:doc.type, areas:routeAreas(), notes:[{ id:ch.noteId, label:ch.label, text:ch.text }], proposed:proposed }).then(function(res){
+      return api('POST','/fi/route',{ address:doc.property.address, pre1978:!!doc.pre1978, inspection_type:doc.type, areas:routeAreas(), notes:[{ id:ch.noteId, label:ch.label, text:ch.text }], proposed:proposed, units:routeUnits(), last_unit:r.lastUnit||'' }).then(function(res){
+        if (res.last_unit) r.lastUnit = res.last_unit;   // the next recording starts from the unit named last in this one
         res.issues.forEach(function(i){ i.keep = true; r.issues.push(i); });
         res.equipment.forEach(function(e){ e.keep = true; r.equipment.push(e); });
         res.conditions.forEach(function(c){ var a = findArea(doc, c.area_id); c.keep = !!a && (!a.condition || a.condition==='not_inspected'); r.conditions.push(c); });
@@ -2747,6 +3001,8 @@ function viewRoute(){
   h += '<div class="muted">Nothing is added until you tap “Add selected”. Each item shows the words it came from. If something landed in the wrong area, change the area before adding.</div>';
   r.errors.forEach(function(e){ h += '<div class="banner err" style="margin-top:10px"><b>“'+esc(e.chunk.label)+'” could not be sorted.</b> '+esc(e.msg)+'</div>'; });
   if (r.errors.length) h += '<div class="btns"><button class="btn" onclick="retryRouteErrors()"'+(S.routeBusy?' disabled':'')+'>'+(S.routeBusy?'Working…':'Try the failed part(s) again')+'</button></div>';
+  var assumedN = r.issues.filter(function(x){ return x.unit_assumed; }).length + r.equipment.filter(function(x){ return x.unit_assumed; }).length;
+  if (assumedN) h += '<div class="banner warn" style="margin-top:10px"><b>'+assumedN+' item'+(assumedN===1?'':'s')+' did not name a unit.</b> Each was put in the unit you named last and is marked ⚠ below — check '+(assumedN===1?'it':'them')+' before adding.</div>';
   if (r.unassigned.length){
     h += '<h2>Could not tell where these belong ('+r.unassigned.length+')</h2><div class="muted">Choose an area to add the text to that area’s notes (you can then tap “Turn into issues”), or dismiss it.</div>';
     r.unassigned.forEach(function(u,i){ h += '<div class="card"><div style="white-space:pre-wrap">'+esc(u.text)+'</div><div class="muted">'+esc(u.why||'')+'</div><select id="ua-'+i+'" style="margin-top:6px"><option value="">Choose an area…</option>'+areaOpts('')+'</select><div class="btns"><button class="btn sm primary" onclick="unassignedSend('+i+')">Add to that area’s notes</button><button class="btn sm" onclick="unassignedDismiss('+i+')">Dismiss</button></div></div>'; });
@@ -2765,6 +3021,7 @@ function viewRoute(){
     idxs.forEach(function(i,k){ var it = r.issues[i];
       h += '<div class="'+(k?'rt-item':'')+'"><label class="check"><input type="checkbox" style="width:22px;height:22px" '+(it.keep?'checked':'')+' onchange="S.route.issues['+i+'].keep=this.checked"> <b>Add this issue</b></label>'
         +(it.quote?'<div class="quote">“'+esc(it.quote)+'”</div>':'')
+        +(it.unit_assumed?'<div class="banner warn" style="margin:6px 0">⚠ No unit was named for this — it was put in the unit you named last. Check the area below.</div>':'')
         +'<select onchange="routeSetArea('+i+',this.value)">'+areaOpts(it.area_id)+'</select>'
         +'<input style="margin-top:6px" value="'+esc(it.title)+'" oninput="S.route.issues['+i+'].title=this.value" placeholder="Title">'
         +'<div class="row" style="gap:6px;margin-top:6px"><select onchange="S.route.issues['+i+'].trade=this.value">'+TRADES.map(function(t){return '<option value="'+t[0]+'"'+(it.trade===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select><select onchange="S.route.issues['+i+'].severity=this.value">'+SEVS.map(function(t){return '<option value="'+t[0]+'"'+(it.severity===t[0]?' selected':'')+'>'+t[1]+'</option>';}).join('')+'</select></div>'
@@ -2779,7 +3036,10 @@ function viewRoute(){
     h += '<h2>Equipment details ('+r.equipment.length+')</h2>';
     r.equipment.forEach(function(e,i){
       h += '<div class="card"><label class="check"><input type="checkbox" style="width:22px;height:22px" '+(e.keep?'checked':'')+' onchange="S.route.equipment['+i+'].keep=this.checked"> <b>Add '+esc((EQUIP_KINDS[e.kind]||EQUIP_KINDS.other).label)+'</b></label>'+(e.quote?'<div class="quote">“'+esc(e.quote)+'”</div>':'')
-        +'<select onchange="S.route.equipment['+i+'].area_id=this.value">'+areaOpts(e.area_id)+'</select><div class="eqgrid">'
+        +(e.unit_assumed?'<div class="banner warn" style="margin:6px 0">⚠ No unit was named for this — check where it is and what it serves.</div>':'')
+        +'<select onchange="S.route.equipment['+i+'].area_id=this.value">'+areaOpts(e.area_id)+'</select>'
+        +(isBuilding(doc)?'<label class="fld">Serves</label><select onchange="S.route.equipment['+i+'].serves=this.value"><option value=""'+(e.serves?'':' selected')+'>The unit it is in / not set</option>'+layoutUnits(doc).map(function(u){ return '<option value="'+u.id+'"'+(e.serves===u.id?' selected':'')+'>'+esc(u.label)+'</option>'; }).join('')+'<option value="'+SEC_BUILDING+'"'+(e.serves===SEC_BUILDING?' selected':'')+'>Building / common areas</option></select>':'')
+        +'<div class="eqgrid">'
         +['brand','model','serial','year'].concat((EQUIP_KINDS[e.kind]||EQUIP_KINDS.other).extra).map(function(f){ return '<div><label class="fld">'+esc(EQUIP_LABEL[f]||f)+'</label><input value="'+esc(e[f]||'')+'" oninput="S.route.equipment['+i+'].'+f+'=this.value" autocomplete="off"></div>'; }).join('')
         +'<div class="full"><label class="fld">Notes</label><input value="'+esc(e.notes||'')+'" oninput="S.route.equipment['+i+'].notes=this.value"></div></div><div class="muted">Heard from a recording — check numbers against the label.</div></div>';
     });
@@ -2816,7 +3076,12 @@ function acceptRoute(){
       if (!e.keep) return; var a = findArea(doc, e.area_id); if (!a) return;
       var o = { id:'eq_'+rid(8), kind:e.kind, photo_ids:[] }; var any = false;
       ['name','brand','model','serial','year','notes'].concat((EQUIP_KINDS[e.kind]||EQUIP_KINDS.other).extra).forEach(function(f){ var v = String(e[f]||'').trim(); if (v){ o[f] = v; if (f!=='name') any = true; } });
-      if (!any) return; (a.equipment = a.equipment||[]).push(o); eqN++;
+      if (!any) return;
+      var sv = (isBuilding(doc) && (e.serves===SEC_BUILDING || unitById(doc, e.serves))) ? e.serves : '';
+      var card = findBlankCard(doc, a, e.kind, sv);   // fill the empty pre-attached card rather than adding a second one
+      if (card){ Object.keys(o).forEach(function(f){ if (f!=='id' && f!=='photo_ids' && f!=='kind') card[f] = o[f]; }); if (sv) card.serves = sv; }
+      else { if (sv) o.serves = sv; (a.equipment = a.equipment||[]).push(o); }
+      eqN++;
     });
     r.conditions.forEach(function(c){ if (!c.keep) return; var a = findArea(doc, c.area_id); if (a){ a.condition = c.condition; condN++; } });
     (doc.voice_notes||[]).forEach(function(n){ if (r.noteIds.indexOf(n.id)>-1 && !failedNotes[n.id]){ n.routed = true; n.routed_at = now; } });

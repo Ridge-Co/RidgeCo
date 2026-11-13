@@ -44580,6 +44580,7 @@ function fiClean(v, max) { return fiContractorize(fiStr(v, max)); }
 // Report-serve scrub: only AI-written text (issues flagged ai:true, suggested fixes, and the AI summary). Text the inspector typed or dictated verbatim is left untouched.
 function fiScrubDocForReport(doc) {
   if (!doc || typeof doc !== 'object') return doc;
+  for (const a of (doc.areas || [])) if (a && Array.isArray(a.equipment)) { a.equipment = a.equipment.filter(e => fiEquipHasInfo(e)); for (const e of a.equipment) delete e.auto; }   // Nov 13 2026: an empty pre-attached card is not a finding
   for (const a of (doc.areas || [])) for (const is of (a.issues || [])) {
     if (!is) continue;
     delete is.flag_send; delete is.sent;   // 'send to the requester' flags and sent marks are for the phone only (Oct 28 2026), never on the public report
@@ -44692,6 +44693,7 @@ function fiValidateDoc(doc) {
       if (!a.name || typeof a.name !== 'string') errors.push(`areas[${i}].name missing`);
       if (a.condition && !FI_CONDITIONS.includes(a.condition)) errors.push(`areas[${i}].condition invalid`);
       fiValidateEquipment(a.equipment, `areas[${i}]`, errors);
+      if (a.section !== undefined && (typeof a.section !== 'string' || a.section.length > 64)) errors.push(`areas[${i}].section invalid`);
       fiValidateAccess(a.access, `areas[${i}]`, errors);
       if (!Array.isArray(a.issues || [])) errors.push(`areas[${i}].issues must be an array`);
       else if ((a.issues || []).length > 60) errors.push(`areas[${i}] has too many issues (max 60)`);
@@ -44715,6 +44717,7 @@ function fiValidateDoc(doc) {
   }
   fiValidateVoiceNotes(doc.voice_notes, errors);
   fiValidateVisit(doc.visit, errors);
+  fiValidateLayout(doc.layout, errors);
   if (doc.booking !== undefined && (!doc.booking || typeof doc.booking !== 'object' || Array.isArray(doc.booking))) errors.push('doc.booking must be an object');
   if (!doc.property || typeof doc.property !== 'object' || !String(doc.property.address || '').trim()) errors.push('doc.property.address required');
   if (doc.owner !== undefined && (!doc.owner || typeof doc.owner !== 'object' || Array.isArray(doc.owner) || String(doc.owner.name || '').length > 160)) errors.push('doc.owner must be an object with a name under 160 characters');
@@ -44767,6 +44770,8 @@ function fiPublishChecks(doc, serverPhotoIds) {
   for (const a of active) if (noAcc(a) && a.access.reason === 'other' && !String(a.access.note || '').trim()) blocks.push({ code: 'access_reason_missing', message: `Say why "${a.name}" was not accessed (you chose “Other”)`, area: a.name });
   const skipped = active.filter(a => !noAcc(a) && (!a.condition || a.condition === 'not_inspected')).map(a => a.name);
   if (skipped.length) warnings.push({ code: 'areas_not_inspected', message: `Not marked inspected: ${skipped.slice(0, 12).join(', ')}`, areas: skipped });
+  const blankEq = fiBlankEquipment(doc);   // Nov 13 2026: pre-attached cards nobody filled in. Warning only; they are left off the report.
+  if (blankEq.length) warnings.push({ code: 'equipment_blank', message: `${blankEq.length} equipment card${blankEq.length === 1 ? ' has' : 's have'} no details and will be left off the report: ${blankEq.slice(0, 12).map(x => x.area + ' (' + x.label + ')').join(', ')}`, items: blankEq.slice(0, 40) });
   const sm = doc.summary;
   if (sm && sm.fp && sm.fp !== fiFingerprint(doc)) warnings.push({ code: 'summary_stale', message: 'The AI summary is out of date and will be left out of the report' });
   return { blocks, warnings };
@@ -45532,6 +45537,34 @@ function fiNormalizeEquipment(raw) {
   }
   return any ? out : null;
 }
+// Nov 13 2026 (multi-unit buildings + pre-attached equipment cards).
+// A card "has something to report" when any detail is filled in, a label photo is attached, or it is marked not owned by the landlord. A label alone ("Upstairs unit") is not a detail.
+function fiEquipHasInfo(e) {
+  if (!e || typeof e !== 'object') return false;
+  if (e.not_owned === true) return true;
+  if (Array.isArray(e.photo_ids) && e.photo_ids.length) return true;
+  return fiEquipFields(e.kind).some(f => f !== 'name' && String(e[f] || '').trim());
+}
+function fiBlankEquipment(doc) {
+  const out = [];
+  for (const a of ((doc && doc.areas) || [])) { if (!a || a.excluded || (a.access && a.access.no_access)) continue; for (const e of (a.equipment || [])) if (e && !fiEquipHasInfo(e)) out.push({ area: a.name, kind: e.kind, label: (FI_EQUIP_KINDS[e.kind] || FI_EQUIP_KINDS.other).label }); }
+  return out;
+}
+const FI_SECTION_FIXED = ['building', 'common'];
+// doc.layout is only present on a multi-unit building inspection: {kind:'building', units:[{id,label,alias}]}. Absent = one home, exactly as before.
+function fiValidateLayout(l, errors) {
+  if (l === undefined) return;
+  if (!l || typeof l !== 'object' || Array.isArray(l) || l.kind !== 'building' || !Array.isArray(l.units)) { errors.push('doc.layout must be {kind:"building", units:[...]}'); return; }
+  if (!l.units.length || l.units.length > 40) { errors.push('doc.layout.units must list 1 to 40 units'); return; }
+  const seen = new Set();
+  l.units.forEach((u, i) => {
+    if (!u || typeof u !== 'object' || Array.isArray(u)) { errors.push(`doc.layout.units[${i}] invalid`); return; }
+    if (typeof u.id !== 'string' || !FI_ID_RE.test(u.id) || FI_SECTION_FIXED.includes(u.id)) errors.push(`doc.layout.units[${i}].id invalid`);
+    else { if (seen.has(u.id)) errors.push(`duplicate unit id ${u.id}`); seen.add(u.id); }
+    if (typeof u.label !== 'string' || !u.label.trim() || u.label.length > 40) errors.push(`doc.layout.units[${i}].label must be 1 to 40 characters`);
+    if (u.alias !== undefined && (typeof u.alias !== 'string' || u.alias.length > 120)) errors.push(`doc.layout.units[${i}].alias must be text up to 120 characters`);
+  });
+}
 function fiValidateEquipment(list, where, errors) {
   if (list === undefined) return;
   if (!Array.isArray(list)) { errors.push(`${where}.equipment must be an array`); return; }
@@ -45541,10 +45574,12 @@ function fiValidateEquipment(list, where, errors) {
     if (!e || typeof e !== 'object' || Array.isArray(e)) { errors.push(`${w} invalid`); return; }
     if (!e.id || typeof e.id !== 'string') errors.push(`${w}.id missing`);
     if (!FI_EQUIP_KINDS[e.kind]) { errors.push(`${w}.kind invalid`); return; }
-    const allowed = new Set(['id', 'kind', 'photo_ids'].concat(fiEquipFields(e.kind)));
+    const allowed = new Set(['id', 'kind', 'photo_ids', 'serves', 'not_owned', 'auto'].concat(fiEquipFields(e.kind)));   // Nov 13 2026: serves = 'building' or a unit id of doc.layout; not_owned = not the landlord's (details not recorded); auto = card the app pre-attached
     for (const k of Object.keys(e)) {
       if (!allowed.has(k)) { errors.push(`${w}.${k} is not a field of ${e.kind}`); continue; }
       if (k === 'photo_ids') { if (!Array.isArray(e.photo_ids) || e.photo_ids.length > 12 || e.photo_ids.some(p => typeof p !== 'string')) errors.push(`${w}.photo_ids invalid`); }
+      else if (k === 'not_owned' || k === 'auto') { if (typeof e[k] !== 'boolean') errors.push(`${w}.${k} must be true or false`); }
+      else if (k === 'serves') { if (typeof e.serves !== 'string' || e.serves.length > 64) errors.push(`${w}.serves must be text up to 64 characters`); }
       else if (k !== 'id' && k !== 'kind' && (typeof e[k] !== 'string' || e[k].length > fiEquipMax(k))) errors.push(`${w}.${k} must be text up to ${fiEquipMax(k)} characters`);
     }
   });
@@ -46007,17 +46042,38 @@ Rules:
 - Wording: never write "licensed", "certified", "qualified" or "professional" before a contractor or trade, and never name a specific trade to hire (no "licensed electrician", "HVAC contractor", "plumber", "pest control"); whenever a repair needs someone, say "an appropriate contractor". Do not mention licensing.
 - Do not repeat issues already recorded or already proposed. "quote" is a short verbatim excerpt (max 200 chars) of the transcript that backs the item, and "note_id" is the id of the note it came from.
 Output a single JSON object and nothing else.`;
+// Multi-unit buildings (Nov 13 2026). Units come from the phone's doc.layout; with none, the prompt and the output are exactly what they were before.
+function fiRouteUnits(b) {
+  return (Array.isArray(b && b.units) ? b.units : []).filter(u => u && typeof u.id === 'string' && FI_ID_RE.test(u.id) && String(u.label || '').trim()).slice(0, 40)
+    .map(u => ({ id: u.id, label: fiStr(u.label, 40).trim(), alias: fiStr(u.alias, 120).trim() }));
+}
+function fiRouteUnitBlock(b, units) {
+  const last = units.find(u => u.id === fiStr(b.last_unit, 64));
+  return `\n\nTHIS IS A MULTI-UNIT BUILDING inspected in one visit. Units (use these unit ids exactly):\n${units.map(u => `- ${u.id} = ${u.label}${u.alias ? ' (the inspector may also call it: ' + u.alias + ')' : ''}`).join('\n')}
+In the area list, "(inside unit X)" marks a room inside that unit and "(shared)" marks the building exterior, roof and common areas (basement, shared hallway, shared laundry), which belong to no unit.
+Unit rules:
+- The inspector names a unit by its label or by its other names (for example an apartment number one moment and "first floor apartment" the next). Treat every name listed for a unit as that same unit.
+- A finding in a room that exists in more than one unit (bedroom, bathroom, kitchen, living room) goes to that room INSIDE THE UNIT THE INSPECTOR IS TALKING ABOUT.
+- If the inspector does not say which unit, assume the unit he named most recently (earlier in these notes; if none yet in these notes, the unit named before these notes) and set "unit_assumed": true on that item so a person checks it. If no unit has been named at all, do not guess: put the text in "unassigned".
+- Never set "unit_assumed" on an item placed in a shared area.
+- Equipment: "serves" is the unit id of the unit that equipment serves when the inspector says so ("the furnace for apartment 2"), "building" when he says it serves the whole building, the common areas or the laundry, otherwise empty. Equipment inside a unit serves that unit. Where it sits and what it serves are separate: a furnace in the basement that serves a unit is placed in the basement area with "serves" set to that unit.
+- "last_unit": the unit id of the unit the inspector named LAST in these notes (or the unit named before these notes if he named none here; empty if none at all).
+Unit named before these notes: ${last ? last.id + ' = ' + last.label : '(none yet)'}`;
+}
 function fiBuildRoutePrompt(b, catalog) {
-  const areas = (b.areas || []).slice(0, 80).map(a => `- ${fiStr(a.id, 64)} = ${fiStr(a.name, 80)}${a.group ? ' [' + fiStr(a.group, 30) + ']' : ''}${(a.issues && a.issues.length) ? ' (already recorded: ' + a.issues.slice(0, 12).map(t => fiStr(t, 60)).join('; ') + ')' : ''}`).join('\n');
+  const units = fiRouteUnits(b), unitIds = new Set(units.map(u => u.id));
+  const areas = (b.areas || []).slice(0, 80).map(a => `- ${fiStr(a.id, 64)} = ${fiStr(a.name, 80)}${a.group ? ' [' + fiStr(a.group, 30) + ']' : ''}${units.length ? (unitIds.has(a.unit_id) ? ' (inside unit ' + a.unit_id + ')' : ' (shared)') : ''}${(a.issues && a.issues.length) ? ' (already recorded: ' + a.issues.slice(0, 12).map(t => fiStr(t, 60)).join('; ') + ')' : ''}`).join('\n');
   const types = catalog.slice(0, 90).map(t => t.name).join('; ');
   const notes = (b.notes || []).map(n => `=== NOTE ${fiStr(n.id, 40)}${n.label ? ' (' + fiStr(n.label, 80) + ')' : ''} ===\n${fiStr(n.text, 30000)}`).join('\n\n');
   const proposed = (b.proposed || []).slice(0, 80).map(t => `- ${fiStr(t, 80)}`).join('\n') || '(none)';
+  if (units.length) return `Property: ${fiStr(b.address, 160) || 'unknown'}${b.pre1978 ? ' - BUILT BEFORE 1978' : ''}\nInspection type: ${fiStr(b.inspection_type, 40) || 'periodic'}\n\nAreas (use these area_ids exactly):\n${areas}${fiRouteUnitBlock(b, units)}\n\nKnown issue types: ${types || '(none)'}\n\nAlready proposed from earlier notes (do not repeat):\n${proposed}\n\n${notes}\n\nReturn JSON only: {"issues":[{"area_id":"","note_id":"","quote":"","type":"","title":"","trade":"","severity":"","detail":"","likely_cause":"","recommended_fix":"","fix_source":"inspector|suggested","unit_assumed":false}],"equipment":[{"area_id":"","note_id":"","quote":"","kind":"","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","amperage":"","spaces":"","notes":"","serves":"","unit_assumed":false}],"conditions":[{"area_id":"","condition":"good|fair|poor|nothing_to_do","note_id":""}],"new_areas":[{"name":"","note_id":"","quote":""}],"unassigned":[{"note_id":"","text":"","why":""}],"last_unit":""}\nAllowed trades: ${FI_TRADES.join(', ')}. Allowed severities: ${FI_SEVERITIES.join(', ')}. Equipment kinds: ${Object.keys(FI_EQUIP_KINDS).join(', ')}.`;
   return `Property: ${fiStr(b.address, 160) || 'unknown'}${b.pre1978 ? ' - BUILT BEFORE 1978' : ''}\nInspection type: ${fiStr(b.inspection_type, 40) || 'periodic'}\n\nAreas (use these area_ids exactly):\n${areas}\n\nKnown issue types: ${types || '(none)'}\n\nAlready proposed from earlier notes (do not repeat):\n${proposed}\n\n${notes}\n\nReturn JSON only: {"issues":[{"area_id":"","note_id":"","quote":"","type":"","title":"","trade":"","severity":"","detail":"","likely_cause":"","recommended_fix":"","fix_source":"inspector|suggested"}],"equipment":[{"area_id":"","note_id":"","quote":"","kind":"","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","amperage":"","spaces":"","notes":""}],"conditions":[{"area_id":"","condition":"good|fair|poor|nothing_to_do","note_id":""}],"new_areas":[{"name":"","note_id":"","quote":""}],"unassigned":[{"note_id":"","text":"","why":""}]}\nAllowed trades: ${FI_TRADES.join(', ')}. Allowed severities: ${FI_SEVERITIES.join(', ')}. Equipment kinds: ${Object.keys(FI_EQUIP_KINDS).join(', ')}.`;
 }
 // Pure: validates/normalizes the AI routing output against the real area list. Anything that cannot be placed safely goes to "unassigned" - nothing is dropped.
-function fiNormalizeRoute(parsed, areaIds) {
+function fiNormalizeRoute(parsed, areaIds, units) {
   if (!parsed || typeof parsed !== 'object') return null;
   const ids = new Set(areaIds);
+  const unitIds = new Set((units || []).map(u => u.id)), multi = unitIds.size > 0;   // multi-unit keys are only added for a building, so a single home's output is unchanged
   const out = { issues: [], equipment: [], conditions: [], new_areas: [], unassigned: [] };
   const lost = (text, why, noteId) => { const t = fiStr(text, 400).trim(); if (t) out.unassigned.push({ note_id: fiStr(noteId, 40), text: t, why: fiStr(why, 200) }); };
   for (const r of (Array.isArray(parsed.issues) ? parsed.issues : []).slice(0, 80)) {
@@ -46026,13 +46082,14 @@ function fiNormalizeRoute(parsed, areaIds) {
     const quote = fiStr(r.quote, 200).trim(), noteId = fiStr(r.note_id, 40);
     if (!ids.has(areaId)) { lost(n.title + (n.detail ? ' - ' + n.detail : ''), 'Area not recognised - choose where it belongs', noteId); continue; }
     if (n.issue_type) n.issue_type = n.issue_type.replace(/\s*\(([a-z_]+)\)\s*$/i, (m, t) => (FI_TRADES.includes(t.toLowerCase()) ? '' : m));
-    out.issues.push(Object.assign(n, { area_id: areaId, note_id: noteId, quote }));
+    out.issues.push(Object.assign(n, { area_id: areaId, note_id: noteId, quote }, multi ? { unit_assumed: r.unit_assumed === true } : {}));
   }
   for (const r of (Array.isArray(parsed.equipment) ? parsed.equipment : []).slice(0, 30)) {
     const e = fiNormalizeEquipment(r); if (!e) continue;
     const areaId = fiStr(r && r.area_id, 64);
     if (!ids.has(areaId)) { lost('Equipment: ' + Object.keys(e).filter(k => k !== 'kind').map(k => k + ' ' + e[k]).join(', '), 'Area not recognised - choose where it belongs', r && r.note_id); continue; }
-    out.equipment.push(Object.assign(e, { area_id: areaId, note_id: fiStr(r.note_id, 40), quote: fiStr(r.quote, 200).trim() }));
+    const serves = fiStr(r.serves, 64).trim();
+    out.equipment.push(Object.assign(e, { area_id: areaId, note_id: fiStr(r.note_id, 40), quote: fiStr(r.quote, 200).trim() }, multi ? { serves: (serves === 'building' || unitIds.has(serves)) ? serves : '', unit_assumed: r.unit_assumed === true } : {}));
   }
   for (const r of (Array.isArray(parsed.conditions) ? parsed.conditions : []).slice(0, 80)) {
     const areaId = fiStr(r && r.area_id, 64), c = String(r && r.condition || '');
@@ -46042,6 +46099,7 @@ function fiNormalizeRoute(parsed, areaIds) {
     const name = fiStr(r && r.name, 60).trim(); if (name) out.new_areas.push({ name, note_id: fiStr(r.note_id, 40), quote: fiStr(r.quote, 200).trim() });
   }
   for (const r of (Array.isArray(parsed.unassigned) ? parsed.unassigned : []).slice(0, 40)) lost(r && r.text, (r && r.why) || 'Could not tell where this belongs', r && r.note_id);
+  if (multi) { const lu = fiStr(parsed.last_unit, 64).trim(); out.last_unit = unitIds.has(lu) ? lu : ''; }
   return out;
 }
 async function fiRouteNotes(env, body) {
@@ -46056,7 +46114,7 @@ async function fiRouteNotes(env, body) {
   let ai;
   try { ai = await routeAI(env, { type: 'fi_route', customerFacing: true, schema: true, system: FI_ROUTE_SYSTEM, prompt: fiBuildRoutePrompt(Object.assign({}, body, { areas, notes }), catalog), maxTokens: 8000, source: 'field-inspect' }); }
   catch (e) { if (aiCreditIsPausedError(e)) return fiErr(503, AI_CREDIT_CODE, 'Automatic sorting of notes is paused (AI credit) - your recordings and transcripts are kept; file them by hand.', { code: AI_CREDIT_CODE, paused: true }); return fiErr(502, 'ai_failed', 'The AI could not sort these notes. Your recordings and transcripts are kept - retry.', { detail: String((e && e.message) || e).slice(0, 200) }); }
-  const norm = fiNormalizeRoute(fiExtractJson(ai.result), areas.map(a => a.id));
+  const norm = fiNormalizeRoute(fiExtractJson(ai.result), areas.map(a => a.id), fiRouteUnits(body));
   if (!norm) return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Your transcripts are kept - retry.');
   return json(Object.assign({ ok: true, model_used: ai.model_used }, norm));
 }

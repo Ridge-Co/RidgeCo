@@ -1,0 +1,44 @@
+# FIELD INSPECTION: MULTI-UNIT BUILDINGS, PRE-ATTACHED EQUIPMENT, "NOT OWNED BY LANDLORD" — Nov 13, 2026 — PR into main, head `feat/fi-multi-unit-building-nov13` (cut from main tip 1e5fa58), merged: no
+
+## CURRENT
+**Ask (Brett, Nov 13, for 8 Cromarty Road, a 2-unit Premier inspection due Monday):** the layout cannot hold a multi-unit property. Separate the building exterior and common areas (hallway, stairs, basement) from each unit; tie each furnace / water heater to the unit it serves wherever it sits; trigger the layout from an inspection ordered with 2+ units. Also: water heater, furnace and electrical panel cards should already be attached (remove by hand, not add by hand); a "not owned by the landlord" checkbox on appliances (default off); voice notes must sort by unit.
+
+**Brett's decisions (Nov 13):** one report for the building with unit sections. A note that names no unit goes to the unit named last and is flagged for review. He mixes "apartment 1/2" with "first/second floor", so each unit has an "also called" name. Heating card defaults to Furnace, switchable to boiler / heat pump / other. Kitchens get range + refrigerator pre-attached; never washer, dryer or dishwasher. Every pre-attached card is removable (he may use this for non-residential). Empty cards warn, never block. "Not owned" is on every appliance, default off.
+
+**Built (worker.js FI block, field-inspect.html, inspection-report.html):**
+- `doc.layout = {kind:'building', units:[{id,label,alias}]}` only on a building inspection; each area has `section` = `building` (exterior, roof), `common`, or a unit id. No layout = one home, unchanged. A room inside a unit stores the unit in its name ("Apt 2 - Bathroom"), so the report, urgent texts, AI prompts and warnings are unambiguous without new code at each site.
+- Start screen: "Multi-unit building" switch; per-unit name, "also called", bedrooms, bathrooms; laundry (shared / in each unit / none); furnace, water heater and panel location (shared area / inside each unit). Switched on automatically by a booking with 2+ units and by "Whole building" on a multi-unit Hub property (Hub unit names used).
+- Areas screen grouped: Building exterior, Common areas, then each unit, each with a done count; a whole-unit "No access" button (reason; rooms already inspected are left alone; can be cleared). "Edit units" renames a unit (its rooms follow), sets the other name, adds a unit with its rooms. An existing one-home inspection can be converted. "Edit area" moves an area between sections. "Add an area" asks where it is.
+- Equipment: `serves` (unit id or `building`), separate from where it sits; inside a unit it serves that unit unless told otherwise. Shared Heating / Water Heater / Electrical Panel areas start with one card per unit. A card can be moved to another area (same id, label photo travels, keeps the unit it served).
+- Pre-attached cards (single-family too): Water Heater, Heating / HVAC (furnace), Electrical Panel, Kitchen (range + refrigerator). The card takes the label photo itself ("Add a photo of the label"), which was the extra step Brett described. Heating type selector on the card.
+- "Not owned by the landlord" on every equipment card, default off; when on, details are cleared and not recorded; the report lists it as not owned.
+- Empty cards: warning on the review screen and in the server publish check (`equipment_blank`), never a block; left off the public report.
+- Voice sorting (`/fi/route`): for a building the prompt lists the units with their other names, marks each area as inside a unit or shared, and applies the last-named-unit rule with `unit_assumed:true`; no unit named at all goes to "unassigned". The last unit named carries from one recording to the next. Equipment heard by voice fills the matching empty card instead of adding a second one. The review screen flags every assumed item. A single home's prompt and output are byte-for-byte what they were.
+- Report: sections Building exterior / Common areas / each unit; equipment lines say what they serve.
+
+**Tests:** `test/fi-multi-unit-building.test.mjs` 106 checks (real page, report and worker code; fixture is the Cromarty layout). Full unit suite: 248 files pass, 0 fail. Real-browser phone harness `test/manual-verify-field-inspection-ui.mjs` at 390 px: 5 new building flows pass (start, furnaces per unit, not-owned + remove, voice sorting, unit no-access + review warning + report); the harness had 9 failures on unchanged main and has the same 9 now (stale harness, not this change). Screenshots of the areas screen, equipment card and report were looked at.
+
+**NOT verified:** a real phone; a real label photo taken from the equipment card over cellular; real AI sorting of a real two-unit recording (the AI answer was mocked: the prompt and the handling of its answer are tested, the model's judgement is not); a real Premier booking with Units = 2 opening as a building.
+
+**Known gaps:** the scheduler booking still takes one bedroom/bathroom answer for all units (Brett sets per-unit counts on the start screen). Adding a unit later does not add furnace / water heater cards for it in the shared areas. Hub Units rows are not created or linked from the inspection. A unit cannot be deleted from the units sheet (exclude or delete its rooms). For a few minutes after the main merge the page can be live before the Worker: a save with the new fields is refused by the old Worker, the phone keeps its copy and says "Not saved" with Retry.
+
+**Brett's steps after merge:** none. Start 8 Cromarty Road from the booking (or pick the property and "Whole building"), set Apt 1 = 2 bed / 2 bath "first floor", Apt 2 = 3 bed / 1 bath "second floor", laundry shared. In Heating / HVAC add a third furnace for Apt 1; in Water Heater add one that serves the building (label it Laundry). Upload the recording after the inspection exists.
+
+Silent-failure check: no new catch and no new network call. Unit names are validated before the inspection is created (message shown). A save the server refuses still surfaces through the existing sync bar. An area with a missing or unknown section falls under Building or Common, never disappears. An AI item sent to an unknown area or a made-up unit is kept as "unassigned" or has its unit cleared, never dropped. Moving equipment reports "Could not move it" if the target is gone.
+
+## Pre-build gate
+Shapes: `record` `list` `doc` `photo` `ui` `endpoint`.
+- B3 move between sections: Y (areas between sections; equipment between areas, same id).
+- B4 reorder: within a section the hand-set order is kept and carries to the report; dragging an area into another section is done from "Edit area", not by drag.
+- B5 undo: Y for unit no-access (Clear); removing a pre-attached card is the existing two-tap delete.
+- B16 bulk: whole-unit no access.
+- B18 warn, don't block: Y (empty equipment cards).
+- B19 preview: existing report preview shows the sections.
+- B27 where else: the report, review screen and voice review all show units. N: the scheduler booking form and Hub Units tab (see Known gaps).
+- C9 gated class: no (no money, PII, auth, schema, customer text or write allow-list).
+- C11 safe blank: no `layout` / `section` / `serves` / `not_owned` on every existing inspection means exactly the old behaviour.
+- C12 existing data: untouched. Existing drafts do not gain cards.
+Companion actions included: edit units after create, add a unit, convert a one-home inspection, move area, move equipment, whole-unit no access with clear, label photo from the card.
+
+## FEATURE_LOG
+**[FL-20261113-fi-multi-unit-building]** Field Inspection building layout, equipment `serves` / `not_owned` / `auto`, pre-attached cards, unit-aware voice sorting. Regression rules: (1) a document with no `layout` must validate and render exactly as before, and `/fi/route` with no `units` must produce the old prompt and an output with no `unit_assumed` / `serves` / `last_unit` keys; (2) unit rooms keep the unit label as a name prefix ("<label> - <room>"); rename a unit only through `renameUnitInDoc`; (3) `fiEquipHasInfo` (worker) and `equipHasInfo` (phone) must agree: any detail, a label photo, or not_owned; a label alone is not a detail; (4) empty cards are a warning in both `localChecks` and `fiPublishChecks` and are removed only from the public copy in `fiScrubDocForReport`, never from the stored document; (5) never pre-attach washer, dryer or dishwasher; (6) the AI never decides a unit silently: assumed = flagged, unknown = unassigned; (7) `function areaRow(a, i, n){` stays as is (other tests grab it): the grouped list shortens the name after the fact. Tests: `test/fi-multi-unit-building.test.mjs`.

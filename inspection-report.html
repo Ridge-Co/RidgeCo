@@ -20,6 +20,7 @@
   .meta div span{display:block;font-size:12px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.03em}
   .card{background:#fff;border:1px solid var(--border);border-radius:12px;padding:16px;margin:14px 0}
   h2{font-size:19px;margin:22px 0 8px;color:var(--brand);border-bottom:2px solid var(--brand);padding-bottom:4px}
+  h2.sec-h{font-size:17px;margin:20px 0 6px;border-bottom:1px solid var(--brand);text-transform:uppercase;letter-spacing:.03em}
   h3{font-size:16px;margin:0 0 6px}
   .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:700;background:#eef2f7;color:#445}
   .pill.good{background:#e7f6ec;color:#14623a} .pill.fair{background:#fdf3e0;color:#7a5b12} .pill.poor{background:#fdecea;color:#8e281d}
@@ -147,8 +148,21 @@ function issueHtml(is, area, have, showArea){
 }
 var EQ_KIND = {furnace:'Furnace',boiler:'Boiler',central_ac:'Central A/C',heat_pump:'Heat pump',water_heater:'Water heater',refrigerator:'Refrigerator',range:'Range / oven',dishwasher:'Dishwasher',microwave:'Microwave',washer:'Washer',dryer:'Dryer',disposal:'Garbage disposal',electrical_panel:'Electrical panel',other:'Equipment'};
 var EQ_FIELD = [['brand','Brand'],['model','Model'],['serial','Serial'],['year','Made'],['filter_size','Filter size'],['fuel','Fuel'],['tonnage','Tonnage'],['capacity','Capacity'],['amperage','Amperage'],['spaces','Breaker spaces']];
-function equipHtml(e, area, have){
-  var bits = EQ_FIELD.filter(function(f){ return e[f[0]]; }).map(function(f){ return '<div><span class="lbl" style="display:inline;margin:0 4px 0 0">'+esc(f[1])+'</span>'+esc(e[f[0]])+'</div>'; }).join('');
+// Multi-unit buildings (Nov 13 2026): doc.layout lists the units; each area has a section ('building', 'common' or a unit id). No layout = one home, drawn exactly as before.
+function rptUnits(doc){ var l = doc && doc.layout; return (l && l.kind==='building' && Array.isArray(l.units)) ? l.units : []; }
+function rptUnit(doc, id){ var us = rptUnits(doc); for (var i=0;i<us.length;i++) if (us[i].id===id) return us[i]; return null; }
+function rptSection(doc, a){ if (!rptUnits(doc).length) return ''; var sc = a.section||''; if (sc==='building' || sc==='common' || rptUnit(doc, sc)) return sc; return a.group==='exterior' ? 'building' : 'common'; }
+function rptSectionLabel(doc, sc){ if (sc==='building') return 'Building exterior'; if (sc==='common') return 'Common areas'; var u = rptUnit(doc, sc); return u ? u.label : ''; }
+function rptGroups(doc, list){
+  if (!rptUnits(doc).length) return [{ key:'', label:'', areas:list }];
+  var by = {}; list.forEach(function(a){ var k = rptSection(doc, a); (by[k] = by[k]||[]).push(a); });
+  return ['building','common'].concat(rptUnits(doc).map(function(u){ return u.id; })).filter(function(k){ return by[k]; }).map(function(k){ return { key:k, label:rptSectionLabel(doc, k), areas:by[k] }; });
+}
+function rptShortName(doc, a){ var u = rptUnit(doc, a.section||''), pre = u ? u.label + ' - ' : ''; return (pre && String(a.name).indexOf(pre)===0) ? a.name.slice(pre.length) : a.name; }
+function rptServes(doc, a, e){ if (!rptUnits(doc).length) return ''; var sv = e.serves||''; if (sv==='building') return 'Serves the building / common areas'; var u = rptUnit(doc, sv) || rptUnit(doc, rptSection(doc, a)); return u ? 'Serves '+u.label : ''; }
+function equipHtml(e, area, have, serves){
+  if (e.not_owned) return '<div class="issue info" style="border-color:#8a94a3"><div class="t">'+esc((e.name?e.name+' · ':'')+(EQ_KIND[e.kind]||'Equipment'))+' <span class="muted">— '+esc(area)+'</span></div>'+(serves?'<div><b>'+esc(serves)+'</b></div>':'')+'<div class="muted">Not owned by the landlord. Details not recorded.</div>'+(e.notes?'<div class="muted">'+esc(e.notes)+'</div>':'')+photoGrid(e.photo_ids, have)+'</div>';
+  var bits = (serves?'<div><b>'+esc(serves)+'</b></div>':'') + EQ_FIELD.filter(function(f){ return e[f[0]]; }).map(function(f){ return '<div><span class="lbl" style="display:inline;margin:0 4px 0 0">'+esc(f[1])+'</span>'+esc(e[f[0]])+'</div>'; }).join('');
   return '<div class="issue info" style="border-color:#8a94a3"><div class="t">'+esc((e.name?e.name+' · ':'')+(EQ_KIND[e.kind]||'Equipment'))+' <span class="muted">— '+esc(area)+'</span></div>'+bits+(e.notes?'<div class="muted">'+esc(e.notes)+'</div>':'')+photoGrid(e.photo_ids, have)+'</div>';
 }
 function contactLine(b){
@@ -198,22 +212,25 @@ function draw(d){
     tenant.items.forEach(function(it){ var r = byId[it.issue_id]; if (r) h += issueHtml(r.is, r.area, have, true); });
     h += '</div>';
   }
-  var eqRows = [];
-  (doc.areas||[]).filter(function(a){ return !a.excluded; }).forEach(function(a){ (a.equipment||[]).forEach(function(e){ eqRows.push({ area:a.name, e:e }); }); });
+  var eqRows = [], shown = (doc.areas||[]).filter(function(a){ return !a.excluded; }), multi = rptUnits(doc).length > 0;
+  rptGroups(doc, shown).forEach(function(g){ g.areas.forEach(function(a){ (a.equipment||[]).forEach(function(e){ eqRows.push({ area:a.name, e:e, serves:rptServes(doc, a, e) }); }); }); });
   if (eqRows.length){
     h += '<h2>Equipment &amp; model information</h2><div class="card">';
-    eqRows.forEach(function(r){ h += equipHtml(r.e, r.area, have); });
+    eqRows.forEach(function(r){ h += equipHtml(r.e, r.area, have, r.serves); });
     h += '</div>';
   }
   h += '<h2>Area by area</h2>';
-  (doc.areas||[]).filter(function(a){ return !a.excluded; }).forEach(function(a){
+  rptGroups(doc, shown).forEach(function(g){
+   if (multi) h += '<h2 class="sec-h">'+esc(g.label)+'</h2>';
+   g.areas.forEach(function(a){
     var n = (a.issues||[]).length;
-    h += '<div class="card area"><div class="tradeline"><h3>'+esc(a.name)+'</h3>'+(noAccess(a) ? '<span class="pill not_inspected">No access</span>' : '<span class="pill '+esc(a.condition)+'">'+esc(COND_LABEL[a.condition]||'Not inspected')+'</span>')+'</div>';
+    h += '<div class="card area"><div class="tradeline"><h3>'+esc(multi ? rptShortName(doc, a) : a.name)+'</h3>'+(noAccess(a) ? '<span class="pill not_inspected">No access</span>' : '<span class="pill '+esc(a.condition)+'">'+esc(COND_LABEL[a.condition]||'Not inspected')+'</span>')+'</div>';
     if (noAccess(a)) h += '<div class="muted">'+esc(accessReasonText(a))+'</div>';
     if (a.notes) h += '<div style="white-space:pre-wrap">'+esc(a.notes)+'</div>';
     if (!n && !noAccess(a)) h += '<div class="muted">'+(a.condition==='not_inspected'?'Not inspected.':'Nothing requiring action.')+'</div>';
     (a.issues||[]).forEach(function(is){ h += issueHtml(is, a.name, have, false); });
     h += photoGrid(a.photo_ids, have) + '</div>';
+   });
   });
   var na = (doc.areas||[]).filter(function(a){ return !a.excluded && noAccess(a); });
   if (na.length) h += '<h2>Areas not accessed</h2><div class="card">'+na.map(function(a){ return '<div style="padding:4px 0"><b>'+esc(a.name)+'</b> — '+esc(accessReasonText(a))+'</div>'; }).join('')+'</div>';
