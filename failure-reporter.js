@@ -33,6 +33,9 @@
     (document.head || document.documentElement).appendChild(ps);
   } catch (e) { try { console.error('[failure-reporter] print style failed', e); } catch (x) { /* no console */ } }
   var REPORT_PAGE = /(^|\/)(inspection-report|inspection-photos)\.html$/i.test(location.pathname);
+  // Nov 12 2026 (Brett): the red "N problems" badge never shows on the customer pages (tenant, vendor, owner), even on a device that has his admin token saved
+  // (his own phone), because that is where customers' screens get shown to prospects. Failures on those pages are still REPORTED (section 1 is untouched); only the badge is skipped.
+  var CUSTOMER_PAGE = /(^|\/)(tenant|vendor|owner)(\.html)?\/?$/i.test(location.pathname);
 
   window.addEventListener('beforeunload', function () { unloading = true; });
   window.addEventListener('pagehide', function () { unloading = true; });
