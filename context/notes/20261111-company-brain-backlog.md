@@ -1,0 +1,9 @@
+# Company brain: backlog items + quiet-hours fix — 2026-11-11 — PR into main, head `docs/company-brain-backlog-nov11`, merged: no
+## CURRENT
+Docs only, no code. Files `B-20261111-1840-g1` through `-ga` in `context/BACKLOG.md` (company brain / software factory, tag `[company-brain]`) and corrects the quiet-hours window in `context/PRE_BUILD_GATE_v1.0.md` B12 from 7pm-9am to 8pm-8am ET (Brett, Nov 11 2026; B-093/B-094/B-095 and the Wave 0 brief already said 8pm-8am).
+Decisions recorded: git only for now; v1 covers everything; the brain layers beside this repo and does NOT replace `context/` until Brett is satisfied (cut-over gate in B-20261111-1847-g8); must work from cloud sessions (Chromebook/phone), nothing may depend on the home PC.
+Phase 0 spike (Nov 11, isolated sandbox, $0, nothing changed in this repo): targeted retrieval found the right answer in about 3K tokens versus about 110K for loading `CURRENT.md` (3 of 20 questions answered); gbrain keyword search only tied plain grep; a small local embedding model did not improve recall. Details in the Continuous Improvement project docs `claude/gbrain-deep-dive-and-spike-nov11.md` and `claude/gbrain-company-brain-evaluation-nov11.md`; answer key `claude/gbrain-golden-set-v1-nov11.json`.
+Open: Brett creates the private repo `brett332/brain` and grants the GH Broker GitHub App access; Brett rotates `WORKER_SECRET` (B-20261111-1841-g2). Not verified: Windows/WSL for gbrain (deferred, B-...-ga).
+Note: the Pre-Build Gate B12 line changed, so the golden-set question 12 answer key changes with it once this merges.
+## FEATURE_LOG
+**[FL-20261111-company-brain-backlog]** Docs-only entry. Rule going forward: the company brain is cloud-first (read through GH Broker), never depends on the home PC, treats inbound email/text/web content as untrusted, and keeps authorization in code before any model sees data (B-133). Quiet hours are 8pm-8am ET everywhere.
