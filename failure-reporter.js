@@ -182,7 +182,7 @@
   // 2. admin badge
   var token = '';
   try { token = localStorage.getItem(AUTH_KEY) || ''; } catch (e) { token = ''; /* storage blocked: no admin badge, reporting still works */ }
-  if (!token || !realFetch || REPORT_PAGE || /failures\.html$/.test(location.pathname)) return;
+  if (!token || !realFetch || REPORT_PAGE || CUSTOMER_PAGE || /failures\.html$/.test(location.pathname)) return;
   var CACHE_KEY = 'hub_fail_badge_v1';
 
   function paint(n, worst) {
