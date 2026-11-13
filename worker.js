@@ -10940,7 +10940,7 @@ async function assignVendor(env, body, internal) {
     for (const tenant of woTenants) {
       if (!tenant?.Phone || !isTenantNotifiable(tenant, wo)) continue;
       const vendorPhoneDisplay = formatPhoneDisplay(vendor.Phone);
-      const msg = `Hi ${tenant.First_Name}, your ${woJobLabel(wo)} has been assigned to ${vendor.Name || 'a technician'}${vendorPhoneDisplay ? ' (' + vendorPhoneDisplay + ')' : ''}. They will contact you to schedule. Ref: ${body.wo_id}.`;
+      const msg = SMS_MSG.tenantJobAssigned({ first: tenant.First_Name, label: woJobLabel(wo), vendorName: vendor.Name, vendorPhone: vendorPhoneDisplay, woId: body.wo_id });
       const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_assigned', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
       if (r.sent) tenantSMSSent = true;
     }
