@@ -8526,7 +8526,7 @@ async function createWorkOrder(env, body) {
     if ((body.type || '') === 'tenant' && owner?.Phone && property) {
       const notify = await shouldNotifyOwner(env, woLike, 'Received');
       if (notify) {
-        const msg = `Hi ${owner.First_Name}, new ${woLike.Trade || 'General'} request from your tenant at ${propUnitText(property, unit)}: ${smsShort(woLike.Description, 80) || '(no description)'}. We'll update you once it's scheduled. Ref: ${woId}.`;   // D-16: shortened, description cut to 80
+        const msg = SMS_MSG.ownerJobReceived({ first: owner.First_Name, trade: woLike.Trade, where: propUnitText(property, unit), description: woLike.Description, woId });
         const r = await smsGatedSend(env, { wo_id: woId, message_type: 'owner_job_received', recipient_type: 'owner', owner, property, message_body: msg });
         if (r.sent) await updateWOFields(env, woId, { Owner_Notified: 'TRUE' });
       }
