@@ -448,7 +448,7 @@ function api(path, opts) {
     var method = path, realPath = opts, body = arguments[2];
     path = realPath;
     opts = { method: method };
-    if (body !== undefined) {
+    if (body !== undefined && body !== null && method !== 'GET') {   // Nov 12 2026: the Tenants tab calls api('GET', path, null); a body on a GET makes the browser throw "Request with GET/HEAD method cannot have body"
       opts.headers = { 'Content-Type': 'application/json' };
       opts.body = JSON.stringify(body);
     }
