@@ -39383,6 +39383,18 @@ function formatPhoneDisplay(phone) {
 // just enough that two jobs at the same address/trade never read the same. No trade -> falls
 // back to "General" (matches the same default used elsewhere for an unset Trade).
 // Pure. Cuts pulled-in text (a tenant's description, a hold reason) to n characters with a plain "..." (first line only). D-16.
+// ── The seven demo-covered text wordings (Nov 12 2026, demo Phase 3b) ──────────────────────────────────────────────────────────────────────────
+// ONE place for the wording of the texts the demo "send me a test" button can send. The real handlers and the test button both build their text here,
+// so a test text is always the real copy and a wording change cannot drift between the two. Pure: every value arrives as a plain argument.
+const SMS_MSG = {
+  ownerJobReceived: (o) => `Hi ${o.first}, new ${o.trade || 'General'} request from your tenant at ${o.where}: ${smsShort(o.description, 80) || '(no description)'}. We'll update you once it's scheduled. Ref: ${o.woId}.`,   // D-16: shortened, description cut to 80
+  tenantJobReceived: (o) => `Hi ${o.first}, we've received your ${o.trade || 'General'} request at ${o.address} and it's pending assignment and scheduling. We'll be in touch. Ref: ${o.woId}. ${TENANT_STOP_NOTE}`,
+  tenantJobAssigned: (o) => `Hi ${o.first}, your ${o.label} has been assigned to ${o.vendorName || 'a technician'}${o.vendorPhone ? ' (' + o.vendorPhone + ')' : ''}. They will contact you to schedule. Ref: ${o.woId}.`,
+  tenantJobScheduled: (o) => o.withinHour ? `Hi ${o.first}, your technician is on the way and will arrive within 1 hour for your ${o.label} at ${o.address}. Ref: ${o.woId}.` : `Hi ${o.first}, your ${o.label} at ${o.address} is scheduled for ${o.dateStr}, ${o.window}. Ref: ${o.woId}.`,
+  tenantJobCompleted: (o) => `Hi ${o.first}, your ${o.label} at ${o.address} is complete. Thank you! Ref: ${o.woId}.`,
+  ownerJobScheduled: (o) => `Hi ${o.first}, ${o.woId} (${o.label}) at ${o.where} is scheduled for ${o.dateStr}, ${o.window}, subject to change.`,   // D-16: shortened
+  ownerJobComplete: (o) => `Hi ${o.first}, ${o.woId} (${o.label}) at ${o.address} is complete.`,
+};
 function smsShort(s, n) {
   const first = String(s == null ? '' : s).split(/\r?\n/)[0].trim();
   return first.length > n ? first.slice(0, n).trim() + '...' : first;
