@@ -1678,6 +1678,16 @@ function demoSweepReason(ownerRow, nowMs) {
   return '';
 }
 function demoTokenClaim(row) { return (row && demoTrue(row.Is_Demo)) ? { demo: String(row.Demo_Slot || '1') } : {}; }
+// Phase 2b (Nov 11 2026): demo rows (fixed IDs DO<n>/DT<n>/DP<n>A../DU<n>A.., Is_Demo=TRUE, or a work order on a demo property) never show up in the
+// admin Hub lists, the daily digest or the portal-access list. Deliberately NOT applied to the message sweeps: a queued demo message whose
+// recipient row was hidden would look like "recipient not found" and alarm Brett; the transport guard already turns those into quiet skips.
+function demoIsDemoRow(r) {
+  if (!r) return false;
+  if (demoTrue(r.Is_Demo)) return true;
+  const id = String(r.ID == null ? '' : r.ID), pid = String(r.Property_ID == null ? '' : r.Property_ID);
+  return /^D[OT]\d+$/.test(id) || /^DP\d+[A-Z]$/.test(id) || /^DU\d+[A-Z]\d+$/.test(id) || /^DP\d+[A-Z]$/.test(pid);
+}
+function demoHide(rows) { return Array.isArray(rows) ? rows.filter(r => !demoIsDemoRow(r)) : rows; }
 async function demoTelemetry(env, type, ok, notes) {
   try { await logTelemetry(env, { Source: 'worker', Job_Type: type, Skill_Or_Endpoint: 'demo', Success: ok ? 'TRUE' : 'FALSE', Notes: String(notes).slice(0, 480) }); }
   catch (e) { console.error('demo telemetry failed:', e && e.message); }
@@ -2078,7 +2088,8 @@ async function stampPinSend(env, type, id, verdict) {
 async function portalAccessList(env, url) {
   const cfg = await fetchConfig(env);
   const opt = { amberDays: parseInt(cfg.PORTAL_FOLLOWUP_AMBER_DAYS, 10) || 14, redDays: parseInt(cfg.PORTAL_FOLLOWUP_RED_DAYS, 10) || 30 };
-  const [tenants, vendors, owners, ownerUsers] = await fetchTabs(env, ['Tenants', 'Vendors', 'Owners', 'Owner_Users']);
+  const [tenants0, vendors, owners0, ownerUsers] = await fetchTabs(env, ['Tenants', 'Vendors', 'Owners', 'Owner_Users']);
+  const tenants = demoHide(tenants0), owners = demoHide(owners0);   // demo prospects are never on the follow-up list
   const now = Date.now(), people = [];
   const add = (type, r, name, extra) => people.push(Object.assign({ type, id: String(r.ID), name: name || '', has_phone: !!String(r.Phone || '').trim(), has_pin: !!String(r.PIN || '').trim() }, extra || {}, portalAccessStatus(r, now, opt)));
   const full = (r) => ((r.First_Name || '') + ' ' + (r.Last_Name || '')).trim();
@@ -2220,6 +2231,7 @@ async function tenantByPin(env, url) {
       // gate can't be bypassed by skipping the UI.
       can_submit_wo:    resolveTenantWOAccess(prop, owner, tenant.Unit_ID||''),
       token:            await makeSessionToken({ role: 'tenant', id: tenant.ID, ...demoTokenClaim(tenant) }, env.WORKER_SECRET),
+      ...(demoTrue(tenant.Is_Demo) ? { demo: true } : {}),   // the tenant page shows its DEMO banner from this
     });
   });
 }
@@ -2288,6 +2300,7 @@ async function ownerByPin(env, url) {
       owner_company: owner.Company||'', owner_phone: owner.Phone||'',
       user_name: `${owner.First_Name} ${owner.Last_Name||''}`.trim(), is_sub_user: false,
       token: await makeSessionToken({ role: 'owner', id: owner.ID, ...demoTokenClaim(owner) }, env.WORKER_SECRET),
+      ...(demoTrue(owner.Is_Demo) ? { demo: true } : {}),   // the owner page shows its DEMO banner from this
     });
   });
 }
@@ -9965,7 +9978,7 @@ async function getWorkOrdersList(env, url) {
   const filtered = voidedOnly ? rows.filter(r => r.Voided === 'TRUE')
     : includeVoided ? rows
     : rows.filter(r => r.Voided !== 'TRUE');
-  return json(filtered.filter(r => String(r.Addon_Status || '') !== 'Draft'));   // additional-work drafts are never listed
+  return json(demoHide(filtered.filter(r => String(r.Addon_Status || '') !== 'Draft')));   // additional-work drafts are never listed; demo work orders live only in their demo portals
 }
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // DUPLICATE WORK ORDER + BID GROUPS  (Oct 12 2026, Brett)
@@ -20710,13 +20723,14 @@ function activeRows(rows) { return rows.filter(r => String(r.Active||'').toUpper
 
 async function buildDigest(env) {
   const today = etTodayISO();
-  const [wos, bills, props, vendors, tenants] = await Promise.all([
+  const [wos0, bills, props0, vendors, tenants0] = await Promise.all([
     fetchTab(env,'Work_Orders').catch(()=>[]),
     fetchTab(env,'Vendor_Bills').catch(()=>[]),
     fetchTab(env,'Properties').catch(()=>[]),
     fetchTab(env,'Vendors').catch(()=>[]),
     fetchTab(env,'Tenants').catch(()=>[]),
   ]);
+  const wos = demoHide(wos0), props = demoHide(props0), tenants = demoHide(tenants0);   // demo work orders/properties never reach Brett's digest
   const open = wos.filter(w => OPEN_WO_STATUSES.includes(w.Status));
   const isUrgent = w => String(w.Priority||'').toLowerCase()==='urgent';
   const label = w => `WO-${w.ID||'?'} · ${w.Property_Address||('prop '+(w.Property_ID||'?'))}${w.Unit_Label?(' '+w.Unit_Label):''} · ${w.Status}${isUrgent(w)?' · URGENT':''}${w.Description?(' · '+String(w.Description).slice(0,55)):''}`;
@@ -28424,7 +28438,7 @@ async function fetchTabs(env, tabs, opts) {
 async function hubBootstrap(env) {
   const [properties, units, tenants, vendors, workorders, invoices, owners, keys] =
     await fetchTabs(env, ['Properties','Units','Tenants','Vendors','Work_Orders','Invoices','Owners','Keys']);
-  return json({ properties, units, tenants, vendors, workorders: workorders.filter(w => String(w.Addon_Status || '') !== 'Draft'), invoices, owners, keys });
+  return json({ properties: demoHide(properties), units: demoHide(units), tenants: demoHide(tenants), vendors, workorders: demoHide(workorders.filter(w => String(w.Addon_Status || '') !== 'Draft')), invoices, owners: demoHide(owners), keys });   // demo rows are managed on the Owners page (Demo prospects), not listed with real data
 }
 
 // GET /twilio/message-status?sid=SM...,SM...  — admin-gated diagnostic. Message_Queue's

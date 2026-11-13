@@ -521,11 +521,22 @@ function doLogin() {
     .catch(function(){ btn.disabled = false; btn.textContent = 'SIGN IN'; showLoginMsg('Connection error.','error'); });
 }
 
+// Phase 2b (Nov 11 2026): demo logins get a visible DEMO strip at the top of the page and a DEMO tag in the header, so nobody mistakes the sample data for real.
+function demoBanner(on) {
+  var old = document.getElementById('demoBanner'); if (old) old.parentNode.removeChild(old);
+  if (!on) return;
+  var b = document.createElement('div'); b.id = 'demoBanner';
+  b.style.cssText = 'background:#b45309;color:#fff;text-align:center;padding:8px 12px;font:700 13px/1.35 system-ui,-apple-system,sans-serif;letter-spacing:.04em';
+  b.textContent = 'DEMO — sample data only. Nothing here is a real property, tenant, bill or message.';
+  document.body.insertBefore(b, document.body.firstChild);
+}
 function onLoginSuccess(data, persist){
   session = data;
   if (data.token) SECRET = data.token;
   var displayName = data.user_name || data.owner_name || '';
   var displayCo = data.is_sub_user && data.owner_company ? data.owner_company : (data.owner_company || 'Owner Portal');
+  if (data.demo) displayCo = 'DEMO · ' + displayCo;
+  demoBanner(!!data.demo);
   var n=document.getElementById('ownerName'); if(n) n.textContent = displayName;
   var c=document.getElementById('ownerCompany'); if(c) c.textContent = displayCo;
   show('screenLogin', false);
@@ -539,6 +550,7 @@ function onLoginSuccess(data, persist){
 
 function doLogout() {
   session = null; ownerProps = []; allWOs = [];
+  demoBanner(false);
   SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
   document.getElementById('pinInput').value = '';
   var ni = document.getElementById('nameInput'); if(ni) ni.value = '';

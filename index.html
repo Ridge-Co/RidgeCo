@@ -692,7 +692,7 @@ window.addEventListener('pageshow', function(e){
   <div class="page" id="page-owners">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
       <div class="section-title" style="margin:0">OWNERS &amp; USERS</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn secondary" onclick="openOwnerInviteModal()" title="Create a link a new owner fills out themselves — owner, billing, properties, units and PIN land here automatically">📨 Owner Onboarding Link</button><button class="btn" onclick="openAddOwnerModal()">+ Add Owner</button></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn secondary" onclick="openOwnerInviteModal()" title="Create a link a new owner fills out themselves — owner, billing, properties, units and PIN land here automatically">📨 Owner Onboarding Link</button><button class="btn secondary" onclick="openDemoProspectsModal()" title="Give a prospective owner a demo login with sample data (nothing real is shown or sent)">🎭 Demo Prospects</button><button class="btn" onclick="openAddOwnerModal()">+ Add Owner</button></div>
     </div>
     <div id="owners-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
@@ -15713,6 +15713,26 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   </div>
 </div>
 
+<!-- DEMO PROSPECTS MODAL (Nov 11 2026, demo owner/tenant portals phase 2b). Admin only; every call is /demo/* on the Worker (admin token). -->
+<div class="modal-overlay" id="modal-demo-prospects">
+  <div class="modal" style="max-width:600px">
+    <div class="modal-header"><div class="modal-title">DEMO PROSPECTS</div><button class="modal-close" onclick="closeModal('modal-demo-prospects')">✕</button></div>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:10px">Gives a prospective owner a demo login with sample data. The same name + PIN works on the demo owner portal and the demo tenant portal. Their <b>10 days start at their first login</b>. Nothing is texted or emailed when you add them: you give them the name and PIN yourself. Demo data never shows up in your real lists, digest or reports.</p>
+    <div id="dp-slots"><div class="loading">Loading…</div></div>
+    <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+      <div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">ADD A PROSPECT</div>
+      <div class="form-grid">
+        <div class="form-group"><label>First name <span style="font-weight:normal;color:var(--muted)">(their login name)</span></label><input type="text" id="dp-name" autocomplete="off"></div>
+        <div class="form-group"><label>Cell phone <span style="font-weight:normal;color:var(--muted)">(demo texts go only here)</span></label><input type="tel" id="dp-phone" autocomplete="off"></div>
+        <div class="form-group full"><label>Email <span style="font-weight:normal;color:var(--muted)">(demo emails go only here)</span></label><input type="email" id="dp-email" autocomplete="off"></div>
+      </div>
+      <div id="dp-msg"></div>
+      <div id="dp-result"></div>
+      <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-demo-prospects')">Close</button><button class="btn" id="dp-add-btn" onclick="addDemoProspect()">Add prospect</button></div>
+    </div>
+  </div>
+</div>
+
 <!-- EDIT OWNER MODAL (Aug 20, 2026 — replaces the old "edit via the Sheet" toast; real edit like Vendor/Tenant/Property) -->
 <div class="modal-overlay" id="modal-edit-owner">
   <div class="modal" style="max-width:480px">
@@ -16086,6 +16106,82 @@ function spnSendTexts() {
 }
 
 // ── Owner onboarding links (Sep 26 2026) ─────────────────────────────────────────────
+// ── DEMO PROSPECTS (Nov 11 2026, phase 2b) ─────────────────────────────────────────────
+// Pure: one slot card. `s` is one entry of GET /demo/slots. Everything that came from the sheet goes through esc().
+function demoSlotCardHtml(s) {
+  var st = String(s.state || '');
+  var pill = { 'active':'background:#eaf6ee;color:#166534', 'waiting for first login':'background:#e8f0fb;color:#1d4ed8', 'expired':'background:#fdecea;color:#b42318', 'free':'background:#f3f5f8;color:#66707c', 'not set up':'background:#f3f5f8;color:#66707c' }[st] || 'background:#fff3e0;color:#9a3412';
+  var label = st === 'free' || st === 'not set up' ? 'open' : st;
+  function when(iso) { if (!iso) return '—'; var d = new Date(iso); return isNaN(d.getTime()) ? esc(iso) : esc(d.toLocaleString()); }
+  var head = '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px"><b style="font-size:13px">Slot ' + esc(s.slot) + '</b><span style="' + pill + ';font-size:10px;font-weight:bold;letter-spacing:.05em;padding:2px 8px;border-radius:10px;text-transform:uppercase">' + esc(label) + '</span></div>';
+  var body;
+  if (!s.prospect) {
+    body = '<div style="color:var(--muted);font-size:12px">Open. Add a prospect below to use it.</div>';
+  } else {
+    var p = s.prospect, nm = ((p.first_name || '') + ' ' + (p.last_name || '')).trim();
+    body = '<div style="font-size:12px;line-height:1.6">' +
+      '<div><b>' + esc(nm || '(no name)') + '</b> · ' + esc(p.phone) + ' · ' + esc(p.email) + '</div>' +
+      '<div>Login: first name <b>' + esc(p.first_name) + '</b> + PIN <b style="letter-spacing:.08em">' + esc(p.pin) + '</b></div>' +
+      '<div style="color:var(--muted)">Added ' + when(s.added) + ' · First login ' + (s.first_login ? when(s.first_login) : 'not yet') + ' · Ends ' + (s.expires ? when(s.expires) : '10 days after first login') + '</div>' +
+      '</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">' +
+      '<button class="btn small secondary" onclick="clearDemoSlot(' + esc(parseInt(s.slot, 10) || 0) + ')" title="Remove their name, phone, email and PIN and delete what they created. Their login stops working at once.">Clear</button>' +
+      '<button class="btn small" onclick="convertDemoSlot(' + esc(parseInt(s.slot, 10) || 0) + ')" title="Create a REAL owner and QuickBooks customer from this prospect, then clear the slot">Convert to real owner</button>' +
+      '</div>';
+  }
+  return '<div style="border:1px solid var(--border);border-radius:6px;padding:10px;margin-bottom:8px">' + head + body + '</div>';
+}
+function demoErrBox(msg) { return '<div style="background:#fdecea;border:1px solid var(--danger);color:#b42318;border-radius:6px;padding:10px;font-size:12px;margin:8px 0"><b>Needs your attention:</b> ' + esc(msg) + '</div>'; }
+function openDemoProspectsModal() {
+  ['dp-name','dp-phone','dp-email'].forEach(function(id){ document.getElementById(id).value=''; });
+  document.getElementById('dp-msg').innerHTML=''; document.getElementById('dp-result').innerHTML='';
+  openModal('modal-demo-prospects');
+  loadDemoSlots();
+}
+function loadDemoSlots() {
+  var el = document.getElementById('dp-slots');
+  api('GET','/demo/slots').then(function(res){
+    if (!res || res.error || !Array.isArray(res.slots)) { el.innerHTML = demoErrBox((res && res.error) || 'The demo slot list did not load. Close this and open it again.'); return; }
+    el.innerHTML = res.slots.map(demoSlotCardHtml).join('');
+  }).catch(function(e){ el.innerHTML = demoErrBox((e && e.message) || 'The demo slot list did not load'); });
+}
+function addDemoProspect() {
+  var btn = document.getElementById('dp-add-btn'), msg = document.getElementById('dp-msg'), out = document.getElementById('dp-result');
+  var name = document.getElementById('dp-name').value.trim(), phone = document.getElementById('dp-phone').value.trim(), email = document.getElementById('dp-email').value.trim();
+  msg.innerHTML = ''; out.innerHTML = '';
+  if (!name || !phone || !email) { msg.innerHTML = demoErrBox('First name, cell phone and email are all required. The demo texts and emails only this person.'); return; }
+  btn.disabled = true; btn.textContent = 'Adding…';
+  api('POST','/demo/add',{ name: name, phone: phone, email: email }).then(function(res){
+    btn.disabled = false; btn.textContent = 'Add prospect';
+    if (!res || res.error || !res.success) { msg.innerHTML = demoErrBox((res && res.error) || 'The prospect was not added'); toast((res && res.error) || 'The prospect was not added', 'error'); loadDemoSlots(); return; }
+    var line = 'Name: ' + res.login_name + '   PIN: ' + res.pin;
+    out.innerHTML = '<div style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:10px;margin:10px 0;font-size:12px;line-height:1.6">' +
+      '<div style="font-weight:bold;color:var(--accent2);margin-bottom:4px">Added to slot ' + esc(res.slot) + '</div>' +
+      '<div>Give them: first name <b>' + esc(res.login_name) + '</b> and PIN <b style="letter-spacing:.08em">' + esc(res.pin) + '</b></div>' +
+      '<div style="color:var(--muted)">Owner portal and tenant portal both use it. Their 10 days start at their first login. Nothing was texted or emailed.</div>' +
+      '<button class="btn small" style="margin-top:8px" onclick="copyText(' + "'" + esc(line).replace(/'/g, '') + "'" + ',\'Copied\')">Copy name + PIN</button></div>';
+    ['dp-name','dp-phone','dp-email'].forEach(function(id){ document.getElementById(id).value=''; });
+    toast('Prospect added to slot ' + res.slot, 'success');
+    loadDemoSlots();
+  }).catch(function(e){ btn.disabled = false; btn.textContent = 'Add prospect'; msg.innerHTML = demoErrBox((e && e.message) || 'The request failed'); toast((e && e.message) || 'The request failed', 'error'); });
+}
+function clearDemoSlot(n) {
+  if (!confirm('Clear demo slot ' + n + '?\n\nThis removes the prospect\'s name, phone, email and PIN, and deletes the notes and requests they created. Their login stops working immediately.')) return;
+  api('POST','/demo/reset',{ slot: n }).then(function(res){
+    if (!res || res.error || !res.success) { var m = (res && res.error) || 'The slot was not cleared'; document.getElementById('dp-msg').innerHTML = demoErrBox(m); toast(m, 'error'); loadDemoSlots(); return; }
+    document.getElementById('dp-msg').innerHTML = ''; document.getElementById('dp-result').innerHTML = '';
+    toast('Slot ' + n + ' cleared', 'success'); loadDemoSlots();
+  }).catch(function(e){ var m = (e && e.message) || 'The request failed'; document.getElementById('dp-msg').innerHTML = demoErrBox(m); toast(m, 'error'); loadDemoSlots(); });
+}
+function convertDemoSlot(n) {
+  if (!confirm('Convert the prospect in slot ' + n + ' into a REAL owner?\n\nThis creates a real owner (with its own PIN) and a QuickBooks customer from their name, phone and email, then clears the demo slot.')) return;
+  api('POST','/demo/convert',{ slot: n }).then(function(res){
+    if (!res || res.error || !res.success) { var m = (res && res.error) || 'The conversion did not finish'; document.getElementById('dp-msg').innerHTML = demoErrBox(m); toast(m, 'error'); loadDemoSlots(); return; }
+    document.getElementById('dp-msg').innerHTML = '';
+    document.getElementById('dp-result').innerHTML = '<div style="background:#eaf6ee;border:1px solid var(--accent2);border-radius:6px;padding:10px;margin:10px 0;font-size:12px;line-height:1.6"><b style="color:var(--accent2)">Converted.</b> Real owner #' + esc(res.owner_id) + ' now exists with QuickBooks customer ' + esc(res.qb_customer_id) + '. Their real PIN is <b style="letter-spacing:.08em">' + esc(res.new_pin) + '</b>. The demo slot is clear.</div>';
+    toast('Slot ' + n + ' converted to a real owner', 'success'); loadDemoSlots(); loadAll();
+  }).catch(function(e){ var m = (e && e.message) || 'The request failed'; document.getElementById('dp-msg').innerHTML = demoErrBox(m); toast(m, 'error'); loadDemoSlots(); });
+}
 function openOwnerInviteModal() {
   ['oi-name','oi-phone','oi-email','oi-note'].forEach(function(id){ document.getElementById(id).value=''; });
   document.getElementById('oi-msg').innerHTML=''; document.getElementById('oi-result').innerHTML='';
