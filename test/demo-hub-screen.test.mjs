@@ -139,7 +139,7 @@ for (const [nm, html] of [['owner', ownerHtml], ['tenant', tenantHtml]]) {
   const src = html.slice(bi, k + 1);
   const made = []; const fakeBody = { firstChild: null, insertBefore(el) { made.push(el); } };
   const fakeDoc = { body: fakeBody, getElementById: (id) => made.find(m => m.id === id && !m.gone) || null, createElement: () => ({ id: '', style: {}, textContent: '', parentNode: { removeChild(el) { el.gone = true; } } }) };
-  const fn = new Function('document', src + '\nreturn demoBanner;')(fakeDoc);
+  const fn = new Function('document', 'function demoTestPanel() {} /* the test-text panel is covered by demo-test-send.test.mjs */\n' + src + '\nreturn demoBanner;')(fakeDoc);
   fn(true); const shown = made.find(m => m.id === 'demoBanner' && !m.gone);
   t(nm + ' page: demoBanner(true) adds a visible DEMO strip', !!shown && /^DEMO/.test(shown.textContent) && /sample data/i.test(shown.textContent));
   fn(false);
