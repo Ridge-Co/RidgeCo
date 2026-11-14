@@ -28448,6 +28448,12 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
         }
         try { return await p; }
         catch (e) {
+          // Nov 13 2026: Cloudflare refuses to settle a promise in a request other than the one that created it. A joiner whose
+          // leader's request ended first gets "This promise was created by a request that has since ended" (that error is what
+          // made /config, vendor lists and the QuickBooks token read fail). Do our own read instead of failing the joiner.
+          if (/promise was created by a request that has since ended|can never settle/i.test(String((e && e.message) || ''))) {
+            return await sheetsRequest(env, method, path, body, readOpts, true);
+          }
           if (readOpts && readOpts.stale) {
             const s = __staleTab(cacheKey);
             if (s) { console.warn('[stale-serve] Sheets read failed, serving last good copy of ' + cacheKey + ': ' + ((e && e.message) || '')); return s; }
