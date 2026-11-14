@@ -30082,33 +30082,115 @@ const QB_SANDBOX_API_BASE = 'https://sandbox-quickbooks.api.intuit.com/v3/compan
 // real books. Production is unchanged. (Staging writes reach the sandbox only when QB_* creds are set.)
 function qbBase(env) { return (env && (env.__STAGING__ ?? isStaging(env))) ? QB_SANDBOX_API_BASE : QB_API_BASE; }
 
+// ── QB ACCESS TOKEN (rewritten Nov 13 2026, FL-20261113-qbtoken) ─────────────────────────────────────────────────────
+// WHY: the Hub called Intuit's refresh endpoint on EVERY qbAccessToken() call (~100 call sites) and, when the Config read
+// failed (Sheets quota / the "promise created by a request that has since ended" error), `fetchConfig` returned {} and the
+// code SILENTLY fell back to env.QB_REFRESH_TOKEN, the stale deploy-time seed that Intuit rotated away long ago. Intuit
+// answered invalid_grant and the Hub told Brett "QB refresh token expired or revoked" although the real token was fine.
+// Rules now (do not undo):
+//  1. A failed Config read is NEVER treated as "no saved token". The env seed is used only when the sheet was read fine and
+//     has no QB_REFRESH_TOKEN value.
+//  2. The access token (valid ~1h) is cached per isolate as a plain value (never a Promise: cross-request promises are what
+//     broke the Config read). One refresh per hour per isolate instead of one per call, so far fewer rotations to race.
+//  3. invalid_grant is only reported after the freshest Config token (another request may have rotated it) was tried too.
+//  4. A rotated refresh token that cannot be saved is verified by read-back, retried, kept in memory, and reported loudly.
+let __qbTok = null;       // { key, token, exp }
+let __qbRotated = null;   // { key, value, at }: newest refresh token this isolate received from Intuit
+let __qbRefreshing = 0;   // ms timestamp while a request in this isolate is refreshing (0 = nobody)
+const QB_ACCESS_MARGIN_MS = 5 * 60 * 1000;
+function qbForgetAccessToken() { __qbTok = null; }
+async function qbConfigRefreshToken(env, fresh) {
+  if (fresh) invalidateTabCache('Config');
+  const data = await sheetsRequest(env, 'GET', '/values/Config'); // throws on failure: the caller decides, never a silent {}
+  const row = ((data && data.values) || []).find(r => r && String(r[0] || '').trim() === 'QB_REFRESH_TOKEN');
+  return row ? String(row[1] || '').trim() : '';
+}
+async function qbTokenPost(env, refresh) {
+  const basic = btoa(`${env.QB_CLIENT_ID}:${env.QB_CLIENT_SECRET}`);
+  let res, text;
+  try {
+    res = await fetch(QB_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Authorization': `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+      body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refresh)}`,
+    });
+    text = await res.text();
+  } catch (e) { throw new Error('QuickBooks token not refreshed: could not reach Intuit (' + String((e && e.message) || e).slice(0, 160) + '). Try again in a minute.'); }
+  let data = {}; try { data = JSON.parse(text); } catch (e) { data = {}; /* silent-ok: a non-JSON body is reported below with its raw text */ }
+  if (res.ok && data.access_token) return { ok: true, access_token: data.access_token, refresh_token: data.refresh_token || '', expires_in: data.expires_in };
+  if (text.includes('invalid_grant')) return { invalid: true };
+  throw new Error(`QB token refresh ${res.status}: ${text.slice(0, 220)}`);
+}
+async function qbPersistRefreshToken(env, value) {
+  let lastErr = '';
+  for (let a = 0; a < 2; a++) {
+    try {
+      const r = await setConfigKey(env, { key: 'QB_REFRESH_TOKEN', value });
+      if (r && typeof r.status === 'number' && r.status >= 400) throw new Error('Config write HTTP ' + r.status);
+      if ((await qbConfigRefreshToken(env, true)) === value) return true;
+      lastErr = 'read-back did not match what was written';
+    } catch (e) { lastErr = String((e && e.message) || e).slice(0, 200); }
+  }
+  console.error('QB refresh token NOT SAVED to Config:', lastErr);
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'qb_refresh_token_not_saved', Skill_Or_Endpoint: 'qbAccessToken', Success: 'FALSE', Notes: lastErr.slice(0, 300) }); }
+  catch (e) { console.error('QB refresh token: telemetry write failed too:', String((e && e.message) || e).slice(0, 200)); }
+  await reportFailure(env, { system: 'hub', source: 'worker', where: 'qb_refresh_token_not_saved', severity: 'P1',
+    message: 'QuickBooks gave the Hub a new login token but it could not be saved to the Config sheet (' + lastErr + '). It is held in memory and will be saved on the next refresh; if this repeats, check the Config tab.' });
+  return false;
+}
+async function qbRefreshAccessToken(env, key) {
+  let cfgTok = '', cfgOk = true, cfgErr = '';
+  try { cfgTok = await qbConfigRefreshToken(env, false); }
+  catch (e) { cfgOk = false; cfgErr = String((e && e.message) || e).slice(0, 160); }
+  const mine = (__qbRotated && __qbRotated.key === key) ? __qbRotated.value : '';
+  const candidates = [];
+  if (cfgTok) candidates.push(cfgTok);
+  if (mine && mine !== cfgTok) candidates.push(mine);
+  // The env value is the deploy-time SEED. Only a successfully-read, genuinely empty Config row may fall back to it.
+  if (!cfgTok && cfgOk && env.QB_REFRESH_TOKEN) candidates.push(env.QB_REFRESH_TOKEN);
+  if (!candidates.length) {
+    if (!cfgOk) throw new Error('QuickBooks token not refreshed: the Hub could not read its saved QuickBooks login from the Config sheet (' + cfgErr + '). This is a Google Sheets hiccup, not a lost QuickBooks connection. Try again in a minute.');
+    throw new Error('QB refresh token missing (set QB_REFRESH_TOKEN env or Config)');
+  }
+  const tried = new Set(); let recheckErr = '';
+  for (let i = 0; i < candidates.length; i++) {
+    const cand = candidates[i]; tried.add(cand);
+    const r = await qbTokenPost(env, cand);
+    if (r.ok) {
+      const ttl = Math.max(120, Number(r.expires_in) || 3600) * 1000;
+      __qbTok = { key, token: r.access_token, exp: Date.now() + ttl - QB_ACCESS_MARGIN_MS };
+      if (r.refresh_token) {
+        __qbRotated = { key, value: r.refresh_token, at: Date.now() };
+        if (r.refresh_token !== cand) await qbPersistRefreshToken(env, r.refresh_token);
+      }
+      return r.access_token;
+    }
+    if (i === candidates.length - 1) {
+      // Every token we hold was refused. Another request may have rotated it after we read Config: look once more, fresh.
+      try { const again = await qbConfigRefreshToken(env, true); if (again && !tried.has(again)) candidates.push(again); }
+      catch (e) { recheckErr = String((e && e.message) || e).slice(0, 160); }
+    }
+  }
+  if (recheckErr) throw new Error('QuickBooks token not refreshed: Intuit refused the saved login and the Hub could not re-check the Config sheet (' + recheckErr + '). Try again in a minute; if it keeps happening, reconnect QuickBooks.');
+  throw new Error('QB refresh token expired or revoked — reconnect QuickBooks (re-auth needed).');
+}
 async function qbAccessToken(env) {
   if (!env.QB_CLIENT_ID || !env.QB_CLIENT_SECRET || !env.QB_REALM_ID)
     throw new Error('QB env vars missing (need QB_CLIENT_ID, QB_CLIENT_SECRET, QB_REALM_ID)');
-  // Intuit rotates the refresh token. Prefer the rotated value persisted in the Config
-  // tab; fall back to the env seed. After a successful refresh, persist the new token.
-  let cfg = {}; try { cfg = await fetchConfig(env); } catch (e) {}
-  const refresh = (cfg.QB_REFRESH_TOKEN && cfg.QB_REFRESH_TOKEN.trim()) || env.QB_REFRESH_TOKEN;
-  if (!refresh) throw new Error('QB refresh token missing (set QB_REFRESH_TOKEN env or Config)');
-  const basic = btoa(`${env.QB_CLIENT_ID}:${env.QB_CLIENT_SECRET}`);
-  const res = await fetch(QB_TOKEN_URL, {
-    method: 'POST',
-    headers: { 'Authorization': `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
-    body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(refresh)}`,
-  });
-  const text = await res.text();
-  let data = {}; try { data = JSON.parse(text); } catch (e) {}
-  if (!res.ok || !data.access_token) {
-    if (text.includes('invalid_grant'))
-      throw new Error('QB refresh token expired or revoked — reconnect QuickBooks (re-auth needed).');
-    throw new Error(`QB token refresh ${res.status}: ${text.slice(0, 220)}`);
+  const key = env.QB_REALM_ID + '|' + env.QB_CLIENT_ID + '|' + qbBase(env);
+  if (__qbTok && __qbTok.key === key && __qbTok.exp > Date.now()) return __qbTok.token;
+  // Someone in this isolate is already refreshing: wait for the token to appear (poll a plain variable; sharing a Promise
+  // between requests is exactly what Cloudflare refuses). Two refreshes at once would race on Intuit's rotation.
+  if (__qbRefreshing && Date.now() - __qbRefreshing < 15000) {
+    for (let i = 0; i < 80 && __qbRefreshing; i++) {
+      await new Promise(r => setTimeout(r, 150));
+      if (__qbTok && __qbTok.key === key && __qbTok.exp > Date.now()) return __qbTok.token;
+    }
+    if (__qbTok && __qbTok.key === key && __qbTok.exp > Date.now()) return __qbTok.token;
   }
-  // Persist the rotated refresh token so the next call uses the fresh one (fixes the
-  // old discard-on-every-call bug that would eventually break auth after rotation).
-  if (data.refresh_token && data.refresh_token !== refresh) {
-    try { await setConfigKey(env, { key: 'QB_REFRESH_TOKEN', value: data.refresh_token }); } catch (e) {}
-  }
-  return data.access_token;
+  __qbRefreshing = Date.now();
+  try { return await qbRefreshAccessToken(env, key); }
+  finally { __qbRefreshing = 0; }
 }
 
 async function qbApi(env, path, method = 'GET', body = null, token = null) {
