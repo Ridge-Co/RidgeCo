@@ -30123,10 +30123,17 @@ async function qbApi(env, path, method = 'GET', body = null, token = null) {
     console.log(`🧪 STAGING — QuickBooks ${method} ${path} stubbed (nothing sent to Intuit)`);
     return { staged: true, would_have: { method, path, body: body || null }, note: '🧪 STAGING MODE — QuickBooks call stubbed, nothing booked.' };
   }
+  const tokenWasPassed = !!token;
   if (!token) token = await qbAccessToken(env);
   const opts = { method, headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } };
   if (body) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-  const res = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/${path}`, opts);
+  let res = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/${path}`, opts);
+  if (res.status === 401) {
+    // The cached access token was refused (revoked or expired early): drop it so the next call refreshes. If we fetched the
+    // token ourselves, retry ONCE with a fresh one. A 401 is "not authorised", so the request was not applied.
+    qbForgetAccessToken();
+    if (!tokenWasPassed) { opts.headers['Authorization'] = `Bearer ${await qbAccessToken(env)}`; res = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/${path}`, opts); }
+  }
   return await res.json();
 }
 
