@@ -22886,9 +22886,449 @@ async function opsQueueSync(env, body, opts) {
         await updateQueueRowOrThrow(env, r.ID, fields);
         changed.push({ id: r.ID, pr: n, build_state: fields.Build_State || r.Build_State, status: fields.Status || r.Status });
       }
-    } catch (e) { errors.push({ id: r.ID, error: String((e && e.message) || e) }); }
+    } catch (e) {
+      const _msg = String((e && e.message) || e);
+      // Tick mode (scheduler job queue_sync): GitHub rate-limiting the Hub's shared address is expected and is simply retried on the next
+      // tick, so it is returned as rate_limited instead of failing the job every 15 minutes. The daily run (hub_impr_daily) stays strict.
+      if (opts && opts.tick && /HTTP (403|429)/.test(_msg)) rateLimited.push({ id: r.ID, error: _msg }); else errors.push({ id: r.ID, error: _msg });
+    }
   }
-  return json({ ok: errors.length === 0, checked: inflight.length, changed, errors });
+  return json({ ok: errors.length === 0, checked: inflight.length, changed, errors, remaining: _more, stuck, deploy_missing: deployMissing, rate_limited: rateLimited });
+}
+
+// ══ QUEUE v2 (Nov 16 2026) ═══════════════════════════════════════════════════════════════════════════════════════
+// WHY: approved rows never moved. Nothing picked them up, build sessions could not report back (POST /ops-queue-update is
+// admin-only, so the broker got 401 and rows stayed "building" after their PR merged), and a GATED row had no build path.
+// WHAT: one lifecycle column (Stage) beside the old Status / Build_State pair, a narrow report-back route (POST /ops-queue-stage),
+// a sync that also runs on every scheduler tick, a deploy check after a merge, and a risk guard a build session calls before merging.
+// RULES: Status and Build_State are ALWAYS written in step with Stage, so every older reader keeps working. A stored Stage only
+// counts while Status / Build_State still agree with it; if an older writer moved the row since, the stage is worked out from those
+// two columns again. That is also how rows from before this build get a stage: on read, nothing is back-filled.
+// Every function marked PURE has no env and no I/O and is pinned by test/queue-v2.test.mjs.
+const QUEUE_STAGES = ['review', 'approved', 'queued', 'building', 'pr_open', 'merged', 'live', 'done', 'blocked', 'snoozed', 'dropped'];
+const QUEUE_SHIPPED_STAGES = ['merged', 'live', 'done'];
+// Which worked-out (legacy) stages a stored Stage may sit on top of.
+const QUEUE_STAGE_FAMILY = { review: ['review'], snoozed: ['snoozed'], approved: ['approved'], queued: ['approved'], building: ['building'], pr_open: ['pr_open'], merged: ['live', 'done'], live: ['live', 'done'], done: ['live', 'done'], blocked: ['blocked'], dropped: ['dropped'] };
+const QUEUE_STUCK_MS = { building: 24 * 3600000, pr_open: 72 * 3600000 };
+const QUEUE_DEPLOY_GRACE_MS = 30 * 60000;
+const QUEUE_DEPLOY_MARK = 'deploy-missing reported';
+const QUEUE_STAGE_LOG_MAX = 6000;
+const QUEUE_BULK_MAX = 40;
+const QUEUE_STAGE_FIELDS = ['id', 'stage', 'pr_number', 'blocked_reason', 'blocked_on', 'risk_class', 'pinned', 'note'];
+const QUEUE_STAGE_ADMIN_FIELDS = ['snooze_days', 'reason'];          // Brett only: snooze needs days, drop needs a reason
+const QUEUE_BLOCKED_ON = ['brett', 'build', 'external'];
+// A token (build session) may only move rows that Brett already approved, and never into review / snoozed / dropped: those are his calls.
+const QUEUE_TOKEN_FROM = ['approved', 'queued', 'building', 'pr_open', 'merged', 'live', 'blocked'];
+const QUEUE_TOKEN_TO = ['approved', 'queued', 'building', 'pr_open', 'merged', 'live', 'done', 'blocked'];
+
+// PURE — the stage implied by the old Status / Build_State columns alone.
+function queueLegacyStage(row, nowMs) {
+  const st = String((row && row.Status) || '').toLowerCase(), bs = String((row && row.Build_State) || '');
+  if (st === 'dropped' || bs === 'abandoned') return 'dropped';
+  if (bs === 'pr_closed' || st === 'held' || bs === 'held') return 'blocked';
+  if (st === 'greenlit' || st === 'prepared') return 'approved';
+  if (st === 'building') return bs === 'pr_open' ? 'pr_open' : 'building';
+  if (st === 'done') return bs === 'pr_open' ? 'pr_open' : (bs === 'building' ? 'building' : (bs === 'live' ? 'live' : 'done'));
+  return isSnoozed(row, nowMs) ? 'snoozed' : 'review';
+}
+
+// PURE — the row's stage. The Stage cell wins while Status / Build_State still agree with it; otherwise (blank, unknown, or an
+// older writer moved the row since) it is worked out from those two columns.
+function queueStageOf(row, nowMs) {
+  const legacy = queueLegacyStage(row, nowMs);
+  const s = String((row && row.Stage) || '').trim().toLowerCase();
+  if (!s || !QUEUE_STAGE_FAMILY[s]) return legacy;
+  return QUEUE_STAGE_FAMILY[s].includes(legacy) ? s : legacy;
+}
+
+// PURE — { stage, stuck, hours }. Stuck = building for over 24h, or PR open for over 72h.
+function queueStuckInfo(row, nowMs) {
+  const stage = queueStageOf(row, nowMs);
+  const since = [row && row.Stage_Updated, row && row.Build_Updated, row && row.Timestamp].map(x => Date.parse(String(x || ''))).find(t => Number.isFinite(t));
+  const hours = Number.isFinite(since) ? Math.floor((nowMs - since) / 3600000) : null;
+  const limit = QUEUE_STUCK_MS[stage];
+  return { stage, stuck: !!limit && Number.isFinite(since) && (nowMs - since) > limit, hours };
+}
+
+// PURE — append one line to Stage_Log, dropping the oldest lines once the cell would pass QUEUE_STAGE_LOG_MAX.
+function queueLogAppend(prev, line) {
+  const p = String(prev || '').trim();
+  let out = (p ? p + '\n' : '') + String(line || '').replace(/[\r\n]+/g, ' ');
+  while (out.length > QUEUE_STAGE_LOG_MAX && out.indexOf('\n') !== -1) out = out.slice(out.indexOf('\n') + 1);
+  return out.slice(-QUEUE_STAGE_LOG_MAX);
+}
+
+// ── Risk guard ────────────────────────────────────────────────────────────────────────────────────────────────────
+// AUTONOMY_GUARDRAILS: money, sign-in, texting and contact details are never built unattended. `path` is tested against each
+// changed file name, `diff` against the CHANGED lines only (+ / -), `text` against a row's title and problem wording.
+const QUEUE_RISK_RULES = [
+  { key: 'quickbooks', why: 'touches QuickBooks calls',
+    path: /(^|[\/_.-])(qb|quickbooks)([\/_.-]|$)/i, diff: /quickbooks|intuit|\bqb\w*\(|\bqb_\w+|\/qb\//i, text: /\b(quickbooks|qb|qbo)\b/i },
+  { key: 'money', why: 'touches invoice or payment math',
+    path: /invoice|payment|ar-report|vendor-reconcile|receipt|signed-proposals|milestone/i,
+    diff: /invoice|payment|deposit|refund|vendor_?bill|markup|milestone|money2\(|subtotal|instant_?fee|credit_(customer|vendor)|\bamount/i,
+    text: /\b(invoic\w*|payments?|pay|paid|deposits?|refunds?|bills?|billing|charges?|markup|pric(?:e|es|ing)|money|fees?)\b/i },
+  { key: 'auth', why: 'touches sign-in, PIN, session or token code',
+    path: /(^|\/)(test-login\.js|wrangler\.toml)$|\.github\/workflows\/|login|auth/i,
+    diff: /worker_secret|verifysessiontoken|ispathallowedforrole|role_scopes|public_paths|_token\b|x-auth-token|\bpin\b|pinlookup|pin_lockout|\bsession|_write_paths|hubtestwriteallowed|schedauthcheck|\bsecret\b|\bpassword/i,
+    text: /\b(pins?|log-?ins?|sign-?ins?|passwords?|tokens?|secrets?|auth\w*|sessions?|permissions?|roles?|access codes?)\b/i },
+  { key: 'sms', why: 'touches a path that sends texts or email',
+    path: /sms|twilio|message-queue/i, diff: /sendsms|smsgatedsend|sendsmsraw|twilio|message_queue|str_outbox|notification_queue|gmailsendemail/i,
+    text: /\b(sms|texts?|texting|twilio|emails?|notif\w*)\b/i },
+  { key: 'contacts', why: 'touches tenant, owner or vendor contact details',
+    path: /tenant-roster|contact|importer/i,
+    diff: /normalizephone|\b(tenants?|owners?|vendors?)_?(phone|email|contact)|['"`](phone|email|mobile|cell)['"`]|\.(phone|email)\b|vendor_contact_history|augment_allowed_fields/i,
+    text: /\b(phones?|phone numbers?|contact\w*)\b/i },
+];
+
+// PURE — classify a PR by its changed file paths and changed lines. Anything a rule hits is FORCED to GATED with the reason stated;
+// a SAFE label never overrides that. Fail-closed: nothing to read, or a code file whose diff GitHub left out, is GATED too.
+// input: { files: ['a.js', …] or [{ filename, patch, patch_missing }], diff: 'unified diff text', label: 'SAFE' | 'GATED' }
+function queueRiskGuard(input) {
+  const inp = input || {}, reasons = [], seen = new Set();
+  const add = (rule, where) => { if (!seen.has(rule.key)) { seen.add(rule.key); reasons.push({ rule: rule.key, why: rule.why, where }); } };
+  const changedLines = (t) => {
+    const all = String(t || '').split('\n'), ch = all.filter(l => /^[+-]/.test(l) && !/^(\+\+\+|---)/.test(l));
+    return (ch.length ? ch : all).join('\n');             // text that is not a diff at all is read whole (never skipped)
+  };
+  const files = (Array.isArray(inp.files) ? inp.files : []).map(f => (typeof f === 'string' ? { filename: f } : (f || {})));
+  for (const f of files) {
+    const name = String(f.filename || f.path || '');
+    for (const rule of QUEUE_RISK_RULES) {
+      if (rule.path.test(name)) add(rule, 'file ' + name);
+      else if (f.patch && rule.diff.test(changedLines(f.patch))) add(rule, 'changed lines in ' + name);
+    }
+  }
+  if (String(inp.diff || '').trim()) { const cl = changedLines(inp.diff); for (const rule of QUEUE_RISK_RULES) if (rule.diff.test(cl)) add(rule, 'changed lines'); }
+  const unread = files.filter(f => f.patch_missing).map(f => String(f.filename || ''));
+  if (unread.length) reasons.push({ rule: 'unreadable', why: 'the change to ' + unread.slice(0, 3).join(', ') + ' is too large to read, so it cannot be cleared', where: 'GitHub left the diff out' });
+  if (inp.truncated) reasons.push({ rule: 'truncated', why: 'the PR changes more files than could be read, so it cannot be cleared', where: 'file list cut off' });
+  if (!files.length && !String(inp.diff || '').trim()) reasons.push({ rule: 'empty', why: 'no changed files or diff were given, so nothing could be cleared', where: 'input' });
+  const label = String(inp.label || '').toUpperCase() === 'SAFE' ? 'SAFE' : 'GATED';
+  const forced = reasons.length > 0;
+  return { risk: (forced || label !== 'SAFE') ? 'GATED' : 'SAFE', forced, label, reasons, reason: reasons.map(x => x.why + ' (' + x.where + ')').join('; ') };
+}
+
+// PURE — the same rules against plain wording (a row's title / problem / first step). Used by "Decide for me".
+function queueRiskGuardText(text) {
+  const t = String(text || ''), reasons = [];
+  for (const rule of QUEUE_RISK_RULES) { const m = rule.text.exec(t); if (m) reasons.push({ rule: rule.key, why: rule.why, match: m[0] }); }
+  return { hit: reasons.length > 0, reasons, reason: reasons.length ? 'it mentions ' + reasons.map(x => '"' + x.match + '"').join(', ') : '' };
+}
+function queueRowText(item) {
+  const it = item || {};
+  return [it.Title != null ? it.Title : it.title, it.Problem != null ? it.Problem : it.problem, it.First_Step != null ? it.First_Step : (it.action || it.first_step)].map(x => String(x == null ? '' : x)).join(' ');
+}
+
+// PURE — turn a label into the stored Risk_Class. SAFE stays SAFE, AUTO ("Decide for me") is SAFE unless the wording matches the
+// guard, anything else (blank, misspelt, GATED) is GATED: the fail-closed rule this queue has always had.
+function queueResolveRisk(label, item) {
+  const l = String(label || '').toUpperCase();
+  if (l === 'SAFE') return { risk: 'SAFE', reason: '' };
+  if (l !== 'AUTO') return { risk: 'GATED', reason: '' };
+  const g = queueRiskGuardText(queueRowText(item));
+  return g.hit ? { risk: 'GATED', reason: g.reason } : { risk: 'SAFE', reason: 'nothing in the title or problem looks like money, sign-in, texting or contact details' };
+}
+
+// PURE — decide what one POST /ops-queue-stage request does to one row. Returns { ok:true, from, to, risk, fields, warnings, log }
+// (fields = the exact cells to write), { ok:true, noop:true } when nothing would change, or { ok:false, status, error }.
+// ctx: { admin, actor, nowMs, prMerged (true | false | null = GitHub could not be read | undefined = not checked yet), prMergedAt, prCheckError }
+function queueStagePlan(row, req, ctx) {
+  const c = ctx || {}, r = req || {};
+  const nowMs = c.nowMs || Date.now(), nowIso = new Date(nowMs).toISOString(), actor = String(c.actor || 'unknown');
+  const bad = (status, error, extra) => Object.assign({ ok: false, status, error }, extra || {});
+  const allowed = QUEUE_STAGE_FIELDS.concat(c.admin ? QUEUE_STAGE_ADMIN_FIELDS : []);
+  const unknown = Object.keys(r).filter(k => !allowed.includes(k));
+  if (unknown.length) return bad(400, 'unknown field(s): ' + unknown.join(', ') + '. Allowed: ' + allowed.join(', '));
+  if (!row) return bad(404, 'not_found: no queue row with that id');
+  const from = queueStageOf(row, nowMs);
+  const fields = {}, notes = [], warnings = [];
+  const wasSafe = String(row.Risk_Class || '').toUpperCase() === 'SAFE';
+  let risk = wasSafe ? 'SAFE' : 'GATED', riskReason = '';
+  let pr = cleanPrNumber(row.PR_Number);
+  if (r.note !== undefined && typeof r.note !== 'string') return bad(400, 'note must be text');
+  if (r.pr_number !== undefined) {
+    const p = cleanPrNumber(r.pr_number);
+    if (!p) return bad(400, 'pr_number must be a positive integer');
+    if (p !== pr) { fields.PR_Number = p; notes.push('PR #' + p); }
+    pr = p;
+  }
+  if (r.risk_class !== undefined) {
+    const l = String(r.risk_class || '').toUpperCase();
+    if (!['SAFE', 'GATED', 'AUTO'].includes(l)) return bad(400, 'risk_class must be SAFE, GATED or AUTO');
+    if (l !== 'GATED' && !c.admin) return bad(403, 'only Brett can mark a row SAFE; a build session may only raise it to GATED');
+    const res = queueResolveRisk(l, row);
+    if (l === 'SAFE') { const g = queueRiskGuardText(queueRowText(row)); if (g.hit) warnings.push('Saved as safe, but ' + g.reason + '. The file check at build time still forces it to gated if the change touches that code.'); }
+    risk = res.risk; riskReason = res.reason;
+    if (String(row.Risk_Class || '') !== risk) { fields.Risk_Class = risk; notes.push('risk ' + risk + (l === 'AUTO' ? ' (decided for Brett: ' + res.reason + ')' : '')); }
+  }
+  if (r.pinned !== undefined) {
+    if (typeof r.pinned !== 'boolean') return bad(400, 'pinned must be true or false');
+    const pv = r.pinned ? 'TRUE' : '';
+    if (String(row.Pinned || '') !== pv) { fields.Pinned = pv; notes.push(r.pinned ? 'pinned' : 'unpinned'); }
+  }
+  if (r.blocked_on !== undefined) {
+    const bo = String(r.blocked_on || '').toLowerCase();
+    if (!QUEUE_BLOCKED_ON.includes(bo)) return bad(400, 'blocked_on must be one of ' + QUEUE_BLOCKED_ON.join('|'));
+    if (String(row.Blocked_On || '') !== bo) { fields.Blocked_On = bo; notes.push('blocked on ' + bo); }
+  }
+  if (r.blocked_reason !== undefined) {
+    const br = String(r.blocked_reason || '').trim().slice(0, 500);
+    if (String(row.Blocked_Reason || '') !== br) { fields.Blocked_Reason = br; notes.push(br ? 'reason: ' + br : 'blocked reason cleared'); }
+  }
+  const wantStage = r.stage !== undefined ? String(r.stage || '').toLowerCase() : null;
+  if (r.snooze_days !== undefined && wantStage !== 'snoozed') return bad(400, 'snooze_days only goes with stage: snoozed');
+  if (r.reason !== undefined && wantStage !== 'dropped') return bad(400, 'reason only goes with stage: dropped');
+  let to = from;
+  if (wantStage !== null) {
+    to = wantStage;
+    if (!QUEUE_STAGES.includes(to)) return bad(400, 'stage must be one of ' + QUEUE_STAGES.join('|'));
+    if (!c.admin) {
+      if (!QUEUE_TOKEN_TO.includes(to)) return bad(403, "only Brett can move a row to '" + to + "'");
+      if (!QUEUE_TOKEN_FROM.includes(from)) return bad(403, "this row is in '" + from + "': only Brett can move it out of review, snoozed, done or dropped");
+      if (from === 'blocked' && to !== 'blocked' && String(row.Blocked_On || 'brett').toLowerCase() === 'brett') return bad(403, 'this row is blocked on Brett: only Brett can unblock it');
+    }
+    if (QUEUE_SHIPPED_STAGES.includes(to)) {
+      // A GATED row (now, or until this very request) and ANY token caller must prove the merge: a real PR number that GitHub says is merged.
+      if (!c.admin || risk === 'GATED' || !wasSafe) {
+        if (!pr) return bad(409, 'this row can only be marked ' + to + ' with a real merged PR number');
+        if (c.prMerged === undefined) return bad(428, 'the PR has to be checked on GitHub first', { code: 'need_pr_check', pr });
+        if (c.prMerged === null) return bad(503, 'could not check PR #' + pr + ' on GitHub (' + (c.prCheckError || 'no answer') + '), so the row was NOT marked ' + to + '. Try again in a minute.');
+        if (c.prMerged !== true) return bad(409, 'PR #' + pr + ' is not merged, so the row cannot be marked ' + to);
+      }
+    }
+    const set = (k, v) => { fields[k] = v; };
+    const clearBlock = () => {
+      if (r.blocked_reason === undefined) set('Blocked_Reason', '');
+      if (r.blocked_on === undefined) set('Blocked_On', '');
+      set('Held_Note', '');
+    };
+    const freshPr = () => { if (r.pr_number === undefined) set('PR_Number', ''); };   // a rebuild starts with no PR (otherwise sync re-reads the old one)
+    if (to === 'review') {
+      set('Status', 'proposed'); set('Build_State', ''); set('Snooze_Until', ''); set('Pinned', ''); freshPr(); clearBlock();
+    } else if (to === 'snoozed') {
+      const su = snoozeUntilFromDays(r.snooze_days, nowMs);
+      if (!su) return bad(400, 'snooze_days must be a number from 1 to 365');
+      set('Status', 'proposed'); set('Build_State', ''); set('Snooze_Until', su); set('Pinned', ''); freshPr(); clearBlock();
+      set('Scout_Verdict', ''); set('Scout_Note', ''); set('Scout_Reviewed', '');
+      notes.push('snoozed until ' + su.slice(0, 10));
+    } else if (to === 'approved' || to === 'queued') {
+      set('Status', String(row.Status || '') === 'prepared' ? 'prepared' : 'greenlit'); set('Build_State', ''); set('Snooze_Until', ''); clearBlock();
+      if (!['approved', 'queued'].includes(from)) freshPr();
+      if (['review', 'snoozed', 'dropped'].includes(from)) { set('Approved_By', actor); notes.push('approved'); }
+      if (!String(row.Risk_Class || '').trim() && fields.Risk_Class === undefined) { set('Risk_Class', 'GATED'); risk = 'GATED'; notes.push('risk GATED (none was chosen)'); }
+      if (to === 'queued') set('Pinned', 'TRUE');
+    } else if (to === 'building') {
+      set('Status', 'building'); set('Build_State', 'building'); set('Snooze_Until', ''); clearBlock();
+    } else if (to === 'pr_open') {
+      if (!pr) return bad(400, 'pr_number is required to move a row to pr_open');
+      set('Status', 'done'); set('Build_State', 'pr_open'); set('Snooze_Until', ''); clearBlock();
+    } else if (QUEUE_SHIPPED_STAGES.includes(to)) {
+      set('Status', 'done'); set('Build_State', 'live'); set('Snooze_Until', ''); set('Pinned', ''); clearBlock();
+    } else if (to === 'blocked') {
+      const why = String(r.blocked_reason !== undefined ? r.blocked_reason : (row.Blocked_Reason || '')).trim().slice(0, 500);
+      if (!why) return bad(400, 'blocked_reason is required to block a row');
+      set('Status', 'held'); set('Build_State', 'held'); set('Held_Note', why); set('Blocked_Reason', why);
+      if (r.blocked_on === undefined && !String(row.Blocked_On || '').trim()) set('Blocked_On', 'brett');
+    } else if (to === 'dropped') {
+      const why = String(r.reason || '').trim().slice(0, 500);
+      if (!why) return bad(400, 'reason is required to drop a row');
+      set('Status', 'dropped'); set('Drop_Reason', why); set('Pinned', ''); set('Snooze_Until', '');
+      notes.push('dropped: ' + why);
+    }
+    if (to !== from || String(row.Stage || '').trim().toLowerCase() !== to) {
+      set('Stage', to); set('Stage_By', actor);
+      if (to !== from || !String(row.Stage_Updated || '').trim()) set('Stage_Updated', (to === 'merged' && c.prMergedAt) ? String(c.prMergedAt) : nowIso);
+      if (to !== from) set('Build_Updated', nowIso);
+    }
+  }
+  for (const k of Object.keys(fields)) if (String(row[k] == null ? '' : row[k]) === String(fields[k])) delete fields[k];   // never write a cell that already holds the value
+  const noteTxt = r.note !== undefined ? r.note.trim().slice(0, 300) : '';
+  if (!Object.keys(fields).length && !noteTxt) return { ok: true, noop: true, from, to, risk, risk_reason: riskReason, fields: {}, warnings };
+  const line = [nowIso, actor, to !== from ? from + ' -> ' + to : to, notes.join('; '), noteTxt].filter(x => x !== '').join(' | ');
+  fields.Stage_Log = queueLogAppend(row.Stage_Log, line);
+  return { ok: true, from, to, risk, risk_reason: riskReason, fields, warnings, log: line };
+}
+
+// Who is calling POST /ops-queue-stage. Identity comes from the credential, never from the request body.
+function queueActorOf(env, tok) {
+  const t = String(tok || '');
+  if (env && env.HUB_PROD_WRITE_TOKEN && t === env.HUB_PROD_WRITE_TOKEN) return { name: 'build session', admin: false };
+  if (env && env.OPS_QUEUE_TOKEN && t === env.OPS_QUEUE_TOKEN) return { name: 'queue token', admin: false };
+  if (env && env.HUB_TEST_TOKEN && t === env.HUB_TEST_TOKEN) return { name: 'staging test', admin: true, stagingTest: true };   // staging only; TEST- rows only (hubTestWriteAllowed)
+  return { name: 'Brett', admin: true };                                  // the admin secret: the only other credential the auth gate lets reach this route
+}
+
+// POST /ops-queue-stage { id, stage?, pr_number?, blocked_reason?, blocked_on?, risk_class?, pinned?, note? }
+// The report-back route. Reachable with the broker write token (HUB_PROD_WRITE_PATHS), the queue token, or the admin secret.
+// It can set ONLY those fields (plus, for Brett: snooze_days with stage snoozed, reason with stage dropped, and ids:[…] for a bulk
+// change), it refuses unknown fields and unknown ids out loud, and it appends every change to Stage_Log. It can never mark a GATED
+// row merged / live without a PR number that GitHub confirms is merged. Writes are re-read: a save that did not stick is an error.
+// Sheets cost: 2 reads + 1 write per call, however many ids. Additive columns only (ensureColumns; never ensureTab on the live sheet).
+async function opsQueueStage(env, body, opts) {
+  const b0 = (body && typeof body === 'object' && !Array.isArray(body)) ? Object.assign({}, body) : {};
+  let actor = (opts && opts.actor) || { name: 'Brett', admin: true };
+  if (b0.test_as_token !== undefined) {
+    // Staging test seam: lets the TEST-only staging token exercise the build-session rules. Unknown to every other caller.
+    if (!actor.stagingTest) return json({ ok: false, error: 'unknown field(s): test_as_token' }, 400);
+    if (b0.test_as_token === true) actor = { name: 'staging test (as build session)', admin: false };
+    delete b0.test_as_token;
+  }
+  const bulk = b0.ids !== undefined;
+  if (bulk) {
+    if (!actor.admin) return json({ ok: false, error: 'unknown field(s): ids' }, 400);
+    if (b0.id !== undefined) return json({ ok: false, error: 'send id or ids, not both' }, 400);
+    if (!Array.isArray(b0.ids) || !b0.ids.length || b0.ids.length > QUEUE_BULK_MAX) return json({ ok: false, error: 'ids must be a list of 1 to ' + QUEUE_BULK_MAX + ' row ids' }, 400);
+  } else if (b0.id === undefined || b0.id === null || b0.id === '') return json({ ok: false, error: 'id required' }, 400);
+  const ids = bulk ? Array.from(new Set(b0.ids.map(String))) : [String(b0.id)];
+  const req = Object.assign({}, b0); delete req.ids;
+  await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  const d = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
+  const v = d.values || [];
+  if (!v.length) return json({ ok: false, error: 'the queue sheet is empty or missing' }, 404);
+  const headers = v[0], idc = idColIndex(headers), nowMs = Date.now();
+  const results = [], updates = [], planned = [], prCache = {};
+  for (const id of ids) {
+    const ri = v.findIndex((x, i) => i > 0 && String(x[idc]) === id);
+    const row = ri === -1 ? null : headers.reduce((o, hh, i) => { o[hh] = (v[ri][i] !== undefined) ? v[ri][i] : ''; return o; }, {});
+    const ctx = { admin: !!actor.admin, actor: actor.name, nowMs };
+    let plan = queueStagePlan(row, req, ctx);
+    if (!plan.ok && plan.code === 'need_pr_check') {
+      if (!prCache[plan.pr]) {
+        try { const pr = await ghPublicJson('/pulls/' + plan.pr, env); prCache[plan.pr] = { merged: !!(pr && (pr.merged === true || pr.merged_at)), at: (pr && pr.merged_at) || '' }; }
+        catch (e) { prCache[plan.pr] = { merged: null, error: String((e && e.message) || e).slice(0, 200) }; }   // not swallowed: the plan turns this into a 503 with the reason
+      }
+      ctx.prMerged = prCache[plan.pr].merged; ctx.prMergedAt = prCache[plan.pr].at; ctx.prCheckError = prCache[plan.pr].error;
+      plan = queueStagePlan(row, req, ctx);
+    }
+    if (!plan.ok) { results.push({ id, ok: false, status: plan.status, error: plan.error }); continue; }
+    if (plan.noop) { results.push({ id, ok: true, noop: true, stage: plan.to, risk_class: plan.risk, risk_reason: plan.risk_reason, warnings: plan.warnings }); continue; }
+    const missing = Object.keys(plan.fields).filter(k => headers.indexOf(k) === -1);
+    if (missing.length) { results.push({ id, ok: false, status: 500, error: 'the queue sheet is missing column(s) ' + missing.join(', ') + ', so nothing was saved for this row' }); continue; }
+    for (const k of Object.keys(plan.fields)) updates.push({ range: `${OPS_QUEUE_TAB}!${col(headers.indexOf(k))}${ri + 1}`, values: [[plan.fields[k]]] });
+    planned.push({ id, plan });
+  }
+  if (updates.length) {
+    await sheetsRequest(env, 'POST', '/values:batchUpdate', { valueInputOption: 'RAW', data: updates });
+    invalidateTabCache(OPS_QUEUE_TAB);
+    let back = null, verifyErr = '';
+    try { back = (await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`)).values || []; }
+    catch (e) { verifyErr = String((e && e.message) || e).slice(0, 200); }                 // not swallowed: reported per row as confirmed:false
+    for (const p of planned) {
+      const out = { id: p.id, ok: true, from: p.plan.from, stage: p.plan.to, risk_class: p.plan.risk, risk_reason: p.plan.risk_reason, warnings: p.plan.warnings.slice(), log: p.plan.log, confirmed: true };
+      if (!back) { out.confirmed = false; out.warnings.push('Saved, but the check read was refused (' + verifyErr + '). Refresh in a minute to confirm.'); }
+      else {
+        const h2 = back[0] || [], i2 = idColIndex(h2), r2 = back.find((x, i) => i > 0 && String(x[i2]) === p.id);
+        const cell = (k) => { const ci = h2.indexOf(k); const val = (r2 && ci !== -1) ? r2[ci] : undefined; return String(val == null ? '' : val); };
+        const lost = Object.keys(p.plan.fields).filter(k => cell(k) !== String(p.plan.fields[k]));
+        if (lost.length) {
+          out.ok = false; out.status = 500; out.confirmed = false; out.error = 'the save did not stick for: ' + lost.join(', ');
+          await reportFailure(env, { system: 'hub', source: 'worker', where: 'queue_stage_write_lost', ref: 'queue#' + p.id, severity: 'P1', message: 'Queue row #' + p.id + ' was written but did not read back the same (' + lost.join(', ') + ').' });
+        }
+      }
+      results.push(out);
+    }
+  }
+  results.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+  if (!bulk) { const r0 = results[0]; return json(r0, r0.ok ? 200 : (r0.status || 500)); }
+  const failed = results.filter(x => !x.ok).length;
+  return json({ ok: failed === 0, bulk: true, saved: results.length - failed, failed, results });
+}
+
+// POST /ops-queue/risk-check { pr_number } or { files:[…], diff:'…' }, optional label:'SAFE'. Writes NOTHING: it only answers
+// "may this change be treated as SAFE?" so a build session can ask before it merges. With pr_number the Hub reads the PR's changed
+// files from public GitHub itself. Fail-closed: if GitHub cannot be read the answer is GATED (HTTP 503), never a guess.
+async function opsQueueRiskCheck(env, body) {
+  const b = (body && typeof body === 'object' && !Array.isArray(body)) ? body : {};
+  const unknown = Object.keys(b).filter(k => !['pr_number', 'files', 'diff', 'label', 'title', 'text'].includes(k));
+  if (unknown.length) return json({ ok: false, error: 'unknown field(s): ' + unknown.join(', ') + '. Allowed: pr_number, files, diff, label, title, text' }, 400);
+  let files = Array.isArray(b.files) ? b.files.slice(0, 400) : [], truncated = false, prn = null;
+  if (b.pr_number !== undefined) {
+    prn = cleanPrNumber(b.pr_number);
+    if (!prn) return json({ ok: false, error: 'pr_number must be a positive integer' }, 400);
+    try {
+      for (let page = 1; page <= 3; page++) {
+        const arr = await ghPublicJson('/pulls/' + prn + '/files?per_page=100&page=' + page, env);
+        if (!Array.isArray(arr)) throw new Error('GitHub did not return a file list');
+        for (const f of arr) files.push({ filename: String(f.filename || ''), patch: f.patch || '', patch_missing: !f.patch && Number(f.changes || 0) > 0 && /\.(m?js|cjs|html|gs|toml|ya?ml|json|css)$/i.test(String(f.filename || '')) });
+        if (arr.length < 100) break;
+        if (page === 3) truncated = true;
+      }
+    } catch (e) {
+      const why = String((e && e.message) || e).slice(0, 200);
+      return json({ ok: false, risk: 'GATED', forced: true, pr_number: prn, error: 'could not read PR #' + prn + ' from GitHub (' + why + '), so it is treated as GATED' }, 503);
+    }
+  }
+  const verdict = queueRiskGuard({ files, diff: b.diff, label: b.label, truncated });
+  const out = Object.assign({ ok: true, pr_number: prn || undefined, files_checked: files.length }, verdict);
+  if (b.title !== undefined || b.text !== undefined) out.text_check = queueRiskGuardText(String(b.title || '') + ' ' + String(b.text || ''));
+  return json(out);
+}
+
+// PURE — the Stage cells a sync pass writes next to the Build_State it just read from GitHub. `next` is prStateToBuildState(pr).
+function queueSyncStageFields(row, next, pr, prNumber, nowMs) {
+  const cur = queueStageOf(row, nowMs), nowIso = new Date(nowMs).toISOString(), out = {};
+  const log = (txt) => { out.Stage_Log = queueLogAppend(row.Stage_Log, nowIso + ' | sync | ' + txt); };
+  if (next === 'live') {
+    if (String(row.Stage || '').trim().toLowerCase() === 'merged' || cur === 'merged') return out;
+    const at = (pr && pr.merged_at) ? String(pr.merged_at) : nowIso;      // Stage_Updated = the real merge time: the deploy check measures from it
+    out.Stage = 'merged'; out.Stage_Updated = at; out.Stage_By = 'sync';
+    log(cur + ' -> merged | PR #' + prNumber + ' merged ' + at);
+  } else if (next === 'pr_open') {
+    if (cur === 'pr_open' || cur === 'blocked') return out;
+    out.Stage = 'pr_open'; out.Stage_Updated = nowIso; out.Stage_By = 'sync';
+    log(cur + ' -> pr_open | PR #' + prNumber + ' is open');
+  } else if (next === 'pr_closed') {
+    if (cur === 'blocked' && String(row.Blocked_Reason || '').trim()) return out;
+    out.Stage = 'blocked'; out.Stage_Updated = nowIso; out.Stage_By = 'sync';
+    out.Blocked_Reason = 'PR #' + prNumber + ' was closed without merging'; out.Blocked_On = 'brett';
+    log(cur + ' -> blocked | PR #' + prNumber + ' was closed without merging');
+  }
+  return out;
+}
+
+// PURE — has the Hub deployed since this row's PR merged? -> { state: 'live' | 'wait' | 'report' | 'reported', minutes, why }
+// `v` is buildVersion(env). 'report' = merged over 30 minutes ago with no newer deploy and not reported yet.
+function queueDeployVerdict(row, v, nowMs) {
+  const mergedMs = [row && row.Stage_Updated, row && row.Build_Updated].map(x => Date.parse(String(x || ''))).find(t => Number.isFinite(t));
+  const depMs = (v && v.stamped) ? Date.parse(String(v.deployed_at || '')) : NaN;
+  if (Number.isFinite(mergedMs) && Number.isFinite(depMs) && depMs > mergedMs) return { state: 'live' };
+  const minutes = Number.isFinite(mergedMs) ? Math.floor((nowMs - mergedMs) / 60000) : null;
+  if (Number.isFinite(mergedMs) && (nowMs - mergedMs) < QUEUE_DEPLOY_GRACE_MS) return { state: 'wait', minutes };
+  const why = !Number.isFinite(mergedMs) ? 'the merge time is not recorded on the row'
+    : (!(v && v.stamped) || !Number.isFinite(depMs)) ? 'the Worker version is unstamped, so a deploy cannot be confirmed'
+    : 'the last deploy (' + v.deployed_at + ') is older than the merge';
+  return { state: String((row && row.Stage_Log) || '').includes(QUEUE_DEPLOY_MARK) ? 'reported' : 'report', minutes, why };
+}
+
+// One merged row: move it to live once GET /version shows a deploy newer than the merge; after 30 minutes without one, file ONE
+// failure-ledger row (Needs Attention page) and note it on the row so the next tick does not file it again.
+async function queueDeployStep(env, r, nowMs, changed, deployMissing, errors) {
+  const v = buildVersion(env), verdict = queueDeployVerdict(r, v, nowMs), nowIso = new Date(nowMs).toISOString();
+  const prn = cleanPrNumber(r.PR_Number) || '';
+  if (verdict.state === 'live') {
+    const f = { Stage: 'live', Stage_Updated: nowIso, Stage_By: 'sync', Status: 'done', Build_State: 'live', Build_Updated: nowIso,
+      Stage_Log: queueLogAppend(r.Stage_Log, nowIso + ' | sync | merged -> live | Hub deployed ' + v.deployed_at + ' (' + String(v.version_id || '').slice(0, 8) + ')') };
+    await updateQueueRowOrThrow(env, r.ID, f);
+    Object.assign(r, f);
+    changed.push({ id: r.ID, pr: prn || undefined, build_state: 'live', status: 'done', stage: 'live' });
+  } else if (verdict.state === 'report') {
+    deployMissing.push({ id: r.ID, pr: prn || undefined, minutes: verdict.minutes, why: verdict.why });
+    const rep = await reportFailure(env, { system: 'hub', source: 'worker', where: 'queue_deploy_missing', ref: 'queue#' + r.ID, severity: 'P1',
+      message: 'Queue item #' + r.ID + (prn ? ' (PR #' + prn + ')' : '') + ' merged' + (verdict.minutes !== null ? ' ' + verdict.minutes + ' minutes ago' : '') + ' but the Hub shows no newer deploy: ' + verdict.why + '. Check the Cloudflare build for main.' });
+    if (!rep || rep.ok !== true) errors.push({ id: r.ID, error: 'could not file the missing-deploy failure row: ' + ((rep && rep.error) || (rep && rep.dropped ? 'rate-capped' : 'unknown')) });
+    else { const f = { Stage_Log: queueLogAppend(r.Stage_Log, nowIso + ' | sync | merged | ' + QUEUE_DEPLOY_MARK + ': ' + verdict.why) }; await updateQueueRowOrThrow(env, r.ID, f); Object.assign(r, f); }
+  } else if (verdict.state === 'reported') {
+    deployMissing.push({ id: r.ID, pr: prn || undefined, minutes: verdict.minutes, why: verdict.why, already_reported: true });
+  }
+}
+
+// Scheduler job `queue_sync` (Apps Script clock, every 15 minutes, NO cron): the same sync as the daily run, limited to 12 rows a tick
+// so it stays under the Worker's outbound-call limit. Costs one Sheets read when nothing is in flight.
+async function schedRunQueueSync(env) {
+  const errors = [];
+  const r = await schedStep('queue_sync', () => opsQueueSync(env, {}, { ignoreSuppliedPrs: true, tick: true, max: 12 }), errors);
+  return { ok: !errors.length, errors, detail: r ? { checked: r.checked, changed: (r.changed || []).length, remaining: r.remaining, stuck: (r.stuck || []).length, deploy_missing: (r.deploy_missing || []).length, rate_limited: (r.rate_limited || []).length } : null };
 }
 
 // ── RidgeCo Hub Improvements sweep (Oct 14 2026) ─────────────────────────────────────────────────
