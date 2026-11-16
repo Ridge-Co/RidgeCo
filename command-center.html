@@ -81,6 +81,17 @@
   .sheet .r{display:flex;gap:8px}.sheet .r button{flex:1;border:none;border-radius:11px;padding:12px;font-weight:700}
   .cancel{background:#eef0f3;color:#42505e}.confirm{background:var(--red);color:#fff}.confirm:disabled{opacity:.4;cursor:not-allowed}
 </style>
+<style id="aging-card-css">
+/* Queue #181 aging card: shared parts (.rc-card, .rc-chip, .rc-btn) plus these few layout rules, written with rc-ui tokens only (no new color, size, radius or shadow). */
+#aging-slot{margin:10px 0}
+.aging-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--rc-s2)}
+.aging-chip{min-height:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:var(--rc-s2) var(--rc-s1)}
+.aging-chip b{font-size:var(--rc-fs-lg);line-height:1.2}
+.aging-row{display:block;min-height:44px;padding:var(--rc-s2) 0;border-top:1px solid var(--rc-border);color:var(--rc-text);text-decoration:none;font-size:var(--rc-fs-body);overflow-wrap:anywhere}
+.aging-row small{display:block;font-size:var(--rc-fs-sm);color:var(--rc-muted)}
+.aging-row:focus-visible{outline:2px solid var(--rc-accent);outline-offset:2px}
+.aging-more{display:none}
+</style>
 <style id="mobile-input-font">
 /* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch screens or Android/iOS zoom the page on focus. Mouse/desktop density unchanged. */
 @media (hover:none) and (pointer:coarse){
