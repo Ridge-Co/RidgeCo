@@ -23779,6 +23779,7 @@ const SELFTEST_ENDPOINT_CHECKS = [
   { name: 'receipt_queue', path: '/receipt-queue' },
   { name: 'scopes', path: '/scopes' },
   { name: 'stale_wos', path: '/stale-wos' },
+  { name: 'repeat_units', path: '/repeat-units' },
   { name: 'deliveries', path: '/deliveries' },
   { name: 'tenant_wo_settings', path: '/tenant-wo-settings' },
   { name: 'twilio_account_status', path: '/twilio/account-status' },
