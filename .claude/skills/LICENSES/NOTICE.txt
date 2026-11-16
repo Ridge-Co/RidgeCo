@@ -1,0 +1,13 @@
+Two skills in .claude/skills/ contain material adapted from Apache-2.0 projects. The full licence text is in
+Apache-2.0.txt in this folder. Per section 4 of that licence: the files were modified (trimmed and rewritten for
+this repository, Nov 16 2026); each adapted file says so at its top; the changes are listed in
+context/THIRD_PARTY_SKILLS.md.
+
+  impeccable/        from https://github.com/pbakaus/impeccable       Copyright 2025 Paul Bakaus
+                     commit d41d9860b0094dcb68030657da63461212835aaa
+                     (its NOTICE.md covers only its iOS and Android reference files, which are not included here)
+
+  playwright-cli/    from https://github.com/microsoft/playwright-cli  Copyright (c) Microsoft Corporation.
+                     commit b21724888b8100b05ef8dee3a92f2bb03bf4dcde
+
+The MIT-licensed sources are listed in MIT.txt.

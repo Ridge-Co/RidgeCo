@@ -1,0 +1,57 @@
+# UI check (Nov 16 2026). Runs scripts/ui-check.mjs on every pull request that touches an .html or .css file:
+# static checks, the Impeccable design detector, and screenshots at 412 / 1366 / 1920 from a local server with mocked Worker calls.
+# It FAILS the check only when a changed page got WORSE than scripts/ui-check-baseline.json (old debt does not fail a PR).
+# The screenshots are kept as a download ("ui-check-screenshots") on the run page for 14 days.
+# pull_request trigger ONLY. No timer and no cron, ever (CLAUDE.md "NO CRON ANYWHERE"). Nothing here can write to the repo.
+name: UI check
+on:
+  pull_request:
+    branches: [main, staging]
+    types: [opened, synchronize, reopened]
+    paths:
+      - '**.html'
+      - '**.css'
+concurrency:
+  group: ui-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  ui-check:
+    name: UI check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: List the changed pages
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git diff --name-only --diff-filter=AMR "$BASE_SHA...$HEAD_SHA" -- '*.html' '*.css' > "$RUNNER_TEMP/changed.txt"
+          echo "Changed pages and stylesheets:"; cat "$RUNNER_TEMP/changed.txt"
+      # Pinned versions, no install scripts. impeccable is the design detector vetted in context/THIRD_PARTY_SKILLS.md.
+      - name: Install the detector and Playwright (pinned)
+        run: |
+          npm install --no-save --ignore-scripts --no-audit --no-fund impeccable@4.9.2 playwright@1.63.0
+          npx --no-install playwright install --with-deps chromium
+      - name: Unit-test the checks
+        run: node test/ui-check.test.mjs
+      - name: Run the UI check on the changed pages
+        env:
+          DO_NOT_TRACK: '1'
+          IMPECCABLE_NO_TELEMETRY: '1'
+        run: node scripts/ui-check.mjs --require-shots --require-detector --out ui-check-out --files-from "$RUNNER_TEMP/changed.txt"
+      - name: Keep the screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-check-screenshots
+          path: ui-check-out/
+          if-no-files-found: ignore
+          retention-days: 14
