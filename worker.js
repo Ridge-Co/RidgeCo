@@ -2821,7 +2821,7 @@ async function woKeyedReadDenied(env, path, url, role, sessionId) {
 //   - author_role was self-declared, so a note could be posted "as a tenant" (which texts Brett).
 //   - /wishlist/add is Brett's internal dev wishlist, not an owner feature.
 // One gate, OWNER sessions only (admin secret and internal tokens never reach it). Every denial is a 4xx plus a FAILED
-// Ops_Telemetry row (`owner_write_scope_denied`) - never silent. Tenant and vendor write scopes are separate (BACKLOG).
+// Ops_Telemetry row (`owner_write_scope_denied`) - never silent. The vendor write scope is vendorWriteScopeDenied below (Nov 16 2026); the tenant one is still BACKLOG.
 const OWNER_WO_WRITE_PATHS = ['/wo/add-note', '/wo/append-description', '/wo/owner-update', '/wo/set-tenant-visibility', '/log-attachment', '/create-upload-session'];
 const OWNER_WO_CREATE_FIELDS = ['property_id', 'unit_id', 'trade', 'priority', 'description', 'type', 'owner_wo_ref', 'tenant_visible', 'tenant_notify_created', 'tenant_notify_updates', 'created_by', 'notes', 'room'];
 async function ownerWriteScopeDenied(env, path, body, ownerId) {
