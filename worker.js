@@ -29682,6 +29682,14 @@ async function hubTestWriteAllowed(env, path, body) {
     const _r = _qr.find(r => String(r.ID) === String(body && body.id));
     return !!_r && String(_r.Title || '').startsWith('TEST-');
   }
+  // Queue v2 (Nov 16 2026): the report-back route, single id or (Brett-style) bulk ids: EVERY target must be a TEST- row. The risk check writes nothing.
+  if (path === '/ops-queue-stage') {
+    const _ids = (body && Array.isArray(body.ids)) ? body.ids : [body && body.id];
+    if (!_ids.length || _ids.some(x => x === undefined || x === null || x === '')) return { ok: false, debug: 'queue-guard: id (or ids) required' };
+    const _qs = await fetchTab(env, OPS_QUEUE_TAB);
+    return _ids.every(x => { const _r = _qs.find(r => String(r.ID) === String(x)); return !!_r && String(_r.Title || '').startsWith('TEST-'); }) ? { ok: true } : { ok: false, debug: 'queue-guard: every target must be a TEST- row' };
+  }
+  if (path === '/ops-queue/risk-check') return true;
   if (path === '/ops-queue/sync') return !!body && body.title_prefix === 'TEST-'; // staging token may only sync TEST- rows (opsQueueSync honours title_prefix)
   // Oct 14 2026 (owner tenant roster): preview writes nothing; apply may only run for a TEST- owner (it can only ever touch that owner's own properties' tenants).
   if (path === '/owner/tenant-roster/preview') return true;
