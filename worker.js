@@ -813,6 +813,11 @@ const _hubWorkerCore = {
             const _owd = await ownerWriteScopeDenied(env, path, body, callerSessionId);
             if (_owd) return _owd;
           }
+          // Vendor WRITE scope (Nov 16 2026): a vendor session may only write to a work order assigned to it, and only as itself.
+          if (callerRole === 'vendor') {
+            const _vwd = await vendorWriteScopeDenied(env, path, body, callerSessionId);
+            if (_vwd) return _vwd;
+          }
           if (callerRole === 'tenant' && callerDemoSlot) {   // a demo tenant may write only inside its own demo slot
             const _dtw = await demoTenantWriteDenied(env, path, body, callerSessionId, callerDemoSlot);
             if (_dtw) return _dtw;
