@@ -21029,6 +21029,16 @@ function formatDigestText(d) {
     if (d.followupsError) L.push('⚠ Could not read the fix-check list: '+d.followupsError);
     L.push('');
   }
+  if ((d.repeatUnits && d.repeatUnits.length) || d.repeatUnitsError) {
+    L.push('▶ REPEAT-FAILURE UNITS (last 90 days)');
+    (d.repeatUnits||[]).forEach(u=>{
+      const tr = Object.entries(u.trades||{}).map(([k,n])=>`${k} x${n}`).join(', ');
+      const ids = (u.wo_ids||[]).slice(0,6).map(i=>'WO-'+i).join(' ') + ((u.wo_ids||[]).length>6 ? ' +'+((u.wo_ids||[]).length-6)+' more' : '');
+      L.push(`· ${u.unit}: ${u.wo_count} WOs (${tr}) · last ${u.last_created} · ${ids} — ${u.tag}`);
+    });
+    if (d.repeatUnitsError) L.push('⚠ Could not check repeat-failure units: '+d.repeatUnitsError);
+    L.push('');
+  }
   L.push('▶ NEEDS YOU TODAY');
   if (d.overdue.length)  { L.push(`${d.overdue.length} overdue:`); d.overdue.slice(0,6).forEach(x=>L.push('· '+x)); }
   if (d.dueToday.length) { L.push(`${d.dueToday.length} scheduled today:`); d.dueToday.forEach(x=>L.push('· '+x)); }
