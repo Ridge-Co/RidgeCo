@@ -123,7 +123,8 @@ tab('Receipts', ['ID', 'WO_ID', 'Role', 'Added_By_ID', 'Active', 'Amount', 'Crea
 tab('Time_Entries', ['ID', 'WO_ID', 'Role', 'Entered_By_ID', 'Active', 'Hours'], [
   { ID: 'TE1', WO_ID: 'WO-1', Role: 'vendor', Entered_By_ID: 'V1', Active: 'TRUE', Hours: '1' }, { ID: 'TE9', WO_ID: 'WO-1', Role: 'admin', Entered_By_ID: 'ADMIN', Active: 'TRUE', Hours: '2' }]);
 tab('Estimates', ['ID', 'WO_ID', 'Version', 'Active', 'Line_Items'], [{ ID: 'E1', WO_ID: 'WO-1', Version: '1', Active: 'TRUE', Line_Items: '[]' }, { ID: 'E2', WO_ID: 'WO-2', Version: '1', Active: 'TRUE', Line_Items: '[]' }]);
-tab('WO_Audit', ['WO_ID', 'Timestamp', 'Action'], [{ WO_ID: 'WO-1', Timestamp: '2026-10-01T00:00:00Z', Action: 'created' }, { WO_ID: 'WO-2', Timestamp: '2026-10-02T00:00:00Z', Action: 'created' }]);
+// Nov 16 2026: rows now carry a real Field, as every row the Hub writes does (an owner session only gets history lines for owner-visible fields).
+tab('WO_Audit', ['WO_ID', 'Timestamp', 'Field', 'New_Value'], [{ WO_ID: 'WO-1', Timestamp: '2026-10-01T00:00:00Z', Field: 'Status', New_Value: 'Assigned' }, { WO_ID: 'WO-2', Timestamp: '2026-10-02T00:00:00Z', Field: 'Status', New_Value: 'Assigned' }]);
 tab('Config', ['Key', 'Value'], []);
 
 const tele = (job) => (store.tabs.get('Ops_Telemetry') || []).slice(1).filter(r => (store.tabs.get('Ops_Telemetry')[0] || []).indexOf('Job_Type') >= 0 && r[store.tabs.get('Ops_Telemetry')[0].indexOf('Job_Type')] === job);
