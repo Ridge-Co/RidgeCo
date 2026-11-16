@@ -14,6 +14,8 @@ function grab(kind, name) {
 }
 const constLine = src.split('\n').find(l => l.startsWith('const ATTACHMENT_COST_DOC_TYPES'));
 assert.ok(constLine, 'ATTACHMENT_COST_DOC_TYPES constant exists');
+// Nov 16 2026 (owner allow-list): getAttachments now also uses these two lists and ownerPick, so the sandbox needs them.
+const ownerConstLines = ['OWNER_ATTACHMENT_FIELDS', 'OWNER_ATTACHMENT_TYPES'].map(n => { const l = src.split('\n').find(x => x.startsWith('const ' + n + ' = ')); assert.ok(l, n + ' constant exists'); return l; }).join('\n');
 
 let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
 
