@@ -903,10 +903,10 @@ function awRender() {
           '</div>';
       }).join('') + '</div>' +
       '<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">' +
-        '<label style="flex:1;min-width:130px;min-height:44px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:var(--info);color:#fff;border-radius:6px;font-size:13px;font-weight:bold;cursor:pointer">📷 ' + esc(t('Take photo')) +
-          '<input type="file" accept="image/*" capture="environment" style="display:none" onchange="awAddFiles(' + i + ',this)"></label>' +
-        '<label style="flex:1;min-width:130px;min-height:44px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;font-size:13px;font-weight:bold;cursor:pointer">🖼 ' + esc(t('Add from gallery')) +
-          '<input type="file" accept="image/*" multiple style="display:none" onchange="awAddFiles(' + i + ',this)"></label>' +
+        '<button type="button" onclick="document.getElementById(\'aw-cam-' + i + '\').click()" style="flex:1;min-width:130px;min-height:44px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:var(--info);color:#fff;border:none;border-radius:6px;font-family:inherit;font-size:13px;font-weight:bold;cursor:pointer">📷 ' + esc(t('Take photo')) + '</button>' +
+          '<input type="file" id="aw-cam-' + i + '" accept="image/*" capture="environment" style="display:none" onchange="awAddFiles(' + i + ',this)">' +
+        '<button type="button" onclick="document.getElementById(\'aw-gal-' + i + '\').click()" style="flex:1;min-width:130px;min-height:44px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;font-family:inherit;font-size:13px;font-weight:bold;cursor:pointer">🖼 ' + esc(t('Add from gallery')) + '</button>' +
+          '<input type="file" id="aw-gal-' + i + '" accept="image/*" multiple style="display:none" onchange="awAddFiles(' + i + ',this)">' +
       '</div>' +
       (bad ? '<div style="color:var(--danger);font-size:12px;margin-top:6px">' + esc(t('This item needs at least one photo.')) + '</div>' : '') +
       '</div>';
