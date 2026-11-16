@@ -58,6 +58,8 @@ const code = names.map(grabConst).join('\n') + '\n' + [
   'buildShippedIndex', 'findShippedMatch', 'prStateToBuildState', 'matchPrToItem', 'cleanPrNumber', 'ghPublicJson',
   'opsApprove', 'opsQueueUpdate', 'opsQueueStatus', 'validateQueueStatusReport', 'opsQueueSync', 'updateQueueRowOrThrow',
   'validateScoutSubmitItems', 'buildScoutQueueRow', 'opsQueueScoutSubmit', 'buildStartBuildRoutineText',
+  'queueLegacyStage', 'queueStageOf', 'queueStuckInfo', 'queueLogAppend', 'queueRiskGuardText', 'queueRowText', 'queueResolveRisk',
+  'queueSyncStageFields', 'queueDeployVerdict', 'queueDeployStep',
 ].map(n => grab(n)).join('\n') + `
 const OPS_QUEUE_TAB = 'Ops_Build_Queue', OPS_REVIEW_TAB = 'Ops_Review_Log', OPS_REVIEW_COLS = [];
 const OPS_QUEUE_COLS = __COLS, OPS_QUEUE_STATUSES = __STATUSES;
