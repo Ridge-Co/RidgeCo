@@ -659,6 +659,7 @@ function render(d){
     +'<p class="note">These come from your backlog. Once the BrettOS sheet is wired (Phase 2) they’ll be live too.</p></div>';
 
   document.getElementById('body').innerHTML=html;
+  renderAging(d,addr);
 }
 
 function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){}document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';load();}
