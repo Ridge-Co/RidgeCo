@@ -2865,6 +2865,8 @@ async function getAttachments(env, url, callerRole, callerSessionId) {
   }
   let visible = rows.filter(a => woAllowed(a.WO_ID));
   if (callerRole === 'tenant') visible = visible.filter(a => !ATTACHMENT_COST_DOC_TYPES.includes(String(a.File_Type || '').toLowerCase()));
+  // Owner allow-list (Nov 16 2026): photos and receipts only, and only the named columns. Vendor bill / invoice file rows never reach an owner.
+  if (callerRole === 'owner') visible = visible.filter(a => OWNER_ATTACHMENT_TYPES.includes(String(a.File_Type || 'photo').toLowerCase())).map(a => ownerPick(a, OWNER_ATTACHMENT_FIELDS));
   return json(visible);
 }
 
