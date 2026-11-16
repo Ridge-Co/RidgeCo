@@ -14518,8 +14518,14 @@ async function getWOAudit(env, url, callerRole) {
       const _mpLine = /\s*(Max price|Precio máximo): \$[\d,]+(\.\d+)? —[^\n]*/g;
       rows = rows.filter(a => a.Field !== 'Max_Price').map(a => (a.Message_Body || a.Original_Body) ? { ...a, Message_Body: String(a.Message_Body || '').replace(_mpLine, ''), Original_Body: String(a.Original_Body || '').replace(_mpLine, '') } : a);
     }
+    // Owner allow-list (Nov 16 2026): only history lines about fields the owner page shows, cut to the named columns (ownerAuditView).
+    if (callerRole === 'owner') rows = ownerAuditView(rows);
     return json(rows);
-  } catch(e) { return json([]); }
+  } catch (e) {
+    // Nov 16 2026: this used to answer [] (a failed read looked exactly like "no history"). Now it is recorded and the caller is told.
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_audit_read_failed', Skill_Or_Endpoint: '/wo-audit', Success: 'FALSE', Notes: `wo=${String(woId).slice(0, 40)} role=${callerRole || 'none'} ${String((e && e.message) || e)}`.slice(0, 480) });
+    return json({ error: 'Could not load the history for this work order. Please try again.' }, 500);
+  }
 }
 
 async function translateToEnglish(env, text) {
