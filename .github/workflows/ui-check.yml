@@ -38,7 +38,7 @@ jobs:
       # Pinned versions, no install scripts. impeccable is the design detector vetted in context/THIRD_PARTY_SKILLS.md.
       - name: Install the detector and Playwright (pinned)
         run: |
-          npm install --no-save --ignore-scripts --no-audit --no-fund impeccable@4.9.2 playwright@1.56.1
+          npm install --no-save --ignore-scripts --no-audit --no-fund impeccable@4.9.2 playwright@1.63.0
           npx --no-install playwright install --with-deps chromium
       - name: Unit-test the checks
         run: node test/ui-check.test.mjs
