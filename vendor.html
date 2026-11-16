@@ -1579,7 +1579,7 @@ function renderEstimateWidget(woId, idx) {
     var bannerMsg = depositRequested
       ? '✓ Approved — deposit is being requested from the customer. You\'ll be notified to proceed once received.'
       : '✓ Approved — no deposit required for this job. You\'re cleared to proceed.';
-    approvalBanner = '<div style="margin-top:8px;background:#eaf6ee;border:1px solid #166534;border-radius:6px;padding:10px;font-size:12px;color:#bbf7d0">' +
+    approvalBanner = '<div style="margin-top:8px;background:#eaf6ee;border:1px solid #166534;border-radius:6px;padding:10px;font-size:12px;color:var(--accent2)">' +
       bannerMsg +
       (current.Approved_By ? '<div style="font-size:11px;color:#86efac;margin-top:4px">Approved by ' + esc(current.Approved_By) + '</div>' : '') +
       '</div>';
