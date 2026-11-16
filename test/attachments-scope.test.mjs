@@ -27,6 +27,8 @@ const json = (body, status = 200) => ({ body, status });
 const env = {};
 const factory = new Function('json', 'fetchTab', 'fetchTabs', 'logTelemetry', 'findWO', `
   ${constLine}
+  ${ownerConstLines}
+  ${grab('function', 'ownerPick')}
   ${grab('function', 'isBackgroundWO')}
   ${grab('function', 'isHiddenBidCopy')}
   ${grab('function', 'tenantCanSeeWO')}
