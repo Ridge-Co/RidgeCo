@@ -1231,6 +1231,8 @@ const _hubWorkerCore = {
         if (path === '/fi/route')                 return await fiRoute(env, 'route', () => fiRouteNotes(env, body));
         if (path === '/fi/brand/scrape')          return await fiRoute(env, 'brand-scrape', () => fiBrandScrape(env, body));
         if (path === '/fi/read-label')            return await fiRoute(env, 'read-label', () => fiReadLabel(env, body));
+        if (path === '/assets/read-nameplate')    return await assetRoute(env, 'read-nameplate', () => assetReadNameplate(env, body));   // #145 admin only, proposes, writes nothing
+        if (path === '/assets/save')              return await assetRoute(env, 'save', () => assetSave(env, body));   // #145 admin only, writes one row + read-back
         if (path === '/fi/transcribe/json')       return await fiRoute(env, 'transcribe-json', () => fiTranscribeJson(env, body));
         if (path === '/fi/issue-types/save')      return await fiRoute(env, 'issue-types-save', () => fiTypesSave(env, body));
         if (path === '/fi/issue-types/touch')     return await fiRoute(env, 'issue-types-touch', () => fiTypesTouch(env, body));
