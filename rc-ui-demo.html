@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script src="test-login.js"></script>
+<script src="failure-reporter.js"></script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shared parts demo</title>
+<meta name="robots" content="noindex">
+<!-- The only page that loads rc-ui yet (UI plan Phase 0, PR A). Shows every part at phone and desktop width.
+     The ?v= number must equal RC_UI_VERSION in rc-ui.js (test/rc-ui.test.mjs checks). -->
+<link rel="stylesheet" href="rc-ui.css?v=1" onerror="document.documentElement.setAttribute('data-rc-css-failed','1')">
+<script src="rc-ui.js?v=1"></script>
+<script data-rc-ui-guard>if (typeof RC === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div role="alert" style="background:#b42318;color:#fff;padding:12px 16px;font:600 15px sans-serif;position:relative;z-index:99999">A shared file (rc-ui.js) did not load, so this page cannot run. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
+<style>
+  .demo-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 24px; }
+  .demo-head img { width: 44px; height: 44px; }
+  .demo-head .grow { flex: 1; min-width: 200px; }
+  .demo-sec { margin: 0 0 32px; }
+  .demo-box { min-height: 120px; }
+  .demo-role { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 8px; align-items: start; margin-top: 8px; font-size: 13px; color: var(--rc-muted); }
+  .demo-out { margin: 12px 0 0; font-size: 13px; color: var(--rc-muted); min-height: 20px; }
+</style>
+</head>
+<body class="rc-app">
+<main class="rc-page" id="top">
+
+<header class="demo-head">
+  <span id="logo-slot"></span>
+  <div class="grow">
+    <h1 class="rc-title rc-title--page"><span data-rc-brand></span> shared parts</h1>
+    <p class="rc-muted" style="margin:4px 0 0">Every part from DESIGN.md in one place. Brand, logo and Worker address come from one config object.</p>
+  </div>
+  <div class="rc-btn-row">
+    <button type="button" class="rc-btn rc-btn--secondary" id="lang-en" aria-pressed="true">English</button>
+    <button type="button" class="rc-btn rc-btn--secondary" id="lang-es" aria-pressed="false">Español</button>
+  </div>
+</header>
+
+<section class="demo-sec" aria-labelledby="h-btn">
+  <h2 class="rc-card-title" id="h-btn">Buttons</h2>
+  <p class="rc-section-label">Four kinds, one large size</p>
+  <div class="rc-card rc-stack">
+    <div class="rc-btn-row" id="btn-row"></div>
+    <div class="rc-btn-row" id="btn-states"></div>
+    <div id="btn-big"></div>
+  </div>
+</section>
+
+<section class="demo-sec" aria-labelledby="h-chip">
+  <h2 class="rc-card-title" id="h-chip">Status chips</h2>
+  <p class="rc-section-label">One map: status in, role decides the words and color</p>
+  <div class="rc-card">
+    <div class="rc-grid" id="chip-grid"></div>
+    <p class="rc-section-label" style="margin-top:16px">Priority</p>
+    <div class="rc-row" id="prio-row"></div>
+    <p class="rc-section-label" style="margin-top:16px">A long value wraps instead of running off the card</p>
+    <div style="max-width:220px"><span class="rc-chip rc-chip--info">Estimate requested by the owner for the second-floor bathroom</span></div>
+  </div>
+</section>
+
+<section class="demo-sec" aria-labelledby="h-field">
+  <h2 class="rc-card-title" id="h-field">Fields</h2>
+  <p class="rc-section-label">Label above, 16px input, hint, error</p>
+  <div class="rc-card"><div class="rc-grid" id="field-grid"></div></div>
+</section>
+
+<section class="demo-sec" aria-labelledby="h-sheet">
+  <h2 class="rc-card-title" id="h-sheet">Sheet, toast, confirm, ask</h2>
+  <p class="rc-section-label">Bottom sheet on a phone, centred dialog on a desktop. Back button closes it.</p>
+  <div class="rc-card">
+    <div class="rc-btn-row" id="sheet-row"></div>
+    <p class="demo-out" id="sheet-out" role="status"></p>
+  </div>
+</section>
+
+<section class="demo-sec" aria-labelledby="h-state">
+  <h2 class="rc-card-title" id="h-state">Empty, loading, error</h2>
+  <p class="rc-section-label">Three different looks. A failed load never looks like an empty list.</p>
+  <div class="rc-grid">
+    <div class="demo-box" id="st-empty"></div>
+    <div class="demo-box" id="st-loading"></div>
+    <div class="demo-box" id="st-error"></div>
+  </div>
+</section>
+
+<section class="demo-sec" aria-labelledby="h-date">
+  <h2 class="rc-card-title" id="h-date">Dates</h2>
+  <div class="rc-card"><ul id="date-list" style="margin:0;padding-left:20px"></ul></div>
+</section>
+
+<section class="demo-sec" aria-labelledby="h-layout">
+  <h2 class="rc-card-title" id="h-layout">Layout: phone, tablet, desktop</h2>
+  <p class="rc-section-label">One column, then two, then three (a grid), and a list with a detail pane on desktop (a split)</p>
+  <div class="rc-grid" id="grid-demo"></div>
+  <p class="rc-section-label" style="margin-top:24px">List and detail</p>
+  <div class="rc-split">
+    <div class="rc-card rc-stack" id="split-list"></div>
+    <div class="rc-card rc-split__detail" id="split-detail"></div>
+  </div>
+</section>
+
+<footer class="rc-muted rc-small">Worker address: <span data-rc-worker></span></footer>
+</main>
+
+<script>
+(function () {
+  if (typeof RC === 'undefined') return;   // the guard above already said so
+  var $ = function (id) { return document.getElementById(id); };
+  var out = function (t) { $('sheet-out').textContent = t; };
+  function btn(label, kind, fn, big) { return RC.button({ label: label, kind: kind, big: big, onClick: fn }); }
+  function clear(e) { e.textContent = ''; }
+  var logo = document.createElement('img'); logo.setAttribute('data-rc-logo', ''); logo.alt = ''; logo.width = 44; logo.height = 44; $('logo-slot').appendChild(logo);
+
+  function build() {
+    document.documentElement.lang = RC.lang();
+    // buttons
+    var row = $('btn-row'); clear(row);
+    ['primary', 'secondary', 'ghost', 'danger'].forEach(function (k) { row.appendChild(btn(k.charAt(0).toUpperCase() + k.slice(1), k)); });
+    var st = $('btn-states'); clear(st);
+    var dis = btn('Disabled', 'primary'); dis.disabled = true; st.appendChild(dis);
+    var busy = btn('Sending…', 'primary'); busy.setAttribute('aria-busy', 'true'); busy.disabled = true; st.appendChild(busy);
+    st.appendChild(RC.button({ label: 'Tap me twice fast', kind: 'secondary', busyLabel: 'Saving…', onClick: function () { return new Promise(function (r) { setTimeout(r, 1200); }); } }));
+    var big = $('btn-big'); clear(big); big.appendChild(btn('Send invoice', 'primary', null, true));
+
+    // chips: every status the map knows, for each role
+    var cg = $('chip-grid'); clear(cg);
+    Object.keys(RC.chip.map).forEach(function (s) {
+      var card = document.createElement('div'); card.className = 'rc-card';
+      var t = document.createElement('h3'); t.className = 'rc-card-title'; t.textContent = s; card.appendChild(t);
+      RC.chip.roles.forEach(function (r) {
+        var row = document.createElement('div'); row.className = 'demo-role'; var l = document.createElement('span'); l.textContent = r.charAt(0).toUpperCase() + r.slice(1); row.appendChild(l);
+        var c = RC.chip.el(s, r), w = document.createElement('span'); if (c) w.appendChild(c); else w.textContent = 'not shown'; row.appendChild(w); card.appendChild(row);
+      });
+      cg.appendChild(card);
+    });
+    var pr = $('prio-row'); clear(pr);
+    Object.keys(RC.chip.priorities).forEach(function (p) { pr.insertAdjacentHTML('beforeend', RC.chip.priorityHtml(p)); });
+
+    // fields
+    var g = $('field-grid'); clear(g);
+    g.appendChild(RC.field({ label: 'Property address', placeholder: '123 Main St', hint: 'The street and number, as on the lease.' }).el);
+    g.appendChild(RC.field({ label: 'Gate code', optional: true, hint: 'Leave blank if there is none.' }).el);
+    var bad = RC.field({ label: 'Phone number', value: '410-555', error: 'That number is too short. Add the area code and all 7 digits.' }); g.appendChild(bad.el);
+    g.appendChild(RC.field({ label: 'Trade', options: [{ value: 'p', label: 'Plumbing' }, { value: 'e', label: 'Electrical' }, { value: 'h', label: 'HVAC' }] }).el);
+    g.appendChild(RC.field({ label: 'Note to the technician', multiline: true, optional: true, placeholder: 'Dog in the yard, use the side door.' }).el);
+
+    // sheet row
+    var sr = $('sheet-row'); clear(sr);
+    sr.appendChild(btn('Open a sheet', 'secondary', function () {
+      var body = document.createElement('p'); body.style.margin = '0'; body.textContent = 'This is a sheet. Escape, the close button, a tap outside, or the phone back button closes it, and focus returns to the button you used.';
+      RC.sheet({ title: 'A sheet', body: body, actions: [{ label: 'Done', kind: 'primary' }] });
+    }));
+    sr.appendChild(btn('Confirm', 'secondary', function () { return rcConfirm({ title: 'Mark this job complete?', message: 'The owner will be told the work is done.', okLabel: 'Mark complete' }).then(function (y) { out('rcConfirm answered: ' + y); }); }));
+    sr.appendChild(btn('Confirm (danger)', 'danger', function () { return rcConfirm({ title: 'Cancel this job?', message: 'The technician is told right away. This cannot be undone.', okLabel: 'Cancel job', cancelLabel: 'Keep job', danger: true }).then(function (y) { out('rcConfirm answered: ' + y); }); }));
+    sr.appendChild(btn('Ask', 'secondary', function () { return rcAsk({ title: 'Add a contact', label: 'Contact name', hint: 'First and last name.', validate: function (v) { return v.length < 3 ? 'Enter at least 3 letters.' : ''; }, okLabel: 'Add contact' }).then(function (v) { out('rcAsk answered: ' + (v === null ? 'cancelled' : '"' + v + '"')); }); }));
+    sr.appendChild(btn('Toast', 'secondary', function () { rcToast('Saved.').then(function (w) { out('toast closed: ' + w); }); }));
+    sr.appendChild(btn('Toast with Undo', 'secondary', function () { rcToast('Bill approved. It went to Paid next.', { actionLabel: 'Undo', kind: 'success', duration: 6000 }).then(function (w) { out('toast closed: ' + w); }); }));
+    sr.appendChild(btn('Error toast', 'secondary', function () { rcToast('Not saved. Check your signal and try again.', { kind: 'error' }); }));
+
+    // states
+    RC.empty($('st-empty'), { title: 'No jobs yet', text: 'New work orders show up here.', actionLabel: 'Add a property', onAction: function () { rcToast('Add a property tapped'); } });
+    RC.loading($('st-loading'), 'Loading your jobs…');
+    var fails = 0;
+    RC.error($('st-error'), { title: 'Could not load your jobs', text: 'Check your signal and try again.', busyLabel: 'Trying again…', onRetry: function () {
+      fails++; return new Promise(function (r) { setTimeout(r, 900); }).then(function () { if (fails < 2) throw new Error('still offline (demo)'); rcToast('Loaded.', { kind: 'success' }); });
+    } });
+
+    // dates
+    var dl = $('date-list'); clear(dl);
+    [['2026-11-12', 'a plain date'], ['2026-11-12T15:30:00', 'a date and time (shown as a date)'], ['11/16/2026', 'a spreadsheet date'], ['', 'blank'], ['not a date', 'bad value']].forEach(function (p) {
+      var li = document.createElement('li'); li.textContent = (p[0] || '(empty)') + ' → ' + (RC.date(p[0], { fallback: '(no date)' })) + '  [' + p[1] + ']'; dl.appendChild(li);
+    });
+    var li2 = document.createElement('li'); li2.textContent = 'With a time: ' + RC.dateTime('2026-11-12T15:30:00') + ', and with the year: ' + RC.date('2026-11-12', { year: true }); dl.appendChild(li2);
+
+    // layout
+    var gd = $('grid-demo'); clear(gd);
+    ['One', 'Two', 'Three', 'Four', 'Five', 'Six'].forEach(function (n, i) { var c = document.createElement('div'); c.className = 'rc-card'; c.innerHTML = '<h3 class="rc-card-title"></h3><p class="rc-muted" style="margin:4px 0 0"></p>'; c.querySelector('h3').textContent = 'Card ' + n; c.querySelector('p').textContent = 'Phone: 1 column. Tablet: 2. Desktop: 3.'; gd.appendChild(c); });
+    var sl = $('split-list'); clear(sl);
+    ['456 Example Ave', '12 Sample Street', '789 Placeholder Rd'].forEach(function (a, i) {
+      var r = document.createElement('div'); r.className = 'rc-row'; var t = document.createElement('strong'); t.textContent = a; r.appendChild(t);
+      r.insertAdjacentHTML('beforeend', RC.chip.html(Object.keys(RC.chip.map)[i + 2], 'vendor')); sl.appendChild(r);
+    });
+    $('split-detail').innerHTML = '<h3 class="rc-card-title">Detail pane</h3><p class="rc-muted" style="margin:4px 0 0">On a phone this sits below the list. From 1100px wide it sits beside it.</p>';
+    RC.applyBrand(document);
+  }
+  function setLang(l) { window.LANG = l; $('lang-en').setAttribute('aria-pressed', String(l === 'en')); $('lang-es').setAttribute('aria-pressed', String(l === 'es')); build(); }
+  $('lang-en').addEventListener('click', function () { setLang('en'); });
+  $('lang-es').addEventListener('click', function () { setLang('es'); });
+  build();
+})();
+</script>
+</body>
+</html>
