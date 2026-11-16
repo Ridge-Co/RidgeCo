@@ -22067,9 +22067,9 @@ const OPS_QUEUE_TAB  = 'Ops_Build_Queue';
 // row #N"; Shipped_Match = "looks already built: <FEATURE_LOG ref>"; Scout_Verdict/Scout_Note/
 // Scout_Reviewed = the Scout's re-check of a snoozed item against builds shipped since.
 const OPS_QUEUE_COLS = ['ID','Timestamp','Title','Rank','Problem','Impact','Effort','Tag','First_Step','Review_TS','Status','Approved_By','Drop_Reason','Superseded_By','Risk_Class','Build_Brief','Held_Note','Lens','Requires_Spend','Spend_Note','Workaround','Brett_Note','Snooze_Until','PR_Number','Build_State','Build_Updated','Dup_Of','Shipped_Match','Scout_Verdict','Scout_Note','Scout_Reviewed','Source_Task_ID',
-  // Queue v2 (Nov 16 2026), all additive via ensureColumns: Stage = the one lifecycle value (QUEUE_STAGES; blank on old rows = worked out
-  // from Status / Build_State on read); Stage_Updated / Stage_By = when and who; Stage_Log = one line per change; Blocked_Reason /
-  // Blocked_On (brett | build | external) = why a row is blocked and on whom; Pinned = 'TRUE' puts it at the top of the board.
+  // Queue v2 (Nov 16 2026), all additive via ensureColumns: Stage = the one lifecycle value (see QUEUE_STAGES, blank on old rows = worked out
+  // from Status / Build_State on read), Stage_Updated / Stage_By = when and who, Stage_Log = one line per change, Blocked_Reason /
+  // Blocked_On (brett, build or external) = why a row is blocked and on whom, Pinned = TRUE puts it at the top of the board.
   'Stage','Stage_Updated','Stage_By','Stage_Log','Blocked_Reason','Blocked_On','Pinned'];
 // 'proposed' (Sep 20 2026, Optimizer Scout & Reuse-Radar): a SYSTEM-generated backlog candidate
 // awaiting Brett's own review — distinct from 'greenlit', which means Brett has explicitly
