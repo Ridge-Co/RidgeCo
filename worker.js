@@ -23903,6 +23903,7 @@ async function selftestCallEndpoint(env, name) {
     case 'receipt_queue': return await listReceiptQueue(env, u('/receipt-queue'));
     case 'scopes': return await scopeList(env, u('/scopes'));
     case 'stale_wos': return await staleWos(env, u('/stale-wos'));
+    case 'repeat_units': return await repeatUnitsResponse(env, u('/repeat-units'));
     case 'deliveries': return await deliveriesList(env, u('/deliveries'));
     case 'tenant_wo_settings': return await tenantWOSettingsSummary(env);
     case 'twilio_account_status': return await twilioAccountStatus(env);
