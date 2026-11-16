@@ -22110,7 +22110,7 @@ async function opsApprove(env, body) {
     if (_m) {
       const _st = String(_m.row.Status || '').toLowerCase();
       if (_st === 'proposed' || _st === 'held') {
-        const _rc = String(it.risk_class || it.riskClass || '').toUpperCase() === 'SAFE' ? 'SAFE' : 'GATED';
+        const _rc = queueResolveRisk(it.risk_class || it.riskClass, it).risk;   // Queue v2: 'AUTO' = decide from the wording; SAFE stays SAFE; anything else is GATED
         await updateRow(env, OPS_QUEUE_TAB, _m.row.ID, { Status: 'greenlit', Approved_By: String((body && body.by) || 'command-center'), Risk_Class: _rc, Snooze_Until: '', Build_Updated: now });
         _m.row.Status = 'greenlit'; promoted++;
       } else already++;
