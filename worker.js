@@ -652,7 +652,7 @@ const _hubWorkerCore = {
         if (path === '/owner-onboard/info')     return await ownerOnboardInfo(env, url);
         if (path === '/owner-onboard/invites')  return await ownerOnboardInvites(env);
         if (path === '/vendor-by-pin')          return await vendorByPin(env, url);
-        if (path === '/owner-properties')       return await ownerProperties(env, url);
+        if (path === '/owner-properties')       return await ownerProperties(env, url, callerRole);
         if (path === '/owner/tenant-roster')    return await ownerRosterList(env, callerRole, callerSessionId, url);   // owner session (own id) or admin ?owner_id=
         if (path === '/vendor-workorders')      return await vendorWorkorders(env, url, callerRole, callerSessionId);
         if (path === '/tenant-workorders')      return await tenantWorkorders(env, url, callerRole, callerSessionId);
