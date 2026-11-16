@@ -688,6 +688,7 @@ const _hubWorkerCore = {
         if (path === '/wo/additional-work')     return await addonList(env, url, callerRole, callerSessionId);   // vendor (own parent) + admin
         if (path === '/nearby-wos')             return await listNearbyWOs(env, url);
         if (path === '/stale-wos')              return await staleWos(env, url);
+        if (path === '/repeat-units')           return await repeatUnitsResponse(env, url);   // #250 admin only (not in ROLE_SCOPES), read-only
         if (path === '/cluster-suggestions')    return await clusterSuggestions(env, url);
         if (path === '/qb/test')                return await qbTest(env);
         if (path === '/gmail/test')             return await gmailTest(env, url);
