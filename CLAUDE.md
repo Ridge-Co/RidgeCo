@@ -10,6 +10,21 @@ Mobile-first (Samsung Galaxy S23 Ultra, Android Chrome). Brett does NOT paste co
 pushes to GitHub. Deliver complete files, never snippets. Scannable, direct, next concrete
 action — no cheerleading. When corrected, change approach; never restate a refuted plan.
 
+## UI and process skills (always)
+Skills live in `.claude/skills/`. These rules apply to every session, scheduled or not (added Nov 16 2026).
+- **Any change to an `.html` or `.css` file:** follow the `ridgeco-ui-review` skill. In short:
+  1. Read `DESIGN.md` first. It is the design standard (`context/HUB_UX_DESIGN_FOUNDATION_v1.1.md` is where it came from).
+  2. Use the shared parts and tokens it names. Do not invent a new button, chip, color or size.
+  3. Run `node scripts/ui-check.mjs <changed pages>` and fix anything it says got worse.
+  4. Look at the screenshots at 412 and 1366 (and 1920 for Hub pages) before opening a PR, and say in the PR what you saw.
+- **Any new feature:** start with the `pre-build-grill` skill (it runs `context/PRE_BUILD_GATE_v1.0.md`), unless the brief
+  already answers the questions.
+- **Never say done, fixed or passing** before the `verification-before-completion` skill: run the check, read the output, then claim.
+- Other skills: `impeccable` (design review rules), `playwright-cli` (drive a browser), `brainstorming`, `writing-plans`,
+  `systematic-debugging`, `office-hours` (new venture ideas), `public-site-taste` (public marketing pages ONLY, never the Hub
+  or the portals).
+- Outside skills are vetted and pinned in `context/THIRD_PARTY_SKILLS.md`. Never install or update one without re-vetting it there.
+
 ## MANDATORY: load context before writing code
 1. Read ALL files in `/context/`, starting with `/context/CURRENT.md`, **then every file in `/context/notes/`** (newest
    first; one note per PR since Oct 21 2026, newer than CURRENT.md; see `context/notes/README.md`) (CURRENT.md names the active
