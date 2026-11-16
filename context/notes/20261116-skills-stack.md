@@ -1,6 +1,6 @@
-# DESIGN + PROCESS SKILLS STACK — Nov 16, 2026 — PR #551 into main, head `feat/skills-stack-nov16` (cut from main tip e5c949a), merged: no
+# DESIGN + PROCESS SKILLS STACK — Nov 16, 2026 — PR #552 into main, head `feat/skills-stack-nov16` (cut from main tip e5c949a), merged: no
 
-(PR #550 was the same branch opened with a placeholder description. GH Broker has no way to edit a PR description, so #550 was closed and #551 opened with the full one. If the number above is wrong, the build report in `brett332/data/ops/build-reports/skills-stack-nov16.md` has the right one.)
+(PR #550 was the same branch opened with a placeholder description. GH Broker has no way to edit a PR description, so #550 was closed and #552 opened with the full one.)
 
 ## CURRENT
 **Ask (Brett, Nov 16, master plan section 4 and 5 phase 1b):** install a vetted set of design and process skills where builds actually run (this repo), so every build that touches a screen follows one design standard and checks its own work in a browser, without depending on a model remembering.
