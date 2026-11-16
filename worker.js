@@ -22846,7 +22846,7 @@ async function updateQueueRowOrThrow(env, id, fields) {
   return r;
 }
 async function opsQueueSync(env, body, opts) {
-  await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
+  if (!(opts && opts.tick)) await ensureTab(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);   // the 15-minute tick skips this extra read; ensureColumns below is memoised
   await ensureColumns(env, OPS_QUEUE_TAB, OPS_QUEUE_COLS);
   const d = await sheetsRequest(env, 'GET', `/values/${OPS_QUEUE_TAB}`);
   const v = d.values || [];
