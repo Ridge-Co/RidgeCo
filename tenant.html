@@ -73,10 +73,10 @@ textarea{resize:vertical;min-height:70px;}
 .badge{display:inline-block;padding:3px 9px;border-radius:4px;font-size:11px;font-weight:bold;letter-spacing:.05em;text-transform:uppercase;}
 .badge-new{background:#e8f0fb;color:var(--info);}
 .badge-assigned,.badge-accepted{background:#eaf6ee;color:var(--accent2);}
-.badge-in-progress,.badge-inprogress{background:#eaf6ee;color:#86efac;}
+.badge-in-progress,.badge-inprogress{background:var(--accent2);color:#fff;}
 .badge-onhold{background:#fdf2e2;color:var(--warn);}
-.badge-complete{background:#eaf6ee;color:#6ee7b7;}
-.badge-pendinginvoice,.badge-invoiced,.badge-paid{background:#eaf6ee;color:#6ee7b7;}
+.badge-complete{background:#eaf6ee;color:var(--accent2);}
+.badge-pendinginvoice,.badge-invoiced,.badge-paid{background:#eaf6ee;color:var(--accent2);}
 .badge-scheduled{color:var(--muted);font-size:11px;display:block;margin-top:4px;}
 .expand-icon{color:var(--muted);font-size:14px;margin-top:2px;transition:transform .2s;}
 .wo-card.expanded .expand-icon{transform:rotate(180deg);}
@@ -145,6 +145,17 @@ textarea{resize:vertical;min-height:70px;}
   .table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
 }
 </style>
+<script>window.RC_PUSH_MOUNT='rc-bell-slot';</script>
+<link rel="stylesheet" href="rc-ui.css?v=1" onerror="document.documentElement.setAttribute('data-rc-css-failed','1')">
+<script src="rc-ui.js?v=1"></script>
+<script data-rc-ui-guard>if (typeof RC === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div role="alert" style="background:#b42318;color:#fff;padding:12px 16px;font:600 15px sans-serif;position:relative;z-index:99999">A shared file (rc-ui.js) did not load, so this page cannot run. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
+<style id="rc-phase0">
+/* UI Phase 0 (PR B): readable text. Body 15px, nothing under 13px, section labels in sentence case. Later in the page than the old rules so it wins. */
+body{font-size:15px}
+.logo-sub,label,.btn-sm,.msg,.app-header .sub,.stat-pill,.wo-date,.wo-desc-prev,.badge,.badge-scheduled,.detail-section-title,.detail-row,.tl-label,.note-thread,.spinner-msg,.load-error-msg,.feedback-btn,[style*="size:9px"],[style*="size:10px"],[style*="size:11px"],[style*="size:12px"]{font-size:13px !important}
+label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font-size:13px}
+@media (hover:hover){.filter-row select,.filter-row input{font-size:13px !important}}
+</style>
 <link rel="manifest" href="manifest-tenant.webmanifest"><script src="push-client.js" defer></script></head>
 <body>
 
@@ -175,6 +186,8 @@ textarea{resize:vertical;min-height:70px;}
       <div class="name" id="tenantName">—</div>
       <div class="sub" id="tenantAddr"></div>
     </div>
+    <span id="rc-bell-slot" style="display:contents"></span>
+    <button class="btn btn-sm btn-muted" onclick="openModal('modalFeedback')" id="feedbackFloatBtn" style="display:none">💬 Feedback</button>
     <button class="btn btn-sm btn-muted" onclick="doLogout()">LOG OUT</button>
   </div>
 
@@ -273,7 +286,6 @@ textarea{resize:vertical;min-height:70px;}
   </div>
 </div>
 
-<button class="feedback-btn" onclick="openModal('modalFeedback')" id="feedbackFloatBtn" style="display:none">💬 Feedback</button>
 
 <script>
 var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
@@ -586,7 +598,7 @@ function renderWOs() {
         '</div>' +
         '<div class="status-block">' +
           '<span class="badge ' + sc + '">' + esc(statusLabel) + '</span>' +
-          (wo.Scheduled_Date ? '<span class="badge-scheduled">Scheduled: ' + esc(wo.Scheduled_Date) + '</span>' : '') +
+          (wo.Scheduled_Date ? '<span class="badge-scheduled">Scheduled: ' + esc(window.RC && RC.date ? RC.date(wo.Scheduled_Date, { fallback: wo.Scheduled_Date }) : wo.Scheduled_Date) + '</span>' : '') +
           '<div class="expand-icon" style="text-align:right;margin-top:6px">▾</div>' +
         '</div>' +
       '</div>' +
@@ -895,6 +907,7 @@ function submitFeedback() {
 // ── Utils ─────────────────────────────────────────────────────
 function fmtDate(iso) {
   if (!iso) return '—';
+  if (window.RC && RC.date) { var rd = RC.date(iso, { year: true }); if (rd) return rd; }
   try { return new Date(iso).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
   catch(e) { return iso.split('T')[0]; }
 }
