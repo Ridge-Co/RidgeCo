@@ -22852,12 +22852,22 @@ async function opsQueueSync(env, body, opts) {
   const v = d.values || [];
   const rows = v.length > 1 ? v.slice(1).map(r => { const o = {}; v[0].forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; }) : [];
   const _pref = body && body.title_prefix ? String(body.title_prefix) : '';
-  const inflight = rows.filter(r => {
+  const _nowMs = Date.now();
+  const stuck = [], deployMissing = [], rateLimited = [];
+  const _all = rows.filter(r => {
     if (_pref && !String(r.Title || '').startsWith(_pref)) return false;
+    const _si = queueStuckInfo(r, _nowMs);
+    if (_si.stuck) stuck.push({ id: r.ID, stage: _si.stage, hours: _si.hours });
     const st = String(r.Status || '').toLowerCase();
     const bs = String(r.Build_State || '');
-    return (st === 'building' || st === 'done' || st === 'held') && (bs === 'building' || bs === 'pr_open' || (bs === '' && r.PR_Number && st !== 'done'));
-  }).slice(0, 25);
+    // Queue v2: also rows waiting for their deploy (merged), and blocked rows that still have a PR (Brett may merge it anyway).
+    return _si.stage === 'merged' || (_si.stage === 'blocked' && bs !== 'pr_closed' && !!cleanPrNumber(r.PR_Number))
+      || ((st === 'building' || st === 'done' || st === 'held') && (bs === 'building' || bs === 'pr_open' || (bs === '' && r.PR_Number && st !== 'done')));
+  });
+  // Merged rows first: their deploy check costs no GitHub call. (Array sort is stable, so the sheet order is kept otherwise.)
+  _all.sort((a, b) => (queueStageOf(b, _nowMs) === 'merged' ? 1 : 0) - (queueStageOf(a, _nowMs) === 'merged' ? 1 : 0));
+  const _cap = (opts && opts.max) || 25;
+  const inflight = _all.slice(0, _cap), _more = Math.max(0, _all.length - _cap);
   const changed = [], errors = [];
   // GitHub rate-limits anonymous calls from Cloudflare's shared addresses, so the Proposals page can
   // look PRs up from Brett's own browser and pass them in as body.prs (same shape as GitHub's /pulls list).
