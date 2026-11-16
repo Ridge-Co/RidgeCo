@@ -22121,7 +22121,8 @@ async function opsApprove(env, body) {
     // never defaulted to SAFE. Only the literal string 'SAFE' counts as SAFE; anything else
     // (missing, misspelled, explicitly 'GATED') stores as GATED, matching judge()'s own
     // fail-closed posture (see the OPS_QUEUE_COLS comment above).
-    const riskClass = String(it.risk_class || it.riskClass || '').toUpperCase() === 'SAFE' ? 'SAFE' : 'GATED';
+    // Queue v2 (Nov 16 2026): the literal 'AUTO' ("Decide for me") stores SAFE unless the wording matches the risk guard.
+    const riskClass = queueResolveRisk(it.risk_class || it.riskClass, it).risk;
     await addRow(env, OPS_QUEUE_TAB, {
       Timestamp: now, Title: String(it.title || '').slice(0, 200), Rank: String(it.rank || ''),
       Problem: String(it.problem || '').slice(0, 600),
