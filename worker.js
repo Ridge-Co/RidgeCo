@@ -20923,8 +20923,12 @@ async function buildDigest(env) {
   } catch (e) { /* non-fatal */ }
   // Tenant fix-checks (Oct 16 2026): answers waiting for Brett + checks nobody answered. An unreadable list is reported IN the digest, never skipped.
   const fuDigest = await fuDigestLines(env);
+  // Repeat-failure units (queue #250): additive and best-effort, from the work orders already loaded above. A failure is reported IN the digest, never skipped and never breaks it.
+  let repeatUnits = [], repeatUnitsError = '';
+  try { repeatUnits = repeatFailureUnits(wos); } catch (e) { repeatUnitsError = String((e && e.message) || e).slice(0, 120); console.error('digest repeat-units failed:', repeatUnitsError); }
   return {
     followups: fuDigest.lines, followupsError: fuDigest.error,
+    repeatUnits, repeatUnitsError,
     today, stamp: etStamp(),
     overdue: overdue.map(label), dueToday: dueToday.map(label), onHold: onHold.map(label), urgent: urgent.map(label),
     pendingBills: pendingBills.map(b=>`Bill ${b.ID} · ${b.Vendor_Name||('V-'+(b.Vendor_ID||'?'))} · WO-${b.WO_ID||'?'} · $${(parseFloat(b.Total||b.Customer_Total||0)||0).toFixed(2)}`),
