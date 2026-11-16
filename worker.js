@@ -338,6 +338,11 @@ const _hubWorkerCore = {
             // POST /ops-queue/start-build (the button that actually fires a routine, i.e. spends)
             // deliberately stays OFF this list — full admin secret only, same tier as /ops-approve.
             (request.method === 'POST' && path === '/ops-queue-status') ||
+            // Queue v2 (Nov 16 2026): POST /ops-queue-stage is the narrow report-back route (queueStagePlan is the hard boundary: a token
+            // can only move rows Brett already approved, can never approve / drop / snooze / mark SAFE, and can never mark a row merged
+            // or live without a PR GitHub confirms is merged). POST /ops-queue/risk-check writes nothing.
+            (request.method === 'POST' && path === '/ops-queue-stage') ||
+            (request.method === 'POST' && path === '/ops-queue/risk-check') ||
             // POST /ops-queue/sync (Oct 13 2026): checks public GitHub PR state for in-flight builds and
             // writes Build_State/PR_Number/Status→done only. Lets the Hub scheduler (Apps Script) call it
             // daily without the admin secret.
