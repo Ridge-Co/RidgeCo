@@ -145,6 +145,17 @@ textarea{resize:vertical;min-height:70px;}
   .table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
 }
 </style>
+<script>window.RC_PUSH_MOUNT='rc-bell-slot';</script>
+<link rel="stylesheet" href="rc-ui.css?v=1" onerror="document.documentElement.setAttribute('data-rc-css-failed','1')">
+<script src="rc-ui.js?v=1"></script>
+<script data-rc-ui-guard>if (typeof RC === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div role="alert" style="background:#b42318;color:#fff;padding:12px 16px;font:600 15px sans-serif;position:relative;z-index:99999">A shared file (rc-ui.js) did not load, so this page cannot run. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
+<style id="rc-phase0">
+/* UI Phase 0 (PR B): readable text. Body 15px, nothing under 13px, section labels in sentence case. Later in the page than the old rules so it wins. */
+body{font-size:15px}
+.logo-sub,label,.btn-sm,.msg,.app-header .sub,.stat-pill,.wo-date,.wo-desc-prev,.badge,.badge-scheduled,.detail-section-title,.detail-row,.tl-label,.note-thread,.spinner-msg,.load-error-msg,.feedback-btn,[style*="size:9px"],[style*="size:10px"],[style*="size:11px"],[style*="size:12px"]{font-size:13px !important}
+label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font-size:13px}
+@media (hover:hover){.filter-row select,.filter-row input{font-size:13px !important}}
+</style>
 <link rel="manifest" href="manifest-tenant.webmanifest"><script src="push-client.js" defer></script></head>
 <body>
 
