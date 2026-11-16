@@ -47267,6 +47267,125 @@ async function fiFolderOrganize(env, body) {
 
 // ═══ FI-BLOCK-END ═══════════════════════════════════════════════════════════════════════════════
 
+// ═══ ASSET-BLOCK-START ═════════════════════════════════════════════════════════════════════════
+// APPLIANCE / EQUIPMENT REGISTRY, PHASE 1 of 2 (Ops_Build_Queue #145, Nov 16 2026). Admin-only, endpoints only (no Hub screen yet).
+// A photo of a data plate is read by the SAME vision prompt field inspection uses (fiReadLabel), the admin confirms the parse, and ONE row is saved
+// in a NEW isolated tab `Asset_Registry` tied to Property_ID / Unit_ID. Why a new tab: warranty flag (#249) and replace-vs-repair (#250, #162) all need a
+// per-asset record and there was none (the inspection doc JSON holds equipment but is not queryable per unit).
+//   POST /assets/read-nameplate  PROPOSES only: reads a photo, writes nothing (no Sheet, no Drive), flags a likely duplicate.
+//   POST /assets/save            writes ONE row after validating Property/Unit, refuses a duplicate unless allow_duplicate, then READS IT BACK (rules 6/19).
+//   GET  /assets/list            read-only, ?property_id=&unit_id=
+// None of the three is in PUBLIC_PATHS, ROLE_SCOPES, HUB_PROD_WRITE_PATHS or HUB_TEST_WRITE_PATHS, so each needs the full WORKER_SECRET admin gate
+// (a tenant/owner/vendor session gets 403, the staging test token cannot write). No tenant/owner/vendor name, phone, email, PIN or code is read or stored here.
+const ASSET_TAB = 'Asset_Registry';
+const ASSET_HEADERS = ['ID', 'Property_ID', 'Unit_ID', 'Kind', 'Brand', 'Model', 'Serial', 'Year', 'Fuel', 'Capacity', 'Filter_Size', 'Tonnage', 'Amperage', 'Spaces', 'Name', 'Notes', 'Source', 'Photo_Drive_File_ID', 'Confirmed_By', 'Confirmed_At', 'Warranty_Start', 'Warranty_Months', 'Active', 'Created_At'];
+const ASSET_CAP = { brand: 'Brand', model: 'Model', serial: 'Serial', year: 'Year', fuel: 'Fuel', capacity: 'Capacity', filter_size: 'Filter_Size', tonnage: 'Tonnage', amperage: 'Amperage', spaces: 'Spaces', name: 'Name', notes: 'Notes' };
+const ASSET_MAX_BYTES = 4.5 * 1024 * 1024;   // same cap as fiReadLabel
+const assetNormSerial = s => String(s == null ? '' : s).toUpperCase().replace(/[^A-Z0-9]/g, '');
+const assetNormText = s => String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, '');
+// Likely duplicate among ACTIVE rows of the same unit (or same property when no unit): same Kind + same normalized serial, else same Brand + Model (+ Kind).
+function assetFindDuplicate(rows, propertyId, unitId, eq) {
+  const ser = assetNormSerial(eq.serial);
+  for (const r of rows || []) {
+    if (r.Active === 'FALSE') continue;
+    if (String(r.Property_ID) !== String(propertyId)) continue;
+    if (String(r.Unit_ID || '') !== String(unitId || '')) continue;
+    if (r.Kind !== eq.kind) continue;
+    if (ser && assetNormSerial(r.Serial) === ser) return { id: r.ID, reason: 'same_serial' };
+    if (!ser && eq.brand && eq.model && assetNormText(r.Brand) === assetNormText(eq.brand) && assetNormText(r.Model) === assetNormText(eq.model) && !assetNormSerial(r.Serial)) return { id: r.ID, reason: 'same_brand_model' };
+  }
+  return null;
+}
+async function assetRoute(env, label, fn) {
+  try { return await fn(); }
+  catch (e) {
+    if (sheetsQuotaBusyError(e)) throw e;   // quota-busy keeps the Hub-wide typed 429 (see fiRoute)
+    console.error('assets/' + label + ' failed:', e && e.message);
+    let telemetryError = '';
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'asset_registry', Skill_Or_Endpoint: '/assets/' + label, Success: 'FALSE', Notes: 'route_error: ' + String((e && e.message) || e).slice(0, 180) }); }
+    catch (te) { telemetryError = String((te && te.message) || te).slice(0, 120); console.error('assets/' + label + ': could not log to Ops_Telemetry:', telemetryError); }
+    return fiErr(500, 'internal', 'The server hit an error (assets/' + label + '). Nothing was reported as saved. Retry; if it repeats, tell Brett.', Object.assign({ detail: String((e && e.message) || e).slice(0, 160) }, telemetryError ? { telemetry_error: telemetryError } : {}));
+  }
+}
+// A missing tab is normal on first use (the tab is created by the first save), so a read of it is an empty list, never an error.
+async function assetRows(env) {
+  try { return await fetchTab(env, ASSET_TAB); }
+  catch (e) { if (isMissingTabError(e)) return []; throw e; }
+}
+async function assetTelemetry(env, endpoint, ok, notes) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'asset_registry', Skill_Or_Endpoint: endpoint, Success: ok ? 'TRUE' : 'FALSE', Notes: String(notes || '').slice(0, 200) }); }
+  catch (e) { console.error('asset telemetry failed (best-effort):', e && e.message); }
+}
+async function assetReadNameplate(env, body) {
+  body = body || {};
+  const mime = String(body.mime || '').toLowerCase();
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) return fiErr(400, 'bad_mime', 'Send a jpeg, png or webp photo.');
+  const b64 = String(body.image_base64 || '').replace(/^data:[^,]+,/, '').replace(/\s+/g, '');
+  if (!b64) return fiErr(400, 'photo_missing', 'No photo was sent.');
+  if (Math.floor(b64.length * 0.75) > ASSET_MAX_BYTES) return fiErr(413, 'photo_too_large', 'That photo is over 4.5 MB. Take it again a bit smaller, or type the details by hand.');
+  const kind = FI_EQUIP_KINDS[body.kind] ? body.kind : '';
+  // Same wording as fiReadLabel on purpose (a test pins that they stay identical), so the plate is read the same way in an inspection and here.
+  const prompt = `${kind ? 'This is a ' + FI_EQUIP_KINDS[kind].label.toLowerCase() + '. ' : ''}Read the label.\nReturn JSON only: {"readable":true,"kind":"${Object.keys(FI_EQUIP_KINDS).join('|')}","brand":"","model":"","serial":"","year":"","filter_size":"","fuel":"","tonnage":"","capacity":"","amperage":"","spaces":"","notes":""}\n"year" only if a manufacture date or year is printed (copy it as printed). "notes" may hold other printed ratings (BTU, voltage) in one short line. For an ELECTRICAL PANEL: brand = the panel manufacturer (e.g. Square D, Eaton / Cutler-Hammer, Siemens, GE, Murray, Federal Pacific, Zinsco, Challenger); model = the panel or enclosure model / catalog number exactly as printed (not a breaker's number); "amperage" = the panel or main bus / main breaker rating printed on it (e.g. 100A, 200A), never the amp rating of a single circuit breaker; "spaces" = the number of spaces / circuits the panel is rated for if printed (e.g. 20, 40); put voltage, phase, short-circuit rating or a "max main" in notes. If only the door directory (handwritten circuit list) is visible and no manufacturer label, set readable false. Set readable false if no label text can be read.`;
+  let ai;
+  try { ai = await routeAI(env, { type: 'fi_read_label', tier: 'REASON', schema: true, system: FI_LABEL_SYSTEM, prompt, media: { type: 'image', source: { type: 'base64', media_type: mime, data: b64 } }, maxTokens: 600, source: 'asset-registry' }); }
+  catch (e) {
+    if (aiCreditIsPausedError(e)) { await assetTelemetry(env, '/assets/read-nameplate', false, 'ai_credit_paused'); return fiErr(503, AI_CREDIT_CODE, 'Automatic label reading is paused (AI credit). Type the details by hand.', { code: AI_CREDIT_CODE, paused: true }); }
+    await assetTelemetry(env, '/assets/read-nameplate', false, 'ai_failed: ' + String((e && e.message) || e));
+    return fiErr(502, 'ai_failed', 'The AI could not read this photo. Retry, or type the details by hand.', { detail: String((e && e.message) || e).slice(0, 200) });
+  }
+  const parsed = fiExtractJson(ai.result);
+  if (!parsed || typeof parsed !== 'object') { await assetTelemetry(env, '/assets/read-nameplate', false, 'ai_bad_output'); return fiErr(502, 'ai_bad_output', 'The AI answered in an unexpected format. Retry, or type the details by hand.'); }
+  const eq = fiNormalizeEquipment(Object.assign({}, parsed, { kind: kind || parsed.kind }));
+  if (parsed.readable === false || !eq) { await assetTelemetry(env, '/assets/read-nameplate', true, 'not_readable'); return json({ ok: true, found: false, message: 'No readable label text was found in that photo.' }); }
+  let duplicate_of = null, duplicate_check = 'skipped';
+  if (body.property_id) {
+    try { duplicate_of = assetFindDuplicate(await assetRows(env), body.property_id, body.unit_id, eq); duplicate_check = 'done'; }
+    catch (e) { duplicate_check = 'failed'; console.error('asset duplicate check failed:', e && e.message); }   // a warning only: the save re-checks
+  }
+  await assetTelemetry(env, '/assets/read-nameplate', true, 'found kind=' + eq.kind);
+  return json({ ok: true, found: true, equipment: eq, duplicate_of, duplicate_check, model_used: ai.model_used });
+}
+async function assetSave(env, body) {
+  body = body || {};
+  const eq = fiNormalizeEquipment(body.equipment);   // never trust the shape the client sent
+  if (!eq) return fiErr(400, 'empty', 'Nothing worth saving: fill in at least one detail (brand, model, serial...).');
+  const propertyId = String(body.property_id || '').trim(), unitId = String(body.unit_id || '').trim();
+  if (!propertyId) return fiErr(400, 'bad_request', 'property_id is required.');
+  const [props, units] = await Promise.all([fetchTab(env, 'Properties'), unitId ? fetchTab(env, 'Units') : Promise.resolve([])]);
+  if (!props.some(p => String(p.ID) === propertyId)) return fiErr(404, 'property_not_found', 'No property with that id. Nothing was saved.');
+  if (unitId) {
+    const u = units.find(x => String(x.ID) === unitId);
+    if (!u) return fiErr(404, 'unit_not_found', 'No unit with that id. Nothing was saved.');
+    if (String(u.Property_ID || '') !== propertyId) return fiErr(400, 'unit_property_mismatch', 'That unit does not belong to that property. Nothing was saved.');
+  }
+  // New, isolated tab: ensureTab creates it on first save. ensureColumns then adds any header a later version introduces (never reorders or deletes).
+  await ensureTab(env, ASSET_TAB, ASSET_HEADERS);
+  await ensureColumns(env, ASSET_TAB, ASSET_HEADERS);
+  const dup = assetFindDuplicate(await assetRows(env), propertyId, unitId, eq);
+  if (dup && body.allow_duplicate !== true) return fiErr(409, 'duplicate', 'This looks like an asset already in the registry (' + dup.reason.replace(/_/g, ' ') + '). Nothing was saved. Send allow_duplicate:true to save it anyway.', { duplicate_of: dup });
+  const now = new Date().toISOString();
+  const rec = { Property_ID: propertyId, Unit_ID: unitId, Kind: eq.kind, Source: body.source === 'manual' ? 'manual' : 'nameplate_ocr', Photo_Drive_File_ID: fiStr(body.photo_drive_file_id, 80), Confirmed_By: fiStr(body.confirmed_by, 60) || 'admin', Confirmed_At: now, Created_At: now };
+  for (const [k, colName] of Object.entries(ASSET_CAP)) if (eq[k]) rec[colName] = eq[k];
+  const addResp = await addRow(env, ASSET_TAB, rec);
+  let added = null; try { added = await addResp.json(); } catch (e) { added = null; }
+  if (!addResp.ok || !added || !added.id) { await assetTelemetry(env, '/assets/save', false, 'add_failed'); return fiErr(502, 'not_saved', 'The registry did not accept the row. Nothing was saved. Retry; if it repeats, tell Brett.'); }
+  // Read it back by ID from a fresh read; only then say ok (FEATURE_LOG rules 6/19, "verify the write").
+  invalidateTabCache(ASSET_TAB);
+  const back = (await assetRows(env)).find(r => String(r.ID) === String(added.id));
+  const same = !!back && back.Kind === eq.kind && String(back.Property_ID) === propertyId && String(back.Unit_ID || '') === unitId && (back.Brand || '') === (eq.brand || '') && (back.Model || '') === (eq.model || '') && (back.Serial || '') === (eq.serial || '');
+  if (!same) { await assetTelemetry(env, '/assets/save', false, 'read_back_mismatch id=' + added.id); return fiErr(502, 'not_confirmed', 'The row was sent but could not be confirmed in the registry. Do not assume it saved: check the list, then retry if it is missing.', { id: added.id }); }
+  await assetTelemetry(env, '/assets/save', true, 'saved id=' + added.id + ' kind=' + eq.kind);
+  return json({ ok: true, id: added.id, row: back });
+}
+async function assetList(env, url) {
+  const pid = String(url.searchParams.get('property_id') || '').trim(), uid = String(url.searchParams.get('unit_id') || '').trim();
+  const rows = (await assetRows(env)).filter(r => r.Active !== 'FALSE' && (!pid || String(r.Property_ID) === pid) && (!uid || String(r.Unit_ID || '') === uid));
+  rows.sort((a, b) => String(a.Kind).localeCompare(String(b.Kind)) || Number(a.ID) - Number(b.ID));
+  await assetTelemetry(env, '/assets/list', true, 'rows=' + rows.length);
+  return json({ ok: true, count: rows.length, assets: rows });
+}
+// ═══ ASSET-BLOCK-END ═══════════════════════════════════════════════════════════════════════════
+
 // ═══ INSB-BLOCK-START ══════════════════════════════════════════════════════
 // INSPECTION BILLING (Oct 22 2026) — "complete the inspection, everything else follows".
 // Brett: Premier Property Management books inspections by work order; when he taps Complete on an approved booking the Hub
