@@ -612,6 +612,7 @@ function render(d){
       +'<p class="note">Ranked by who’s waiting on you, then priority, then how long it’s been sitting.</p></div>';
 
   html+=staleCard(d.stale);
+  html+='<div id="aging-slot"></div>';   // queue #181, filled by renderAging() below
   html+=optCard(d.opt);
   html+=tasksCard(d.tasks);
 
