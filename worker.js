@@ -11658,11 +11658,14 @@ async function saveBuildingInfo(env, body) {
   return json({ success: true, results });
 }
 
-async function ownerProperties(env, url) {
-  const ownerId = url.searchParams.get('owner_id');
+async function ownerProperties(env, url, callerRole) {
+  const ownerId = url.searchParams.get('owner_id');   // for an owner session the router has already forced this to the session's own id
   if (!ownerId) return json({ error: 'Missing owner_id' }, 400);
   const [properties, units] = await fetchTabs(env, ['Properties','Units']);
-  return json(properties.filter(p => p.Owner_ID === ownerId && p.Active !== 'FALSE').map(p => ({ ...p, units: units.filter(u => u.Property_ID === p.ID) })));
+  const mine = properties.filter(p => p.Owner_ID === ownerId && p.Active !== 'FALSE');
+  // Owner allow-list (Nov 16 2026): an owner session gets the address fields the page uses, never the whole row (lock codes, QuickBooks ids, access notes).
+  if (callerRole === 'owner') return json(mine.map(p => ({ ...ownerPick(p, OWNER_PROPERTY_FIELDS), units: units.filter(u => u.Property_ID === p.ID).map(u => ownerPick(u, OWNER_UNIT_FIELDS)) })));
+  return json(mine.map(p => ({ ...p, units: units.filter(u => u.Property_ID === p.ID) })));
 }
 
 async function saveCacheEntry(env, body) {
