@@ -23825,6 +23825,10 @@ function selftestAssertEndpoint(name, status, data) {
       if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
       if (!data || data.ok !== true || !Array.isArray(data.stale)) return { ok: false, reason: 'missing ok/stale array' };
       return { ok: true, reason: `${data.stale.length} stale WO(s) over ${data.threshold_days}d` };
+    case 'repeat_units':
+      if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
+      if (!data || data.ok !== true || !Array.isArray(data.units)) return { ok: false, reason: 'missing ok/units array' };
+      return { ok: true, reason: `${data.units.length} repeat-failure unit(s) over ${data.window_days}d` };
     case 'deliveries':
       if (status !== 200) return { ok: false, reason: `expected 200, got ${status}` };
       if (!data || !Array.isArray(data.deliveries)) return { ok: false, reason: 'missing deliveries array' };
