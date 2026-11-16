@@ -598,7 +598,7 @@ function renderWOs() {
         '</div>' +
         '<div class="status-block">' +
           '<span class="badge ' + sc + '">' + esc(statusLabel) + '</span>' +
-          (wo.Scheduled_Date ? '<span class="badge-scheduled">Scheduled: ' + esc(wo.Scheduled_Date) + '</span>' : '') +
+          (wo.Scheduled_Date ? '<span class="badge-scheduled">Scheduled: ' + esc(window.RC && RC.date ? RC.date(wo.Scheduled_Date, { fallback: wo.Scheduled_Date }) : wo.Scheduled_Date) + '</span>' : '') +
           '<div class="expand-icon" style="text-align:right;margin-top:6px">▾</div>' +
         '</div>' +
       '</div>' +
