@@ -22142,6 +22142,10 @@ async function opsQueueRead(env, url) {
     const v = d.values || [];
     if (v.length > 1) { const hs = v[0]; rows = v.slice(1).map(r => { const o = {}; hs.forEach((hh, i) => o[hh] = (r[i] !== undefined) ? r[i] : ''); return o; }); }
   } catch (e) { if (!isMissingTabError(e)) throw e; }
+  // Queue v2 (Nov 16 2026): every row carries its lifecycle stage (worked out on read when the Stage cell is blank or out of step),
+  // whether it is stuck (building over 24h, PR open over 72h) and the hours since its stage last changed. Nothing is written here.
+  const _qNow = Date.now();
+  rows.forEach(r => { const si = queueStuckInfo(r, _qNow); r.stage = si.stage; r.stuck = si.stuck; r.stage_hours = si.hours; });
   // ?all=1 → every row incl. done/dropped (capped 200), so proposals.html can flag a proposal
   // that's already been queued or built instead of re-offering it as fresh. Same read-only data
   // (titles/problems, no money/PII), so the narrow OPS_QUEUE_TOKEN may read it too.
