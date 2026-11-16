@@ -22879,6 +22879,7 @@ async function opsQueueSync(env, body, opts) {
   const nowIso = new Date().toISOString();
   for (const r of inflight) {
     try {
+      if (queueStageOf(r, _nowMs) === 'merged') { await queueDeployStep(env, r, _nowMs, changed, deployMissing, errors); continue; }
       let n = cleanPrNumber(r.PR_Number);
       if (!n) {
         if (prList === null) prList = await ghPublicJson('/pulls?state=all&sort=created&direction=desc&per_page=60', env);
