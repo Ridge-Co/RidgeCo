@@ -181,7 +181,7 @@ Each of these has shipped more than once. Check for them by name.
 5. **Grey all-caps labels with wide letter-spacing.** Use 13px sentence case.
 6. **A phone column on a monitor.** `proposals.html` is 560px wide on a 1920px screen; 37 pages have a page column with no wider rule.
 7. **A chip that cannot wrap,** so a long value runs off the card (`proposals.html` Effort).
-8. **Browser pop-ups.** 214 `alert` / `confirm` / `prompt` calls today, including three `prompt`s in a row to add one contact.
+8. **Browser pop-ups.** 214 `alert` / `confirm` / `prompt` calls today, including four `prompt`s in a row to add one contact.
 9. **Unreadable status colors:** pale green on pale green for "In Progress" and "Complete".
 10. **A style meant for one input applied to all of them** (the PIN box rule made the vendor search box spaced capitals).
 11. **"Loading..." forever, or an empty list, when the load actually failed.**
