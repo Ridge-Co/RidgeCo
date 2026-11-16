@@ -20,7 +20,17 @@ const helpers = {
   json, isMissingTabError: () => false, OPS_QUEUE_TAB: 'Ops_Build_Queue',
   sheetsRequest: async () => ({ values: [COLS, ...ROWS.map(r => [r.ID, r.Title, r.Status])] }),
 };
-const read = new Function(...Object.keys(helpers), grab('opsQueueRead') + '\nreturn opsQueueRead;')(...Object.values(helpers));
+// Queue v2 (Nov 16 2026): the read also works out each row's stage and stuck flag, so it needs those pure helpers.
+function grabPlain(name) {
+  const i = src.indexOf('function ' + name + '(');
+  if (i < 0) throw new Error('missing ' + name);
+  let d = 0, j = src.indexOf('{', src.indexOf(')', i));
+  for (; j < src.length; j++) { if (src[j] === '{') d++; else if (src[j] === '}') { d--; if (!d) break; } }
+  return src.slice(i, j + 1);
+}
+function grabLine(name) { const i = src.indexOf('const ' + name + ' = '); if (i < 0) throw new Error('missing const ' + name); return src.slice(i, src.indexOf('\n', i)); }
+const v2 = ['QUEUE_STAGE_FAMILY', 'QUEUE_STUCK_MS'].map(grabLine).join('\n') + '\n' + ['isSnoozed', 'queueLegacyStage', 'queueStageOf', 'queueStuckInfo'].map(grabPlain).join('\n') + '\n';
+const read = new Function(...Object.keys(helpers), v2 + grab('opsQueueRead') + '\nreturn opsQueueRead;')(...Object.values(helpers));
 const call = async (qs) => (await read({}, { searchParams: new URLSearchParams(qs) })).body;
 
 // 214 rows like the live sheet: the OLD greenlit rows (IDs 3..60) sit far below the newest 50.
