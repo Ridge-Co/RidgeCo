@@ -22812,7 +22812,9 @@ function prStateToBuildState(pr) {
 // PURE — find the PR a build session opened for queue item `id` when it did not report a number:
 // the routine text tells sessions to put "Ops queue item #ID" in the PR body/title.
 function matchPrToItem(prs, id) {
-  const re = new RegExp('ops[ -]?queue\\s+(?:item\\s+)?#?' + String(id).replace(/[^0-9A-Za-z]/g, '') + '(?![0-9])', 'i');
+  // Queue v2 (Nov 16 2026): plain "queue #N" / "queue item #N" / "queue row #N" also counts (the # is required without "ops").
+  const _qid = String(id).replace(/[^0-9A-Za-z]/g, '');
+  const re = new RegExp('(?:ops[ -]?queue\\s+(?:item\\s+)?#?|\\bqueue\\s+(?:item\\s+|row\\s+)?#)' + _qid + '(?![0-9])', 'i');
   for (const p of prs || []) {
     if (re.test(String((p && p.title) || '') + '\n' + String((p && p.body) || ''))) return p;
   }
