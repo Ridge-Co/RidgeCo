@@ -1,0 +1,16 @@
+{
+ "_about": "Made-up answers for scripts/ui-check.mjs screenshots. Key = Worker path, value = the JSON the page gets. Paths not listed here answer [] for GET and {success:true} for anything else. TEST data only: never put a real name, phone, address or code in this file.",
+ "/vendor-workorders": [
+  {"ID": "WO-TEST-1", "WO_ID": "WO-TEST-1", "Status": "Assigned", "Priority": "High", "Trade": "Plumbing", "property_address": "456 Example Ave", "Address": "456 Example Ave", "Unit": "2B", "Room": "Kitchen", "Description": "TEST: kitchen sink drains slowly and the cabinet floor is wet.", "Scheduled_Date": "", "Notes": ""},
+  {"ID": "WO-TEST-2", "WO_ID": "WO-TEST-2", "Status": "In Progress", "Priority": "Normal", "Trade": "Electrical", "property_address": "12 Sample Street", "Address": "12 Sample Street", "Unit": "", "Room": "Hallway", "Description": "TEST: hallway light flickers. A long description so wrapping can be seen on a phone: the tenant says it started after the storm and happens most evenings.", "Scheduled_Date": "2026-11-18", "Notes": "TEST note"},
+  {"ID": "WO-TEST-3", "WO_ID": "WO-TEST-3", "Status": "Complete", "Priority": "Low", "Trade": "General", "property_address": "789 Placeholder Rd", "Address": "789 Placeholder Rd", "Unit": "1", "Room": "Bath", "Description": "TEST: re-caulk the tub.", "Scheduled_Date": "2026-11-10", "Notes": ""}
+ ],
+ "/tenant-workorders": [
+  {"ID": "WO-TEST-1", "WO_ID": "WO-TEST-1", "Status": "Assigned", "Priority": "High", "Trade": "Plumbing", "property_address": "456 Example Ave", "Address": "456 Example Ave", "Unit": "2B", "Room": "Kitchen", "Description": "TEST: kitchen sink drains slowly and the cabinet floor is wet.", "Scheduled_Date": "", "Notes": ""},
+  {"ID": "WO-TEST-2", "WO_ID": "WO-TEST-2", "Status": "In Progress", "Priority": "Normal", "Trade": "Electrical", "property_address": "456 Example Ave", "Address": "456 Example Ave", "Unit": "2B", "Room": "Hallway", "Description": "TEST: hallway light flickers.", "Scheduled_Date": "2026-11-18", "Notes": ""}
+ ],
+ "/owner-workorders": [
+  {"ID": "WO-TEST-1", "WO_ID": "WO-TEST-1", "Status": "Assigned", "Priority": "High", "Trade": "Plumbing", "property_address": "456 Example Ave", "Address": "456 Example Ave", "Unit": "2B", "Room": "Kitchen", "Description": "TEST: kitchen sink drains slowly and the cabinet floor is wet.", "Scheduled_Date": "", "Notes": ""},
+  {"ID": "WO-TEST-3", "WO_ID": "WO-TEST-3", "Status": "Complete", "Priority": "Low", "Trade": "General", "property_address": "789 Placeholder Rd", "Address": "789 Placeholder Rd", "Unit": "1", "Room": "Bath", "Description": "TEST: re-caulk the tub.", "Scheduled_Date": "2026-11-10", "Notes": ""}
+ ]
+}
