@@ -23002,7 +23002,7 @@ const QUEUE_RISK_RULES = [
     path: /(^|[\/_.-])(qb|quickbooks)([\/_.-]|$)/i, diff: /quickbooks|intuit|\bqb\w*\x28|\bqb_\w+|\/qb\//i, text: /\b(quickbooks|qb|qbo)\b/i },   // \x28 = "(" (kept bracket-balanced on purpose)
   { key: 'money', why: 'touches invoice or payment math',
     path: /invoice|payment|ar-report|vendor-reconcile|receipt|signed-proposals|milestone/i,
-    diff: /invoice|payment|deposit|refund|vendor_?bill|markup|milestone|money2\(|subtotal|instant_?fee|credit_(customer|vendor)|\bamount/i,
+    diff: /invoice|payment|deposit|refund|vendor_?bill|markup|milestone|money2\x28|subtotal|instant_?fee|credit_(customer|vendor)|\bamount/i,
     text: /\b(invoic\w*|payments?|pay|paid|deposits?|refunds?|bills?|billing|charges?|markup|pric(?:e|es|ing)|money|fees?)\b/i },
   { key: 'auth', why: 'touches sign-in, PIN, session or token code',
     path: /(^|\/)(test-login\.js|wrangler\.toml)$|\.github\/workflows\/|login|auth/i,
