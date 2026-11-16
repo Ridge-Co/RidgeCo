@@ -19229,6 +19229,8 @@ const SCHED_JOBS = [
   // Oct 16 2026: gate:'ai_paused' = this job is not even STARTED (no claim, no state write, no Anthropic call) unless the AI-credit pause flag is on.
   // While paused it makes ONE 1-token call at most hourly (every_min 59 = "every 60 minutes"); success clears the pause and sends one "AI is back" notice.
   { name: 'ai_credit_probe',    kind: 'interval', every_min: 59, gate: 'ai_paused', run: (env) => schedRunAiCreditProbe(env) },
+  // Queue v2 (Nov 16 2026): checks the PR behind every in-flight build and moves the row on (PR open -> merged -> live once /version shows a newer deploy).
+  { name: 'queue_sync',         kind: 'interval', every_min: 14, run: (env) => schedRunQueueSync(env) },
   { name: 'daily_digest',       kind: 'daily',    at: '07:00', run: (env) => schedRunDailyDigest(env) },
   { name: 'daily_receipts',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyReceipts(env) },
   { name: 'daily_receipts_post', kind: 'daily',   at: '07:00', run: (env) => schedRunDailyReceiptsPost(env) },
