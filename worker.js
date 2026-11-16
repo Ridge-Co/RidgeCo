@@ -782,6 +782,14 @@ const _hubWorkerCore = {
             try { const _fd = await request.clone().formData(); _upOk = await isTestWO(env, String(_fd.get('wo_id') || '').trim()); } catch (e) { _upOk = false; }
             if (!_upOk) return json({ error: 'HUB_TEST_TOKEN: upload must target a TEST- work order, refusing' }, 403);
           }
+          // Vendor WRITE scope (Nov 16 2026): this route is multipart, so it never reaches the JSON-body gate below. Same rule, applied here.
+          if (callerRole === 'vendor') {
+            let _vUpWo = '';
+            try { _vUpWo = String((await request.clone().formData()).get('wo_id') || '').trim(); }
+            catch (e) { return await vendorWriteDeny(env, path, callerSessionId, 400, 'Could not read this upload. Please try again.', 'unreadable upload form: ' + String((e && e.message) || e).slice(0, 120)); }
+            const _vUpDenied = await vendorWriteScopeDenied(env, path, { wo_id: _vUpWo }, callerSessionId);
+            if (_vUpDenied) return _vUpDenied;
+          }
           return await handlePhotoUploadClean(env, request);
         }
         if (path === '/sms-inbound')  return await handleInboundSMS(env, request);
