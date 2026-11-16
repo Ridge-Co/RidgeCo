@@ -1120,6 +1120,8 @@ const _hubWorkerCore = {
         if (path === '/agent-write')              return await agentWrite(env, body);
         if (path === '/ops-queue-prepare')        return await opsQueuePrepare(env, body);
         if (path === '/ops-queue-status')         return await opsQueueStatus(env, body);
+        if (path === '/ops-queue-stage')          return await opsQueueStage(env, body, { actor: queueActorOf(env, request.headers.get('X-Auth-Token')) });
+        if (path === '/ops-queue/risk-check')     return await opsQueueRiskCheck(env, body);
         if (path === '/ops-queue/start-build')    return await opsQueueStartBuild(env, body);
         if (path === '/ops-queue/scout-submit')   return await opsQueueScoutSubmit(env, body);
         if (path === '/ops-queue/sync')           return await opsQueueSync(env, body, { ignoreSuppliedPrs: !!env.OPS_QUEUE_TOKEN && request.headers.get('X-Auth-Token') === env.OPS_QUEUE_TOKEN });
