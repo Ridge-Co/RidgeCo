@@ -35,6 +35,9 @@ const json = (o, s) => ({ status: s || 200, body: o });
 const env = { OPS_QUEUE_TOKEN: 'tok' };
 const helpers = {
   json,
+  // Queue v2: the deploy check reads the Worker's own version and files a failure row when a merge has no deploy
+  buildVersion: () => globalThis.__version || { stamped: false, deployed_at: null, version_id: null },
+  reportFailure: async (_e, f) => { (globalThis.__failures = globalThis.__failures || []).push(f); return { ok: true }; },
   isMissingTabError: () => false,
   ensureTab: async () => {}, ensureColumns: async () => {},
   sheetsRequest: async (_e, _m, path) => {
@@ -50,12 +53,16 @@ const helpers = {
     Object.assign(r, f); return json({ success: true });
   },
 };
-const names = ['QUEUE_STOPWORDS', 'QUEUE_STANDING_RULES', 'QUEUE_REPO'];
+const names = ['QUEUE_STOPWORDS', 'QUEUE_STANDING_RULES', 'QUEUE_REPO',
+  // Queue v2 (Nov 16 2026): opsApprove / opsQueueSync now lean on the lifecycle + risk helpers
+  'QUEUE_STAGES', 'QUEUE_SHIPPED_STAGES', 'QUEUE_STAGE_FAMILY', 'QUEUE_STUCK_MS', 'QUEUE_DEPLOY_GRACE_MS', 'QUEUE_DEPLOY_MARK', 'QUEUE_STAGE_LOG_MAX', 'QUEUE_RISK_RULES'];
 const code = names.map(grabConst).join('\n') + '\n' + [
   'queueTokens', 'queueDice', 'queueSimilarity', 'findQueueMatch', 'isSnoozed', 'snoozeUntilFromDays',
   'buildShippedIndex', 'findShippedMatch', 'prStateToBuildState', 'matchPrToItem', 'cleanPrNumber', 'ghPublicJson',
   'opsApprove', 'opsQueueUpdate', 'opsQueueStatus', 'validateQueueStatusReport', 'opsQueueSync', 'updateQueueRowOrThrow',
   'validateScoutSubmitItems', 'buildScoutQueueRow', 'opsQueueScoutSubmit', 'buildStartBuildRoutineText',
+  'queueLegacyStage', 'queueStageOf', 'queueStuckInfo', 'queueLogAppend', 'queueRiskGuardText', 'queueRowText', 'queueResolveRisk',
+  'queueSyncStageFields', 'queueDeployVerdict', 'queueDeployStep',
 ].map(n => grab(n)).join('\n') + `
 const OPS_QUEUE_TAB = 'Ops_Build_Queue', OPS_REVIEW_TAB = 'Ops_Review_Log', OPS_REVIEW_COLS = [];
 const OPS_QUEUE_COLS = __COLS, OPS_QUEUE_STATUSES = __STATUSES;
