@@ -22892,10 +22892,14 @@ async function opsQueueSync(env, body, opts) {
       if (String(r.PR_Number || '') !== n) fields.PR_Number = n;
       if (next && next !== String(r.Build_State || '')) { fields.Build_State = next; fields.Build_Updated = nowIso; }
       if (next === 'live' && String(r.Status || '').toLowerCase() !== 'done') fields.Status = 'done';
+      Object.assign(fields, queueSyncStageFields(r, next, pr, n, _nowMs));   // Queue v2: Stage moves in step with Status / Build_State
       if (Object.keys(fields).length) {
         await updateQueueRowOrThrow(env, r.ID, fields);
-        changed.push({ id: r.ID, pr: n, build_state: fields.Build_State || r.Build_State, status: fields.Status || r.Status });
+        Object.assign(r, fields);
+        changed.push({ id: r.ID, pr: n, build_state: r.Build_State, status: r.Status, stage: queueStageOf(r, _nowMs) });
       }
+      // A PR that just merged goes straight on to the deploy check (merged -> live once /version shows a newer deploy).
+      if (queueStageOf(r, _nowMs) === 'merged') await queueDeployStep(env, r, _nowMs, changed, deployMissing, errors);
     } catch (e) {
       const _msg = String((e && e.message) || e);
       // Tick mode (scheduler job queue_sync): GitHub rate-limiting the Hub's shared address is expected and is simply retried on the next
