@@ -22999,7 +22999,7 @@ function queueLogAppend(prev, line) {
 // changed file name, `diff` against the CHANGED lines only (+ / -), `text` against a row's title and problem wording.
 const QUEUE_RISK_RULES = [
   { key: 'quickbooks', why: 'touches QuickBooks calls',
-    path: /(^|[\/_.-])(qb|quickbooks)([\/_.-]|$)/i, diff: /quickbooks|intuit|\bqb\w*\x28|\bqb_\w+|\/qb\//i, text: /\b(quickbooks|qb|qbo)\b/i },   // \x28 = "(" (kept bracket-balanced on purpose)
+    path: /(^|[\/_.-])(qb|quickbooks)([\/_.-]|$)/i, diff: /quickbooks|intuit|\bqb\w*\x28|\bqb_\w+|\/qb\//i, text: /\b(quickbooks|qb|qbo)\b/i },   // \x28 is an opening round bracket, written this way so the text stays bracket-balanced for the test scanners
   { key: 'money', why: 'touches invoice or payment math',
     path: /invoice|payment|ar-report|vendor-reconcile|receipt|signed-proposals|milestone/i,
     diff: /invoice|payment|deposit|refund|vendor_?bill|markup|milestone|money2\x28|subtotal|instant_?fee|credit_(customer|vendor)|\bamount/i,
