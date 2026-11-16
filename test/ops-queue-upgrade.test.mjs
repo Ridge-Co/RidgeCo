@@ -35,6 +35,9 @@ const json = (o, s) => ({ status: s || 200, body: o });
 const env = { OPS_QUEUE_TOKEN: 'tok' };
 const helpers = {
   json,
+  // Queue v2: the deploy check reads the Worker's own version and files a failure row when a merge has no deploy
+  buildVersion: () => globalThis.__version || { stamped: false, deployed_at: null, version_id: null },
+  reportFailure: async (_e, f) => { (globalThis.__failures = globalThis.__failures || []).push(f); return { ok: true }; },
   isMissingTabError: () => false,
   ensureTab: async () => {}, ensureColumns: async () => {},
   sheetsRequest: async (_e, _m, path) => {
