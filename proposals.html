@@ -5,70 +5,119 @@
 <script src="failure-reporter.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BrettOS — Optimizer Proposals</title>
+<title>BrettOS — Proposals and build queue</title>
 <style>
-  :root{--bg:#e9ebef;--card:#fff;--ink:#0e1621;--muted:#5b6672;--line:#d8dce2;
-    --green:#1a8f4c;--greenbg:#e6f4ec;--amber:#b26a00;--amberbg:#fbf0dd;
-    --red:#c0242b;--redbg:#f9e4e4;--blue:#1d4ed8;--bluebg:#e7effb;
+  /* Queue v2 (Nov 16 2026). Fluid layout: one column under 700px, two columns of cards from 700px, a board with one column per
+     stage group plus a detail pane from 1101px. No fixed-pixel page column. No text under 13px. Colours pass 4.5:1 on their backgrounds. */
+  :root{--bg:#e9ebef;--card:#fff;--ink:#0e1621;--muted:#4a5561;--line:#cfd4db;--colbg:#dfe3e8;
+    --green:#0f6b36;--greenbg:#e3f3ea;--amber:#7a4700;--amberbg:#fbf0dd;
+    --red:#a11a21;--redbg:#f9e4e4;--blue:#1a3fb0;--bluebg:#e7effb;--grey:#39434f;--greybg:#eef0f3;
     --shadow:0 1px 2px rgba(16,23,32,.08),0 1px 8px rgba(16,23,32,.04);}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;font-size:16px;line-height:1.4;padding-bottom:96px}
-  .wrap{max-width:560px;margin:0 auto;padding:0 12px}
-  header{position:sticky;top:0;z-index:20;background:var(--bg);padding:12px 0 8px}
-  .title{font-size:15px;font-weight:800;display:flex;align-items:center;gap:8px}
-  .title small{font-weight:600;color:var(--muted);font-size:12px;margin-left:auto}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin:10px 0;box-shadow:var(--shadow)}
-  .card h2{margin:0 0 4px;font-size:15px;font-weight:800}
-  .sub{font-size:12.5px;color:var(--muted);margin:2px 0 0}
-  .pcard{display:flex;gap:11px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:13px;padding:13px;margin:9px 0;box-shadow:var(--shadow)}
-  .pcard.sel{border-color:var(--blue);box-shadow:0 0 0 2px var(--bluebg)}
-  .pcard input{width:22px;height:22px;flex:none;margin-top:2px;accent-color:var(--blue)}
-  .pbody{flex:1;min-width:0}
-  .prow{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
-  .rank{font-size:12px;font-weight:800;color:var(--muted)}
-  .ptitle{font-size:15px;font-weight:800}
-  .chip{font-size:10px;font-weight:800;padding:2px 7px;border-radius:6px;white-space:nowrap}
-  .chip.big{background:var(--greenbg);color:var(--green)} .chip.quick{background:var(--bluebg);color:var(--blue)}
-  .chip.fix{background:var(--amberbg);color:var(--amber)} .chip.eff{background:#eef0f3;color:#42505e}
-  .chip.safe{background:var(--greenbg);color:var(--green)} .chip.gated{background:var(--redbg);color:var(--red)}
-  .pprob{font-size:13px;color:#26313d;margin:6px 0 0}
-  .pact{font-size:13px;color:var(--ink);margin:5px 0 0;font-weight:600}
-  .pimp{font-size:12px;color:var(--muted);margin:4px 0 0}
-  .qcard{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:13px;margin:9px 0;box-shadow:var(--shadow)}
-  .qcard.sel{border-color:var(--green);box-shadow:0 0 0 2px var(--greenbg)} .qcard.locked{opacity:.72}
-  .qcard input.qsel{width:20px;height:20px;flex:none;margin-top:2px;accent-color:var(--green)}
-  .banner{background:var(--amberbg);color:var(--amber);border:1px solid #f0d9ad;border-radius:11px;padding:10px 12px;font-size:12.5px;font-weight:700;margin:8px 0}
-  .modal{display:none;position:fixed;inset:0;background:rgba(14,22,33,.45);z-index:50;padding:14px}
-  .modal .box{max-width:560px;margin:20px auto;background:#fff;border-radius:14px;padding:14px;box-shadow:var(--shadow)}
-  .modal textarea{width:100%;height:44vh;font-size:12.5px;font-family:ui-monospace,Menlo,Consolas,monospace;border:1px solid var(--line);border-radius:9px;padding:10px;margin-top:6px;color:var(--ink)}
-  .ctrls{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 2px}
-  .mini{border:1px solid var(--line);background:#fff;border-radius:9px;padding:8px 11px;font-size:12.5px;font-weight:700;color:var(--ink)}
-  .bar{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);padding:12px;box-shadow:0 -2px 12px rgba(16,23,32,.08)}
-  .bar .wrap{padding:0 12px}
-  .go{width:100%;border:none;border-radius:12px;padding:14px;font-size:15px;font-weight:800;background:var(--blue);color:#fff}
-  .go:disabled{background:#c7ccd3;color:#fff}
-  .q{font-size:13px;padding:9px 0;border-bottom:1px solid var(--line);display:flex;gap:8px}
-  .q:last-child{border-bottom:none}
-  .qs{font-size:10px;font-weight:800;padding:2px 7px;border-radius:6px;background:var(--greenbg);color:var(--green);flex:none}
-  .qs.building{background:var(--amberbg);color:var(--amber)} .qs.held{background:var(--redbg);color:var(--red)} .qs.prepared{background:var(--bluebg);color:var(--blue)}
-  .spin{color:var(--muted);font-size:13px;padding:16px 2px}
-  .tokbar{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0}
-  .tokbar input{width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;font-size:14px;margin:6px 0}
-  .tokbar button{width:100%;border:none;border-radius:9px;padding:11px;font-weight:700;background:var(--blue);color:#fff}
-  a.back{color:var(--blue);font-size:12.5px;text-decoration:none;font-weight:700}
-  #toast .banner{margin:8px 0}
-  .banner.ok{background:var(--greenbg);color:var(--green);border-color:#bfe3cc}
-  .sumrow{display:flex;gap:8px;margin:8px 0}
-  .sumb{flex:1;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 4px;text-align:center;text-decoration:none;color:var(--ink);box-shadow:var(--shadow)}
-  .sumb b{display:block;font-size:20px;line-height:1.1}.sumb span{font-size:11px;color:var(--muted);font-weight:700}
-  textarea.note{width:100%;margin-top:8px;border:1px solid var(--line);border-radius:9px;padding:9px;font:inherit;font-size:14px;resize:vertical;background:#fbfcfd}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;font-size:16px;line-height:1.4;padding-bottom:120px}
+  .wrap{width:100%;padding:0 clamp(10px,1.6vw,28px)}
+  header{padding:12px 0 4px}
+  .title{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  h1{font-size:19px;font-weight:800;margin:0}
+  h2{font-size:16px;font-weight:800;margin:0}
+  .sub{font-size:13px;color:var(--muted);margin:2px 0 0}
+  a.back{color:var(--blue);font-size:14px;font-weight:700;margin-left:auto}
+  .counts{display:flex;flex-wrap:wrap;gap:6px 8px;margin:8px 0}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:5px 10px;font-size:14px;color:var(--ink)}
+  .stat b{font-size:16px}
+  .stat.warn{background:var(--amberbg);border-color:#e6cf9f;color:var(--amber)}
+  .filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0 8px}
+  .filters label{font-size:14px;color:var(--muted);font-weight:700;display:flex;align-items:center;gap:5px}
+  input[type=search],input[type=text],input[type=number],input[type=password],select,textarea{font:inherit;font-size:15px;color:var(--ink);background:#fff;border:1px solid #8b96a3;border-radius:9px;padding:7px 9px;max-width:100%}
+  #qsearch{flex:1 1 220px;min-width:0}
+  input.days{width:76px}
+  button{font:inherit;cursor:pointer}
+  .btn{border:1px solid #8b96a3;background:#fff;color:var(--ink);border-radius:9px;padding:8px 12px;font-size:14px;font-weight:700;min-height:36px}
+  .btn.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+  .btn.go{background:var(--green);border-color:var(--green);color:#fff}
+  .btn.danger{color:var(--red);border-color:var(--red)}
+  .btn.ghost{border-color:transparent;background:transparent;color:var(--blue);text-decoration:underline}
+  .btn:disabled{opacity:.55;cursor:default}
+  .tog[aria-pressed=true],.seg button[aria-pressed=true]{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .seg{display:inline-flex;gap:0}
+  .seg button{border-radius:0;margin-left:-1px}
+  .seg button:first-child{border-radius:9px 0 0 9px;margin-left:0}
+  .seg button:last-child{border-radius:0 9px 9px 0}
+  button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,summary:focus-visible{outline:3px solid #1a3fb0;outline-offset:2px}
+
+  .board{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
+  .col{min-width:0}
+  .colhead{display:flex;align-items:center;gap:8px;margin:0 0 8px}
+  .count{background:var(--ink);color:#fff;border-radius:999px;padding:1px 9px;font-size:13px;font-weight:800}
+  .cards{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
+  .empty{font-size:14px;color:var(--muted);padding:8px 2px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px;box-shadow:var(--shadow);min-width:0}
+  .card.sel{border-color:var(--blue);box-shadow:0 0 0 2px var(--bluebg)}
+  .card.pinned{border-left:5px solid var(--amber)}
+  .chead{display:flex;gap:6px;align-items:flex-start}
+  .pick{display:inline-flex;align-items:center;justify-content:center;min-width:28px;min-height:28px;flex:none}
+  .pick input{width:20px;height:20px;accent-color:var(--blue);margin:0}
+  .ctitle{flex:1;min-width:0;text-align:left;background:none;border:none;padding:2px 0;color:var(--ink);font-size:15px;font-weight:800;line-height:1.3;overflow-wrap:anywhere}
+  .ctitle .rank{color:var(--muted);font-weight:800;margin-right:4px}
+  .chips{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0 0}
+  .chip{font-size:13px;font-weight:700;padding:2px 8px;border-radius:7px;background:var(--greybg);color:var(--grey);max-width:100%;overflow-wrap:anywhere}
+  .chip.safe,.chip.s-live,.chip.s-done,.chip.s-merged{background:var(--greenbg);color:var(--green)}
+  .chip.gated,.chip.s-blocked,.chip.stuck,.chip.s-dropped{background:var(--redbg);color:var(--red)}
+  .chip.s-building,.chip.s-queued,.chip.pin,.chip.s-snoozed{background:var(--amberbg);color:var(--amber)}
+  .chip.s-pr_open,.chip.s-approved,.chip.s-review{background:var(--bluebg);color:var(--blue)}
+  a.chip{text-decoration:underline}
+  .flag{font-size:14px;font-weight:600;margin:6px 0 0;padding:7px 9px;border-radius:9px;overflow-wrap:anywhere}
+  .flag.red{background:var(--redbg);color:var(--red)}.flag.amber{background:var(--amberbg);color:var(--amber)}.flag.blue{background:var(--bluebg);color:var(--blue)}.flag.green{background:var(--greenbg);color:var(--green)}
+  .cbtns{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 0}
+  .detail{margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
+  .detail p{margin:6px 0 0;font-size:15px;overflow-wrap:anywhere}
+  .detail .lbl{font-size:13px;font-weight:800;color:var(--muted);display:block;margin-top:10px}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px}
+  textarea.note{width:100%;margin-top:4px;resize:vertical;background:#fbfcfd}
   textarea.note.saved{border-color:var(--green);background:var(--greenbg)} textarea.note.bad{border-color:var(--red)}
-  .flag{font-size:12.5px;font-weight:700;margin:6px 0 0;padding:7px 9px;border-radius:9px}
-  .flag.red{background:var(--redbg);color:var(--red)}.flag.amber{background:var(--amberbg);color:var(--amber)}.flag.blue{background:var(--bluebg);color:var(--blue)}
-  .mini.ok{background:var(--green);color:#fff;border-color:var(--green)}
-  select.risk,input.days{border:1px solid var(--line);border-radius:9px;padding:7px 8px;font-size:13px;background:#fff}
-  input.days{width:64px}
-  details.card>summary{cursor:pointer;list-style:none}details.card>summary::-webkit-details-marker{display:none}
+  .dropbox{display:none;margin-top:6px}.dropbox.on{display:flex}
+  .dropbox input{flex:1 1 180px;min-width:0}
+  pre.log{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--greybg);border-radius:8px;padding:8px;margin:6px 0 0;color:var(--ink)}
+  details>summary{cursor:pointer;font-weight:800;font-size:15px;padding:4px 0}
+  .pane{display:none}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin:16px 0 0;box-shadow:var(--shadow)}
+  .q{font-size:15px;padding:9px 0;border-bottom:1px solid var(--line)}
+  .q:last-child{border-bottom:none}
+  .wk{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line)}
+  .wk input{width:20px;height:20px;margin-top:3px;flex:none;accent-color:var(--blue)}
+  .banner{border-radius:11px;padding:10px 12px;font-size:15px;font-weight:600;margin:8px 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--redbg);color:var(--red);border:1px solid #e3b5b8}
+  .banner.ok{background:var(--greenbg);color:var(--green);border-color:#b5dcc4}
+  .banner.info{background:var(--amberbg);color:var(--amber);border-color:#e6cf9f}
+  .banner span{flex:1 1 200px;min-width:0;overflow-wrap:anywhere}
+  .spin{color:var(--muted);font-size:15px;padding:16px 2px}
+  .bulkbar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:#fff;border-top:2px solid var(--ink);padding:10px clamp(10px,1.6vw,28px);box-shadow:0 -2px 12px rgba(16,23,32,.12);display:none;flex-wrap:wrap;gap:8px;align-items:center}
+  .bulkbar.on{display:flex}
+  .bulkbar b{font-size:15px}
+  .modal{display:none;position:fixed;inset:0;background:rgba(14,22,33,.5);z-index:50;padding:14px;overflow:auto}
+  .modal .box{width:min(100%,760px);margin:20px auto;background:#fff;border-radius:14px;padding:14px}
+  .modal textarea{width:100%;height:44vh;font-size:14px;font-family:ui-monospace,Menlo,Consolas,monospace;margin-top:6px}
+  .tokbar{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0;width:min(100%,520px)}
+  .tokbar input{width:100%;margin:6px 0}
+
+  @media (min-width:700px){
+    .cards{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .card.sel{grid-column:1 / -1}
+  }
+  @media (min-width:1101px){
+    .layout{display:grid;grid-template-columns:minmax(0,1fr) clamp(300px,27vw,520px);gap:14px;align-items:start}
+    .board{grid-template-columns:repeat(var(--cols,5),minmax(0,1fr));gap:10px;align-items:start}
+    .col{background:var(--colbg);border-radius:12px;padding:8px}
+    .cards{grid-template-columns:minmax(0,1fr)}
+    .card.sel{grid-column:auto}
+    .card .detail.inline{display:none}
+    .pane{display:block;position:sticky;top:8px;max-height:calc(100vh - 16px);overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;box-shadow:var(--shadow)}
+    .pane .detail{border-top:none;margin-top:0;padding-top:0}
+  }
+  @media (hover:none) and (pointer:coarse){
+    .pick{min-width:44px;min-height:44px}
+    .ctitle{min-height:44px}
+    input[type=search],input[type=text],input[type=number],input[type=password],textarea{min-height:44px}
+  }
 </style>
 <style id="mobile-input-font">
 /* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch screens or Android/iOS zoom the page on focus. Mouse/desktop density unchanged. */
@@ -91,9 +140,9 @@
 </head>
 <body>
 <!-- RC-NAV: shared back-to-Hub + tools jump bar (Aug 20, 2026) -->
-<div id="rc-navbar" style="position:static;z-index:9999;background:#1d4ed8;color:#fff;display:flex;align-items:center;gap:8px;padding:6px 10px;font:600 12px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;overflow-x:auto;white-space:nowrap">
+<div id="rc-navbar" style="position:static;z-index:9999;background:#1d4ed8;color:#fff;display:flex;align-items:center;gap:8px;padding:6px 10px;font:600 13px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;overflow-x:auto;white-space:nowrap">
   <a href="index.html" style="color:#fff;text-decoration:none;display:flex;align-items:center;gap:4px;flex:none">← Hub</a>
-  <select id="rc-nav-jump" onchange="if(this.value)location.href=this.value" style="margin-left:auto;flex:none;background:#fff;color:#1b1f24;border:none;border-radius:4px;padding:4px 6px;font:600 11px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;max-width:46vw">
+  <select id="rc-nav-jump" aria-label="Jump to another tool" onchange="if(this.value)location.href=this.value" style="margin-left:auto;flex:none;background:#fff;color:#1b1f24;border:none;border-radius:4px;padding:4px 6px;font:600 13px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;max-width:46vw">
     <option value="">Jump to…</option>
     <optgroup label="Dashboards">
       <option value="command-center.html">Command Center</option>
@@ -137,436 +186,583 @@
 </div>
 
 <div class="wrap">
-  <header><div class="title">🧭 Optimizer Proposals <small id="asof"></small></div>
-    <a class="back" href="command-center.html">← Command Center</a></header>
-  <div id="toast"></div>
-  <div id="summary"></div>
-  <div class="card"><b>🔎 Find an item</b>
-    <div class="sub">Search by its # ID (e.g. 14) or title — covers every status, including done, dropped and snoozed items.</div>
-    <input id="qsearch" oninput="searchQueue(this.value)" placeholder="# ID or title…" style="width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;font-size:14px;margin-top:6px;box-sizing:border-box">
-    <div id="qsearchResults"></div>
-  </div>
+  <header>
+    <div class="title"><h1>Proposals and build queue</h1><span class="sub" id="asof"></span><a class="back" href="command-center.html">Command Center</a></div>
+    <div class="counts" id="counts" aria-live="polite"></div>
+    <div class="filters" id="filters">
+      <input id="qsearch" type="search" placeholder="Search by number or title" aria-label="Search every item by number or title">
+      <label>Stage <select id="fStage">
+        <option value="">Any</option><option value="review">Review</option><option value="approved">Approved</option><option value="queued">Queued</option>
+        <option value="building">Building</option><option value="pr_open">PR open</option><option value="merged">Merged</option><option value="live">Live</option>
+        <option value="done">Done</option><option value="blocked">Blocked</option><option value="snoozed">Snoozed</option><option value="dropped">Dropped</option></select></label>
+      <label>Risk <select id="fRisk"><option value="">Any</option><option value="SAFE">Safe</option><option value="GATED">Gated</option></select></label>
+      <label>Tag <select id="fTag"><option value="">Any</option></select></label>
+      <button type="button" class="btn tog" id="fMine" aria-pressed="false">Waiting on me</button>
+      <button type="button" class="btn tog" id="fStuck" aria-pressed="false">Stuck</button>
+      <button type="button" class="btn ghost" id="fClear">Clear filters</button>
+      <button type="button" class="btn" id="refresh">Refresh</button>
+    </div>
+  </header>
+  <div id="toast" role="status" aria-live="polite"></div>
   <div id="body"><div class="spin">Loading…</div></div>
 </div>
-<div class="bar" id="bar" style="display:none"><div class="wrap" style="display:flex;gap:8px">
-  <button class="go" id="go" onclick="approveSel()" disabled style="display:none">Approve selected</button>
-  <button class="go" id="buildGo" onclick="startBuild()" disabled style="display:none;background:var(--green)">Start Build</button>
-</div></div>
-<div class="modal" id="modal" onclick="if(event.target.id==='modal')closeModal()"><div class="box">
-  <div class="prow" style="justify-content:space-between;align-items:center"><b id="mtitle">Build brief</b><button class="mini" onclick="closeModal()">Close</button></div>
+
+<div class="bulkbar" id="bulkbar" role="region" aria-label="Actions for the selected items">
+  <b id="bulkN"></b>
+  <button type="button" class="btn" data-act="bsafe">Set safe</button>
+  <button type="button" class="btn" data-act="bgated">Set gated</button>
+  <button type="button" class="btn" data-act="bpin">Pin to top</button>
+  <button type="button" class="btn danger" data-act="bdropask">Drop</button>
+  <span class="dropbox" id="bulkDrop"><input type="text" id="bulkReason" maxlength="300" placeholder="Why are these dropped?" aria-label="Reason for dropping the selected items"><button type="button" class="btn danger" data-act="bdrop">Confirm drop</button></span>
+  <button type="button" class="btn ghost" data-act="bclear">Clear selection</button>
+</div>
+
+<div class="modal" id="modal"><div class="box" role="dialog" aria-modal="true" aria-labelledby="mtitle">
+  <div class="row" style="justify-content:space-between;margin-top:0"><b id="mtitle">Build brief</b><button type="button" class="btn" data-act="closemodal">Close</button></div>
   <div id="mmsg" class="sub" style="margin:6px 0"></div>
-  <textarea id="mtext" readonly></textarea>
-  <button class="go" style="margin-top:10px" onclick="copyFromModal()">📋 Copy to clipboard</button>
+  <textarea id="mtext" readonly aria-label="Build brief text"></textarea>
+  <div class="row"><button type="button" class="btn primary" data-act="copymodal">Copy to clipboard</button></div>
 </div></div>
+
 <script>
+// ── Queue v2 (Nov 16 2026) ───────────────────────────────────────────────────────────────────────
+// Every change to a row goes to POST /ops-queue-stage (one narrow route, re-read after every write). The page never calls any AI
+// service: "Build now" only marks the row queued and pinned; a separate scheduled build run picks queued rows up.
 const _p=new URLSearchParams(location.search);
 const STAGING=_p.has('staging');
 const WORKER=STAGING?'https://maintenance-hub-staging.brett-2f8.workers.dev':'https://maintenance-hub.brett-2f8.workers.dev';
 const AUTH_KEY=STAGING?'mh_auth_staging':'mh_auth';
 const REPO_URL='https://github.com/Ridge-Co/RidgeCo';
-const REVIEW_CAP=25, DEFAULT_SNOOZE=10, RECHECK_GRACE_DAYS=4, STALLED_HOURS=24;
-let TOKEN=''; try{TOKEN=localStorage.getItem(AUTH_KEY)||''}catch(e){}
-let PROPOSALS=[], REVIEW_TS='', SHOW_ALL_REVIEW=false, SYNCED=false;
-function h(s){return (s==null?'':(''+s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-function jsq(s){return JSON.stringify(String(s==null?'':s));}
-async function getJSON(path){const r=await fetch(WORKER+path,{headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN}});const t=await r.text();let d=null;try{d=JSON.parse(t)}catch(e){}if(!r.ok)throw new Error(path+' → HTTP '+r.status+' '+((d&&d.error)||t.slice(0,80)));if(d&&d.error)throw new Error(d.error);return d;}
-async function postJSON(path,body){const r=await fetch(WORKER+path,{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify(body)});const d=await r.json().catch(function(){return null;});if(!r.ok||!d||d.error||(d.success!==true&&d.ok!==true))throw new Error((d&&d.error)||('HTTP '+r.status));return d;}
-function toast(msg,kind){const el=document.getElementById('toast');if(!el)return;el.innerHTML=msg?'<div class="banner'+(kind==='ok'?' ok':'')+'">'+msg+' <button class="mini" style="float:right;padding:3px 8px" onclick="toast(\'\')">✕</button></div>':'';}
-function chip(tag){const t=(tag||'').toUpperCase();if(t.indexOf('QUICK')>=0)return '<span class="chip quick">QUICK WIN</span>';if(t.indexOf('FIX')>=0)return '<span class="chip fix">FIXES EXISTING</span>';if(t.indexOf('BIG')>=0)return '<span class="chip big">BIG GAIN</span>';return t?'<span class="chip eff">'+h(t)+'</span>':'';}
-function pct(x){const n=parseFloat(x);return Number.isFinite(n)?Math.round(n*100)+'%':'n/a';}
+const REVIEW_CAP=25, LIVE_CAP=12, DEFAULT_SNOOZE=10, RECHECK_GRACE_DAYS=4, BULK_MAX=40;
+const STAGE_LABEL={review:'Review',approved:'Approved',queued:'Queued',building:'Building',pr_open:'PR open',merged:'Merged',live:'Live',done:'Done',blocked:'Blocked',snoozed:'Snoozed',dropped:'Dropped'};
+const GROUPS=[['review','Review'],['approved','Approved and queued'],['building','Building'],['waiting','Waiting on you'],['live','Live'],['other','Other']];
+function report(where,e){ try{ if(typeof window.hubReportFailure==='function') window.hubReportFailure('proposals:'+where,String((e&&e.message)||e)); }catch(e2){ console.error('could not report',where,e2); } }
+function store(key,val){ try{ if(val===undefined) return localStorage.getItem(key)||''; localStorage.setItem(key,val); return val; }catch(e){ console.warn('This browser is not saving settings for this page ('+key+').'); return ''; } }
+let TOKEN=store(AUTH_KEY);
+let ROWS=[], BYID={}, REV=null, SEL='', SHOW_ALL_REVIEW=false, SYNCED=false, LASTQ=null;
+const BULK=new Set(), F={q:'',stage:'',risk:'',tag:'',mine:false,stuck:false};
+let REVIEW_ANYWAY={}; try{ REVIEW_ANYWAY=JSON.parse(store('prop_review_anyway')||'{}')||{}; }catch(e){ REVIEW_ANYWAY={}; }
 
-// ── duplicate matching (same algorithm as the Worker's queueSimilarity) ──────────────────────
+function h(s){return (s==null?'':(''+s)).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function ms(v){const t=Date.parse(String(v||''));return Number.isFinite(t)?t:NaN;}
+function pct(x){const n=parseFloat(x);return Number.isFinite(n)?Math.round(n*100)+'%':'n/a';}
+function wide(){return window.matchMedia('(min-width:1101px)').matches;}
+
+// ── network: every call either returns data or throws a plain-English error (nothing fails quietly) ──
+async function call(method,path,body){
+  let r;
+  try{ r=await fetch(WORKER+path,{method:method,headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:body===undefined?undefined:JSON.stringify(body)}); }
+  catch(e){ throw new Error('Could not reach the Hub. Check the connection and try again.'); }
+  const t=await r.text(); let d=null;
+  try{ d=JSON.parse(t); }catch(e){ d=null; }
+  if(r.status===401) throw new Error('The Hub did not accept the access code. Reconnect and try again.');
+  if(!d) throw new Error('The Hub sent an answer this page could not read (HTTP '+r.status+').');
+  if(d.bulk===true) return d;                                   // bulk answers list each row's own result
+  if(!r.ok||d.error||(d.ok!==true&&d.success!==true)) throw new Error(d.error||('HTTP '+r.status));
+  return d;
+}
+function getJSON(path){return call('GET',path);}
+function postJSON(path,body){return call('POST',path,body);}
+
+// ── messages ────────────────────────────────────────────────────────────────────────────────────
+let RETRY=null;
+function toast(msg,kind,retry){
+  const el=document.getElementById('toast'); if(!el)return;
+  RETRY=retry||null;
+  el.innerHTML=msg?'<div class="banner'+(kind?' '+kind:'')+'"><span>'+h(msg)+'</span>'+(retry?'<button type="button" class="btn" data-act="retry">Try again</button>':'')+'<button type="button" class="btn" data-act="dismiss">Dismiss</button></div>':'';
+}
+// Double-tap guard: the button is disabled on the very first line, before anything is awaited, and restored on success AND failure.
+const BUSY={};
+async function guarded(key,btn,fn){
+  if(BUSY[key])return; BUSY[key]=true;
+  let old=''; if(btn){ old=btn.textContent; btn.disabled=true; btn.textContent='Saving…'; }
+  try{ await fn(); }
+  catch(e){ report(key,e); toast('That did not save. '+String((e&&e.message)||e),'',function(){ guarded(key,null,fn); }); }
+  finally{ BUSY[key]=false; if(btn&&btn.isConnected){ btn.disabled=false; btn.textContent=old; } }
+}
+
+// ── rows ────────────────────────────────────────────────────────────────────────────────────────
+// The Hub sends each row's stage. This fallback only matters if the page loads before the Hub has the new code.
+function fallbackStage(x){
+  const s=String(x.Status||'').toLowerCase(), bs=String(x.Build_State||'');
+  if(s==='dropped'||bs==='abandoned')return 'dropped';
+  if(bs==='pr_closed'||s==='held'||bs==='held')return 'blocked';
+  if(s==='greenlit'||s==='prepared')return 'approved';
+  if(s==='building')return bs==='pr_open'?'pr_open':'building';
+  if(s==='done')return bs==='pr_open'?'pr_open':(bs==='building'?'building':(bs==='live'?'live':'done'));
+  return ms(x.Snooze_Until)>Date.now()?'snoozed':'review';
+}
+function isSafe(x){return String(x.Risk_Class||'').toUpperCase()==='SAFE';}
+function onBrett(x){return String(x.Blocked_On||'brett').toLowerCase()==='brett';}
+function prep(x){
+  x._stage=STAGE_LABEL[x.stage]?x.stage:fallbackStage(x);
+  x._stuck=x.stuck===true;
+  x._hours=(typeof x.stage_hours==='number')?x.stage_hours:null;
+  x._group=groupOf(x);
+  return x;
+}
+function groupOf(x){
+  const s=x._stage, now=Date.now();
+  if(s==='review'){
+    const sn=ms(x.Snooze_Until);
+    if(Number.isFinite(sn)&&sn<=now){            // snooze is up: it comes back once the Optimizer has re-checked it against builds since
+      const v=String(x.Scout_Verdict||'').toLowerCase(), graceOver=(now-sn)>RECHECK_GRACE_DAYS*86400000;
+      if(v==='covered'&&!REVIEW_ANYWAY[x.ID]){ x._why=x.Scout_Note||'The Optimizer says builds shipped since cover this'; return 'built'; }
+      if(v==='keep'||v==='update'||graceOver) x._back=v?('Back from snooze. Re-checked: '+v):'Back from snooze. Not re-checked yet';
+      else { x._wait=true; return 'snoozedlist'; }
+    }
+    if(String(x.Shipped_Match||'').trim()&&!REVIEW_ANYWAY[x.ID]){ x._why=x.Shipped_Match; return 'built'; }
+    return 'review';
+  }
+  if(s==='approved'||s==='queued')return 'approved';
+  if(s==='building')return 'building';
+  if(s==='pr_open')return 'waiting';
+  if(s==='blocked')return onBrett(x)?'waiting':'building';
+  if(s==='merged'||s==='live')return recent(x,14)?'live':'other';
+  if(s==='done')return recent(x,14)?'live':'other';
+  if(s==='snoozed')return 'snoozedlist';
+  return 'other';
+}
+function when(x){return ms(x.Stage_Updated)||ms(x.Build_Updated)||ms(x.Timestamp);}
+function recent(x,days){const t=when(x);return Number.isFinite(t)&&Date.now()-t<days*86400000;}
+function effortParts(e){
+  e=String(e||'').trim(); if(!e)return {l:'',rest:''};
+  const m=/^(xs|s|m|l|xl|small|medium|large|low|high|quick)\b[\s:.,;()\-]*/i.exec(e);
+  const size=function(w){w=w.toLowerCase();return (w==='s'||w==='xs'||w==='small'||w==='low'||w==='quick')?'S':(w==='m'||w==='medium')?'M':'L';};
+  if(m)return {l:size(m[1]),rest:e.slice(m[0].length).trim()};
+  const k=/\b(small|quick|low)\b/i.test(e)?'S':/\b(medium|moderate)\b/i.test(e)?'M':/\b(large|big|high)\b/i.test(e)?'L':'';
+  return {l:k,rest:e};
+}
+const EFFORT_WORD={S:'small',M:'medium',L:'large'};
+
+// ── load ────────────────────────────────────────────────────────────────────────────────────────
+async function load(){
+  if(!TOKEN){ document.getElementById('body').innerHTML='<div class="tokbar"><b>Connect</b><div class="sub">Enter your Hub access code to load the queue.</div><input id="tok" type="password" placeholder="Access code" aria-label="Hub access code"><button type="button" class="btn primary" data-act="savetok">Connect</button></div>'; return; }
+  let rev=null,q=null;
+  try{ rev=await getJSON('/ops-review-log?limit=1'); }
+  catch(e){ rev=null; report('review-log',e); toast('Could not load this week’s review. '+e.message,'',load); }
+  try{ q=await getJSON('/ops-queue?all=1'); }
+  catch(e){
+    report('queue',e);
+    document.getElementById('body').innerHTML='<div class="banner"><span>Could not load the queue. '+h(e.message)+'</span><button type="button" class="btn" data-act="reload">Try again</button>'+(/access code/.test(e.message)?'<button type="button" class="btn" data-act="forget">Reconnect</button>':'')+'</div>';
+    return;
+  }
+  if(q&&q.truncated) toast('The queue list is cut off at 400 rows, so the oldest rows are not shown here.','info');
+  REV=rev; LASTQ=q;
+  ROWS=((q&&q.queue)||[]).map(prep); BYID={}; ROWS.forEach(function(x){BYID[String(x.ID)]=x;});
+  Array.from(BULK).forEach(function(id){ if(!BYID[id]) BULK.delete(id); });
+  fillTags(); render(); maybeSync();
+}
+// Ask the Hub to check GitHub for every build in flight, once per page load. GitHub often refuses the Hub's shared address,
+// so the PR list is looked up from this browser and handed over; if that lookup fails the Hub tries by itself.
+async function maybeSync(){
+  if(SYNCED)return;
+  const need=ROWS.some(function(x){return x._stage==='building'||x._stage==='pr_open'||x._stage==='merged'||(x._stage==='blocked'&&x.PR_Number);});
+  if(!need)return; SYNCED=true;
+  let prs=[];
+  try{
+    const ac=new AbortController(); const tm=setTimeout(function(){ac.abort();},6000);
+    const g=await fetch('https://api.github.com/repos/Ridge-Co/RidgeCo/pulls?state=all&sort=updated&direction=desc&per_page=100',{headers:{'Accept':'application/vnd.github+json'},signal:ac.signal});
+    clearTimeout(tm);
+    if(g.ok) prs=(await g.json()).map(function(p){return {number:p.number,state:p.state,merged_at:p.merged_at,title:p.title,body:(String(p.body||'').match(/(?:ops[ -]?queue\s+(?:item\s+)?#?|\bqueue\s+(?:item\s+|row\s+)?#)\d+/ig)||[]).join(' ')};});
+  }catch(e){ prs=[]; console.warn('GitHub could not be read from this browser; the Hub will check by itself.',e); }
+  try{
+    const body={prs:prs}; if(STAGING) body.title_prefix='TEST-';
+    const r=await fetch(WORKER+'/ops-queue/sync',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(d.errors&&d.errors.length) toast('Could not check GitHub for '+d.errors.length+' build'+(d.errors.length>1?'s':'')+' ('+d.errors[0].error+'). Their stage below may be out of date.','',function(){SYNCED=false;maybeSync();});
+    else if(!r.ok) throw new Error(d.error||('HTTP '+r.status));
+    if(d.changed&&d.changed.length) load();
+  }catch(e){
+    report('sync',e);
+    toast('Could not check GitHub for build progress. '+String((e&&e.message)||e)+' Stages below may be out of date.','',function(){SYNCED=false;maybeSync();});
+  }
+}
+function fillTags(){
+  const sel=document.getElementById('fTag'), cur=F.tag, tags=Array.from(new Set(ROWS.map(function(x){return String(x.Tag||'').trim();}).filter(Boolean))).sort();
+  sel.innerHTML='<option value="">Any</option>'+tags.map(function(t){return '<option value="'+h(t)+'"'+(t===cur?' selected':'')+'>'+h(t)+'</option>';}).join('');
+  if(cur&&tags.indexOf(cur)<0) F.tag='';
+}
+
+// ── filters ─────────────────────────────────────────────────────────────────────────────────────
+function passes(x){
+  if(F.q){ const q=F.q.toLowerCase().replace(/^#/,''); if(String(x.ID).toLowerCase()!==q&&String(x.Title||'').toLowerCase().indexOf(q)<0) return false; }
+  if(F.stage&&x._stage!==F.stage)return false;
+  if(F.risk==='SAFE'&&!isSafe(x))return false;
+  if(F.risk==='GATED'&&isSafe(x))return false;
+  if(F.tag&&String(x.Tag||'').trim()!==F.tag)return false;
+  if(F.mine&&!(x._stage==='pr_open'||(x._stage==='blocked'&&onBrett(x))))return false;
+  if(F.stuck&&!x._stuck)return false;
+  return true;
+}
+function filtering(){return !!(F.q||F.stage||F.risk||F.tag||F.mine||F.stuck);}
+function sortRows(list,g){
+  return list.slice().sort(function(a,b){
+    const pa=String(a.Pinned||'').toUpperCase()==='TRUE'?0:1, pb=String(b.Pinned||'').toUpperCase()==='TRUE'?0:1;
+    if(pa!==pb)return pa-pb;
+    if(g==='review'){ const ra=parseFloat(a.Rank),rb=parseFloat(b.Rank); const na=Number.isFinite(ra)?ra:999,nb=Number.isFinite(rb)?rb:999; if(na!==nb)return na-nb; return (+b.ID)-(+a.ID); }
+    return (when(b)||0)-(when(a)||0)||(+b.ID)-(+a.ID);
+  });
+}
+
+// ── render ──────────────────────────────────────────────────────────────────────────────────────
+function chip(cls,text,title){return '<span class="chip'+(cls?' '+cls:'')+'"'+(title?' title="'+h(title)+'" aria-label="'+h(title)+'"':'')+'>'+h(text)+'</span>';}
+function prUrl(x){return REPO_URL+'/pull/'+encodeURIComponent(String(x.PR_Number||'').trim());}
+function chipsOf(x){
+  const out=[], ef=effortParts(x.Effort), pinned=String(x.Pinned||'').toUpperCase()==='TRUE';
+  out.push(chip('s-'+x._stage,STAGE_LABEL[x._stage]));
+  if(x._stage!=='review'||String(x.Risk_Class||'').trim()) out.push(isSafe(x)?chip('safe','Safe','Safe: may be built without you'):chip('gated','Gated','Gated: needs a build you supervise'));
+  if(ef.l) out.push(chip('','Effort '+ef.l,'Effort: '+EFFORT_WORD[ef.l]));
+  if(x.Tag) out.push(chip('',x.Tag));
+  if(pinned) out.push(chip('pin','Pinned'));
+  if(x._stuck) out.push(chip('stuck','Stuck'+(x._hours!==null?' '+(x._hours>=48?Math.floor(x._hours/24)+' days':x._hours+' hours'):'')));
+  if(String(x.Requires_Spend||'').toUpperCase()==='TRUE') out.push(chip('pin','Costs money'));
+  if(String(x.PR_Number||'').trim()) out.push('<a class="chip" href="'+h(prUrl(x))+'" target="_blank" rel="noopener">PR #'+h(x.PR_Number)+'</a>');
+  return out.join('');
+}
+function pushButton(x){
+  const s=x._stage;
+  if(s==='review')return '<button type="button" class="btn go" data-act="approve">Approve</button>';
+  if(s==='approved')return '<button type="button" class="btn primary" data-act="buildnow">Build now</button>';
+  if(s==='queued')return '<span class="flag amber" style="margin:0">Queued for the next build run</span>';
+  if(s==='building')return '<button type="button" class="btn" data-act="retry-build">Retry</button>';
+  if(s==='pr_open')return '<button type="button" class="btn primary" data-act="openpr">Open PR</button>';
+  if(s==='merged')return '<button type="button" class="btn primary" data-act="marklive">Mark live</button>';
+  if(s==='blocked')return '<button type="button" class="btn primary" data-act="unblock">Unblock</button>';
+  if(s==='snoozed'||s==='dropped')return '<button type="button" class="btn" data-act="toreview">Back to review</button>';
+  return '';
+}
+function flagsOf(x){
+  let f='';
+  if(x._stage==='blocked') f+='<div class="flag red">Blocked'+(onBrett(x)?' on you':' on '+h(String(x.Blocked_On||'the build')))+': '+h(x.Blocked_Reason||x.Held_Note||'no reason was given')+'</div>';
+  if(x._stuck) f+='<div class="flag red">No change for '+h(x._hours)+' hours. '+(x._stage==='building'?'The build may have stopped. Retry it or pull it out.':'This PR is waiting for your merge.')+'</div>';
+  if(x._stage==='merged') f+='<div class="flag blue">Merged. Waiting for the Hub to deploy; it moves to Live by itself.</div>';
+  if(x._back) f+='<div class="flag blue">'+h(x._back)+'</div>';
+  if(x.Dup_Of){ const o=BYID[String(x.Dup_Of)]; f+='<div class="flag amber">May overlap #'+h(x.Dup_Of)+(o?' “'+h(o.Title)+'” ('+h(STAGE_LABEL[o._stage])+')':'')+'. Check before approving.</div>'; }
+  return f;
+}
+function detail(x,inline){
+  const s=x._stage, ef=effortParts(x.Effort), beforeMerge=['approved','queued','building','pr_open','blocked'].indexOf(s)>=0;
+  const pinned=String(x.Pinned||'').toUpperCase()==='TRUE';
+  let d='<div class="detail'+(inline?' inline':'')+'" data-id="'+h(x.ID)+'">';
+  if(!inline) d+='<h2><span class="sub">#'+h(x.ID)+'</span> '+h(x.Title||'')+'</h2><div class="chips">'+chipsOf(x)+'</div>'+flagsOf(x);
+  if(x.Problem) d+='<span class="lbl">Problem</span><p>'+h(x.Problem)+'</p>';
+  if(x.First_Step) d+='<span class="lbl">First step</span><p>'+h(x.First_Step)+'</p>';
+  if(x.Impact) d+='<span class="lbl">Impact</span><p>'+h(x.Impact)+'</p>';
+  if(ef.l||ef.rest) d+='<span class="lbl">Effort</span><p>'+h((ef.l?EFFORT_WORD[ef.l].charAt(0).toUpperCase()+EFFORT_WORD[ef.l].slice(1):'')+(ef.l&&ef.rest?'. ':'')+ef.rest)+'</p>';
+  if(String(x.Requires_Spend||'').toUpperCase()==='TRUE') d+='<span class="lbl">Cost</span><p>'+h(x.Spend_Note||'This costs something.')+(x.Workaround?' Cheaper option: '+h(x.Workaround):'')+'</p>';
+  if(s==='dropped'&&x.Drop_Reason) d+='<span class="lbl">Why it was dropped</span><p>'+h(x.Drop_Reason)+'</p>';
+  if(s!=='live'&&s!=='done'&&s!=='merged'&&s!=='dropped') d+='<label class="lbl">Your change (optional). It travels with the item into the build.<textarea class="note" rows="2" maxlength="1000">'+h(x.Brett_Note||'')+'</textarea></label>';
+  else if(x.Brett_Note) d+='<span class="lbl">Your change</span><p>'+h(x.Brett_Note)+'</p>';
+
+  if(s==='review'){
+    d+='<span class="lbl">Approve</span><div class="row"><label class="sub">Risk <select class="risk"><option value="AUTO" selected>Decide for me</option><option value="SAFE">Safe: may be built without me</option><option value="GATED">Gated: I will supervise</option></select></label>'
+      +'<button type="button" class="btn go" data-act="approve">Approve</button></div>'
+      +'<div class="sub">“Decide for me” picks safe unless the wording mentions money, sign-in, texting or contact details.</div>';
+  }
+  if(beforeMerge){
+    d+='<span class="lbl">Risk (saves at once)</span><div class="row"><div class="seg" role="group" aria-label="Risk">'
+      +'<button type="button" class="btn" data-act="risk" data-v="SAFE" aria-pressed="'+(isSafe(x)?'true':'false')+'">Safe</button>'
+      +'<button type="button" class="btn" data-act="risk" data-v="GATED" aria-pressed="'+(isSafe(x)?'false':'true')+'">Gated</button></div>'
+      +'<span class="sub">'+(isSafe(x)?'May be built without you.':'Needs a build you supervise.')+'</span></div>';
+    d+='<span class="lbl">Move it forward</span><div class="row">'+pushButton(x)
+      +(s==='pr_open'?'<span class="sub">Merging the PR is what ships it. The row moves to Merged, then Live, by itself.</span>':'')
+      +'<button type="button" class="btn" data-act="pin" data-v="'+(pinned?'off':'on')+'">'+(pinned?'Unpin':'Pin to top')+'</button>'
+      +(s!=='pr_open'?'<button type="button" class="btn" data-act="copy">Copy build brief</button>':'')+'</div>';
+  }
+  if(s==='merged') d+='<span class="lbl">Move it forward</span><div class="row">'+pushButton(x)+'<span class="sub">Only needed if it does not move by itself.</span></div>';
+  if(s==='snoozed'||s==='dropped') d+='<div class="row">'+pushButton(x)+'</div>';
+  if(s==='review'||beforeMerge||s==='snoozed'){
+    d+='<span class="lbl">Pull it out</span><div class="row">'
+      +(beforeMerge?'<button type="button" class="btn" data-act="toreview">Back to review</button>':'')
+      +(s!=='snoozed'?'<button type="button" class="btn" data-act="snooze">Snooze</button><label class="sub">for <input class="days" type="number" min="1" max="365" value="'+DEFAULT_SNOOZE+'" aria-label="Days to snooze"> days</label>':'')
+      +'<button type="button" class="btn danger" data-act="dropask">Drop</button></div>'
+      +'<div class="row dropbox"><input type="text" class="reason" maxlength="300" placeholder="Why is it dropped?" aria-label="Reason for dropping"><button type="button" class="btn danger" data-act="drop">Confirm drop</button></div>';
+  }
+  if(String(x.Stage_Log||'').trim()) d+='<details><summary>History</summary><pre class="log">'+h(x.Stage_Log)+'</pre></details>';
+  return d+'</div>';
+}
+function card(x){
+  const open=SEL===String(x.ID), pinned=String(x.Pinned||'').toUpperCase()==='TRUE';
+  const btn=pushButton(x);
+  return '<article class="card'+(open?' sel':'')+(pinned?' pinned':'')+'" data-id="'+h(x.ID)+'">'
+    +'<div class="chead"><label class="pick"><input type="checkbox" class="bulk"'+(BULK.has(String(x.ID))?' checked':'')+' aria-label="Select item '+h(x.ID)+'"></label>'
+    +'<button type="button" class="ctitle" data-act="open" aria-expanded="'+(open?'true':'false')+'"><span class="rank">#'+h(x.ID)+'</span>'+h(x.Title||'(no title)')+'</button></div>'
+    +'<div class="chips">'+chipsOf(x)+'</div>'+flagsOf(x)
+    +(btn?'<div class="cbtns">'+btn+'</div>':'')
+    +(open?detail(x,true):'')
+    +'</article>';
+}
+function render(){
+  const body=document.getElementById('body');
+  const row=(REV&&REV.rows&&REV.rows[0])||null;
+  document.getElementById('asof').textContent=(row&&row.Timestamp)?('Last review '+String(row.Timestamp).slice(0,10)):'';
+  // header counts
+  const waiting=ROWS.filter(function(x){return x._stage==='pr_open'||(x._stage==='blocked'&&onBrett(x));}).length;
+  const blocked=ROWS.filter(function(x){return x._stage==='blocked';}).length;
+  const stuckN=ROWS.filter(function(x){return x._stuck;}).length;
+  const built=ROWS.filter(function(x){return (x._stage==='merged'||x._stage==='live'||x._stage==='done')&&recent(x,7);}).length;
+  document.getElementById('counts').innerHTML='<span class="stat"><b>'+built+'</b> built this week</span><span class="stat'+(waiting?' warn':'')+'"><b>'+waiting+'</b> waiting on you</span><span class="stat'+(blocked?' warn':'')+'"><b>'+blocked+'</b> blocked</span><span class="stat'+(stuckN?' warn':'')+'"><b>'+stuckN+'</b> stuck</span>';
+
+  const shown=ROWS.filter(passes), by={review:[],approved:[],building:[],waiting:[],live:[],other:[]};
+  const showOther=filtering();
+  shown.forEach(function(x){
+    let g=x._group;
+    if(g==='built'||g==='snoozedlist') g=showOther?'other':null;       // these two have their own lists below unless you are searching / filtering
+    if(g==='other'&&!showOther) g=null;
+    if(g) by[g].push(x);
+  });
+  const groups=GROUPS.filter(function(g){return g[0]!=='other'||by.other.length;});
+  let html='<div class="layout"><div class="board" id="board" style="--cols:'+groups.length+'">';
+  groups.forEach(function(g){
+    let list=sortRows(by[g[0]],g[0]), more=0;
+    if(g[0]==='review'&&!SHOW_ALL_REVIEW&&list.length>REVIEW_CAP){ more=list.length-REVIEW_CAP; list=list.slice(0,REVIEW_CAP); }
+    if(g[0]==='live'&&!showOther&&list.length>LIVE_CAP){ list=list.slice(0,LIVE_CAP); }
+    html+='<section class="col" data-g="'+g[0]+'" aria-label="'+h(g[1])+'"><div class="colhead"><h2>'+h(g[1])+'</h2><span class="count">'+by[g[0]].length+'</span></div><div class="cards">'
+      +(list.length?list.map(card).join(''):'<div class="empty">'+(showOther?'Nothing matches the filters.':({review:'Nothing is waiting for your review.',approved:'Nothing is approved and waiting.',building:'Nothing is being built.',waiting:'Nothing needs you right now.',live:'Nothing went live in the last 14 days.'}[g[0]]||'Nothing here.'))+'</div>')
+      +'</div>'+(more?'<div class="row"><button type="button" class="btn" data-act="showall">Show the other '+more+'</button></div>':'')+'</section>';
+  });
+  html+='</div><aside class="pane" id="pane" aria-label="Details of the selected item">'+(BYID[SEL]?detail(BYID[SEL],false):'<div class="empty">Select an item to see its details and controls here.</div>')+'</aside></div>';
+
+  // probably already built
+  const builtList=ROWS.filter(function(x){return x._group==='built';});
+  if(builtList.length){
+    html+='<details class="panel" id="sec-built"><summary>Probably already built ('+builtList.length+')</summary><div class="sub">The Optimizer flagged these as already shipped, or covered by builds since you snoozed them. Drop them, or bring one back to review.</div>'
+      +'<div class="row"><button type="button" class="btn danger" data-act="dropallbuilt">Drop all '+builtList.length+' as already built</button></div>';
+    builtList.forEach(function(x){ html+='<div class="q" data-id="'+h(x.ID)+'"><b>#'+h(x.ID)+' '+h(x.Title||'')+'</b><div class="sub">'+h(x._why||'')+'</div><div class="row"><button type="button" class="btn danger" data-act="dropbuilt">Drop</button><button type="button" class="btn" data-act="reviewanyway">Review it anyway</button></div></div>'; });
+    html+='</details>';
+  }
+  // snoozed
+  const sn=ROWS.filter(function(x){return x._group==='snoozedlist';}).sort(function(a,b){return ms(a.Snooze_Until)-ms(b.Snooze_Until);});
+  html+='<details class="panel" id="sec-snoozed"><summary>Snoozed ('+sn.length+')</summary>';
+  if(!sn.length) html+='<div class="sub">Nothing is snoozed.</div>';
+  sn.forEach(function(x){
+    const dl=Math.ceil((ms(x.Snooze_Until)-Date.now())/86400000);
+    html+='<div class="q" data-id="'+h(x.ID)+'"><b>#'+h(x.ID)+' '+h(x.Title||'')+'</b><div class="sub">'+(x._wait?'The snooze is up. Waiting for the Optimizer to re-check it against recent builds.':(dl>0?'Comes back in '+dl+' day'+(dl>1?'s':'')+'.':'Due today.'))+'</div><div class="row"><button type="button" class="btn" data-act="wake">Bring back now</button></div></div>';
+  });
+  html+='</details>';
+  // this week's Optimizer review
+  if(row){
+    let items=[]; if(row.Proposal_JSON){ try{ items=JSON.parse(row.Proposal_JSON)||[]; }catch(e){ items=[]; html+='<div class="banner"><span>This week’s review could not be read (its saved list is damaged).</span></div>'; } }
+    const open=items.filter(function(it){return !overlapsQueue(it,ROWS);}), covered=items.length-open.length;
+    window.__reviewOpen=open; window.__reviewTs=row.Timestamp||'';
+    html+='<details class="panel" id="sec-week"'+(open.length?' open':'')+'><summary>This week’s Optimizer review ('+open.length+' new)</summary><div class="sub">'+h(row.Total_Jobs||'0')+' jobs, success '+pct(row.Success_Rate)+', escalation '+pct(row.Escalation_Rate)+'</div>';
+    const tot=parseInt(row.Total_Jobs||'0',10)||0;
+    if(tot<20) html+='<div class="banner info"><span>Thin data ('+tot+' jobs; a confident review wants 20 or more). Treat these as ideas to check.</span></div>';
+    if(row.Stuck_Patterns) html+='<div class="sub">'+h(row.Stuck_Patterns)+'</div>';
+    if(!items.length) html+='<p style="white-space:pre-wrap">'+h(row.Proposal||'(none)')+'</p>';
+    if(open.length) html+='<div class="row"><button type="button" class="btn" data-act="pick" data-v="3">Top 3</button><button type="button" class="btn" data-act="pick" data-v="5">Top 5</button><button type="button" class="btn" data-act="pick" data-v="99">All</button><button type="button" class="btn" data-act="pick" data-v="0">Clear</button></div>';
+    open.forEach(function(it,i){
+      const ef=effortParts(it.effort);
+      html+='<label class="wk"><input type="checkbox" class="wkbox" data-i="'+i+'"><span><b>#'+h(it.rank||i+1)+' '+h(it.title||'')+'</b><span class="chips">'+(it.tag?chip('',it.tag):'')+(ef.l?chip('','Effort '+ef.l,'Effort: '+EFFORT_WORD[ef.l]):'')+'</span>'
+        +(it.problem?'<span class="sub" style="display:block">'+h(it.problem)+'</span>':'')+(it.action?'<span style="display:block;font-size:15px">'+h(it.action)+'</span>':'')+(it.impact?'<span class="sub" style="display:block">Impact: '+h(it.impact)+'</span>':'')+(ef.rest?'<span class="sub" style="display:block">Effort: '+h(ef.rest)+'</span>':'')+'</span></label>';
+    });
+    if(open.length) html+='<div class="row"><button type="button" class="btn go" id="wkGo" data-act="approveweek" disabled>Approve selected</button><span class="sub">Risk is decided for you; change it on the card afterwards if you disagree.</span></div>';
+    if(covered) html+='<div class="sub">'+covered+' finding'+(covered>1?'s':'')+' from this review match items already in the queue, so they are not shown again.</div>';
+    html+='</details>';
+  } else if(REV) html+='<div class="panel sub">No weekly review yet. Run one from the Command Center.</div>';
+  body.innerHTML=html;
+  bulkBar();
+}
+
+// ── duplicate matching for the weekly list (same algorithm as the Hub's queueSimilarity) ─────────
 const STOP=new Set(['the','and','for','with','from','that','this','into','via','per','new','add','build','show','make','use','using','when','not','all','any','every','each','are','was','were','been','will','can','should','would','could','item','items','page','view','flow','tool','auto','automatic','automatically','system','feature']);
 function toks(t){const o=new Set();String(t==null?'':t).toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).forEach(function(w){if(w.length<3||STOP.has(w))return;let s=w;if(s.length>5&&/ing$/.test(s))s=s.slice(0,-3);else if(s.length>4&&/ed$/.test(s))s=s.slice(0,-2);else if(s.length>4&&/ies$/.test(s))s=s.slice(0,-3)+'y';else if(s.length>3&&/s$/.test(s)&&!/ss$/.test(s))s=s.slice(0,-1);if(s.length>=3)o.add(s);});return o;}
 function dice(a,b){if(!a.size||!b.size)return 0;let i=0;a.forEach(function(t){if(b.has(t))i++;});return 2*i/(a.size+b.size);}
 function overlapsQueue(it,rows){const ta=toks(it.title),fa=toks([it.title,it.problem,it.action].join(' '));for(let k=0;k<rows.length;k++){const r=rows[k];if(dice(ta,toks(r.Title))>=0.6||dice(fa,toks([r.Title,r.Problem,r.First_Step].join(' ')))>=0.30)return r;}return null;}
 
-// ── row classification ──────────────────────────────────────────────────────────────────────
-function st(x){return String(x.Status||'').toLowerCase();}
-function ms(v){const t=Date.parse(String(v||''));return Number.isFinite(t)?t:NaN;}
-function daysLeft(x){return Math.ceil((ms(x.Snooze_Until)-Date.now())/86400000);}
-let REVIEW_ANYWAY={}; try{REVIEW_ANYWAY=JSON.parse(localStorage.getItem('prop_review_anyway')||'{}')||{};}catch(e){}
-function classify(allQ){
-  const out={review:[],built:[],snoozed:[],ready:[],flight:[],live:[],byId:{}};
-  allQ.forEach(function(x){
-    out.byId[String(x.ID)]=x;
-    const s=st(x), bs=String(x.Build_State||'');
-    if(s==='proposed'){
-      const sn=ms(x.Snooze_Until), now=Date.now();
-      let waiting=false, back=false;
-      if(Number.isFinite(sn)&&sn>now){ out.snoozed.push(x); return; }
-      if(Number.isFinite(sn)&&sn<=now){            // snooze expired → only resurface after the Scout re-checked it vs builds since
-        const v=String(x.Scout_Verdict||'').toLowerCase();
-        const graceOver=(now-sn)>RECHECK_GRACE_DAYS*86400000;
-        if(v==='covered'&&!REVIEW_ANYWAY[x.ID]){ x.__why=x.Scout_Note||'Scout says builds shipped since cover this'; out.built.push(x); return; }
-        if(v==='keep'||v==='update'||graceOver){ back=true; x.__back=v?('back from snooze · Scout re-checked: '+v):'back from snooze · not re-checked yet'; }
-        else waiting=true;
-      }
-      if(waiting){ x.__wait=true; out.snoozed.push(x); return; }
-      if(String(x.Shipped_Match||'').trim() && !REVIEW_ANYWAY[x.ID]){ x.__why=x.Shipped_Match; out.built.push(x); return; }
-      out.review.push(x); return;
-    }
-    if(s==='greenlit'||s==='prepared'||s==='held'){ out.ready.push(x); return; }
-    if(s==='building'||(s==='done'&&(bs==='pr_open'||bs==='pr_closed'||bs==='building'||bs==='held'))){ out.flight.push(x); return; }
-    if(s==='done'){
-      const t=ms(x.Build_Updated)||ms(x.Timestamp); if(Number.isFinite(t)&&Date.now()-t<14*86400000) out.live.push(x);
-    }
-  });
-  out.review.sort(function(a,b){const ra=parseFloat(a.Rank),rb=parseFloat(b.Rank);const na=Number.isFinite(ra)?ra:999,nb=Number.isFinite(rb)?rb:999;return na-nb||(+b.ID)-(+a.ID);});
-  out.live.sort(function(a,b){return (ms(b.Build_Updated)||0)-(ms(a.Build_Updated)||0);});
-  return out;
+// ── writes ──────────────────────────────────────────────────────────────────────────────────────
+async function setStage(id,body,okMsg){
+  const d=await postJSON('/ops-queue-stage',Object.assign({id:String(id)},body));
+  const warn=(d.warnings||[]).join(' ');
+  let msg=typeof okMsg==='function'?okMsg(d):okMsg;
+  await load();
+  toast((msg||'Saved.')+(warn?' '+warn:''),warn?'info':'ok');
 }
-
-// ── load / render ───────────────────────────────────────────────────────────────────────────
-async function load(){
-  if(!TOKEN){ document.getElementById('body').innerHTML='<div class="tokbar"><b>Connect</b><div class="sub">Paste your Hub access code (mh_auth) to load proposals.</div><input id="tok" type="password" placeholder="access code"><button onclick="saveTok()">Connect</button></div>'; return; }
-  let rev=null,q=null;
-  try{ rev=await getJSON('/ops-review-log?limit=1'); }catch(e){ rev=null; toast('Couldn’t load this week’s review — '+h(e.message)); }
-  try{ q=await getJSON('/ops-queue?all=1'); }catch(e){ q=null; document.getElementById('body').innerHTML='<div class="card"><b>Couldn’t load the queue</b><div class="sub">'+h(e.message)+'</div><div class="ctrls"><button class="mini" onclick="load()">Try again</button></div></div>'; return; }
-  if(q&&q.truncated) toast('The queue list is cut off at 400 rows, so the oldest rows are not shown here.');
-  render(rev,q);
-  maybeSync(q);
+async function saveNoteIfChanged(box,id){
+  const ta=box&&box.querySelector('textarea.note'); if(!ta)return;
+  const was=String((BYID[id]||{}).Brett_Note||'').trim();
+  if(ta.value.trim()===was)return;
+  await postJSON('/ops-queue-update',{id:id,note:ta.value.trim()});
+  if(BYID[id])BYID[id].Brett_Note=ta.value.trim();
 }
-// Two-way sync: when in-flight builds exist, ask the Worker to check their PRs on GitHub once per page load.
-async function maybeSync(q){
-  if(SYNCED)return; const rows=(q&&q.queue)||[];
-  const need=rows.some(function(x){const s=st(x),bs=String(x.Build_State||'');return s==='building'||(s==='done'&&(bs==='pr_open'||bs==='building'));});
-  if(!need)return; SYNCED=true;
-  try{
-    // GitHub blocks the Hub's shared server address, so look the PRs up from this browser and hand them over.
-    let prs=[]; try{ const ac=new AbortController(); const tm=setTimeout(function(){ac.abort();},6000); const g=await fetch('https://api.github.com/repos/Ridge-Co/RidgeCo/pulls?state=all&sort=updated&direction=desc&per_page=100',{headers:{'Accept':'application/vnd.github+json'},signal:ac.signal}); clearTimeout(tm); if(g.ok) prs=(await g.json()).map(function(p){return {number:p.number,state:p.state,merged_at:p.merged_at,title:p.title,body:(String(p.body||'').match(/ops[ -]?queue\s+(?:item\s+)?#?\d+/ig)||[]).join(' ')};}); }catch(e){ prs=[]; }
-    const r=await fetch(WORKER+'/ops-queue/sync',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({prs:prs})});
-    const d=await r.json().catch(function(){return null;});
-    if(!d) throw new Error('HTTP '+r.status);
-    if(d.errors&&d.errors.length) toast('Couldn’t check GitHub for '+d.errors.length+' build(s) ('+h(d.errors[0].error)+') — their status below may be out of date.');
-    else if(!r.ok) throw new Error(d.error||('HTTP '+r.status));
-    if(d.changed&&d.changed.length) load();
-  }catch(e){
-    toast('Couldn’t check GitHub for build status: '+h(e.message)+' — build states below may be out of date.');
-  }
-}
-
-function summaryBar(c){
-  const b=function(n,label,anchor){return '<a class="sumb" href="#'+anchor+'"><b>'+n+'</b><span>'+label+'</span></a>';};
-  document.getElementById('summary').innerHTML='<div class="sumrow">'+b(c.review.length,'to review','sec-review')+b(c.ready.length,'ready to build','sec-ready')+b(c.flight.length,'in flight','sec-flight')+b(c.snoozed.length,'snoozed','sec-snoozed')+'</div>';
-}
-
-function noteBox(x){
-  return '<textarea class="note" rows="2" placeholder="✎ Your change (optional) — e.g. “don’t show monthly spend”" onblur="saveNote(this)">'+h(x.Brett_Note||'')+'</textarea>';
-}
-function buildStateLine(x){
-  const s=st(x), bs=String(x.Build_State||''), pr=String(x.PR_Number||'').trim();
-  const prLink=pr?'<a href="'+REPO_URL+'/pull/'+h(pr)+'" target="_blank" style="color:var(--blue);font-weight:800">PR #'+h(pr)+'</a>':'';
-  const age=ms(x.Build_Updated); const hrs=Number.isFinite(age)?Math.floor((Date.now()-age)/3600000):null;
-  if(bs==='pr_closed') return '<div class="flag red">⚠ '+prLink+' was closed WITHOUT merging — the work didn’t ship. Rebuild it, or abandon it.</div>';
-  if(bs==='pr_open'||(s==='done'&&bs==='')) return '<div class="flag blue">🔀 Built — '+(prLink||'PR not found yet')+' is waiting for your merge'+(hrs!==null&&hrs>=24*7?' ('+Math.floor(hrs/24)+' days)':'')+'.</div>';
-  if(s==='building') return '<div class="flag amber">🔨 Building'+(prLink?' — '+prLink+' open':' — no PR reported yet')+(hrs!==null&&hrs>=STALLED_HOURS?' · ⏰ no update in '+hrs+'h, may be stuck':'')+'.</div>';
-  return '';
-}
-
-function reviewCard(x,i){
-  const requiresSpend=String(x.Requires_Spend||'').toUpperCase()==='TRUE';
-  const spendChip=requiresSpend?'<span class="chip fix">💰 '+h(x.Spend_Note||'costs something')+'</span>':'';
-  let badges=(x.Lens?'<span class="chip eff">'+h(x.Lens)+'</span>':'')+chip(x.Tag)+(x.Effort?'<span class="chip eff">'+h(x.Effort)+' effort</span>':'')+spendChip;
-  if(x.__back) badges+='<span class="chip quick">⏰ '+h(x.__back)+'</span>';
-  let overlap='';
-  if(x.Dup_Of){ const o=(window.__c&&window.__c.byId[String(x.Dup_Of)]); overlap='<div class="flag amber">⚠ May overlap #'+h(x.Dup_Of)+(o?' “'+h(o.Title)+'” ('+h(st(o))+')':'')+' — check before approving.</div>'; }
-  return '<div class="qcard" data-id="'+h(x.ID)+'" id="rv'+i+'">'
-    +'<div class="prow"><span class="rank">#'+h(x.ID)+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
-    +'<div class="prow" style="margin-top:4px">'+badges+'</div>'
-    +overlap
-    +(x.Problem?'<div class="pprob">'+h(x.Problem)+'</div>':'')
-    +(x.First_Step?'<div class="pact">→ '+h(x.First_Step)+'</div>':'')
-    +(x.Impact?'<div class="pimp">Impact: '+h(x.Impact)+'</div>':'')
-    +(requiresSpend&&x.Workaround?'<div class="pimp">Cheaper workaround: '+h(x.Workaround)+'</div>':'')
-    +noteBox(x)
-    +'<div class="ctrls" style="margin-top:8px;align-items:center">'
-    +'<select class="risk" title="SAFE = the Start Build button may build it automatically. GATED = it needs a session you supervise.">'
-    +'<option value="SAFE">Auto-build (SAFE)</option><option value="GATED" selected>I’ll supervise (GATED)</option></select>'
-    +'<button class="mini ok" onclick="act(this,\'approve\')">✓ Approve</button>'
-    +'<button class="mini" onclick="act(this,\'drop\')">✕ Drop</button>'
-    +'</div>'
-    +'<div class="ctrls" style="margin-top:2px;align-items:center">'
-    +'<button class="mini" onclick="act(this,\'snooze\')">💤 Not now — snooze</button>'
-    +'<input class="days" type="number" min="1" max="365" value="'+DEFAULT_SNOOZE+'" aria-label="snooze days"><span class="sub">days</span>'
-    +'</div></div>';
-}
-
-function render(rev,q){
-  const row=(rev&&rev.rows&&rev.rows[0])||null;
-  let items=[];
-  if(row&&row.Proposal_JSON){ try{ items=JSON.parse(row.Proposal_JSON)||[]; }catch(e){ items=[]; } }
-  PROPOSALS=items; REVIEW_TS=(row&&row.Timestamp)||'';
-  document.getElementById('asof').textContent=REVIEW_TS?('· review '+REVIEW_TS.slice(0,10)):'';
-  const allQ=(q&&q.queue)||[];
-  window.__allQ=allQ;
-  const c=classify(allQ); window.__c=c;
-  window.__queue=c.ready;           // index space for copyOne / Start Build checkboxes
-  summaryBar(c);
-  let html='';
-
-  // 1 ─ NEEDS YOUR REVIEW ─────────────────────────────────────────────────────────────────────
-  html+='<div class="card" id="sec-review"><h2 style="margin:0">Needs your review ('+c.review.length+')</h2>'
-    +'<div class="sub" style="margin:4px 0 0">Duplicates are merged and anything already built, snoozed or declined is hidden. For each item you can type a <b>change</b> (it travels with the item into the build), then <b>Approve</b> (sends it to “ready to build”), <b>Snooze</b> (hides it for a while — the Optimizer still sees it and re-checks it against what’s been built since), or <b>Drop</b>.</div></div>';
-  if(!c.review.length) html+='<div class="card sub">✓ Nothing waiting for your review.</div>';
-  const shown=SHOW_ALL_REVIEW?c.review:c.review.slice(0,REVIEW_CAP);
-  shown.forEach(function(x,i){ html+=reviewCard(x,i); });
-  if(c.review.length>shown.length) html+='<div class="ctrls"><button class="mini" onclick="SHOW_ALL_REVIEW=true;load()">Show the other '+(c.review.length-shown.length)+'</button></div>';
-
-  // 1b ─ PROBABLY ALREADY BUILT ───────────────────────────────────────────────────────────────
-  if(c.built.length){
-    html+='<details class="card" id="sec-built"><summary><b>Probably already built ('+c.built.length+')</b> <span class="sub">— hidden from review</span></summary>'
-      +'<div class="sub" style="margin:6px 0">The Optimizer flagged these as already shipped (or covered by builds since you snoozed them). Drop them, or bring one back to review.</div>'
-      +'<div class="ctrls"><button class="mini" onclick="dropAllBuilt(this)">✕ Drop all '+c.built.length+' as already built</button></div>';
-    c.built.forEach(function(x){
-      html+='<div class="q" data-id="'+h(x.ID)+'" style="flex-direction:column;gap:4px"><div><span class="rank">#'+h(x.ID)+'</span> <b>'+h(x.Title||'')+'</b></div>'
-        +'<div class="pimp">'+h(x.__why||'')+'</div>'
-        +'<div class="ctrls"><button class="mini" onclick="act(this,\'dropbuilt\')">✕ Drop</button><button class="mini" onclick="reviewAnyway(this)">Review it anyway</button></div></div>';
+function riskWords(d){return d.risk_class==='SAFE'?'safe':'gated';}
+const ACT={
+  open:function(el,id){ SEL=(SEL===id&&!wide())?'':id; render(); if(SEL&&!wide()){ const c=document.querySelector('.card.sel'); if(c&&c.scrollIntoView) c.scrollIntoView({block:'nearest'}); } },
+  approve:function(el,id,box){ guarded('stage'+id,el,async function(){
+    await saveNoteIfChanged(box,id);
+    const sel=box&&box.querySelector('select.risk'); const risk=sel?sel.value:'AUTO';
+    await setStage(id,{stage:'approved',risk_class:risk},function(d){return 'Approved as '+riskWords(d)+(risk==='AUTO'&&d.risk_reason?' ('+d.risk_reason+')':'')+'. Tap Build now when you want it built.';});
+  }); },
+  buildnow:function(el,id,box){ guarded('stage'+id,el,async function(){ await saveNoteIfChanged(box,id); await setStage(id,{stage:'queued'},'Queued for the next build run.'); }); },
+  'retry-build':function(el,id){ guarded('stage'+id,el,function(){ return setStage(id,{stage:'queued',note:'retry'},'Queued for the next build run.'); }); },
+  openpr:function(el,id){ const x=BYID[id]; if(x&&String(x.PR_Number||'').trim()) window.open(prUrl(x),'_blank','noopener'); else toast('This item has no PR number yet.'); },
+  marklive:function(el,id){ guarded('stage'+id,el,function(){ return setStage(id,{stage:'live'},'Marked live.'); }); },
+  unblock:function(el,id){ const x=BYID[id]||{}; const to=(String(x.PR_Number||'').trim()&&String(x.Build_State||'')!=='pr_closed')?'pr_open':'queued';
+    guarded('stage'+id,el,function(){ return setStage(id,{stage:to},to==='pr_open'?'Unblocked. Back to waiting for your merge.':'Unblocked. Queued for the next build run.'); }); },
+  toreview:function(el,id){ guarded('stage'+id,el,function(){ return setStage(id,{stage:'review'},'Moved back to review.'); }); },
+  wake:function(el,id){ guarded('stage'+id,el,function(){ return setStage(id,{stage:'review'},'Brought back to review.'); }); },
+  snooze:function(el,id,box){
+    const days=Math.round(parseFloat(((box&&box.querySelector('input.days'))||{}).value));
+    if(!(days>=1&&days<=365)){ toast('Enter a snooze of 1 to 365 days.'); return; }
+    guarded('stage'+id,el,async function(){ await saveNoteIfChanged(box,id); await setStage(id,{stage:'snoozed',snooze_days:days},'Snoozed for '+days+' day'+(days>1?'s':'')+'. Find it under Snoozed.'); });
+  },
+  dropask:function(el,id,box){ const b=box&&box.querySelector('.dropbox'); if(!b)return; b.classList.toggle('on'); if(b.classList.contains('on')) b.querySelector('input').focus(); },
+  drop:function(el,id,box){
+    const why=String(((box&&box.querySelector('input.reason'))||{}).value||'').trim();
+    if(!why){ toast('Type a short reason first, so you can tell later why it was dropped.'); return; }
+    guarded('stage'+id,el,function(){ return setStage(id,{stage:'dropped',reason:why},'Dropped. To undo, choose Stage: Dropped and tap Back to review.'); });
+  },
+  dropbuilt:function(el,id){ guarded('stage'+id,el,function(){ return setStage(id,{stage:'dropped',reason:'already built (per Optimizer flag)'},'Dropped as already built.'); }); },
+  reviewanyway:function(el,id){ REVIEW_ANYWAY[id]=1; store('prop_review_anyway',JSON.stringify(REVIEW_ANYWAY)); ROWS.forEach(function(x){x._why='';x._group=groupOf(x);}); render(); },
+  dropallbuilt:function(el){
+    const ids=ROWS.filter(function(x){return x._group==='built';}).map(function(x){return String(x.ID);});
+    if(!ids.length)return;
+    if(!el.getAttribute('data-armed')){ const old=el.textContent; el.setAttribute('data-armed','1'); el.textContent='Tap again to drop all '+ids.length; setTimeout(function(){ if(el.isConnected){ el.removeAttribute('data-armed'); el.textContent=old; } },4000); return; }
+    guarded('bulk',el,function(){ return bulkWrite(ids,{stage:'dropped',reason:'already built (per Optimizer flag)'},'dropped'); });
+  },
+  risk:function(el,id){ const v=el.getAttribute('data-v'); guarded('risk'+id,el,function(){ return setStage(id,{risk_class:v},function(d){return 'Risk saved: '+riskWords(d)+'.';}); }); },
+  pin:function(el,id){ const on=el.getAttribute('data-v')==='on'; guarded('pin'+id,el,function(){ return setStage(id,{pinned:on},on?'Pinned to the top.':'Unpinned.'); }); },
+  copy:function(el,id){ const x=BYID[id]; if(x) openModal('Build brief: '+(x.Title||''),brief(x),'Paste this into a Claude session to build it.'); },
+  showall:function(){ SHOW_ALL_REVIEW=true; render(); },
+  // bulk
+  bsafe:function(el){ guarded('bulk',el,function(){ return bulkWrite(Array.from(BULK),{risk_class:'SAFE'},'set to safe'); }); },
+  bgated:function(el){ guarded('bulk',el,function(){ return bulkWrite(Array.from(BULK),{risk_class:'GATED'},'set to gated'); }); },
+  bpin:function(el){ guarded('bulk',el,function(){ return bulkWrite(Array.from(BULK),{pinned:true},'pinned'); }); },
+  bdropask:function(){ const b=document.getElementById('bulkDrop'); b.classList.toggle('on'); if(b.classList.contains('on')) document.getElementById('bulkReason').focus(); },
+  bdrop:function(el){
+    const why=document.getElementById('bulkReason').value.trim();
+    if(!why){ toast('Type a short reason first, so you can tell later why they were dropped.'); return; }
+    guarded('bulk',el,async function(){ await bulkWrite(Array.from(BULK),{stage:'dropped',reason:why},'dropped'); document.getElementById('bulkReason').value=''; document.getElementById('bulkDrop').classList.remove('on'); });
+  },
+  bclear:function(){ BULK.clear(); render(); },
+  // weekly review list
+  pick:function(el){ const nmax=+el.getAttribute('data-v'); document.querySelectorAll('#sec-week input.wkbox').forEach(function(cb){ const i=+cb.getAttribute('data-i'); const it=(window.__reviewOpen||[])[i]; cb.checked=nmax>=99?true:(nmax===0?false:!!(it&&(it.rank||i+1)<=nmax)); }); weekCount(); },
+  approveweek:function(el){
+    const items=[]; document.querySelectorAll('#sec-week input.wkbox:checked').forEach(function(cb){ const it=(window.__reviewOpen||[])[+cb.getAttribute('data-i')]; if(it) items.push(Object.assign({},it,{risk_class:'AUTO'})); });
+    if(!items.length)return;
+    guarded('week',el,async function(){
+      const d=await postJSON('/ops-approve',{items:items.slice(0,20),review_ts:window.__reviewTs||''});
+      await load();
+      toast('Approved '+(d.queued+(d.promoted||0))+' item'+((d.queued+(d.promoted||0))===1?'':'s')+(d.already?'; '+d.already+' were already in the queue':'')+(items.length>20?'. Only the first 20 were sent; approve the rest next.':'.'),'ok');
     });
-    html+='</details>';
+  },
+  // misc
+  retry:function(){ const f=RETRY; toast(''); if(f) f(); },
+  dismiss:function(){ toast(''); },
+  reload:function(){ document.getElementById('body').innerHTML='<div class="spin">Loading…</div>'; load(); },
+  forget:function(){ TOKEN=''; store(AUTH_KEY,''); load(); },
+  savetok:function(){ const v=document.getElementById('tok').value.trim(); if(!v){ toast('Enter the access code first.'); return; } TOKEN=v; store(AUTH_KEY,v); document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>'; load(); },
+  closemodal:function(){ document.getElementById('modal').style.display='none'; },
+  copymodal:function(){ const t=document.getElementById('mtext'); t.focus(); t.select(); copyText(t.value); },
+};
+// One bulk request per 40 rows; every row's own result comes back, so a partly failed batch says exactly which rows failed and why.
+async function bulkWrite(ids,body,verb){
+  if(!ids.length)return;
+  let saved=0; const failed=[];
+  for(let i=0;i<ids.length;i+=BULK_MAX){
+    const d=await postJSON('/ops-queue-stage',Object.assign({ids:ids.slice(i,i+BULK_MAX)},body));
+    (d.results||[]).forEach(function(r){ if(r.ok) saved++; else failed.push(r); });
   }
-
-  // 2 ─ READY TO BUILD (greenlit) ─────────────────────────────────────────────────────────────
-  html+='<div class="card" id="sec-ready"><div class="prow" style="justify-content:space-between;align-items:center"><h2 style="margin:0">Ready to build ('+c.ready.length+')</h2>'+(c.ready.length?'<button class="mini" onclick="copyAll()">📋 Copy all</button>':'')+'</div>'
-    +'<div class="sub" style="margin:4px 0 0">Check one or more <b>SAFE</b> items (🔒 = GATED, needs your own session) and tap <b>Start Build</b> below to fire one live build session. It reports back here: building → built (PR waiting for your merge) → live. You can still edit your change on a card before building.</div></div><div id="buildResult"></div>';
-  if(!c.ready.length) html+='<div class="card sub">Nothing approved and waiting.</div>';
-  c.ready.forEach(function(x,qi){
-    const s=st(x), rc=(x.Risk_Class||'GATED').toUpperCase(), isSafe=rc==='SAFE';
-    const eligible=isSafe&&(s==='greenlit'||s==='prepared'||s==='held');
-    const hasBrief=!!(x.Build_Brief&&String(x.Build_Brief).trim());
-    const stCls=(s==='held')?'held':(s==='prepared')?'prepared':'';
-    const left=eligible?'<input type="checkbox" class="qsel" data-qi="'+qi+'" onchange="syncBuildSel()">':'<span title="GATED — needs your own session, not auto-buildable" style="font-size:18px;line-height:1;margin-top:2px">🔒</span>';
-    html+='<div class="qcard'+(eligible?'':' locked')+'" id="qc'+qi+'" data-id="'+h(x.ID)+'" style="display:flex;gap:10px;align-items:flex-start">'+left
-      +'<div style="flex:1;min-width:0">'
-      +'<div class="prow"><span class="rank">#'+h(x.ID)+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
-      +'<div class="prow" style="margin-top:4px"><span class="qs'+(stCls?' '+stCls:'')+'">'+h(s)+'</span><span class="chip '+(isSafe?'safe':'gated')+'">'+(isSafe?'SAFE':'GATED')+'</span>'+(hasBrief?'<span class="chip eff">📋 brief ready</span>':'')+chip(x.Tag)+(x.Effort?'<span class="chip eff">'+h(x.Effort)+' effort</span>':'')+'</div>'
-      +((s==='held'&&x.Held_Note)?'<div class="flag red">⚠ '+h(x.Held_Note)+'</div>':'')
-      +(x.Problem?'<div class="pprob">'+h(x.Problem)+'</div>':'')
-      +(x.First_Step?'<div class="pact">→ '+h(x.First_Step)+'</div>':'')
-      +noteBox(x)
-      +'<div class="ctrls" style="margin-top:8px"><button class="mini" onclick="copyOne('+qi+')">📋 Copy build brief</button>'
-      +'<button class="mini" onclick="act(this,\'back\')" title="Send it back to the review list">↩ Back to review</button>'
-      +'<button class="mini" onclick="act(this,\'drop\')">✕ Drop</button></div>'
-      +'</div></div>';
-  });
-
-  // 3 ─ IN FLIGHT ─────────────────────────────────────────────────────────────────────────────
-  html+='<div class="card" id="sec-flight"><h2 style="margin:0">In flight ('+c.flight.length+')</h2><div class="sub" style="margin:4px 0 0">Approved items being built or waiting for your merge. This updates by itself: when a PR merges the item moves to “Recently live”; if a PR is closed without merging it is flagged here for you to decide.</div></div>';
-  if(!c.flight.length) html+='<div class="card sub">Nothing in flight.</div>';
-  c.flight.forEach(function(x){
-    const bs=String(x.Build_State||'');
-    let btns='';
-    if(bs==='pr_closed') btns='<button class="mini ok" onclick="act(this,\'rebuild\')">🔁 Rebuild it</button><button class="mini" onclick="act(this,\'abandon\')">🗑 Abandon</button>';
-    else if(st(x)==='building') btns='<button class="mini" onclick="act(this,\'rebuild\')" title="Put it back in the ready list">↩ Back to ready</button><button class="mini" onclick="act(this,\'markdone\')">✓ Mark done</button>';
-    else btns='<button class="mini" onclick="act(this,\'markdone\')" title="Mark it live without waiting for the sync">✓ It’s live</button>';
-    html+='<div class="qcard" data-id="'+h(x.ID)+'"><div class="prow"><span class="rank">#'+h(x.ID)+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
-      +buildStateLine(x)
-      +(x.Brett_Note?'<div class="pimp">✎ Your change: '+h(x.Brett_Note)+'</div>':'')
-      +'<div class="ctrls" style="margin-top:8px">'+btns+'</div></div>';
-  });
-
-  // 4 ─ SNOOZED / RECENTLY LIVE (collapsed) ───────────────────────────────────────────────────
-  html+='<details class="card" id="sec-snoozed"><summary><b>Snoozed ('+c.snoozed.length+')</b> <span class="sub">— hidden until they’re due</span></summary>';
-  if(!c.snoozed.length) html+='<div class="sub" style="margin-top:6px">Nothing snoozed.</div>';
-  c.snoozed.sort(function(a,b){return ms(a.Snooze_Until)-ms(b.Snooze_Until);}).forEach(function(x){
-    const dl=daysLeft(x);
-    html+='<div class="q" data-id="'+h(x.ID)+'" style="flex-direction:column;gap:4px"><div><span class="rank">#'+h(x.ID)+'</span> <b>'+h(x.Title||'')+'</b></div>'
-      +'<div class="pimp">'+(x.__wait?'Snooze is up — waiting for the Optimizer to re-check it against recent builds':(dl>0?'Comes back in '+dl+' day'+(dl>1?'s':''):'Due today'))+'</div>'
-      +'<div class="ctrls"><button class="mini" onclick="act(this,\'wake\')">⏰ Bring back now</button></div></div>';
-  });
-  html+='</details>';
-  html+='<details class="card" id="sec-live"><summary><b>Recently live ('+c.live.length+')</b> <span class="sub">— last 14 days</span></summary>';
-  if(!c.live.length) html+='<div class="sub" style="margin-top:6px">Nothing finished in the last 14 days.</div>';
-  c.live.slice(0,12).forEach(function(x){ html+='<div class="q"><span class="rank">#'+h(x.ID)+'</span><span>'+h(x.Title||'')+(x.PR_Number?' · <a href="'+REPO_URL+'/pull/'+h(x.PR_Number)+'" target="_blank" style="color:var(--blue)">PR #'+h(x.PR_Number)+'</a>':'')+'</span></div>'; });
-  html+='</details>';
-
-  // 5 ─ THIS WEEK'S OPTIMIZER REVIEW (telemetry findings, checkbox flow) ─────────────────────────
-  if(row){
-    const open=items.filter(function(it){return !overlapsQueue(it,allQ);});
-    const covered=items.length-open.length;
-    window.__reviewOpen=open;
-    html+='<details class="card" id="sec-week"'+(open.length?' open':'')+'><summary><b>This week’s Optimizer review ('+open.length+' new)</b> <span class="sub">· '+h(row.Total_Jobs||'0')+' jobs · success '+pct(row.Success_Rate)+' · escalation '+pct(row.Escalation_Rate)+'</span></summary>';
-    const totJobs=parseInt(row.Total_Jobs||'0')||0;
-    if(totJobs<20) html+='<div class="banner">⚠ Directional only — thin data ('+totJobs+' telemetry rows; a confident review wants 20+). Treat these as hypotheses.</div>';
-    if(row.Stuck_Patterns) html+='<div class="sub">⚠ '+h(row.Stuck_Patterns)+'</div>';
-    if(!items.length) html+='<div class="sub" style="white-space:pre-wrap;color:var(--ink);margin-top:6px">'+h(row.Proposal||'(none)')+'</div>';
-    if(open.length) html+='<div class="ctrls"><button class="mini" onclick="pick(3)">Top 3</button><button class="mini" onclick="pick(5)">Top 5</button><button class="mini" onclick="pick(99)">All</button><button class="mini" onclick="pick(0)">Clear</button></div>';
-    open.forEach(function(it,i){
-      html+='<label class="pcard" id="pc'+i+'"><input type="checkbox" data-i="'+i+'" onchange="syncSel()">'
-        +'<div class="pbody"><div class="prow"><span class="rank">#'+(it.rank||i+1)+'</span><span class="ptitle">'+h(it.title||'')+'</span></div>'
-        +'<div class="prow" style="margin-top:4px">'+chip(it.tag)+(it.effort?'<span class="chip eff">'+h(it.effort)+' effort</span>':'')+'</div>'
-        +(it.problem?'<div class="pprob">'+h(it.problem)+'</div>':'')+(it.action?'<div class="pact">→ '+h(it.action)+'</div>':'')+(it.impact?'<div class="pimp">Impact: '+h(it.impact)+'</div>':'')
-        +'</div></label>';
-    });
-    if(covered) html+='<div class="sub" style="margin-top:6px">'+covered+' finding'+(covered>1?'s':'')+' from this review match items already in the queue, so they’re not shown again.</div>';
-    if(items.length&&!open.length) html+='<div class="sub" style="margin-top:6px">✓ Everything from this review is already in the queue.</div>';
-    html+='</details>';
-  } else html+='<div class="card sub">No weekly review yet — run one from the Command Center.</div>';
-
-  document.getElementById('body').innerHTML=html;
-  syncSel(); syncBuildSel();
+  BULK.clear(); failed.forEach(function(r){ BULK.add(String(r.id)); });
+  await load();
+  if(failed.length) toast(saved+' '+verb+', '+failed.length+' did not save: '+failed.slice(0,4).map(function(r){return '#'+r.id+' ('+r.error+')';}).join('; ')+'. The ones that failed are still selected.','',function(){ guarded('bulk',null,function(){ return bulkWrite(Array.from(BULK),body,verb); }); });
+  else toast(saved+' item'+(saved===1?'':'s')+' '+verb+'.','ok');
 }
+function bulkBar(){
+  const n=BULK.size, bar=document.getElementById('bulkbar');
+  bar.classList.toggle('on',n>0);
+  document.getElementById('bulkN').textContent=n+' selected';
+  if(!n) document.getElementById('bulkDrop').classList.remove('on');
+}
+function weekCount(){ const n=document.querySelectorAll('#sec-week input.wkbox:checked').length, g=document.getElementById('wkGo'); if(g){ g.disabled=!n; g.textContent=n?('Approve '+n+' selected'):'Approve selected'; } }
 
-// ── actions ─────────────────────────────────────────────────────────────────────────────────
-const armed={};
-async function act(btn,what){
-  const card=btn.closest('[data-id]'); if(!card)return; const id=card.getAttribute('data-id');
-  const note=card.querySelector('textarea.note');
-  const key=what+id;
-  if((what==='drop'||what==='abandon')&&!armed[key]){ armed[key]=1; const old=btn.textContent; btn.textContent='Tap again to confirm'; setTimeout(function(){armed[key]=0;btn.textContent=old;},4000); return; }
-  btn.disabled=true;
-  try{
-    if(what==='approve'){
-      const risk=(card.querySelector('select.risk')||{}).value==='SAFE'?'SAFE':'GATED';
-      const body={id:id,status:'greenlit',risk_class:risk}; if(note&&note.value.trim()!==String((window.__c.byId[id]||{}).Brett_Note||'').trim()) body.note=note.value.trim(); 
-      await postJSON('/ops-queue-update',body);
-    } else if(what==='snooze'){
-      const days=Math.round(parseFloat((card.querySelector('input.days')||{}).value));
-      if(!(days>=1&&days<=365)){ toast('Enter a snooze of 1–365 days.'); btn.disabled=false; return; }
-      const body={id:id,snooze_days:days}; if(note&&note.value.trim()) body.note=note.value.trim();
-      await postJSON('/ops-queue-update',body);
-    } else if(what==='drop'||what==='dropbuilt'){
-      await postJSON('/ops-queue-update',{id:id,status:'dropped',reason:what==='dropbuilt'?'already built (per Optimizer flag)':'declined at review'});
-    } else if(what==='abandon'){
-      await postJSON('/ops-queue-update',{id:id,status:'dropped',build_state:'abandoned',reason:'abandoned after its PR was closed without merging'});
-    } else if(what==='rebuild'){
-      await postJSON('/ops-queue-update',{id:id,status:'greenlit',build_state:''});
-    } else if(what==='back'){
-      await postJSON('/ops-queue-update',{id:id,status:'proposed'});
-    } else if(what==='markdone'){
-      await postJSON('/ops-queue-update',{id:id,status:'done',build_state:'live'});
-    } else if(what==='wake'){
-      await postJSON('/ops-queue-update',{id:id,snooze_days:0});
-    }
-    load();
-  }catch(e){ btn.disabled=false; toast('That didn’t save — '+h(e&&e.message||e)); }
-}
-async function saveNote(el){
-  const card=el.closest('[data-id]'); if(!card)return; const id=card.getAttribute('data-id');
-  const was=String(((window.__c&&window.__c.byId[id])||{}).Brett_Note||'');
-  if(el.value.trim()===was.trim())return;
-  try{ await postJSON('/ops-queue-update',{id:id,note:el.value.trim()}); if(window.__c&&window.__c.byId[id])window.__c.byId[id].Brett_Note=el.value.trim(); el.classList.add('saved'); setTimeout(function(){el.classList.remove('saved');},1500); }
-  catch(e){ el.classList.add('bad'); toast('Your change wasn’t saved — '+h(e&&e.message||e)); }
-}
-function reviewAnyway(btn){ const id=btn.closest('[data-id]').getAttribute('data-id'); REVIEW_ANYWAY[id]=1; try{localStorage.setItem('prop_review_anyway',JSON.stringify(REVIEW_ANYWAY));}catch(e){} load(); }
-async function dropAllBuilt(btn){
-  const list=(window.__c&&window.__c.built)||[]; if(!list.length)return;
-  if(!btn.getAttribute('data-armed')){ const old=btn.textContent; btn.setAttribute('data-armed','1'); btn.textContent='Tap again to drop all '+list.length+' (still searchable later)'; setTimeout(function(){ btn.removeAttribute('data-armed'); btn.textContent=old; },4000); return; }
-  let fail=0;
-  for(const x of list){ try{ await postJSON('/ops-queue-update',{id:x.ID,status:'dropped',reason:'already built (per Optimizer flag)'}); }catch(e){ fail++; } }
-  if(fail) toast(fail+' of '+list.length+' didn’t save — try again.');
-  load();
-}
+document.addEventListener('click',function(ev){
+  const modal=document.getElementById('modal'); if(ev.target===modal){ modal.style.display='none'; return; }
+  const el=ev.target.closest('[data-act]'); if(!el)return;
+  const host=el.closest('[data-id]'); const id=host?host.getAttribute('data-id'):'';
+  const box=el.closest('.detail')||el.closest('.card')||host;
+  const fn=ACT[el.getAttribute('data-act')]; if(fn) fn(el,id,box);
+});
+document.addEventListener('change',function(ev){
+  const t=ev.target;
+  if(t.classList&&t.classList.contains('bulk')){ const id=t.closest('[data-id]').getAttribute('data-id'); if(t.checked) BULK.add(id); else BULK.delete(id); bulkBar(); }
+  else if(t.classList&&t.classList.contains('wkbox')) weekCount();
+});
+// "Your change" saves when you leave the box; a failed save is shown with a retry.
+document.addEventListener('focusout',function(ev){
+  const ta=ev.target; if(!(ta.classList&&ta.classList.contains('note')))return;
+  const box=ta.closest('[data-id]'); if(!box)return; const id=box.getAttribute('data-id');
+  const was=String((BYID[id]||{}).Brett_Note||'').trim(); if(ta.value.trim()===was)return;
+  const val=ta.value.trim();
+  const save=async function(){ await postJSON('/ops-queue-update',{id:id,note:val}); if(BYID[id])BYID[id].Brett_Note=val; if(ta.isConnected){ ta.classList.remove('bad'); ta.classList.add('saved'); setTimeout(function(){ta.classList.remove('saved');},1500); } };
+  save().catch(function(e){ report('note',e); if(ta.isConnected) ta.classList.add('bad'); toast('Your change was not saved. '+String((e&&e.message)||e),'',function(){ save().catch(function(e2){ report('note',e2); toast('Your change was still not saved. '+String((e2&&e2.message)||e2)); }); }); });
+});
+// filters
+function setTog(id,on){ document.getElementById(id).setAttribute('aria-pressed',on?'true':'false'); }
+document.getElementById('qsearch').addEventListener('input',function(){ F.q=this.value.trim(); render(); });
+document.getElementById('fStage').addEventListener('change',function(){ F.stage=this.value; render(); });
+document.getElementById('fRisk').addEventListener('change',function(){ F.risk=this.value; render(); });
+document.getElementById('fTag').addEventListener('change',function(){ F.tag=this.value; render(); });
+document.getElementById('fMine').addEventListener('click',function(){ F.mine=!F.mine; setTog('fMine',F.mine); render(); });
+document.getElementById('fStuck').addEventListener('click',function(){ F.stuck=!F.stuck; setTog('fStuck',F.stuck); render(); });
+document.getElementById('fClear').addEventListener('click',function(){ F.q='';F.stage='';F.risk='';F.tag='';F.mine=false;F.stuck=false; document.getElementById('qsearch').value=''; document.getElementById('fStage').value=''; document.getElementById('fRisk').value=''; document.getElementById('fTag').value=''; setTog('fMine',false); setTog('fStuck',false); render(); });
+document.getElementById('refresh').addEventListener('click',function(){ const b=this; guarded('refresh',b,async function(){ SYNCED=false; await load(); }); });
+document.addEventListener('keydown',function(ev){ if(ev.key==='Escape') document.getElementById('modal').style.display='none'; });
 
-function searchQueue(q){
-  q=(q||'').trim().toLowerCase();
-  const box=document.getElementById('qsearchResults'); if(!box)return;
-  if(!q){ box.innerHTML=''; return; }
-  const all=window.__allQ||[];
-  const hits=all.filter(function(x){return String(x.ID||'').toLowerCase()===q||String(x.Title||'').toLowerCase().indexOf(q)>=0;}).slice(0,15);
-  if(!hits.length){ box.innerHTML='<div class="sub" style="margin-top:6px">No matches for “'+h(q)+'”.</div>'; return; }
-  box.innerHTML=hits.map(function(x){
-    const s=st(x), stCls=(s==='building')?'building':(s==='held'||s==='dropped')?'held':(s==='prepared')?'prepared':'';
-    const stStyle=(s==='dropped')?'background:var(--redbg);color:var(--red)':(s==='done')?'background:var(--greenbg);color:var(--green)':'';
-    return '<div class="qcard" style="padding:10px;margin:8px 0">'
-      +'<div class="prow"><span class="rank">#'+h(x.ID||'')+'</span><span class="ptitle">'+h(x.Title||'')+'</span></div>'
-      +'<div class="prow" style="margin-top:4px"><span class="qs'+(stCls?' '+stCls:'')+'" style="'+stStyle+'">'+h(s)+'</span>'+(x.Build_State?'<span class="chip eff">'+h(x.Build_State)+'</span>':'')+(x.PR_Number?'<a class="chip eff" href="'+REPO_URL+'/pull/'+h(x.PR_Number)+'" target="_blank">PR #'+h(x.PR_Number)+'</a>':'')+(isNaN(ms(x.Snooze_Until))?'':'<span class="chip eff">snoozed to '+h(String(x.Snooze_Until).slice(0,10))+'</span>')+chip(x.Tag)+'</div>'
-      +(x.Problem?'<div class="pprob">'+h(x.Problem)+'</div>':'')
-      +(x.Brett_Note?'<div class="pimp">✎ Your change: '+h(x.Brett_Note)+'</div>':'')
-      +(x.Drop_Reason?'<div class="pimp">Reason: '+h(x.Drop_Reason)+'</div>':'')
-      +(x.Superseded_By?'<div class="pimp">Superseded by #'+h(x.Superseded_By)+'</div>':'')
-      +'</div>';
-  }).join('');
-}
-
-// ── weekly-review checkboxes (approve via /ops-approve — now promotes in place, never clones) ──
-function pick(n){document.querySelectorAll('#sec-week input[type=checkbox]').forEach(function(cb){const i=+cb.getAttribute('data-i');const it=(window.__reviewOpen||[])[i];cb.checked=(n>=99)?true:(n===0?false:(it&&(it.rank||i+1)<=n));});syncSel();}
-function syncSel(){let n=0;document.querySelectorAll('#sec-week input[type=checkbox]').forEach(function(cb){const card=document.getElementById('pc'+cb.getAttribute('data-i'));if(cb.checked){n++;card&&card.classList.add('sel');}else{card&&card.classList.remove('sel');}});const g=document.getElementById('go');g.disabled=!n;g.style.display=n?'block':'none';g.textContent=n?('Approve '+n+' → ready to build'):'Approve selected';updateBar();}
-function syncBuildSel(){let n=0;document.querySelectorAll('#body input.qsel').forEach(function(cb){const qi=+cb.getAttribute('data-qi');const card=document.getElementById('qc'+qi);if(cb.checked){n++;card&&card.classList.add('sel');}else{card&&card.classList.remove('sel');}});const bg=document.getElementById('buildGo');bg.disabled=!n;bg.style.display=n?'block':'none';bg.textContent=n?('🚀 Start Build ('+n+')'):'Start Build';updateBar();}
-function updateBar(){const g=document.getElementById('go'),bg=document.getElementById('buildGo');const show=(g&&g.style.display==='block')||(bg&&bg.style.display==='block');document.getElementById('bar').style.display=show?'block':'none';}
-function selectedQueueIds(){const out=[];document.querySelectorAll('#body input.qsel:checked').forEach(function(cb){const x=(window.__queue||[])[+cb.getAttribute('data-qi')];if(x&&x.ID)out.push(x.ID);});return out;}
-async function startBuild(){
-  const ids=selectedQueueIds(); if(!ids.length)return;
-  const bg=document.getElementById('buildGo'); bg.disabled=true; bg.textContent='Starting…';
-  const rEl=document.getElementById('buildResult');
-  try{
-    const r=await fetch(WORKER+'/ops-queue/start-build',{method:'POST',headers:{'Content-Type':'application/json','X-Auth-Token':TOKEN},body:JSON.stringify({ids:ids})});
-    const d=await r.json().catch(function(){return null;});
-    if(!r.ok||!d||d.ok!==true){
-      const msg=(d&&d.error)||('HTTP '+r.status);
-      if(rEl)rEl.innerHTML='<div class="banner">✕ Start Build failed — '+h(msg)+(d&&d.skipped&&d.skipped.length?'<br>Skipped: '+d.skipped.map(function(s){return h(s.id)+' ('+h(s.reason)+')';}).join(', '):'')+'</div>';
-      bg.disabled=false; bg.textContent='Start Build';
-      return;
-    }
-    let msg='<div class="banner ok">✓ Fired '+d.fired_ids.length+' item(s). They now show under “In flight”.';
-    if(d.session_url) msg+=' <a href="'+h(d.session_url)+'" target="_blank" style="color:var(--green);font-weight:800">▶ Watch build session</a>';
-    if(d.skipped&&d.skipped.length) msg+='<br>Skipped: '+d.skipped.map(function(s){return h(s.id)+' ('+h(s.reason)+')';}).join(', ');
-    msg+='</div>';
-    if(rEl)rEl.innerHTML=msg;
-    setTimeout(load,700);
-  }catch(e){
-    if(rEl)rEl.innerHTML='<div class="banner">✕ Start Build failed — '+h(e&&e.message||e)+'</div>';
-    bg.disabled=false; bg.textContent='Start Build';
-  }
-}
-function selected(){const out=[];document.querySelectorAll('#sec-week input[type=checkbox]:checked').forEach(function(cb){const it=(window.__reviewOpen||[])[+cb.getAttribute('data-i')];if(it)out.push(it);});return out;}
-async function approveSel(){
-  const items=selected(); if(!items.length)return;
-  const g=document.getElementById('go'); g.disabled=true; g.textContent='Queueing…';
-  try{
-    const d=await postJSON('/ops-approve',{items:items,review_ts:REVIEW_TS});
-    g.textContent='✓ Queued '+d.queued+(d.promoted?' · '+d.promoted+' promoted':'')+(d.already?' · '+d.already+' already there':'');
-    setTimeout(load,700);
-  }catch(e){ g.disabled=false; g.textContent='Failed — '+(e&&e.message||e); }
-}
-function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){}document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';load();}
-
-// ── copyable brief (includes Your change) ───────────────────────────────────────────────────
+// ── copyable build brief (includes Your change) ─────────────────────────────────────────────────
 function brief(x){
   return '## '+(x.Title||'(untitled)')+'\n'
     +'- Rank: #'+(x.Rank||'')+(x.Tag?'  ·  '+x.Tag:'')+(x.Effort?'  ·  '+x.Effort+' effort':'')+'\n'
+    +'- Risk: '+(isSafe(x)?'SAFE':'GATED')+'\n'
     +(x.Problem?'- Problem: '+x.Problem+'\n':'')
     +(x.First_Step?'- First step: '+x.First_Step+'\n':'')
     +(x.Impact?'- Impact: '+x.Impact+'\n':'')
     +(x.Brett_Note?'- BRETT\'S CHANGE (overrides the above): '+x.Brett_Note+'\n':'')
     +(x.Review_TS?'- From review: '+String(x.Review_TS).slice(0,10)+'\n':'')
-    +'- Queue ID: '+(x.ID||'')+'\n';
+    +'- Queue ID: '+(x.ID||'')+' (put "queue #'+(x.ID||'')+'" in the PR title so the row follows the PR)\n';
 }
-function copyOne(qi){const x=(window.__queue||[])[qi];if(!x)return;openModal('Build brief — '+(x.Title||''),brief(x),'Paste this into a Claude session to build it.');}
-function copyAll(){const qs=window.__queue||[];if(!qs.length)return;const text='# BrettOS — ready-to-build queue ('+qs.length+' items)\n\nStanding rule: owner-facing views never show what owners spend with Brett; estimate/approval screens still show amounts.\n\n'+qs.map(brief).join('\n');openModal('All ready ('+qs.length+')',text,'Paste into a Claude session — this is the full build backlog.');}
-function openModal(title,text,msg){document.getElementById('mtitle').textContent=title;document.getElementById('mtext').value=text;document.getElementById('mmsg').textContent=msg||'';document.getElementById('modal').style.display='block';tryCopy(text);}
-function closeModal(){document.getElementById('modal').style.display='none';}
-function tryCopy(text){try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(function(){var m=document.getElementById('mmsg');if(m)m.textContent='✓ Copied to clipboard. (Or select the text below to copy manually.)';},function(){});}}catch(e){}}
-function copyFromModal(){const t=document.getElementById('mtext');t.focus();t.select();try{document.execCommand('copy')}catch(e){}tryCopy(t.value);document.getElementById('mmsg').textContent='✓ Copied (or long-press the text → Copy).';}
+function openModal(title,text,msg){ document.getElementById('mtitle').textContent=title; document.getElementById('mtext').value=text; document.getElementById('mmsg').textContent=msg||''; document.getElementById('modal').style.display='block'; copyText(text); }
+function copyText(text){
+  const m=document.getElementById('mmsg');
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(function(){ if(m)m.textContent='Copied to the clipboard.'; },function(){ if(m)m.textContent='Could not copy by itself. Select the text below and copy it.'; });
+  } else if(m) m.textContent='Select the text below and copy it.';
+}
 load();
 </script>
-<!-- B-093 auto-refresh: poll /version, refresh onto new code (idle=auto, mid-entry=tap banner).
-     Added because a stale cached copy of THIS page (pre-greenlit-build, no status buttons) left
-     Brett unable to tap anything but checkboxes — the page now self-updates when the Worker version changes. -->
+<!-- B-093 auto-refresh: poll /version, refresh onto new code (idle=auto, mid-entry=tap banner). A failed check is counted and,
+     after five in a row, shown once: the page may then be out of date without knowing it. -->
 <script>
 (function(){
-  var VER_URL = WORKER + '/version', booted = null;
+  var VER_URL = WORKER + '/version', booted = null, misses = 0, told = false;
   function dirty(){
     var el = document.activeElement;
     if (el && (el.tagName==='INPUT'||el.tagName==='TEXTAREA'||el.tagName==='SELECT') && el.value) return true;
     if (document.getElementById('modal') && document.getElementById('modal').style.display==='block') return true;
+    if (BULK.size) return true;
     return false;
   }
   function banner(){
     if (document.getElementById('mh-upd-banner')) return;
-    var b = document.createElement('div');
+    var b = document.createElement('button');
+    b.type = 'button';
     b.id = 'mh-upd-banner';
-    b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#0b8a3e;color:#fff;padding:13px 16px;text-align:center;font:600 15px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 -2px 10px rgba(0,0,0,.2)';
-    b.textContent = 'Update ready — tap to refresh';
-    b.onclick = function(){ location.reload(true); };
+    b.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;width:100%;border:none;background:#0b6b33;color:#fff;padding:13px 16px;text-align:center;font:600 15px system-ui,-apple-system,sans-serif;cursor:pointer;box-shadow:0 -2px 10px rgba(0,0,0,.2)';
+    b.textContent = 'Update ready. Tap to refresh';
+    b.onclick = function(){ location.reload(); };
     document.body.appendChild(b);
   }
   function check(){
     fetch(VER_URL, {cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+      misses = 0;
       if (!d || !d.version) return;
       if (booted === null){ booted = d.version; return; }
-      if (d.version !== booted){ dirty() ? banner() : location.reload(true); }
-    }).catch(function(){});
+      if (d.version !== booted){ dirty() ? banner() : location.reload(); }
+    }).catch(function(e){
+      misses++;
+      if (misses >= 5 && !told){ told = true; toast('This page cannot check for updates right now (' + String((e && e.message) || e) + '). Refresh it by hand if something looks out of date.', 'info'); }
+    });
   }
   check();
   setInterval(check, 60000);
