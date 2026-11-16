@@ -20958,6 +20958,58 @@ async function staleWos(env, url) {
   return json({ ok: true, threshold_days: days, count: stale.length, stale: stale.slice(0, 100) });
 }
 
+// ── Repeat-failure units (Ops_Build_Queue #250, PHASE 1 of 2, Nov 16 2026) ─────────────────────────────────────────────────────────────────
+// Which UNIT keeps generating work orders? A read-only pass over the Work_Orders rows the digest already loads: no new tab, no schema change, no write, no SMS.
+//   - flagged when a unit has >= minWos real WOs in the trailing window, OR one unit + one trade has >= 2 (a repeat failure of the same system);
+//   - "asset" is approximated by unit + trade until the appliance registry (#145) is merged; Phase 2 swaps/adds the per-asset key and the OWNER view (a "replace vs repair"
+//     line in front of owners is customer-facing wording and needs Brett's review, so it is deliberately not built here).
+// Admin only (GET /repeat-units is in no role scope). The output carries unit label, WO ids, counts, trades and dates ONLY: no tenant, phone, email, code or money.
+const REPEAT_SKIP_TYPES = ['addon', 'delivery', 'turnover', 'recurring'];   // not a failure: extra scope on a job, an appliance delivery, a turn, a scheduled PM job
+const REPEAT_NOT_REAL_STATUSES = WOStatus.sets.DEAD.concat(WOStatus.sets.CLOSED_FINAL.filter(s => s !== 'Paid' && s !== 'Closed'));   // Cancelled/Canceled/Declined/Void: the job never happened. Paid/Closed stay: real work.
+const REPEAT_TAG = 'consider root-cause / replace-vs-repair';
+// Trade for the same-trade rule. resolveTrade() folds every trade it does not know into 'General', which would make two unrelated "other" jobs look like one system, so an
+// unknown trade keeps its own text, and a blank trade is 'Unspecified' (counts toward the unit total, never toward the same-trade rule).
+function repeatTradeOf(raw) {
+  const t = String(raw || '').trim();
+  if (!t) return 'Unspecified';
+  const r = resolveTrade(t);
+  return r.matched ? r.name : t.toLowerCase();
+}
+// PURE: no I/O. opts: windowDays (default 90), minWos (3), minSameTrade (2), top (5), nowMs.
+function repeatFailureUnits(wos, opts) {
+  const o = Object.assign({ windowDays: 90, minWos: 3, minSameTrade: 2, top: 5, nowMs: Date.now() }, opts || {});
+  const by = new Map();
+  for (const w of Array.isArray(wos) ? wos : []) {
+    if (!w || String(w.Voided || '').toUpperCase() === 'TRUE') continue;
+    if (REPEAT_SKIP_TYPES.includes(String(w.Type || '').toLowerCase()) || String(w.Recurring_Template_ID || '').trim()) continue;
+    if (isHiddenBidCopy(w) || REPEAT_NOT_REAL_STATUSES.includes(String(w.Status || '').trim())) continue;
+    const t = Date.parse(w.Created_Date);
+    if (isNaN(t) || Math.floor((o.nowMs - t) / 86400000) > o.windowDays || t > o.nowMs + 86400000) continue;   // unparseable, older than the window (whole days, like staleWos), or dated in the future
+    if (!String(w.Unit_ID || '').trim() && !String(w.Unit_Label || '').trim()) continue;   // property-wide work is not a unit signal
+    const key = String(w.Unit_ID || '').trim() || (String(w.Property_ID || '').trim() + '|' + String(w.Unit_Label || '').trim().toLowerCase());
+    const e = by.get(key) || { label: (String(w.Property_Address || '').trim() || ('prop ' + (w.Property_ID || '?'))) + (w.Unit_Label ? ' ' + String(w.Unit_Label).trim() : ''), ids: [], trades: {}, last: 0 };
+    e.ids.push(String(w.ID)); e.last = Math.max(e.last, t);
+    const tr = repeatTradeOf(w.Trade); e.trades[tr] = (e.trades[tr] || 0) + 1;
+    by.set(key, e);
+  }
+  return [...by.values()]
+    .map(e => { const same = Object.entries(e.trades).filter(([k, n]) => k !== 'Unspecified' && n >= o.minSameTrade).map(([k]) => k); return Object.assign(e, { same, byCount: e.ids.length >= o.minWos }); })
+    .filter(e => e.byCount || e.same.length)
+    .sort((a, b) => b.ids.length - a.ids.length || b.last - a.last || String(a.label).localeCompare(String(b.label)))
+    .slice(0, o.top)
+    .map(e => ({ unit: e.label, wo_count: e.ids.length, trades: e.trades, why: [].concat(e.byCount ? ['unit_count'] : [], e.same.length ? ['same_trade:' + e.same.join(',')] : []), wo_ids: e.ids, last_created: new Date(e.last).toISOString().slice(0, 10), tag: REPEAT_TAG }));
+}
+// GET /repeat-units?days=90&min=3 — READ-ONLY, admin gated. days clamps to 7..365, min to 2..20 (a bad value is clamped, never an error).
+async function repeatUnitsResponse(env, url) {
+  const q = k => (url && url.searchParams && url.searchParams.get(k)) || '';
+  const num = (k, d) => { const n = parseInt(q(k)); return isNaN(n) ? d : n; };   // 0 is a real (too small) value, so clamp it instead of treating it as missing
+  const days = Math.min(365, Math.max(7, num('days', 90))), min = Math.min(20, Math.max(2, num('min', 3)));
+  let wos = [];
+  try { wos = await fetchTab(env, 'Work_Orders'); } catch (e) { if (!isMissingTabError(e)) throw e; }   // a missing tab is an empty list; any other read error is a real error
+  const units = repeatFailureUnits(demoHide(wos), { windowDays: days, minWos: min });
+  return json({ ok: true, window_days: days, min_wos: min, count: units.length, units });
+}
+
 function formatDigestText(d) {
   const L = [];
   L.push(`RIDGE CO — DAILY DIGEST · ${d.stamp}`); L.push('');
