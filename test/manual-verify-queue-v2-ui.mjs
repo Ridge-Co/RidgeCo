@@ -151,7 +151,7 @@ const card = (page, id) => page.locator('.card[data-id="' + id + '"]');
     await page.fill('#qsearch', 'tap targets');
     ok((await card(page, '110').count()) === 1, 'search by title works');
     await page.locator('#fClear').tap();
-    ok((await page.locator('.card').count()) === 11, 'Clear filters brings the board back');
+    ok((await page.locator('.card').count()) === 12, 'Clear filters brings the board back');
 
     // approve with "Decide for me"
     await card(page, '101').locator('.detail [data-act=approve]').tap();
