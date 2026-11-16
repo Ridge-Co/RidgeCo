@@ -118,7 +118,7 @@
     // A page can set window.RC_PUSH_MOUNT = '<element id>' to have the bell sit inside its header instead of floating in the corner.
     var mount = window.RC_PUSH_MOUNT ? document.getElementById(window.RC_PUSH_MOUNT) : null;
     fab = el('button', { text: '🔔', 'aria-label': 'Notification settings', title: 'Notification settings', style: mount ? 'width:44px;height:44px;min-width:44px;min-height:44px;border-radius:8px;border:1px solid #c9cfdd;background:#fff;font-size:20px;line-height:1;cursor:pointer;padding:0' : 'position:fixed;left:12px;bottom:12px;width:48px;height:48px;min-width:48px;min-height:48px;border-radius:24px;border:1px solid #253562;background:#fff;font-size:22px;line-height:1;cursor:pointer;z-index:2147482999;box-shadow:0 2px 8px rgba(0,0,0,.2);padding:0', onclick: function(){ if (state.open) { state.open = false; panel.style.display = 'none'; } else openPanel(); } });
-    document.body.appendChild(fab);
+    (mount || document.body).appendChild(fab);
   }
   // The bell appears only once the person is signed in (the page sets its session token after PIN / access-code login) and the page has a worker address.
   var tries = 0;
