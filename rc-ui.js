@@ -1,7 +1,7 @@
 /* rc-ui.js - the shared RidgeCo parts, written from DESIGN.md (v1, Nov 16 2026). UI plan Phase 0. Pair of rc-ui.css.
    Load with the version in the tag:  <script src="rc-ui.js?v=1"></script>   (test/rc-ui.test.mjs keeps ?v= equal to RC_UI_VERSION below).
    Interface only. It never talks to the Worker, never reads a PIN or token, never sends a text. A page that fails to load it keeps working:
-   pages call these parts only after checking `typeof RC !== 'undefined'`, and the guard snippet in DESIGN.md shows a visible warning.
+   pages call these parts only after checking `typeof RC !== 'undefined'`, and the guard snippet in rc-ui-demo.html (copy it into a page) shows a visible warning.
 
    What is in here (all on window.RC, and rcToast / rcConfirm / rcAsk / rcSheet as globals):
      RC.config        brand name, logo path and Worker address: the ONLY place they are written. Override with window.RC_CONFIG before this loads.
