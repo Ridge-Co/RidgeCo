@@ -22,7 +22,7 @@
 
 **Silent-failure check:** `ui-check.mjs` prints RAN or NOT RUN for each of its three parts and never treats a part that did not run as a pass (`--require-shots` / `--require-detector` make that a failure in CI). The one `catch` that does not report is the localStorage seed inside the test browser, commented; every other catch puts the failure in the summary. No Worker or page code changed.
 
-Branch checklist: PR #551 -> main (verify with `get_pull_request`); head `feat/skills-stack-nov16`, cut from main tip e5c949a; no staging test-only PR (nothing to deploy or test there); not merged; `BUILD_VERSION` untouched; no commits on staging.
+Branch checklist: PR #552 -> main (checked with `get_pull_request`: open, base main); head `feat/skills-stack-nov16`, cut from main tip e5c949a; no staging test-only PR (nothing to deploy or test there); not merged; `BUILD_VERSION` untouched; no commits on staging.
 
 ## FEATURE_LOG
 **[FL-20261116-skills-stack]** Design standard + skills + UI ratchet. Rules (do not break):
