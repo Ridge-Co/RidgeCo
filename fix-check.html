@@ -157,7 +157,7 @@ function fieldHTML(f){
   if (d.type === 'textarea') return lab + '<textarea id="f-' + f + '" maxlength="' + (d.max || 1000) + '" oninput="setVal(\'' + f + '\',this.value,false)">' + esc(VAL[f] || '') + '</textarea>';
   if (d.type === 'photo') {
     var left = (DATA.photos_max || 6) - PHOTOS;
-    return lab + (left > 0 ? '<label class="ph"><input type="file" accept="image/*" multiple onchange="pickPhotos(this)">📷 ' + T('Take or choose a photo', 'Tomar o elegir una foto') + '</label>' : '<div class="small">' + T('Photo limit reached.', 'Límite de fotos alcanzado.') + '</div>') + '<div id="ph-list"></div>';
+    return lab + (left > 0 ? '<button type="button" class="ph" onclick="document.getElementById(\'ph-in\').click()">📷 ' + T('Take or choose a photo', 'Tomar o elegir una foto') + '</button><input type="file" id="ph-in" accept="image/*" multiple onchange="pickPhotos(this)" style="display:none">' : '<div class="small">' + T('Photo limit reached.', 'Límite de fotos alcanzado.') + '</div>') + '<div id="ph-list"></div>';
   }
   return '';
 }
