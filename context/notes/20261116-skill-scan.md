@@ -34,7 +34,7 @@ Run AFTER the build (Nov 17 2026, at Brett's request; this PR was opened before 
 - C11 Safe start: Y. Runs only on PRs that touch skills.
 - C13 Manual steps for Brett: merge; then the staging workflow-file sync per BRANCH_POLICY.
 - C15 Cost: no AI calls; free GitHub Actions minutes on a public repo.
-- B27 Where else: N. `context/THIRD_PARTY_SKILLS.md` does not yet say new skills are scanned on every PR. Companion (not done): one line there.
+- B27 Where else: FIXED Nov 17. `context/THIRD_PARTY_SKILLS.md` step 8 now says every skill PR is scanned and how to treat a finding.
 - B31 Settings: the pinned commit is deliberately a constant (changing it means re-vetting).
 - D10 Scheduled job: N/A (CI, not a Hub job).
 
