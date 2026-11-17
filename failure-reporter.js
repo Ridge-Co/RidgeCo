@@ -132,7 +132,7 @@
             try {
               if (unloading || recentlyHidden()) return;
               realFetch(WORKER + '/version', { cache: 'no-store' }).then(function (r) {
-                if (r && r.status < 500) { try { console.warn('[failure-reporter] one request failed but the Hub answers; not reported:', path); } catch (w) { /* silent-ok: console may be unavailable in locked-down webviews */ } return; }
+                if (r && r.status < 500) { try { console.warn('[failure-reporter] one request failed but the Hub answers; not reported:', path); } catch (w) { /* silent-ok: console may be unavailable in locked-down webviews */ } return; } // silent-ok: console may be unavailable in locked-down webviews, debug note only
                 if (report('api ' + path, msg + ' (Hub check: HTTP ' + (r && r.status) + ')')) toast();
               }, function (probeErr) {
                 if (unloading || recentlyHidden()) return;
