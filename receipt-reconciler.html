@@ -585,7 +585,7 @@ function searchResultCard(r){
   const active = r.active ? '' : ' <span class="pill danger">Voided</span>';
   return '<div class="rcard">'
     + '<div class="rc-top"><div><div class="rc-title">'+esc(r.store||'(store unknown)')+' — $'+money(r.amount)+active+'</div>'
-    + '<div class="rc-sub">'+esc((r.date||'').slice(0,10))+' · '+where+' · '+esc(r.category||'')+(r.added_by?' · added by '+esc(r.added_by):'')+'</div></div>'
+    + '<div class="rc-sub">'+esc((r.date||'').slice(0,10))+' · '+where+' · '+esc(r.category||'')+(r.added_by?' · added by '+esc(r.added_by):'')+(r.receipt_number?' · '+receiptNumChip({ Invoice_Number: r.receipt_number }):'')+(r.non_billing?' · <span class="pill muted">reference only, not billed</span>':'')+'</div></div>'
     + '<div>'+qb+'</div></div>'
     + (r.description ? '<div class="rc-items">'+esc(r.description)+'</div>' : '')
     + (r.source_file_url ? '<div class="rc-foot"><a href="'+esc(r.source_file_url)+'" target="_blank">View receipt →</a><span></span></div>' : '')
