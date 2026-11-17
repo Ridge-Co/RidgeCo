@@ -16655,6 +16655,62 @@ async function submitMoveOut() {
 
 
 // ── Quick status change ────────────────────────────────────────
+// Nov 17 2026 (Brett): a hold needs a reason from the list AND the day work is expected to resume. Same list and same saved text as the
+// vendor portal (vendor-job-order.js), so a hold set here or there reads the same. cb(text) gets the string to save in Hold_Reason.
+function hubHoldDialog(count, cb) {
+  if (typeof JobOrder === 'undefined') { toast('The hold picker did not load. Reload the page and try again.', 'error'); return; }
+  var old = document.getElementById('hub-hold-overlay'); if (old) old.remove();
+  var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+  var d0 = new Date(), today = d0.getFullYear() + '-' + pad(d0.getMonth() + 1) + '-' + pad(d0.getDate());
+  var rows = JobOrder.HOLD_REASONS.map(function(r) {
+    return '<label style="display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;cursor:pointer;color:var(--text);font-size:13px;letter-spacing:0;text-transform:none">' +
+      '<input type="radio" name="hh-reason" value="' + r.code + '" style="margin:0"><span>' + esc(r.en) + '</span></label>';
+  }).join('');
+  var chips = [[1, 'Tomorrow'], [3, 'In 3 days'], [7, 'In 1 week']].map(function(c) {
+    return '<button type="button" class="btn small hh-chip" data-days="' + c[0] + '">' + c[1] + '</button>';
+  }).join('');
+  var o = document.createElement('div');
+  o.id = 'hub-hold-overlay';
+  o.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:2000;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto';
+  o.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:100%;max-width:440px;padding:18px;margin:auto">' +
+    '<div style="font-size:15px;font-weight:bold;margin-bottom:10px">' + (count > 1 ? 'Put ' + count + ' work orders on hold' : 'Put this work order on hold') + '</div>' + rows +
+    '<div style="font-size:12px;color:var(--muted);margin:8px 0 4px">Details (required if Other)</div>' +
+    '<textarea id="hh-detail" style="width:100%;min-height:50px"></textarea>' +
+    '<div style="font-size:12px;color:var(--muted);margin:8px 0 4px">Expected back</div>' +
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">' + chips + '</div>' +
+    '<input type="date" id="hh-back" min="' + today + '" style="width:100%">' +
+    '<div id="hh-msg" style="margin-top:8px"></div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button type="button" class="btn small" id="hh-cancel">Cancel</button><button type="button" class="btn" id="hh-save">Put on hold</button></div></div>';
+  document.body.appendChild(o);
+  Array.prototype.forEach.call(o.querySelectorAll('.hh-chip'), function(b) {
+    b.onclick = function() { document.getElementById('hh-back').value = JobOrder.addDays(today, +b.getAttribute('data-days')); };
+  });
+  document.getElementById('hh-cancel').onclick = function() { o.remove(); };
+  document.getElementById('hh-save').onclick = function() {
+    var picked = o.querySelector('input[name="hh-reason"]:checked');
+    var f = { code: picked ? picked.value : '', detail: document.getElementById('hh-detail').value, back: document.getElementById('hh-back').value };
+    var chk = JobOrder.checkHold(f, today);
+    if (!chk.ok) {
+      var why = { reason: 'Pick a reason.', other: 'Explain the reason in the details box.', date: 'Pick the date work is expected to resume.', past: 'That date has already passed. Pick today or a later day.' }[chk.errors[0]];
+      document.getElementById('hh-msg').innerHTML = '<div style="color:#b42318;font-size:12.5px;font-weight:bold">' + esc(why) + '</div>';
+      return;
+    }
+    o.remove();
+    cb(JobOrder.holdText(f));
+  };
+}
+
+// A hold whose expected-back date has passed shows in red next to the reason, so stale holds are seen instead of forgotten.
+function hubHoldBadge(reason) {
+  var m = /expected back (\d{4}-\d{2}-\d{2})/.exec(reason || ''), over = '';
+  if (m) {
+    var d0 = new Date(), p = function(n) { return (n < 10 ? '0' : '') + n; };
+    var today = d0.getFullYear() + '-' + p(d0.getMonth() + 1) + '-' + p(d0.getDate());
+    if (m[1] < today) over = ' <span style="color:#b42318;font-weight:bold;font-size:11px">⚠ back-date passed (' + m[1] + ') — chase this hold</span>';
+  }
+  return ' <span style="color:var(--muted);font-size:11px">— ' + esc(reason) + '</span>' + over;
+}
+
 function quickStatusChange(woId, newStatus) {
   if (!newStatus) return;
   var payload = { wo_id:woId, status:newStatus, updated_by:'Admin', updated_by_role:'admin' };
