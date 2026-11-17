@@ -5999,7 +5999,7 @@ async function woPushToScope(env, body) {
   const apply = !!body && (body.apply === true || String(body.apply).toUpperCase() === 'TRUE');
 
   await scopesTab(env);
-  try { await ensureColumns(env, 'Work_Orders', ['Scope_ID']); } catch (_) {}
+  try { await ensureColumns(env, 'Work_Orders', ['Scope_ID']); } catch (_) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, woId);
   if (!wo) return json({ error: `No work order ${woId} found` }, 404);
@@ -6057,7 +6057,7 @@ async function woPushToScope(env, body) {
     return json({ error: `Estimate ${estimate.ID} (v${estimate.Version}) is not the approved estimate on this WO — the approved one is ${approved[0].ID} (v${approved[0].Version}).` }, 400);
   }
 
-  let lineItems = []; try { lineItems = JSON.parse(estimate.Line_Items || '[]'); } catch (_) {}
+  let lineItems = []; try { lineItems = JSON.parse(estimate.Line_Items || '[]'); } catch (e) { await softFail(env, 'woPushToScope:lineItems', e, { severity: 'P1', ref: String(estimate.ID), source: 'parse', context: 'the approved estimate lines are unreadable, so nothing could be converted to a Scope' }); }
   if (!Array.isArray(lineItems) || !lineItems.length) return json({ error: `Estimate ${estimate.ID} has no line items to convert.` }, 400);
   // Older estimates (pre desc_en) written in Spanish: translate the lines that lack an English copy
   // in memory only, so the proposal is English regardless. A translation miss keeps the original.
@@ -6066,7 +6066,7 @@ async function woPushToScope(env, body) {
       const need = lineItems.map((li, i) => (li && li.desc && !li.desc_en && plausiblyNonEnglish(li.desc)) ? i : -1).filter(i => i >= 0);
       const tr = await translateBatchToEnglish(env, need.map(i => lineItems[i].desc));
       if (tr.ok) need.forEach((i, k) => { if (String(tr.out[k]).trim().toLowerCase() !== String(lineItems[i].desc).trim().toLowerCase()) lineItems[i] = Object.assign({}, lineItems[i], { desc_en: tr.out[k] }); });
-    } catch (_) {}
+    } catch (e) { await softFail(env, 'woPushToScope:translate', e, { severity: 'P2', ref: String(estimate.ID), source: 'translate', context: 'estimate lines were converted without English descriptions' }); }
   }
 
   // ---- Resolve target scope: reuse Work_Orders.Scope_ID if already set, else preview a new one.
@@ -6115,7 +6115,7 @@ async function woPushToScope(env, body) {
       WO_ID: woId, Vendor_ID: wo.Vendor_ID || '', Estimate_Number: '', Estimate_Amount: '', Estimate_Notes: '',
       Proposal_Text: '', Created_By: (body && body.created_by) || 'admin', Created_Date: now, Updated_Date: now, Notes: '', Active: 'TRUE',
     });
-    const createJson = await createResp.clone().json().catch(() => ({}));
+    const createJson = await createResp.clone().json().catch(() => ({}));   // silent-ok: an unreadable answer leaves no id, which the next line turns into a 500
     scopeId = createJson.id;
     if (!scopeId) return json({ error: 'Failed to create the new Scope for this WO', detail: createJson }, 500);
     try { await updateWOFields(env, woId, { Scope_ID: scopeId }); }
@@ -6128,7 +6128,7 @@ async function woPushToScope(env, body) {
   }
 
   const finalItems = existingItems.concat(mappedItems);
-  let srcs = []; try { srcs = JSON.parse((targetScope && targetScope.Source_Refs) || '[]'); } catch (_) {}
+  let srcs = []; try { srcs = JSON.parse((targetScope && targetScope.Source_Refs) || '[]'); } catch (e) { await softFail(env, 'woPushToScope:sourceRefs', e, { severity: 'P2', ref: String(scopeId), source: 'parse', context: 'the Scope history of pushed estimates was unreadable and restarts from this push' }); }
   srcs.push({ type: 'estimate', estimate_id: estimate.ID, version: estimate.Version, wo_id: woId, ts: new Date().toISOString() });
   try {
     await updateRow(env, 'Scopes', scopeId, {
@@ -6151,10 +6151,10 @@ async function woPushToScope(env, body) {
     await ensureColumns(env, 'Estimates', ['Converted_Scope_ID', 'Converted_Date']);
     await updateRow(env, 'Estimates', estimate.ID, { Status: 'Converted', Converted_Scope_ID: scopeId, Converted_Date: new Date().toISOString() });
     convertedMarked = true;
-  } catch (e) {}
+  } catch (e) { await softFail(env, 'woPushToScope:markConverted', e, { severity: 'P1', ref: String(estimate.ID), source: 'write', context: 'the items went onto the Scope but the estimate was not marked Converted, so it can be pushed a second time and duplicate the items' }); }
 
   await setApprovalStage(env, { woId, scopeId, stage: 'Proposed' });
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_push_to_scope', Skill_Or_Endpoint: '/wo/push-to-scope', Success: 'TRUE', Notes: `wo=${woId} estimate=${estimate.ID} scope=${scopeId} created=${willCreate}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_push_to_scope', Skill_Or_Endpoint: '/wo/push-to-scope', Success: 'TRUE', Notes: `wo=${woId} estimate=${estimate.ID} scope=${scopeId} created=${willCreate}` }); } catch (_) { /* silent-ok: telemetry is best effort, the push result is returned to the page */ }
 
   return json({
     success: true, applied: true, wo_id: woId, scope_id: scopeId, created_new_scope: willCreate,
@@ -13231,37 +13231,37 @@ async function addVendorBill(env, body) {
       // A re-submit didn't create a second bill, but the hours it was built from still
       // belong to the bill that DID get created. Link them to that one rather than leaving
       // them loose and billable a second time.
-      try { await linkTimeEntriesToBill(env, body.time_entry_ids, String(dupe.ID || ''), dupeKey); } catch (e) {}
+      try { await linkTimeEntriesToBill(env, body.time_entry_ids, String(dupe.ID || ''), dupeKey); } catch (e) { await softFail(env, 'addVendorBill:linkHoursDupe', e, { severity: 'P1', ref: String(dupe.ID || ''), source: 'write', context: 'a re-submitted bill was recognised but its hours were not linked to it, so they stay billable a second time' }); }
       return json({ success: true, duplicate: true, id: String(dupe.ID || '') });
     }
   }
   // Vendor_Bills has no column for the vendor's own invoice number until something needs
   // one, and addRow maps by header — a write to a missing column stores nothing silently.
-  if (body.Vendor_Invoice_No) { try { await ensureColumns(env, 'Vendor_Bills', ['Vendor_Invoice_No']); } catch (e) {} }
+  if (body.Vendor_Invoice_No) { try { await ensureColumns(env, 'Vendor_Bills', ['Vendor_Invoice_No']); } catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ } }
   // Same lazy pattern for the vendor's own invoice DATE (Aug 31 2026, invoice-OCR pre-fill —
   // Created_Date already means "the day this bill row was submitted," not the date printed on
   // the vendor's invoice, so this is a genuinely new fact, not a rename/reuse of an existing
   // column). Only touches the sheet when a caller actually sends one — neither the plain hourly/
   // flat bill flow nor the older vendor.html build ever did, so this is a no-op for them.
-  if (body.Vendor_Invoice_Date) { try { await ensureColumns(env, 'Vendor_Bills', ['Vendor_Invoice_Date']); } catch (e) {} }
+  if (body.Vendor_Invoice_Date) { try { await ensureColumns(env, 'Vendor_Bills', ['Vendor_Invoice_Date']); } catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ } }
   // B-227 Phase 1/2: Payment_Method (reimburse_via_labor_bill default / separate_vendor_billpay /
   // credit_card_no_bill) — same lazy-ensureColumns pattern, only touches the sheet when a caller
   // actually sends one (the vendor portal doesn't send this field, so it stays untouched there).
-  if (body.Payment_Method) { try { await ensureColumns(env, 'Vendor_Bills', ['Payment_Method']); } catch (e) {} }
+  if (body.Payment_Method) { try { await ensureColumns(env, 'Vendor_Bills', ['Payment_Method']); } catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ } }
   // Same pattern for the vendor's own invoice FILE (the actual document/photo, not just the
   // number) — B-fix Aug 17: vendors had no way to attach their invoice, only receipts had an
   // upload control. Drive_File_ID kept alongside the URL so the Hub can open it directly.
-  if (body.Invoice_File_URL) { try { await ensureColumns(env, 'Vendor_Bills', ['Invoice_File_URL', 'Invoice_File_ID']); } catch (e) {} }
+  if (body.Invoice_File_URL) { try { await ensureColumns(env, 'Vendor_Bills', ['Invoice_File_URL', 'Invoice_File_ID']); } catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ } }
   // Invoice_Description — the customer-facing text (separate from Notes, which stays
   // private). Used directly on flat/no-time-entry bills, and as the lead-in when time
   // entries with their own Invoice_Description are also linked to this bill (buildInvoiceLines).
-  if (body.Invoice_Description) { try { await ensureColumns(env, 'Vendor_Bills', ['Invoice_Description']); } catch (e) {} }
+  if (body.Invoice_Description) { try { await ensureColumns(env, 'Vendor_Bills', ['Invoice_Description']); } catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ } }
 
   // B-20260916-1930-k7: real time-of-day, for the vendor confirmation email + a genuine audit
   // trail — Created_Date is date-only (matches this tab's existing business-date convention),
   // Submitted_At captures the actual moment regardless of what the caller sends.
   if (!body.Submitted_At) body.Submitted_At = new Date().toISOString();
-  try { await ensureColumns(env, 'Vendor_Bills', ['Submitted_At']); } catch (e) {}
+  try { await ensureColumns(env, 'Vendor_Bills', ['Submitted_At']); } catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
 
   // Hours logged on the job can BE the bill — that is the whole point when Brett is the
   // vendor. The ids ride in on the body but are not a Vendor_Bills column, so they come
@@ -13277,7 +13277,7 @@ async function addVendorBill(env, body) {
     try {
       const created = await res.clone().json();
       if (created && created.id) await linkTimeEntriesToBill(env, timeIds, String(created.id), body.WO_ID || body.wo_id);
-    } catch (e) { /* the bill is saved; the link is not worth losing it over */ }
+    } catch (e) { await softFail(env, 'addVendorBill:linkHours', e, { severity: 'P1', ref: String(body.WO_ID || body.wo_id || ''), source: 'write', context: 'the bill saved but its hours were not marked spent, so they may be billed again' }); }   // the bill itself is saved, so it is not failed
   }
   // Automation: entering a bill moves the WO to Complete (if still pre-complete).
   try {
@@ -13290,11 +13290,11 @@ async function addVendorBill(env, body) {
         await updateWOFields(env, woKey, { Status: 'Complete', Completed_Date: wo.Completed_Date || new Date().toISOString().split('T')[0] });
       }
     }
-  } catch(e) { /* non-fatal: bill is still saved */ }
+  } catch(e) { await softFail(env, 'addVendorBill:markComplete', e, { severity: 'P1', ref: String(body.WO_ID || body.wo_id || ''), source: 'write', context: 'the bill saved but the Work Order was not moved to Complete' }); }   // the bill itself is saved
   // B-20260916-1930-k7: vendor invoice confirmation email — best-effort, soft-launched via
   // Config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS. Never blocks or slows the bill itself.
-  try { await autoMatchVendorToQbo(env, body.Vendor_ID || body.vendor_id, '/vendor-bill/add'); } catch (e) { /* never blocks the bill */ }
-  try { await sendVendorInvoiceConfirmationEmail(env, body); } catch (e) { /* non-fatal: bill is still saved */ }
+  try { await autoMatchVendorToQbo(env, body.Vendor_ID || body.vendor_id, '/vendor-bill/add'); } catch (e) { await softFail(env, 'addVendorBill:qboMatch', e, { severity: 'P1', ref: String(body.Vendor_ID || body.vendor_id || ''), source: 'qbo', context: 'the bill saved but the vendor could not be matched to QuickBooks, so a later pay or bill-push may fail' }); }   // never blocks the bill
+  try { await sendVendorInvoiceConfirmationEmail(env, body); } catch (e) { /* silent-ok: the confirmation email reports its own failure at P0 */ }
   return res;
 }
 
@@ -15123,7 +15123,7 @@ async function addEstimateVersion(env, body) {
   const _estByAdmin = /^(admin|hub|brett)$/i.test(String(body.created_by || ''));
   let overMaxReason = '', overMaxReasonEn = '', overMax = false;
   if (!_estByAdmin) {
-    let _mwo = null; try { _mwo = findWO(await fetchTab(env, 'Work_Orders'), woId); } catch (_) {}
+    let _mwo = null; try { _mwo = findWO(await fetchTab(env, 'Work_Orders'), woId); } catch (e) { await softFail(env, 'addEstimateVersion:maxPriceRead', e, { severity: 'P1', ref: String(woId), source: 'read', context: 'the job max price could not be read, so this estimate was accepted without the over-max check' }); }
     const _mxRaw = parseFloat(String((_mwo && _mwo.Max_Price) == null ? '' : _mwo.Max_Price).replace(/[$,\s]/g, ''));   // inline (not maxPriceNum) so this function stays self-contained for tests that run it alone
     const _mx = Number.isFinite(_mxRaw) && _mxRaw > 0 ? _mxRaw : 0;
     if (_mx && subtotal > _mx + 0.004) {
@@ -15131,14 +15131,14 @@ async function addEstimateVersion(env, body) {
       overMaxReason = String(body.over_max_reason || '').trim().slice(0, 1000);
       if (overMaxReason.length < 5) {
         let _ml = String(body.lang || '').toLowerCase() === 'es' ? 'es' : 'en';
-        try { const _mv = body.vendor_id ? (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(body.vendor_id)) : null; if (vendorWantsSpanish(_mv)) _ml = 'es'; } catch (_) {}
+        try { const _mv = body.vendor_id ? (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(body.vendor_id)) : null; if (vendorWantsSpanish(_mv)) _ml = 'es'; } catch (e) { await softFail(env, 'addEstimateVersion:langLookup', e, { severity: 'P2', ref: String(body.vendor_id || ''), source: 'read', context: 'the vendor language could not be read, so the over-max message may be in English' }); }
         return json({ error: _ml === 'es' ? 'Este presupuesto supera el precio máximo de este trabajo. Escriba la razón de la diferencia para poder enviarlo.' : 'This estimate is over the max price for this job. Add the reason for the difference to send it.', code: 'over_max_reason_needed', max: _mx, subtotal: +subtotal.toFixed(2), lang: _ml }, 409);
       }
       overMaxReasonEn = overMaxReason;
       try {
         const _mv2 = body.vendor_id ? (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(body.vendor_id)) : null;
         if (vendorWantsSpanish(_mv2)) { const _tr = await translateText(env, overMaxReason, 'Spanish', 'English'); if (_tr) overMaxReasonEn = String(_tr); }
-      } catch (_) {}
+      } catch (e) { await softFail(env, 'addEstimateVersion:overMaxTranslate', e, { severity: 'P2', ref: String(woId), source: 'translate', context: 'the over-max reason was saved without an English version' }); }
     }
   }
 
@@ -15148,15 +15148,15 @@ async function addEstimateVersion(env, body) {
   const changeReason = nextVersion === 1 ? 'Initial estimate' : (body.change_reason||'Revised');
   let storedLineItems = body.line_items, changeReasonEn = '';
   try {
-    const vendorRow = body.vendor_id ? (await fetchTab(env, 'Vendors').catch(() => [])).find(v => String(v.ID) === String(body.vendor_id)) : null;
+    const vendorRow = body.vendor_id ? (await fetchTab(env, 'Vendors').catch(() => [])).find(v => String(v.ID) === String(body.vendor_id)) : null;   // silent-ok: a vendor row that cannot be read only turns off forced Spanish handling
     const en = await estimateEnglishFields(env, body.line_items, nextVersion === 1 ? '' : changeReason, { force: vendorWantsSpanish(vendorRow) });
     if (en.ok) { storedLineItems = en.line_items; changeReasonEn = en.change_reason_en; }
-  } catch (_) {}
+  } catch (e) { await softFail(env, 'addEstimateVersion:translate', e, { severity: 'P2', ref: String(woId), source: 'translate', context: 'the estimate was saved without English versions of its lines' }); }
   const row = { WO_ID: woId, Vendor_ID: body.vendor_id||'', Version: String(nextVersion), Line_Items: JSON.stringify(storedLineItems), Subtotal: subtotal.toFixed(2), Change_Reason: changeReason, Created_By: body.created_by||'vendor', Created_Date: new Date().toISOString(), Status: body.status||'Pending' };
-  if (changeReasonEn) { try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); row.Change_Reason_EN = changeReasonEn; } catch (_) {} }
-  if (overMax && overMaxReason) { try { await ensureColumns(env, 'Estimates', ['Over_Max_Reason', 'Over_Max_Reason_EN']); row.Over_Max_Reason = overMaxReason; row.Over_Max_Reason_EN = overMaxReasonEn; } catch (_) {} }
+  if (changeReasonEn) { try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); row.Change_Reason_EN = changeReasonEn; } catch (_) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ } }
+  if (overMax && overMaxReason) { try { await ensureColumns(env, 'Estimates', ['Over_Max_Reason', 'Over_Max_Reason_EN']); row.Over_Max_Reason = overMaxReason; row.Over_Max_Reason_EN = overMaxReasonEn; } catch (_) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ } }
   await addRow(env, 'Estimates', row);
-  try { await updateWOField(env, woId, 'Current_Estimate', subtotal.toFixed(2)); } catch(e) {}
+  try { await updateWOField(env, woId, 'Current_Estimate', subtotal.toFixed(2)); } catch(e) { await softFail(env, 'addEstimateVersion:currentEstimate', e, { severity: 'P1', ref: String(woId), source: 'write', context: 'the estimate saved but the Work Order still shows the old Current_Estimate amount' }); }
   // Approval stage: a first/normal estimate puts the job in Estimated. A revision that arrives AFTER
   // the job was approved/proposed/signed means something changed — do NOT silently reset the stage
   // (that hides a signed job's change); flag it "revised" so Brett reviews it (change order vs
@@ -15165,12 +15165,12 @@ async function addEstimateVersion(env, body) {
     const wo = findWO(await fetchTab(env, 'Work_Orders'), woId);
     const cur = String((wo && wo.Approval_Stage) || '');
     if (['Approved', 'Proposed', 'Pre-approved'].includes(cur) && nextVersion > 1) {
-      try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) {}
+      try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
       await updateWOFields(env, woId, { Estimate_Revised: 'v' + nextVersion + ' $' + subtotal.toFixed(2) + ' (' + new Date().toISOString().slice(0, 10) + ')' });
     } else {
       await setApprovalStage(env, { woId, stage: 'Estimated' });
     }
-  } catch (_) {}
+  } catch (e) { await softFail(env, 'addEstimateVersion:approvalStage', e, { severity: 'P1', ref: String(woId), source: 'write', context: 'the estimate saved but the Work Order approval stage was not updated' }); }
   // Text Brett about a vendor-posted estimate (not one he typed himself in the Hub). Best-effort.
   if (!/^(admin|hub|brett)$/i.test(String(body.created_by || ''))) {
     try {
@@ -35251,10 +35251,10 @@ async function vendorPaidJobs(env, qbBillIds) {
   const out = { jobs: [], unresolved: [] };
   if (!ids.length) return out;
   const [vbs, irs, mss, wos, props, units] = await Promise.all([
-    fetchTab(env, 'Vendor_Bills').catch(() => []), fetchTab(env, 'Invoice_Review').catch(() => []), fetchTab(env, 'Payment_Milestones').catch(() => []),
+    fetchTabSoft(env, 'Vendor_Bills', { where: 'vendorPaidJobs:Vendor_Bills', severity: 'P1' }).then(r => r.rows), fetchTabSoft(env, 'Invoice_Review', { where: 'vendorPaidJobs:Invoice_Review', severity: 'P1', optional: true }).then(r => r.rows), fetchTabSoft(env, 'Payment_Milestones', { where: 'vendorPaidJobs:Payment_Milestones', severity: 'P1', optional: true }).then(r => r.rows),
     fetchTab(env, 'Work_Orders'), fetchTab(env, 'Properties'), fetchTab(env, 'Units'),
   ]);
-  const scopes = mss.length ? await fetchTab(env, 'Scopes').catch(() => []) : [];
+  const scopes = mss.length ? (await fetchTabSoft(env, 'Scopes', { where: 'vendorPaidJobs:Scopes', severity: 'P1' })).rows : [];
   for (const id of ids) {
     let woId = '';
     const vb = vbs.find(b => String(b.QB_Bill_ID || '').trim() === id); if (vb) woId = String(vb.WO_ID || '');
