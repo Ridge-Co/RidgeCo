@@ -31,7 +31,7 @@
     ps.setAttribute('data-hub-print-hide', '1');
     ps.textContent = '@media print{#hub-fail-badge,#hub-fail-toast{display:none!important;visibility:hidden!important}}';
     (document.head || document.documentElement).appendChild(ps);
-  } catch (e) { try { console.error('[failure-reporter] print style failed', e); } catch (x) { /* no console */ } }
+  } catch (e) { try { console.error('[failure-reporter] print style failed', e); } catch (x) { /* no console */ } } // silent-ok: the failure reporter cannot report its own print-style failure, no console left
   var REPORT_PAGE = /(^|\/)(inspection-report|inspection-photos)\.html$/i.test(location.pathname);
   // Nov 12 2026 (Brett): the red "N problems" badge never shows on the customer pages (tenant, vendor, owner), even on a device that has his admin token saved
   // (his own phone), because that is where customers' screens get shown to prospects. Failures on those pages are still REPORTED (section 1 is untouched); only the badge is skipped.
