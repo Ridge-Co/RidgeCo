@@ -29124,6 +29124,11 @@ function __cacheFresh(env, hit) {
   if (env && env.__CRON__) { const at = hit.at !== undefined ? hit.at : hit.exp - TAB_CACHE_MS; return (Date.now() - at) < CRON_CACHE_MS; }
   return hit.exp > Date.now();
 }
+// Cloudflare refuses to settle a promise in a request other than the one that created it. One place decides whether an error is that one,
+// so every shared-read joiner (single tab and batch) treats it the same way.
+function __isCrossRequestPromiseError(e) {
+  return /promise was created by a request that has since ended|can never settle/i.test(String((e && e.message) || ''));
+}
 function __tabCacheKey(path) {
   // Matches "/values/TabName" or "/values/TabName:append...", NEVER "/values/TabName!A1:Z9"
   // (a real range read) or "/values:batchGet"/"/values:batchUpdate" (handled by their own
