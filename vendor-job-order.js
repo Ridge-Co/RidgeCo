@@ -2,7 +2,7 @@
    The order: accept -> schedule -> work -> mark COMPLETE -> invoice. Three things live here:
      1. Complete first. Billing opens only after the job is Complete. A vendor who reaches billing early is asked
         "Is the job finished?" and can mark it Complete and carry on in one tap. After they mark Complete they are
-        asked "Send your invoice now?" (a nudge, not a wall).
+        asked whether to send the invoice now (a nudge, not a wall).
      2. What a bill needs, shown in bold red BEFORE the vendor submits so nobody learns they are missing something
         after the work is done: a short description of what was done, at least 1 AFTER photo on the job, and a picture
         of every receipt that is to be paid back.
