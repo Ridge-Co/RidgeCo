@@ -13293,8 +13293,8 @@ async function addVendorBill(env, body) {
   } catch(e) { await softFail(env, 'addVendorBill:markComplete', e, { severity: 'P1', ref: String(body.WO_ID || body.wo_id || ''), source: 'write', context: 'the bill saved but the Work Order was not moved to Complete' }); }   // the bill itself is saved
   // B-20260916-1930-k7: vendor invoice confirmation email — best-effort, soft-launched via
   // Config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS. Never blocks or slows the bill itself.
-  try { await autoMatchVendorToQbo(env, body.Vendor_ID || body.vendor_id, '/vendor-bill/add'); } catch (e) { /* never blocks the bill */ }
-  try { await sendVendorInvoiceConfirmationEmail(env, body); } catch (e) { /* non-fatal: bill is still saved */ }
+  try { await autoMatchVendorToQbo(env, body.Vendor_ID || body.vendor_id, '/vendor-bill/add'); } catch (e) { await softFail(env, 'addVendorBill:qboMatch', e, { severity: 'P1', ref: String(body.Vendor_ID || body.vendor_id || ''), source: 'qbo', context: 'the bill saved but the vendor could not be matched to QuickBooks, so a later pay or bill-push may fail' }); }   // never blocks the bill
+  try { await sendVendorInvoiceConfirmationEmail(env, body); } catch (e) { /* silent-ok: the confirmation email reports its own failure at P0 */ }
   return res;
 }
 
