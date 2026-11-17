@@ -4761,7 +4761,7 @@ async function receiptAttachOnly(env, body) {
   }
   const addResp = await addReceipt(env, {
     wo_id, property_id, amount, description, store, date,
-    added_by: customerCard ? 'Receipt Reconciler (customer card, reference only)' : 'Receipt Reconciler (attach only)', added_by_id: 'receipt-recon-attach-only', role: 'hub',
+    added_by: customerCard ? 'Receipt Reconciler (customer card, reference only)' : fixedPrice ? 'Receipt Reconciler (fixed-price job cost, not billed)' : 'Receipt Reconciler (attach only)', added_by_id: 'receipt-recon-attach-only', role: 'hub',
     category: 'attached_only',
     ...(customerCard ? { category: 'customer_paid', non_billable: true } : {}),   // customer-card reference: existing customer_paid category + explicit Non_Billable flag
     receipt_number: row.Invoice_Number || '',
