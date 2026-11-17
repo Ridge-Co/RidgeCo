@@ -1549,7 +1549,15 @@ async function attachOnlyRow(id, btn){
 
 // Nov 17 2026: attach a customer-card receipt to the picked work order as a reference. Same endpoint as "Attach image only"; customer_card:true makes
 // the Worker write a non-billing Receipts row (never an invoice line, never a QuickBooks expense). A failure is shown on the card, never swallowed.
-async function attachCustomerCardRow(id, btn){
+async function attachCustomerCardRow(id, btn){ return attachNonBillingRow(id, btn, 'customer_card'); }
+// Nov 17 2026 (Brett): fixed-price job, we paid but the job price already covers it. Same non-billing path as customer-card; the cost is still ours (goes to QuickBooks).
+async function attachFixedPriceRow(id, btn){
+  const bill = document.getElementById('rc'+id+'-bill');   // a business-expense card keeps its pickers behind a toggle: open them first
+  if (bill && !bill.checked){ bill.checked = true; toggleBillCustomer(id); const st = document.getElementById('rc'+id+'-status'); if (st) st.innerHTML = '<span class="info">Pick the property and work order, then tap "Fixed-price job" again.</span>'; return; }
+  return attachNonBillingRow(id, btn, 'fixed_price');
+}
+async function attachNonBillingRow(id, btn, reason){
+  const fixed = reason === 'fixed_price';
   if (btn) btn.disabled = true;
   const idAttr = 'rc'+id;
   const statusEl = document.getElementById(idAttr+'-status');
