@@ -26990,6 +26990,8 @@ function bytesToB64(buf) {
 async function gmailSendEmailWithAttachment(env, { to, subject, html, attachment }) {
   if (!to) throw new Error('gmailSendEmailWithAttachment: to required');
   { const _dg = await demoGuardEmail(env, { to, subject, html }); if (_dg) return { sent: false, skipped: true, demo_blocked: true, limit: !!_dg.limit, reason: 'email not sent: ' + _dg.reason }; }   // Nov 11 2026 demo safety guard
+  // Nov 17 2026: staging never sends a real attachment email (same stub/redirect policy as gmailSendEmail; the old code would have really sent it).
+  if (env.__STAGING__ ?? isStaging(env)) return await gmailSendEmail(env, { to, subject, html, _demoChecked: true });
   const accessToken = await gmailAccessToken(env);
   const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
   const subjectEncoded = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject || '')))}?=`;
