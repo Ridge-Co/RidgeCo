@@ -10239,6 +10239,7 @@ async function addonOwnerNotice(env, body) {
   const childId = String((body && body.child_wo_id) || '').trim();
   if (!childId) return json({ error: 'child_wo_id required' }, 400);
   const preview = !(body && body.preview === false);
+  const req = {};   // Phase 2: one report per problem per request
   const [workorders, estimates, attachments, properties, owners, unitsAll] = await fetchTabs(env, ['Work_Orders', 'Estimates', 'Attachments', 'Properties', 'Owners', 'Units']);
   const child = findWO(workorders, childId);
   if (!child || !addonIsChild(child)) return json({ error: 'Additional-work job not found' }, 404);
