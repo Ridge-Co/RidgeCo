@@ -37804,7 +37804,7 @@ async function qbSendInvoice(env, body) {
             previewLoanDeduction = Math.min(computeLoanDeduction(laborPrev, previewLoanBalance), money2(vendorCost - creditVend - (depCredit ? depCredit.amount : 0)));
             if (previewLoanDeduction > 0) warnings.push(`Loan repayment: $${previewLoanDeduction.toFixed(2)} will be deducted from ${vendDisplay}'s payment (current balance $${previewLoanBalance.toFixed(2)}).`);
           }
-        } catch (e) { /* best-effort — confirm still applies/records the real deduction */ }
+        } catch (e) { await softFail(env, 'qbSendInvoice:loanPreview', e, { severity: 'P2', ref: String(ir.ID || ''), source: 'read', context: 'the loan-repayment preview could not be calculated; confirm still applies the real deduction' }); }
       }
 
       return json({ preview: {
