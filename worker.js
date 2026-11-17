@@ -35254,7 +35254,7 @@ async function vendorPaidJobs(env, qbBillIds) {
     fetchTabSoft(env, 'Vendor_Bills', { where: 'vendorPaidJobs:Vendor_Bills', severity: 'P1' }).then(r => r.rows), fetchTabSoft(env, 'Invoice_Review', { where: 'vendorPaidJobs:Invoice_Review', severity: 'P1', optional: true }).then(r => r.rows), fetchTabSoft(env, 'Payment_Milestones', { where: 'vendorPaidJobs:Payment_Milestones', severity: 'P1', optional: true }).then(r => r.rows),
     fetchTab(env, 'Work_Orders'), fetchTab(env, 'Properties'), fetchTab(env, 'Units'),
   ]);
-  const scopes = mss.length ? await fetchTab(env, 'Scopes').catch(() => []) : [];
+  const scopes = mss.length ? (await fetchTabSoft(env, 'Scopes', { where: 'vendorPaidJobs:Scopes', severity: 'P1' })).rows : [];
   for (const id of ids) {
     let woId = '';
     const vb = vbs.find(b => String(b.QB_Bill_ID || '').trim() === id); if (vb) woId = String(vb.WO_ID || '');
