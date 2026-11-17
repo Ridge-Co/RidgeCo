@@ -3475,6 +3475,8 @@ function openBillModal(woId, vendorName) {
 }
 
 function _openBillModalGated(woId, vendorName) {
+  // Nov 17 2026 (Brett): complete first, then bill. Billing opened early asks "Is the job finished?" and offers one-tap Mark Complete.
+  if (window.JobOrder && JobOrder.billNeedsComplete(woId)) { JobOrder.askComplete(woId, vendorName); return; }
   var vendorId = (window.session && session.vendor_id) ? String(session.vendor_id) : '';
   if (!vendorId) { _openBillModalReal(woId, vendorName); return; } // no session — fail open rather than block
   api('/vendor-onboarding-status?vendor_id=' + encodeURIComponent(vendorId)).then(function(res) {
