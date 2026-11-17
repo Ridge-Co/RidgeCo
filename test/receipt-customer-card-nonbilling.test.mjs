@@ -124,7 +124,7 @@ ok(fp.body.ok && fp.body.fixed_price === true && fp.body.customer_card === false
 const fr = sheets.Receipts.find(r => r.Description === 'fasteners');
 ok(fr.WO_ID === '1002' && fr.Property_ID === '11' && fr.Non_Billable === 'TRUE' && fr.Non_Billable_Reason === 'fixed_price', 'Receipts row carries the WO, the property, the ONE non-billing flag and reason fixed_price');
 ok(fr.Category === 'company' && fr.Receipt_Number === '36109' && Number(fr.Amount) === 6.33, 'recorded as a company expense (our cost) with receipt number 36109 and $6.33');
-ok(spies.sendReceiptsToQBEmail === qbBefore + 1 && fp.body.qb_email && fp.body.qb_email.sent === true, 'the expense IS sent to the QuickBooks receipts inbox (fixed-price cost is ours)');
+ok(spies.sendReceiptsToQBEmail === qbBefore && fp.body.qb_email && fp.body.qb_email.queued === true && fp.body.qb_email.sent === false, 'Nov 17 batch: the fixed-price expense is NOT emailed at attach; it waits in the daily QuickBooks batch (fixed-price cost is ours, so it is waiting, not skipped)');
 ok(spies.appendReceiptToInvoiceReview === irBefore, 'never folded into an invoice (appendReceiptToInvoiceReview not called)');
 const ir2 = sheets.Invoice_Review.find(r => r.ID === '8');
 ok(ir2.Own_Materials === '0' && ir2.Own_Material_IDs === '' && ir2.Customer_Total === '500', 'the WO invoice row is untouched: no materials, no markup base, total unchanged');
