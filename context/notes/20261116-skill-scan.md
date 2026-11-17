@@ -27,7 +27,7 @@ Gap: every third-party skill is read in full by hand (see PR #552 / `context/THI
 Run AFTER the build (Nov 17 2026, at Brett's request; this PR was opened before the gate was enforced on every build), against the actual diff. Shapes: `job` `external` (plus the standing parameters). Open items below did not shape the build and are not done yet.
 - D11 Secrets / access: Y. No secrets or keys; `permissions: contents: read`; scanner pinned to one commit.
 - C2 No cron: Y. `pull_request` only.
-- C3 Nothing fails silently: mostly Y (a self-test proves the scanner still flags a bad sample; no scanner = exit 2). N, small: the scan's own output goes to /dev/null, so a scanner crash mid-scan is reported as "found something new". Loud but misleading. Companion (not done): keep stderr in the report and say "scanner error" for exit codes that are not findings.
+- C3 Nothing fails silently: mostly Y (a self-test proves the scanner still flags a bad sample; no scanner = exit 2). FIXED Nov 17: the scanner's output now goes to `skill-scan-out/skillspector.log`; anything other than "exit 1 with a report" is reported as "scanner error" with the log tail and exit 2 (SkillSpector's codes checked at the pinned commit: 1 + report = findings, 2 + no report = error). Tested three ways: clean skills (0), a planted bad skill (1), a simulated crash (2, "scanner error").
 - C5 Fail-closed on purpose: Y. A broken scanner blocks (exit 2); no skills folder passes with a visible notice.
 - C8 Branch / PR / merge: Y, BUILD_VERSION untouched. N: no staging twin, and the new workflow file needs the staging sync step (see "Things to know").
 - C9 GATED: no (CI config only; no money, PII, auth or schema).
