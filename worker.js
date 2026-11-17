@@ -41728,7 +41728,7 @@ async function inspDriveMap(env, cand, anchors) {
 // ── Alerts (throttled; failures here must still be visible somewhere) ─────────────────────
 const __inspAlertAt = {};
 async function inspAlert(env, kind, message) {
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-book/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { console.error('insp alert: telemetry write failed:', te && te.message, '| original:', kind, message); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-book/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { /* silent-ok: alert code must not report its own telemetry failure (it would loop); the texts below still go out */ console.error('insp alert: telemetry write failed:', te && te.message, '| original:', kind, message); }
   const now = Date.now();
   if (__inspAlertAt[kind] && now - __inspAlertAt[kind] < 30 * 60000) return;
   __inspAlertAt[kind] = now;
