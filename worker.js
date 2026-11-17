@@ -30379,9 +30379,11 @@ async function health(env, url) {
   // config — so a bad setup (wrong Worker/environment, wrong Sheet key/typo, malformed JSON)
   // can be diagnosed from a plain curl instead of needing the admin token or guessing.
   out.pricing = { secret_set: false, sheet_set: false, parses_ok: false };
-  try { out.pricing.secret_set = !!(env && env.PRICING_CONFIG); } catch (_) {}
-  try { const cfg = await fetchConfig(env); out.pricing.sheet_set = !!(cfg && cfg.pricing_config); } catch (_) {}
-  try { const pc = await getPricingConfig(env); out.pricing.parses_ok = !!(pc && Array.isArray(pc.tiers) && pc.tiers.length > 0); } catch (_) {}
+  out.warnings = [];   // config checks that could not run; shown here instead of a silent false
+  const healthWarn = (what, e) => out.warnings.push(what + ': ' + String((e && e.message) || e).slice(0, 120));
+  out.pricing.secret_set = !!(env && env.PRICING_CONFIG);
+  try { const cfg = await fetchConfig(env); out.pricing.sheet_set = !!(cfg && cfg.pricing_config); } catch (e) { healthWarn('pricing config unreadable', e); }
+  try { const pc = await getPricingConfig(env); out.pricing.parses_ok = !!(pc && Array.isArray(pc.tiers) && pc.tiers.length > 0); } catch (e) { healthWarn('pricing config did not parse', e); }
   // Gmail OAuth (B-210) config-presence check — same never-expose-values pattern as pricing
   // above. Confirms the 4 Cloudflare secrets actually landed and are non-empty, without
   // proving the refresh token is still valid (that needs a real send — see /gmail/test).
