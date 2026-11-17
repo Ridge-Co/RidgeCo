@@ -1423,6 +1423,7 @@ function rowCard(r){
   html += '<div class="rc-foot">' + fileLink + '<div class="actions">';
   if (isPendingLike) {
     if (!excluded && !isCompany && !isRefund) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm</button>';
+    if (excluded) html += '<button class="btn small" onclick="attachCustomerCardRow(\''+r.ID+'\', this)">📎 Attach to work order (reference only, not billed)</button>';
     if (isCompany) html += '<button class="btn small" id="'+idAttr+'-bizbtn" onclick="confirmBusinessExpense(\''+r.ID+'\', this)">✓ Confirm as business expense</button>'
       + '<button class="btn small" id="'+idAttr+'-billbtn" style="display:none" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm to this work order</button>';
     if (isDuplicateFlagged) html += '<button class="btn small warnbtn" onclick="confirmDuplicate(\''+r.ID+'\', this)">🖐 Confirm duplicate</button>';
