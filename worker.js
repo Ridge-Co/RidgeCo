@@ -6734,10 +6734,12 @@ async function scopeProposalSend(env, body) {
     try {
       await ensureTab(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
       await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'FAILED: ' + String((e && e.message) || e).slice(0, 200) });
-    } catch (_) { /* audit log best-effort */ }
+    } catch (_) { /* silent-ok: the failed send is returned to the page as a 500; this audit row is best effort */ }
+    await softFail(env, 'scopeProposalSend:email', e, { severity: 'P0', ref: String(id), source: 'send', context: 'estimate email to the owner did not go out' });
     return json({ error: 'Send failed: ' + e.message }, 500);
   }
 
+  const warnings = [];
   try {
     await ensureColumns(env, 'Scopes', ['Sent_Date', 'Sent_To', 'Send_Count']);
     const nextCount = String((parseInt(s.Send_Count || '0', 10) || 0) + 1);
