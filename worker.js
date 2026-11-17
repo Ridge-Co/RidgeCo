@@ -26973,12 +26973,13 @@ async function sendReceiptsToQBEmail(env, opts) {
   catch (e) { return json({ ok: false, error: 'Could not prepare the Receipts columns, so nothing was emailed to QuickBooks: ' + String(e && e.message || e) }, 500); }
 
   let all = []; try { all = await fetchTab(env, 'Receipts'); } catch (e) { return json({ ok: false, error: 'Could not read Receipts: ' + (e.message || e) }, 500); }
-  const onlyIds = (opts.ids && Array.isArray(opts.ids) && opts.ids.length) ? new Set(opts.ids.map(String)) : null;
-  const today = new Date().toISOString().slice(0, 10);
-  const waiting = all.filter(r => qbBatchWaiting(r));
-  const heldN = waiting.filter(r => qbBatchStatus(r) === 'held').length;
-  const stuckN = waiting.filter(r => qbBatchStatus(r) === 'sending').length;
-  const pending = waiting.filter(r => qbBatchSendable(r, { manual: opts.manual === true, today }) && (!onlyIds || onlyIds.has(String(r.ID))));
+  // vendor_reimburse rows never touched a Ridge Co card — nothing to reconcile against a bank/CC
+  // statement, and sending them would just clutter QuickBooks' receipts inbox with entries that
+  // don't correspond to any real transaction on the account being reconciled.
+  const onlyIds = (opts && Array.isArray(opts.ids) && opts.ids.length) ? new Set(opts.ids.map(String)) : null;
+  const pending = all.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Email_Sent || '').toUpperCase() !== 'TRUE' && String(r.Payment_Source || 'company_card') !== 'vendor_reimburse'
+    && !(String(r.Non_Billable || '').toUpperCase() === 'TRUE' && String(r.Non_Billable_Reason || '') !== 'fixed_price')   // customer-card references were never a Ridge Co purchase; a fixed-price job cost IS ours
+    && (!onlyIds || onlyIds.has(String(r.ID))));
   const batch = pending.slice(0, limit);
   if (!batch.length) return json({ ok: true, sent: 0, remaining: 0, held: heldN, stuck: stuckN, failed: [], note: 'nothing pending' });
 
