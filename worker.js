@@ -9435,7 +9435,7 @@ async function createWorkOrder(env, body) {
 
   // If a checklist was defined at creation, make sure the column exists BEFORE we read the
   // header row — otherwise the field maps to a non-existent header and is silently dropped.
-  if (body.checklist) { try { await ensureColumns(env, 'Work_Orders', ['Checklist']); } catch(_){} }
+  if (body.checklist) { try { await ensureColumns(env, 'Work_Orders', ['Checklist']); } catch(_){} } // silent-ok: ensureColumns reports its own failure to the ledger
   // Max price (Nov 5 2026): admin-only field (the router strips it from portal sessions); the column is added only when a max is actually set.
   // (parsed inline, not via maxPriceNum, so this function stays self-contained for the tests that run it on its own)
   const _mpRaw = parseFloat(String(body.max_price == null ? '' : body.max_price).replace(/[$,\s]/g, ''));
