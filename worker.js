@@ -21184,7 +21184,7 @@ const SCHED_PF_WHAT = {
   daily_digest: 'builds the morning digest and texts it to the admin phone',
   daily_receipts: 'scans the receipt inbox (skips and reports "paused: AI credit" while Anthropic credit is out)',
   ai_credit_probe: 'does nothing unless AI is paused; while paused, at most hourly, makes one 1-token Claude call and clears the pause (plus one "AI is back" notice) if it works',
-  daily_receipts_post: 'emails newly scanned receipts to QuickBooks',
+  daily_receipts_post: 'sends the day\'s batch of confirmed receipts to QuickBooks',
   daily_turnover: 'releases turnover work orders due today',
   daily_qb_sync: 'syncs QuickBooks payments and the deposit-paid sweep',
   sms_delivery_check: 'reads the last day of outbound texts from Twilio, flags carrier-filtered / unregistered / link texts that fail, and emails Brett the result',
