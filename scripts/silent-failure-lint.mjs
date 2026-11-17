@@ -31,6 +31,7 @@ const PATTERNS = [
   ['comment-only catch', /catch\s*(?:\([^)]*\))?\s*\{\s*(?:\/\*[\s\S]*?\*\/\s*|\/\/[^\n]*\n\s*)+\}/g],
   ['log-only catch', /catch\s*(?:\([^)]*\))?\s*\{\s*console\.(?:log|warn|error|info|debug)\((?:[^()]|\([^()]*\))*\)\s*;?\s*\}/g],
   ['swallowing .catch', /\.catch\(\s*(?:\(\s*\w*\s*\)|\w+)\s*=>\s*(?:\{\s*\}|null|undefined|false|true|''|""|\[\]|\(\s*\{\s*\}\s*\)|\{\s*return\s*(?:null|undefined|false|\[\]|\{\})?\s*;?\s*\})\s*\)/g],
+  ['return-default catch', /catch\s*(?:\([^)]*\))?\s*\{\s*(?:(?:\/\*[\s\S]*?\*\/|\/\/[^\n]*)\s*)*return(?:\s+(?:null|undefined|false|true|0|''|""|\[\]|\{\}))?\s*;?\s*(?:\/\/[^\n]*)?\s*\}/g],
   ['swallowing .catch', /\.catch\(\s*function\s*\w*\s*\([^)]*\)\s*\{\s*\}\s*\)/g],
 ];
 const SILENT_OK = /\/\/\s*silent-ok:\s*(.*)$/;
