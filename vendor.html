@@ -3920,6 +3920,14 @@ function submitVendorBill() {
   var total = parseFloat(document.getElementById('bill-grand-total').textContent.replace('$','')) || 0;
   var msgEl = document.getElementById('bill-msg');
   if (total <= 0) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Enter at least one billable item.</div>'; return; }
+  // Nov 17 2026 (Brett): a bill needs what was done, an after photo, and a picture of every receipt to be paid back. The red list above says exactly what is missing.
+  var _need = window.JobOrder ? JobOrder.billMissing() : [];
+  if (_need.length) {
+    JobOrder.refreshBillPanel();
+    msgEl.innerHTML = '<div style="color:#b42318;font-size:13px;font-weight:bold">⚠ ' + esc(t('Your invoice is missing items. Fix the red list above, then tap Submit again.')) + '</div>';
+    var _np = document.getElementById('bill-needs-panel'); if (_np && _np.scrollIntoView) _np.scrollIntoView({block:'center'});
+    return;
+  }
   if (_reconcileState === 'issues' && _reconcileUnmatched.length) {
     msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;font-weight:bold">⚠ Your invoice photo shows receipts that aren\'t entered yet — add them above before submitting (see the warning by the photo upload).</div>';
     return;
