@@ -12948,10 +12948,14 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
       const msg = (vendor.Language === 'es')
         ? `Hola${vname ? ' ' + vname : ''}, no tenemos un correo electrónico registrado para usted. Agréguelo en su portal de proveedores de Ridge Co para recibir una copia de cada factura que envíe y la fecha de pago.`
         : `Hi${vname ? ' ' + vname : ''}, we don't have an email on file for you. Add one in your Ridge Co vendor portal so we can send you a copy of every invoice you submit and when payment is due.`;
-      try {
-        await sendSMS(env, vendor.Phone, msg);
-        await updateRow(env, 'Vendors', vendor.ID, { Email_Request_Sent_Date: new Date().toISOString().split('T')[0] });
-      } catch (e) {}
+      // Phase 2: a refused text (Twilio answers with plain JSON, it does not throw) must not stamp "asked", or the vendor is never asked again; a stamp that fails to save means he is asked on every bill.
+      let askErr = '';
+      try { askErr = sendFailure(await sendSMS(env, vendor.Phone, msg)); } catch (e) { askErr = String((e && e.message) || e).slice(0, 200); }
+      if (askErr) await softFail(env, 'vendorInvoiceConfirm:emailRequestSms', 'The "add your email" text to the vendor did not go out: ' + askErr, { req, severity: 'P0', ref: String(vendor.ID), source: 'send' });
+      else {
+        try { await updateRow(env, 'Vendors', vendor.ID, { Email_Request_Sent_Date: new Date().toISOString().split('T')[0] }); }
+        catch (e) { await softFail(env, 'vendorInvoiceConfirm:emailRequestStamp', e, { req, severity: 'P1', ref: String(vendor.ID), source: 'write', context: 'the vendor was texted but Email_Request_Sent_Date is blank, so he will be asked again on the next bill' }); }
+      }
     }
     return;
   }
