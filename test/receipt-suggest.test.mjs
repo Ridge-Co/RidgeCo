@@ -18,8 +18,10 @@ function grab(name){
 const norm = grab('_rcNorm');
 const consts = "const RECEIPT_OPEN_STATUSES=['New','Assigned','Accepted','In Progress','On Hold','Pending Invoice','Complete'];" +
   "const RECEIPT_STOP=new Set(['the','and','for','with','apt','ste','unit','street','saint','st','ave','rd','ln','pl','n','s','e','w','2x','x']);";
-const matchReceiptProperty = new Function(norm + '\n' + grab('matchReceiptProperty') + '\nreturn matchReceiptProperty;')();
-const rankReceiptWOs = new Function(norm + '\n' + consts + '\n' + grab('rankReceiptWOs') + '\nreturn rankReceiptWOs;')();
+void norm; void consts; // the shared loader carries the Nov 17 2026 helper functions too
+import { E } from './_receipt-engine.mjs';
+const matchReceiptProperty = E.matchReceiptProperty;
+const rankReceiptWOs = E.rankReceiptWOs;
 const receiptIsDuplicate = new Function(norm + '\n' + grab('receiptIsDuplicate') + '\nreturn receiptIsDuplicate;')();
 
 let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
