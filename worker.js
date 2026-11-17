@@ -8256,7 +8256,7 @@ function rosterOwnerId(callerRole, callerSessionId, body, url) {
 // owner_approvals_enabled (blank = OFF): off, GET answers {enabled:false} and POST answers 404 not_available, and the emailed sign link keeps
 // working exactly as before. Owner identity is the SESSION's (rosterOwnerId), never the body's. No sums across jobs anywhere (Brett: owners
 // never see spend totals); the only amount is each proposal's own customer price, the same one its sign page shows.
-const OWNER_APPROVAL_RESPONSE_COLS = ['Owner_Response', 'Owner_Response_At', 'Owner_Response_By', 'Owner_Response_Text'];
+const OWNER_APPROVAL_RESPONSE_COLS = ['Owner_Response', 'Owner_Response_At', 'Owner_Response_By', 'Owner_Response_Text', 'Owner_Response_Alerted'];
 const OWNER_APPROVAL_WINDOW_DAYS = 90;
 const OWNER_APPROVAL_DOUBLE_TAP_MS = 2 * 60 * 1000;
 function ownerApprovalsEnabled(cfg) { return String((cfg && cfg.owner_approvals_enabled) || '').trim().toUpperCase() === 'TRUE'; }
