@@ -14234,7 +14234,7 @@ async function retranslateEstimate(env, body) {
   if (!Array.isArray(lines) || !lines.length) return json({ error: 'Estimate has no line items' }, 400);
   const en = await estimateEnglishFields(env, lines, est.Change_Reason || '', { force: true });
   if (!en.ok) return json({ ok: false, success: false, error: 'Translation is unavailable right now (' + (en.error || 'unknown') + ') — nothing was changed. Try again in a minute.' }, 502);
-  try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); } catch (_) {}
+  try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   await updateRow(env, 'Estimates', est.ID, { Line_Items: JSON.stringify(en.line_items), Change_Reason_EN: en.change_reason_en || '' });
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_retranslate', Skill_Or_Endpoint: '/estimate/retranslate', Success: 'TRUE', Notes: `estimate=${est.ID} wo=${est.WO_ID} v${est.Version}` }); } catch (_) {}
   return json({ success: true, ok: true, estimate_id: est.ID, wo_id: est.WO_ID, version: est.Version, line_items: en.line_items, change_reason_en: en.change_reason_en || '',
