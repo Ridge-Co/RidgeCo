@@ -8,7 +8,9 @@
 <title>Milam Ridge — Barrels, Planters &amp; Spheres</title>
 <meta name="description" content="Order whiskey barrels, barrel planters and barrel spheres at Milam Ridge.">
 <style>
+@font-face{font-family:"Stardos Stencil";font-style:normal;font-weight:700;font-display:swap;src:url(fonts/stardos-stencil-700.woff2) format("woff2")}
 :root{
+  --stencil:"Stardos Stencil",Georgia,"Times New Roman",serif;
   --cream:#f6efe3; --paper:#fffaf2; --oak:#7a4a21; --deep:#3b2414; --forest:#2f4a34;
   --amber:#c47f2a; --line:#e2d6c1; --muted:#6f6253; --bad:#a3271b; --badbg:#fdeceb; --ok:#2f6b3a;
   --r:14px;
@@ -16,16 +18,16 @@
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--cream);color:var(--deep);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding-bottom:calc(88px + env(safe-area-inset-bottom))}
-h1,h2,h3{font-family:Georgia,"Times New Roman",serif;margin:0;letter-spacing:.2px}
+h1,h2,h3{font-family:var(--stencil);font-weight:700;margin:0;letter-spacing:.5px}
 .wrap{max-width:560px;margin:0 auto;padding:0 16px}
 header{background:var(--deep);color:var(--cream);padding:22px 0 20px;border-bottom:4px solid var(--amber)}
 header .brand{font:700 13px/1 system-ui,sans-serif;letter-spacing:.22em;text-transform:uppercase;color:var(--amber)}
-header h1{font-size:34px;line-height:1.1;margin:8px 0 6px}
+header h1{font-size:40px;letter-spacing:1px;line-height:1.1;margin:8px 0 6px}
 header p{margin:0;color:#e9dcc6;font-size:15px}
 .banner{margin:16px 0 0;padding:12px 14px;border-radius:var(--r);background:var(--badbg);color:var(--bad);border:1px solid #efc1bc;font-weight:600}
 .banner.info{background:#fff4de;color:#6a4a10;border-color:#ecd19a}
 .banner button{margin-left:8px}
-.step-title{font-size:22px;margin:22px 0 10px}
+.step-title{font-size:26px;margin:22px 0 10px}
 .card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin:0 0 16px;box-shadow:0 1px 0 rgba(59,36,20,.04)}
 .gallery{position:relative;background:#e8dcc6}
 .track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none}
@@ -40,8 +42,8 @@ header p{margin:0;color:#e9dcc6;font-size:15px}
 @media (hover:hover){.nav{display:block}}
 .body{padding:14px 16px 16px}
 .row{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
-.card h3{font-size:21px}
-.price{font:700 22px Georgia,serif;color:var(--oak);white-space:nowrap}
+.card h3{font-size:23px}
+.price{font:700 24px var(--stencil);color:var(--oak);white-space:nowrap}
 .desc{margin:4px 0 0;color:var(--muted);font-size:15px}
 .stock{font-size:14px;font-weight:600;margin-top:8px;color:var(--ok)}
 .stock.low{color:#9a5b00}.stock.out{color:var(--bad)}
@@ -65,7 +67,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
 .hidden{display:none!important}
 form{margin:0}
 fieldset{border:0;margin:0 0 6px;padding:0}
-legend{font:700 19px Georgia,serif;padding:0;margin:18px 0 10px}
+legend{font:700 21px var(--stencil);letter-spacing:.5px;padding:0;margin:18px 0 10px}
 .field{margin:0 0 12px}
 .field label{display:block;font-weight:600;font-size:15px;margin-bottom:5px}
 .field .opt{font-weight:400;color:var(--muted)}
@@ -92,7 +94,7 @@ legend{font:700 19px Georgia,serif;padding:0;margin:18px 0 10px}
 .done h2{font-size:28px;margin:18px 0 6px}
 .done .ok{width:56px;height:56px;border-radius:50%;background:var(--forest);color:#fff;font-size:32px;display:flex;align-items:center;justify-content:center;margin-top:20px}
 .paybox{background:var(--paper);border:2px solid var(--forest);border-radius:var(--r);padding:16px;margin:14px 0}
-.paybox .big{font:800 30px Georgia,serif;color:var(--forest)}
+.paybox .big{font:700 32px var(--stencil);color:var(--forest)}
 .paybox code{display:inline-block;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:18px;word-break:break-all}
 .paybox .btn{margin-top:12px}
 .spin{display:inline-block;width:18px;height:18px;border:3px solid rgba(255,255,255,.5);border-top-color:#fff;border-radius:50%;animation:s .8s linear infinite;vertical-align:-3px;margin-right:8px}
