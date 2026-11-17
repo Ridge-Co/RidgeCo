@@ -1408,7 +1408,7 @@ function rowCard(r){
     if (r.Status === 'skipped') html += '<button class="btn secondary small" onclick="unskipRow(\''+r.ID+'\', this)">↩ Move back to Pending</button>';
     // Sep 23 2026 build: un-flip a confirmed BMore/Ridge Co expense and rebill it to a property +
     // work order (Brett's ask — only offered for 'company'-category confirmed rows, and only
-    // works server-side while the original hasn't been emailed to QuickBooks yet).
+    // works even after it was emailed: the answer then carries qb_delete_needed, Nov 17 2026).
     if (r.Status === 'confirmed' && sug.category === 'company') html += '<button class="btn secondary small" onclick="toggleReassign(\''+r.ID+'\')">🔁 Reassign to a work order</button>';
     // Undo a wrongly confirmed/expensed receipt into the refund flow — reuses the exact Pending
     // refund UI once it drops back to Pending (see markRefundConfirmed).
