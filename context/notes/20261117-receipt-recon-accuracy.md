@@ -1,4 +1,4 @@
-# 2026-11-17 receipt-recon-accuracy (phases 1-2 built; UI not started)
+# 2026-11-17 receipt-recon-accuracy (phases 1-3 built; staging + live checks pending)
 
 ## CURRENT
 Brett listed 10 Receipt Reconciler problems on Nov 17 (plus an 11th at 2:42pm: a manual way to mark any receipt as a customer-card purchase). All traced to causes in live code/data; all design questions answered. Brief: `context/RECEIPT_RECONCILER_ACCURACY_BUILD_BRIEF_v1.0.md`. Resume with `resume ridgeco receipt accuracy`.
@@ -10,7 +10,9 @@ Brett listed 10 Receipt Reconciler problems on Nov 17 (plus an 11th at 2:42pm: a
 Allow-lists: prod read-only token is a deny-list (Sep 24), so the new GETs need no edit; staging write gate `hubTestWriteAllowed` has cases for each new POST (mark-customer-card flag-only, a rule pointing at a property only if it is a TEST- record); gh-broker keeps no path list of its own (checked `src/index.ts`).
 Deviations to flag to Brett: auto-confirm capped at 4 per scan; auto-confirm also blocked when the card last-4 is unknown; rules for Home Depot, Lowe's, Ace, Menards and Sherwin-Williams are forced to Auto=FALSE (always a human check); mark-customer-card keeps the row pending (like Manual_Refund) and Move back to Pending clears it. BUILD_VERSION is frozen, not bumped.
 
-**Phase 3 (not started):** receipt-reconciler.html (pickers, Cards panel, Rules, Auto-handled with Undo, duplicate banner, customer-card button), staging Playwright, live read-only check, ridgeco-validate, PR.
+**Phase 3 (done):** receipt-reconciler.html: inactive properties hidden from the picker; closed-in-30-days work orders offered; duplicate banner from `dup_signals`; unknown-card one-tap (my card / customer's card); rule hint on the card; ambiguous-PO candidates; business-expense card with unit/WO pickers behind "Bill this to a customer instead"; "This was on a customer's card" on every pending row (optional remember-last-4 checkbox) with an undo; vendor-invoice pill; panels for errors, Auto-handled (14 days, two-tap Undo), Cards, Always-rules (two-tap Turn off). No browser pop-ups. `node scripts/ui-check.mjs receipt-reconciler.html` passes; `test/receipt-reconciler-accuracy-ui.test.mjs` (44 checks at 412 and 1366, mocked Worker) passes.
+Home Depot 1661 confirmed as Brett's card (Nov 17).
+Still to run before merge: staging twin check, live read-only check of the matcher on 928 N Calvert (`hub_prod_get`), ridgeco-validate.
 
 Key find: Properties ID 2 (inactive, no units, no WOs) duplicates ID 11 `928 N Calvert St`; the old matcher picked the first on ties. Vendor Invoice Inbox (Kayla/K&C) is design only, not built.
 
