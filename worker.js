@@ -10451,7 +10451,7 @@ async function woBulkVoid(env, body) {
     } catch (e) { skipped.push({ id, reason: e.message || 'Void failed' }); }
   }
 
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_bulk_void', Skill_Or_Endpoint: '/wo/bulk-void', Success: 'TRUE', Notes: `voided=${voided.length} skipped=${skipped.length}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_bulk_void', Skill_Or_Endpoint: '/wo/bulk-void', Success: 'TRUE', Notes: `voided=${voided.length} skipped=${skipped.length}` }); } catch (_) {} // silent-ok: telemetry is best effort, a logging miss must not fail the request
 
   return json({ success: true, voided, skipped, voided_count: voided.length, skipped_count: skipped.length });
 }
