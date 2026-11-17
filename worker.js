@@ -4245,6 +4245,7 @@ async function receiptReconScan(env, body) {
   const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
   let n = 0; const errs = []; let failuresChanged = false; let skippedOld = 0; let flaggedRescan = 0; let configError = ''; let pausedMid = false;
   let vendorInvoiceSkipped = 0, autoHandled = 0, autoFailed = 0;
+  const errorFiles = [];   // Nov 17 2026: each file that errored THIS scan, by name + Drive id + reason (the page used to show only a count)
   const cutoff = receiptReconCutoff(cfg);
   for (const f of newFiles) {
     try {
