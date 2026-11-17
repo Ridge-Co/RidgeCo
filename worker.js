@@ -6151,7 +6151,7 @@ async function woPushToScope(env, body) {
     await ensureColumns(env, 'Estimates', ['Converted_Scope_ID', 'Converted_Date']);
     await updateRow(env, 'Estimates', estimate.ID, { Status: 'Converted', Converted_Scope_ID: scopeId, Converted_Date: new Date().toISOString() });
     convertedMarked = true;
-  } catch (e) {}
+  } catch (e) { await softFail(env, 'woPushToScope:markConverted', e, { severity: 'P1', ref: String(estimate.ID), source: 'write', context: 'the items went onto the Scope but the estimate was not marked Converted, so it can be pushed a second time and duplicate the items' }); }
 
   await setApprovalStage(env, { woId, scopeId, stage: 'Proposed' });
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_push_to_scope', Skill_Or_Endpoint: '/wo/push-to-scope', Success: 'TRUE', Notes: `wo=${woId} estimate=${estimate.ID} scope=${scopeId} created=${willCreate}` }); } catch (_) {}
