@@ -4342,7 +4342,7 @@ async function receiptReconScan(env, body) {
       message: failTrim(errorFiles.length + ' file(s) errored in the Receipt Reconciler scan: ' + errorFiles.slice(0, 5).map(x => x.name + ' (' + x.id + '): ' + x.error).join('; ') + (errorFiles.length > 5 ? ' (+' + (errorFiles.length - 5) + ' more)' : ''), 280) });
   }
   if (pausedMid) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: n, auto_handled: autoHandled, remaining: allNew.length - n, errors: errs, stuck: stuckNow, reason: 'paused: AI credit - the scan stopped when Anthropic credit ran out; remaining receipts wait in Drive' });
-  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, vendor_invoice_skipped: vendorInvoiceSkipped, auto_handled: autoHandled, auto_failed: autoFailed, list_errors: listErrors, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow, config_error: configError || undefined });
+  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, vendor_invoice_skipped: vendorInvoiceSkipped, auto_handled: autoHandled, auto_failed: autoFailed, list_errors: listErrors, cutoff, remaining: allNew.length - newFiles.length, more_waiting: allNew.length - newFiles.length, errors: errs, error_files: errorFiles, stuck: stuckNow, stuck_files: stuckFiles, config_error: configError || undefined });
 }
 // Most rule auto-confirms one scan will run (each costs several subrequests); the rest stay pending with the rule pre-selected.
 const RECEIPT_AUTO_MAX_PER_SCAN = 4;
