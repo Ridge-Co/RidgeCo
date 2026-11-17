@@ -8720,7 +8720,7 @@ async function triageWorkOrder(env, woId, wo, source) {
   if (raise) fields.Priority = 'urgent';   // never lowered; only an Emergency raises it
   await ensureColumns(env, 'Work_Orders', TRIAGE_COLS);
   await updateRowVerified(env, 'Work_Orders', woId, fields);   // writes, re-reads, and throws if the row did not keep it
-  if (raise) { try { await logWOAudit(env, woId, 'triage', 'system', 'Priority', priority, 'urgent', 'Raised by triage (matched: ' + r.matched.join(', ') + ')'); } catch (e) { console.error('triage audit failed:', schedErrText(e)); } }
+  if (raise) { try { await logWOAudit(env, woId, 'triage', 'system', 'Priority', priority, 'urgent', 'Raised by triage (matched: ' + r.matched.join(', ') + ')'); } catch (e) { try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'wo_triage_audit', ref: 'WO ' + woId, severity: 'P2', message: 'Triage raised Priority to urgent on ' + woId + ' but the audit row did not save: ' + schedErrText(e) }); } catch (_) { console.error('triage audit failed:', schedErrText(e)); } } }
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'TRUE', Notes: `wo=${woId} tier=${r.tier} source=${fields.Triage_Source} matched=${r.matched.length}${raise ? ' priority_raised' : ''}`.slice(0, 300) }); } catch (te) { console.error('triage telemetry failed:', schedErrText(te)); }
   return { tier: r.tier, raised: raise, matched: r.matched };
 }
