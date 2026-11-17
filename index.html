@@ -12813,7 +12813,7 @@ function irLoadWOReceipts(i, woId) {
     if (!rows.length) { host.innerHTML = '<span style="color:var(--muted);font-size:11px">No separate receipts logged on this WO.</span>'; return; }
     var lines = rows.map(function(r) {
       var onAccount = (r.Payment_Source || 'company_card') !== 'vendor_reimburse';
-      var badge = r.Non_Billing === 'TRUE' ? '<span style="background:#fff7ed;color:#7c2d12;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px">' + (r.Non_Billable_Reason === 'fixed_price' ? '🏷️ FIXED-PRICE COST, NOT BILLED' : '📎 REFERENCE ONLY') + '</span>' : onAccount
+      var badge = r.Non_Billing === 'TRUE' ? '<span style="background:#fff7ed;color:#7c2d12;font-weight:bold;font-size:12px;padding:1px 5px;border-radius:8px">' + (r.Non_Billable_Reason === 'fixed_price' ? '🏷️ FIXED-PRICE COST, NOT BILLED' : '📎 REFERENCE ONLY') + '</span>' : onAccount
         ? '<span style="background:#e6f4ea;color:#1a7a3c;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px">💳 CARD</span>'
         : '<span style="background:#fff3cd;color:#8a6100;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px">💵 REIMBURSE</span>';
       return '<div style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:11.5px;flex-wrap:wrap">' +
