@@ -5412,7 +5412,7 @@ async function receiptReconSearch(env, url) {
 
   let properties = [], workorders = [];
   try { properties = await fetchTab(env, 'Properties'); } catch (e) { await softFail(env, 'receiptReconSearch:properties', e, { severity: 'P2', ref: '', source: 'read', context: 'the properties list could not be read, so search results may be missing property names' }); }
-  try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) {}
+  try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) { await softFail(env, 'receiptReconSearch:workorders', e, { severity: 'P2', ref: '', source: 'read', context: 'the work orders list could not be read, so search results may be missing jobs' }); }
   const propById = new Map(properties.map(p => [String(p.ID), p]));
   const woById = new Map(workorders.map(w => [String(w.ID), w]));
 
