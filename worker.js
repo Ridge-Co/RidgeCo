@@ -13550,7 +13550,7 @@ async function editVendorBillReceipts(env, body) {
       `$${oldTotal.toFixed(2)} (${(JSON.parse(bill.Receipts_JSON || '[]') || []).length} receipt line(s))`,
       `$${newTotal.toFixed(2)} (${receipts.length} receipt line(s))`,
       resetToSubmitted ? 'Receipts edited on bill ' + billId + ' — reset to submitted, needs re-review before QuickBooks.' : 'Receipts edited on bill ' + billId + '.');
-  } catch (e) { /* audit is best-effort — the fix itself already landed */ }
+  } catch (e) { await softFail(env, 'editVendorBillReceipts:audit', e, { severity: 'P2', ref: String(billId), source: 'write', context: 'the receipts were edited but the audit-log row was not saved' }); }
 
   return json({
     success: true, bill_id: billId, total: newTotal.toFixed(2),
