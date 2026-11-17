@@ -6649,7 +6649,8 @@ async function proposalStampSms(env, scopeId, status) {
     const r = await updateRow(env, 'Scopes', scopeId, { Owner_SMS_Status: status, Owner_SMS_Time: new Date().toISOString() });
     if (r && r.status >= 400) throw new Error('Scopes update HTTP ' + r.status);
   } catch (e) {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_stamp_failed', Skill_Or_Endpoint: 'proposalStampSms', Success: 'FALSE', Notes: 'scope=' + scopeId + ' status=' + status + ' err=' + String((e && e.message) || e).slice(0, 160) }); } catch (_) {}
+    await softFail(env, 'proposalStampSms', e, { severity: 'P2', ref: String(scopeId), source: 'write', context: 'the owner text outcome (' + status + ') was not saved on the Scope, so the Scope Creator will not show it' });
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_stamp_failed', Skill_Or_Endpoint: 'proposalStampSms', Success: 'FALSE', Notes: 'scope=' + scopeId + ' status=' + status + ' err=' + String((e && e.message) || e).slice(0, 160) }); } catch (_) { /* silent-ok: telemetry is best effort, the stamp failure is already in the failure ledger */ }
   }
 }
 // Text the owner "your estimate was emailed". Gated like every owner SMS (global / property / owner toggles, test mode).
@@ -6676,7 +6677,7 @@ async function proposalOwnerSms(env, { scopeId, prop, owner, addr, ownerName, ov
   } catch (e) { out = { status: 'failed', note: String((e && e.message) || e).slice(0, 200) }; }
   await proposalStampSms(env, scopeId, out.status);
   if (out.status !== 'sent' && out.status !== 'held') {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_owner_sms', Skill_Or_Endpoint: '/scope/proposal/send', Success: 'FALSE', Notes: 'scope=' + scopeId + ' ' + out.status + ': ' + (out.note || '') }); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_owner_sms', Skill_Or_Endpoint: '/scope/proposal/send', Success: 'FALSE', Notes: 'scope=' + scopeId + ' ' + out.status + ': ' + (out.note || '') }); } catch (_) { /* silent-ok: telemetry is best effort, the failed text is returned in out.status to the caller */ }
   }
   return out;
 }
@@ -6733,17 +6734,23 @@ async function scopeProposalSend(env, body) {
     try {
       await ensureTab(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
       await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'FAILED: ' + String((e && e.message) || e).slice(0, 200) });
-    } catch (_) { /* audit log best-effort */ }
+    } catch (_) { /* silent-ok: the failed send is returned to the page as a 500; this audit row is best effort */ }
+    await softFail(env, 'scopeProposalSend:email', e, { severity: 'P0', ref: String(id), source: 'send', context: 'estimate email to the owner did not go out' });
     return json({ error: 'Send failed: ' + e.message }, 500);
   }
 
+  const warnings = [];
   try {
     await ensureColumns(env, 'Scopes', ['Sent_Date', 'Sent_To', 'Send_Count']);
     const nextCount = String((parseInt(s.Send_Count || '0', 10) || 0) + 1);
     // A resend puts the card back to "waiting" (queue #138): the owner's earlier decline/question is cleared; the history stays in Ops_Telemetry.
     const _clearResp = String(s.Owner_Response || '') ? { Owner_Response: '', Owner_Response_At: '', Owner_Response_By: '', Owner_Response_Text: '', Owner_Response_Alerted: '' } : {};
     await updateRow(env, 'Scopes', id, { Sent_Date: new Date().toISOString(), Sent_To: email, Send_Count: nextCount, ..._clearResp });
-  } catch (_) { /* the email already sent successfully; a failure to stamp the Scopes row shouldn't be reported as a send failure */ }
+  } catch (e) {
+    // the email already went out, so this is not reported as a send failure; but without Sent_Date the double-send guard cannot see it, so the page is told.
+    warnings.push('The estimate email went out, but the "sent" date could not be saved on the Scope. Check before sending it again.');
+    await softFail(env, 'scopeProposalSend:stamp', e, { severity: 'P1', ref: String(id), source: 'write', context: 'estimate email sent; Scopes.Sent_Date not saved, so the 90-second double-send guard will not catch a second tap' });
+  }
 
   // Owner heads-up text (Oct 14 2026): on the FIRST send only (a resend would just nag), unless sms_again:true.
   // Email already went; the text is held/skipped/blocked on its own rules and its outcome is always reported.
@@ -6756,9 +6763,9 @@ async function scopeProposalSend(env, body) {
     await ensureTab(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
     await ensureColumns(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
     await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'sent', SMS_Result: sms.status + (sms.note ? ' - ' + sms.note : '') });
-  } catch (_) { /* audit log best-effort; the send already happened */ }
+  } catch (e) { await softFail(env, 'scopeProposalSend:sendLog', e, { severity: 'P2', ref: String(id), source: 'write', context: 'the send happened; its Proposal_Send_Log row was not saved' }); }   // the send already happened, so the response still says success
 
-  return json({ success: true, sent_to: email, sent_at: new Date().toISOString(), url, sms });
+  return json({ success: true, sent_to: email, sent_at: new Date().toISOString(), url, sms, warnings });
 }
 
 // PUBLIC (link-token gated): the customer-safe payload scope-proposal.html renders. Serves the
@@ -10239,6 +10246,7 @@ async function addonOwnerNotice(env, body) {
   const childId = String((body && body.child_wo_id) || '').trim();
   if (!childId) return json({ error: 'child_wo_id required' }, 400);
   const preview = !(body && body.preview === false);
+  const req = {};   // Phase 2: one report per problem per request
   const [workorders, estimates, attachments, properties, owners, unitsAll] = await fetchTabs(env, ['Work_Orders', 'Estimates', 'Attachments', 'Properties', 'Owners', 'Units']);
   const child = findWO(workorders, childId);
   if (!child || !addonIsChild(child)) return json({ error: 'Additional-work job not found' }, 404);
@@ -10251,7 +10259,8 @@ async function addonOwnerNotice(env, body) {
   const property = properties.find(p => String(p.ID) === String(child.Property_ID)) || null;
   const owner = property ? owners.find(o => String(o.ID) === String(property.Owner_ID)) : null;
   if (!owner) return json({ error: 'No owner found for this property' }, 400);
-  let lines = []; try { lines = JSON.parse((est && est.Line_Items) || '[]'); } catch (_) {}
+  let lines = [], linesUnreadable = false;
+  try { lines = JSON.parse((est && est.Line_Items) || '[]'); } catch (e) { linesUnreadable = true; await softFail(env, 'addonOwnerNotice:lineItems', e, { req, severity: 'P1', ref: childId, source: 'parse', context: 'the owner notice was built without the saved estimate lines' }); }
   const photos = addonPhotosByItem(attachments, childId);
   const items = addonParseItems(child);
   const itemTexts = items.map(it => {
@@ -10268,7 +10277,9 @@ async function addonOwnerNotice(env, body) {
   if (!ownerEmail) warnings.push('Owner has no email on file — no email will be sent.');
   if (String(owner.Notify_Method || 'sms') === 'none') warnings.push('Owner notification method is set to none.');
   if (String(parent.Managed_By || '') === 'Owner') warnings.push('This job is marked owner-managed.');
-  let _cfg = {}; try { _cfg = await fetchConfig(env); } catch (_) {}
+  if (linesUnreadable) warnings.push('The saved estimate lines could not be read, so this notice uses the item descriptions only.');
+  let _cfg = {};
+  try { _cfg = await fetchConfig(env); } catch (e) { warnings.push('Settings could not be read, so the email and text switches were checked against empty settings (nothing will be emailed).'); await softFail(env, 'addonOwnerNotice:config', e, { req, severity: 'P1', ref: childId, source: 'read' }); }
   const emailGate = addonEmailGate({ cfg: _cfg, property, owner });
   if (!emailGate.ok) warnings.push('Email will NOT be sent: ' + emailGate.reason + '.');
   const already = String(child.Addon_Owner_Notified_Date || '').trim();
@@ -10280,17 +10291,21 @@ async function addonOwnerNotice(env, body) {
   let smsResult = { sent: false, reason: 'no owner phone' };
   if (owner.Phone) {
     try { smsResult = await smsGatedSend(env, { wo_id: parent.ID, message_type: 'owner_addon_notice', recipient_type: 'owner', owner, property, message_body: msg.sms }); }
-    catch (e) { smsResult = { sent: false, reason: String((e && e.message) || e) }; }
+    catch (e) { smsResult = { sent: false, reason: String((e && e.message) || e) }; await softFail(env, 'addonOwnerNotice:sms', e, { req, severity: 'P0', ref: childId, source: 'send', context: 'owner text for additional work' }); }
   }
   let emailResult = { sent: false, reason: 'no owner email' };
   if (ownerEmail && !emailGate.ok) emailResult = { sent: false, reason: emailGate.reason };
   else if (ownerEmail) {
     try { const _er = await gmailSendEmail(env, { to: ownerEmail, subject: msg.subject, html: msg.html, recipientType: 'owner' }); emailResult = (_er && _er.sent === false) ? { sent: false, staged: !!_er.staged, reason: _er.note || 'not sent' } : { sent: true }; }
-    catch (e) { emailResult = { sent: false, reason: String((e && e.message) || e) }; }
+    catch (e) { emailResult = { sent: false, reason: String((e && e.message) || e) }; await softFail(env, 'addonOwnerNotice:email', e, { req, severity: 'P0', ref: childId, source: 'send', context: 'owner email for additional work' }); }
   }
   const anyOut = !!(smsResult && (smsResult.sent || smsResult.held_for_quiet_hours)) || emailResult.sent;
-  if (anyOut) { try { await updateWOFields(env, childId, { Addon_Owner_Notified_Date: new Date().toISOString() }); } catch (_) {} }
-  try { await logWOAudit(env, childId, 'admin', 'admin', 'Addon_Owner_Notified', '', anyOut ? 'sent' : 'not sent', 'Owner information notice'); } catch (_) {}
+  if (anyOut) {
+    try { await updateWOFields(env, childId, { Addon_Owner_Notified_Date: new Date().toISOString() }); }
+    catch (e) { warnings.push('The notice went out but the "owner notified" date could not be saved. Check before sending it again.'); await softFail(env, 'addonOwnerNotice:stamp', e, { req, severity: 'P1', ref: childId, source: 'write', context: 'the owner was told but Addon_Owner_Notified_Date is blank, so a second send is not blocked' }); }
+  }
+  try { await logWOAudit(env, childId, 'admin', 'admin', 'Addon_Owner_Notified', '', anyOut ? 'sent' : 'not sent', 'Owner information notice'); }
+  catch (e) { await softFail(env, 'addonOwnerNotice:audit', e, { req, severity: 'P2', ref: childId, source: 'write' }); }
   return json({ success: true, sms: { sent: !!(smsResult && smsResult.sent), held_for_quiet_hours: !!(smsResult && smsResult.held_for_quiet_hours), gate_snapshot: (smsResult && (smsResult.gate_snapshot || smsResult.reason)) || '' }, email: emailResult, warnings });
 }
 
@@ -10684,7 +10699,7 @@ async function woCombine(env, body) {
       const msg = `Hi ${tenant.First_Name}, work order${combinedIds.length > 1 ? 's' : ''} ${idList} (${woJobLabel(survivorFresh)}) ${combinedIds.length > 1 ? 'were' : 'was'} combined into ${survivorId}. We're continuing to track it there. Ref: ${survivorId}.`;
       await smsGatedSend(env, { wo_id: survivorId, message_type: 'tenant_wo_combined', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
-  } catch (e) { /* non-fatal — combine already succeeded */ }
+  } catch (e) { await softFail(env, 'woCombine:tenantTexts', e, { severity: 'P0', ref: String(survivorId), source: 'send', context: 'the combine worked but the tenant text loop stopped; later tenants may not have been told' }); }   // the combine itself already succeeded, so this stays non-fatal
 
   // Owner ref notice (Sep 23 2026, Brett's follow-up) — Owner_WO_Ref is excluded from both
   // WO_COMBINE_RECONCILE_FIELDS and WO_COMBINE_MERGE_FIELDS (see the comment above
@@ -10720,7 +10735,7 @@ async function woCombine(env, body) {
         await smsGatedSend(env, { wo_id: survivorId, message_type: 'owner_wo_combined_ref', recipient_type: 'owner', owner, property, message_body: msg });
       }
     }
-  } catch (e) { /* non-fatal — combine already succeeded */ }
+  } catch (e) { await softFail(env, 'woCombine:ownerTexts', e, { severity: 'P0', ref: String(survivorId), source: 'send', context: 'the combine worked but the owner text did not go out' }); }   // the combine itself already succeeded, so this stays non-fatal
 
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_combine', Skill_Or_Endpoint: '/wo/combine', Success: 'TRUE', Notes: `survivor=${survivorId} combined=${combinedIds.join(',')}` }); } catch (_) {} // silent-ok: telemetry is best effort, a logging miss must not fail the request
 
@@ -10976,7 +10991,7 @@ async function woSplit(env, body) {
       const msg = `Hi ${tenant.First_Name}, work order ${originalId} (${woJobLabel(originalFresh)}) was split into ${createdWoIds.length > 1 ? 'work orders' : 'work order'} ${idList}. We're continuing to track your job across these. Ref: ${originalId}.`;
       await smsGatedSend(env, { wo_id: originalId, message_type: 'tenant_wo_split', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
-  } catch (e) { /* non-fatal — split already succeeded */ }
+  } catch (e) { await softFail(env, 'woSplit:tenantTexts', e, { severity: 'P0', ref: String(originalId), source: 'send', context: 'the split worked but the tenant text loop stopped; later tenants may not have been told' }); }   // the split itself already succeeded, so this stays non-fatal
 
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_split', Skill_Or_Endpoint: '/wo/split', Success: 'TRUE', Notes: `original=${originalId} new=${createdWoIds.join(',')}` }); } catch (_) {} // silent-ok: telemetry is best effort, a logging miss must not fail the request
 
@@ -11923,7 +11938,7 @@ async function assignVendor(env, body, internal) {
   // Vendor nudge clock (Sep 14 2026) — starts on every successful assignment, notify or
   // silent, since it tracks actual work progress rather than whether a text went out.
   await createVendorNudgeClock(env, body.wo_id, body.vendor_id);
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent} vendor_email=${vendorEmailDetail.status} notify=${notify}` }); } catch (e) { console.error('wo_assign telemetry failed', e && e.message); }
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent} vendor_email=${vendorEmailDetail.status} notify=${notify}` }); } catch (e) { /* silent-ok: telemetry is best effort, the assignment result is returned to the caller */ console.error('wo_assign telemetry failed', e && e.message); }
   return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify, vendor_sms_detail: vendorSmsDetail, vendor_email_detail: vendorEmailDetail });
 }
 
@@ -12924,11 +12939,10 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   const allowIds = String(config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
   if (!allowIds.includes(String(vendorId))) return; // soft launch — not enabled for this vendor yet
 
-  const [vendors, wos, properties] = await Promise.all([
-    fetchTab(env, 'Vendors').catch(() => []),
-    fetchTab(env, 'Work_Orders').catch(() => []),
-    fetchTab(env, 'Properties').catch(() => []),
-  ]);
+  // Phase 2: a failed read used to look like "no such vendor" and the vendor silently got no confirmation. Now it is reported (P1) and the behaviour is unchanged (no email goes out on empty data).
+  const req = {};
+  const rd = async tab => (await fetchTabSoft(env, tab, { where: 'vendorInvoiceConfirm:read:' + tab, req, severity: 'P1' })).rows;
+  const [vendors, wos, properties] = await Promise.all([rd('Vendors'), rd('Work_Orders'), rd('Properties')]);
   const vendor = vendors.find(v => String(v.ID) === String(vendorId));
   if (!vendor) return;
 
@@ -12936,15 +12950,19 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
     // Ask once, via SMS (subject to the standing Config.TWILIO_ENABLED switch, same as every
     // other SMS in this file) — never re-nudge on every future bill while Email stays blank.
     if (!vendor.Email_Request_Sent_Date) {
-      try { await ensureColumns(env, 'Vendors', ['Email_Request_Sent_Date']); } catch (e) {}
+      try { await ensureColumns(env, 'Vendors', ['Email_Request_Sent_Date']); } catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
       const vname = (vendor.First_Name || (vendor.Name || '').split(' ')[0] || '').trim();
       const msg = (vendor.Language === 'es')
         ? `Hola${vname ? ' ' + vname : ''}, no tenemos un correo electrónico registrado para usted. Agréguelo en su portal de proveedores de Ridge Co para recibir una copia de cada factura que envíe y la fecha de pago.`
         : `Hi${vname ? ' ' + vname : ''}, we don't have an email on file for you. Add one in your Ridge Co vendor portal so we can send you a copy of every invoice you submit and when payment is due.`;
-      try {
-        await sendSMS(env, vendor.Phone, msg);
-        await updateRow(env, 'Vendors', vendor.ID, { Email_Request_Sent_Date: new Date().toISOString().split('T')[0] });
-      } catch (e) {}
+      // Phase 2: a refused text (Twilio answers with plain JSON, it does not throw) must not stamp "asked", or the vendor is never asked again; a stamp that fails to save means he is asked on every bill.
+      let askErr = '';
+      try { askErr = sendFailure(await sendSMS(env, vendor.Phone, msg)); } catch (e) { askErr = String((e && e.message) || e).slice(0, 200); }
+      if (askErr) await softFail(env, 'vendorInvoiceConfirm:emailRequestSms', 'The "add your email" text to the vendor did not go out: ' + askErr, { req, severity: 'P0', ref: String(vendor.ID), source: 'send' });
+      else {
+        try { await updateRow(env, 'Vendors', vendor.ID, { Email_Request_Sent_Date: new Date().toISOString().split('T')[0] }); }
+        catch (e) { await softFail(env, 'vendorInvoiceConfirm:emailRequestStamp', e, { req, severity: 'P1', ref: String(vendor.ID), source: 'write', context: 'the vendor was texted but Email_Request_Sent_Date is blank, so he will be asked again on the next bill' }); }
+      }
     }
     return;
   }
@@ -12954,7 +12972,7 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   const address = prop ? (prop.Address || '') : '';
   const isEs = vendor.Language === 'es';
   let description = wo.Description || '';
-  if (isEs && description) { try { const t = await translateText(env, description, 'English', 'Spanish'); if (t) description = t; } catch (e) {} }
+  if (isEs && description) { try { const t = await translateText(env, description, 'English', 'Spanish'); if (t) description = t; } catch (e) { await softFail(env, 'vendorInvoiceConfirm:translate', e, { req, severity: 'P2', ref: String(woId), source: 'translate', context: 'the Spanish email went out with the job description in English' }); } }
 
   const holidayMap = parseHolidayMap(config.US_HOLIDAYS);
   const submissionDate = String(billRow.Submitted_At || new Date().toISOString()).split('T')[0];
@@ -12968,7 +12986,7 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
 
   const base = String(env.WORKER_BASE_URL || 'https://maintenance-hub.brett-2f8.workers.dev').replace(/\/+$/, '');
   let fileToken = '';
-  try { fileToken = await makeSessionToken({ role: 'vendor', id: vendor.ID }, env.WORKER_SECRET); } catch (e) {}
+  try { fileToken = await makeSessionToken({ role: 'vendor', id: vendor.ID }, env.WORKER_SECRET); } catch (e) { await softFail(env, 'vendorInvoiceConfirm:fileToken', e, { req, severity: 'P1', ref: String(vendor.ID), source: 'auth', context: 'the confirmation email went out without links to the vendor\'s files' }); }
   const fileLink = (fileId) => `${base}/vendor-file/view?wo_id=${encodeURIComponent(woId)}&file_id=${encodeURIComponent(fileId)}&t=${encodeURIComponent(fileToken)}`;
 
   const linkRows = [];
@@ -12977,7 +12995,7 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   }
   if (fileToken) {
     let receipts = [];
-    try { receipts = JSON.parse(billRow.Receipts_JSON || '[]'); } catch (e) {}
+    try { receipts = JSON.parse(billRow.Receipts_JSON || '[]'); } catch (e) { await softFail(env, 'vendorInvoiceConfirm:receipts', e, { req, severity: 'P2', ref: String(woId), source: 'parse', context: 'the confirmation email went out without receipt links' }); }
     (Array.isArray(receipts) ? receipts : []).forEach((r, i) => {
       if (!r || r.pay === 'account' || !r.url) return;
       const fid = driveIdFromUrl(r.url);
@@ -13015,10 +13033,10 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   ];
   const subject = isEs ? `Hemos recibido su factura — OT ${woId}` : `We've received your invoice — WO ${woId}`;
   let emailOutcome = 'failed';
-  try { await gmailSendEmail(env, { to: vendor.Email, subject, html: html.filter(Boolean).join('\n') }); emailOutcome = 'sent'; } catch (e) { emailOutcome = 'failed'; throw e; }
+  try { await gmailSendEmail(env, { to: vendor.Email, subject, html: html.filter(Boolean).join('\n') }); emailOutcome = 'sent'; } catch (e) { emailOutcome = 'failed'; await softFail(env, 'vendorInvoiceConfirm:send', e, { req, severity: 'P0', ref: String(woId), source: 'send', context: 'vendor invoice confirmation email' }); throw e; }
   finally {
     // Per-WO communication audit (Sep 20 2026) — same visibility as the SMS side (smsGatedSend).
-    try { await logMessageAudit(env, { woId, channel: 'email', recipientName: vendor.Name || vendor.First_Name || '', recipientType: 'vendor', messageType: 'vendor_invoice_confirmation', messageBody: subject + '\n\n' + html.filter(Boolean).join('\n'), outcome: emailOutcome }); } catch (e) {}
+    try { await logMessageAudit(env, { woId, channel: 'email', recipientName: vendor.Name || vendor.First_Name || '', recipientType: 'vendor', messageType: 'vendor_invoice_confirmation', messageBody: subject + '\n\n' + html.filter(Boolean).join('\n'), outcome: emailOutcome }); } catch (e) { await softFail(env, 'vendorInvoiceConfirm:audit', e, { req, severity: 'P2', ref: String(woId), source: 'write' }); }
   }
 }
 
@@ -14267,7 +14285,7 @@ const ESTIMATE_SMS_DEFAULT_SINCE = '2026-09-29T00:00:00.000Z';
 const NEEDS_INFO_RESUME_DAYS = 3;
 const REMINDER_MIN_AGE_HOURS = 12; // an estimate posted this morning already got its own text
 async function getAdminSmsRecipient(env) {
-  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
+  let cfg = {}; try { cfg = await fetchConfig(env); } catch (e) { await softFail(env, 'getAdminSmsRecipient:config', e, { severity: 'P1', source: 'read', context: 'the admin text went to the built-in fallback number because settings could not be read' }); }
   return { Name: 'Brett', Phone: cfg.ADMIN_SMS_PHONE || cfg.TWILIO_TEST_RECIPIENT || '+14439617927' };
 }
 // "20 E Eager St Apt 3" for a work order — property + unit (Brett Oct 19). Falls back to the property alone,
@@ -14300,7 +14318,8 @@ async function sendTemplatedSms(env, o) {
     if (o.kind === 'admin') opts.admin = await getAdminSmsRecipient(env); else if (o.kind === 'owner') opts.owner = o.owner; else opts.vendor = o.vendor;
     return await smsGatedSend(env, opts);
   } catch (e) {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_sms_failed', Skill_Or_Endpoint: o.type, Success: 'FALSE', Notes: 'wo=' + (o.wo_id || '') + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
+    await softFail(env, 'sendTemplatedSms:' + o.type, e, { severity: 'P0', ref: String(o.wo_id || ''), source: 'send', context: 'recipient=' + o.kind });   // Phase 2: the failed text now reaches the failure ledger, not only a telemetry row
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_sms_failed', Skill_Or_Endpoint: o.type, Success: 'FALSE', Notes: 'wo=' + (o.wo_id || '') + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) { /* silent-ok: telemetry is best effort, the failed text is already in the failure ledger */ }
     return { sent: false, error: String((e && e.message) || e) };
   }
 }
@@ -14353,7 +14372,11 @@ function etDateString(date) { return new Intl.DateTimeFormat('en-CA', { timeZone
 async function processEstimateReminders(env, nowArg) {
   const now = nowArg || new Date();
   { const h = etHour(now); if (h < 8 || h >= 18) return { skipped: 'outside the 8am-6pm ET reminder window' }; }
-  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
+  // Phase 2: this job claims the day in Config BEFORE it texts, so two overlapping runs cannot double-send. With the settings unreadable it cannot tell whether today was already
+  // claimed, so it sends nothing this run (reported, P0) instead of guessing "not yet" and risking a second round of reminder texts to owners.
+  let cfg = {};
+  try { cfg = await fetchConfig(env); }
+  catch (e) { await softFail(env, 'processEstimateReminders:config', e, { severity: 'P0', source: 'read', context: 'estimate reminder texts were NOT sent this run because settings could not be read' }); return { skipped: 'settings could not be read; no reminders sent this run' }; }
   const today = etDateString(now);
   if (cfg.estimate_reminder_last_date === today) return { skipped: 'already sent today' };
   const [ests, wos, vendors] = await Promise.all([fetchTab(env, 'Estimates'), fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendors')]);
@@ -15580,7 +15603,7 @@ async function addWONote(env, body) {
         const noteAddr = noteWOProp ? noteWOProp.Address : wo.Property_ID;
         await sendSMS(env, config.admin_phone, `💬 ${body.author||'A tenant'} left a note on ${body.wo_id} (${noteAddr}): "${noteText}"`);
       }
-    } catch (e) { /* non-fatal — note already saved */ }
+    } catch (e) { await softFail(env, 'addWONote:adminText', e, { severity: 'P1', ref: String(body.wo_id), source: 'send', context: 'a tenant note was saved but the text to Brett about it did not go out' }); }   // the note itself is already saved, so this stays non-fatal
   }
 
   if (body.notify_owner_status_note === true) {
@@ -15660,7 +15683,7 @@ async function adminUpdateWO(env, body) {
           : `Hi ${owner.First_Name}, ${body.wo_id} at ${mbLoc} is back with Ridge Co to handle — we'll take it from here.`;
         await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'owner_managed_by_changed', recipient_type: 'owner', owner, property, message_body: msg });
       }
-    } catch (e) { /* non-fatal */ }
+    } catch (e) { await softFail(env, 'adminUpdateWO:ownerManagedText', e, { severity: 'P1', ref: String(body.wo_id), source: 'send', context: 'Managed_By was changed but the owner text about it did not go out' }); }   // the change itself is saved, so this stays non-fatal
   }
   return json({ success: true });
 }
@@ -16869,7 +16892,12 @@ async function queueNotification(env, woId, type, phone, message, sendAfter, ctx
       Message_Type:ctx.message_type||'',Recipient_Type:ctx.recipient_type||'',Recipient_ID:ctx.recipient_id||'',Property_ID:ctx.property_id||''};
     const newRow=headers.map(h=>rowObj[h]??'');
     await sheetsRequest(env,'POST',`/values/${NOTIF_QUEUE_TAB}:append?valueInputOption=RAW`,{values:[newRow]});
-  } catch(e){/* non-fatal */}
+    return { queued: true };
+  } catch(e){
+    // Phase 2: a text held for later that cannot be queued is a text that is never sent. Still non-fatal for the caller (the job it belongs to is already saved), but no longer silent.
+    await softFail(env, 'queueNotification:' + type, e, { severity: 'P0', ref: String(woId || ''), source: 'send', context: 'the ' + (ctx.message_type || type) + ' text to a ' + (ctx.recipient_type || 'recipient') + ' could not be queued and will not be sent' });
+    return { queued: false, error: String((e && e.message) || e).slice(0, 200) };
+  }
 }
 
 let __pendingNotifAt = 0; // last time GET /notifications/pending actually ran (per isolate)
@@ -16976,7 +17004,7 @@ async function createVendorNudgeClock(env, woId, vendorId) {
       Nudge_Count: '0', First_Nudge_At: firstNudge.toISOString(), Next_Nudge_At: firstNudge.toISOString(),
       Last_Activity_At: now.toISOString(), Satisfied_Date: '', Created_Date: now.toISOString(), Active: 'TRUE',
     });
-  } catch (e) { /* non-fatal — assignment itself already succeeded */ }
+  } catch (e) { await softFail(env, 'createVendorNudgeClock', e, { severity: 'P1', ref: String(woId), source: 'write', context: 'the vendor was assigned but the status-update reminder clock was not started, so he will not be nudged' }); }   // the assignment itself already succeeded, so this stays non-fatal
 }
 
 // Called from updateStatus/scheduleWO when updated_by_role==='vendor' — real vendor activity
@@ -16992,7 +17020,7 @@ async function resetVendorNudgeClock(env, woId, vendorId) {
     const now = new Date();
     const nextNudge = new Date(Math.max(next9amET(now).getTime(), now.getTime() + 16*3600000));
     await updateRow(env, VENDOR_REQ_TAB, row.ID, { Nudge_Count: '0', Next_Nudge_At: nextNudge.toISOString(), Last_Activity_At: now.toISOString() });
-  } catch (e) { /* non-fatal */ }
+  } catch (e) { await softFail(env, 'resetVendorNudgeClock', e, { severity: 'P1', ref: String(woId), source: 'write', context: 'the vendor reminder clock was not reset, so he may be nudged again right after updating' }); }   // non-fatal for the caller
 }
 
 // POST /vendor-request/create { wo_id, vendor_id, request_type: 'photos'|'invoice' } — the
@@ -18252,8 +18280,11 @@ async function doorWatchdogCron(env) {
   } catch (e) {
     const m = String((e && e.message) || e).slice(0, 300);
     console.error('door-watchdog: pass threw:', m);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: DOOR_WD_JOB, Skill_Or_Endpoint: 'scheduled/door-watchdog', Success: 'FALSE', Notes: ('unexpected throw: ' + m).slice(0, 480) }); } catch (e2) { console.error('door-watchdog: telemetry write failed after throw:', e2 && e2.message); }
-    try { await alertAdminOnFailure(env, 'door_watchdog', m); } catch (e3) { console.error('door-watchdog: admin alert failed after throw:', e3 && e3.message); }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: DOOR_WD_JOB, Skill_Or_Endpoint: 'scheduled/door-watchdog', Success: 'FALSE', Notes: ('unexpected throw: ' + m).slice(0, 480) }); } catch (e2) { await softFail(env, 'doorWatchdog:telemetry', e2, { severity: 'P1', ref: DOOR_WD_JOB, source: 'write', context: 'the pass threw: ' + m.slice(0, 150) }); }
+    try {
+      const al = await alertAdminOnFailure(env, 'door_watchdog', m);
+      if (al && al.error) console.error('door-watchdog: admin alert did not go out:', al.error);   // alertAdminOnFailure already reported this to the ledger (P0)
+    } catch (e3) { await softFail(env, 'doorWatchdog:alert', e3, { severity: 'P0', ref: DOOR_WD_JOB, source: 'send', context: 'the door watchdog pass threw and the alert to Brett could not be sent: ' + m.slice(0, 150) }); }
     return { ok: false, errors: ['pass threw: ' + m] };
   }
 }
@@ -19051,7 +19082,7 @@ async function smsGatedSend(env, opts) {
     try {
       const t = await translateForVendorDetailed(env, opts.vendor, messageBody);
       if (t.translated) { originalBody = t.original; translatedTo = 'es'; messageBody = t.text; }
-    } catch (e) { /* fail open: English goes out */ }
+    } catch (e) { await softFail(env, 'smsGatedSend:translate', e, { severity: 'P2', ref: String((opts.vendor && opts.vendor.ID) || ''), source: 'translate', context: 'the vendor text went out in English because translation failed' }); }   // fails open on purpose: English goes out
   }
   // D-16 (Oct 23 2026): make the text plain BEFORE it is queued, so the Message_Queue row shows exactly what is sent and Twilio bills 160-character
   // pieces. A Spanish vendor text keeps its accents (stripping them changes meaning) but still gets plain dashes, quotes and dots.
@@ -19491,8 +19522,15 @@ async function alertAdminOnFailure(env, jobType, errMsg) {
   if (!cfg.admin_phone) return { skipped: true, reason: 'admin_phone not set' };
   const key = `failure_alert_last_sent_${jobType}`;
   if (!alertDebounceOk(cfg, key, Date.now(), 3600000)) return { skipped: true, reason: 'already alerted within the last hour' };
-  try { await sendSMS(env, cfg.admin_phone, `🔴 ${jobType} failed: ${String(errMsg).slice(0, 200)}`); } catch (_) {}
-  try { await setConfigKey(env, { key, value: new Date().toISOString() }); } catch (_) {}
+  // Phase 2 (Nov 17 2026): the alert that tells Brett something broke must not fail silently itself. A text that did not go out is reported (P0) and is NOT debounced,
+  // so the next failure tries again instead of waiting an hour; the old code stamped the debounce and answered { sent: true } either way.
+  let sendErr = '';
+  try { sendErr = sendFailure(await sendSMS(env, cfg.admin_phone, `🔴 ${jobType} failed: ${String(errMsg).slice(0, 200)}`)); } catch (e) { sendErr = String((e && e.message) || e).slice(0, 200); }
+  if (sendErr) {
+    await softFail(env, 'alertAdminOnFailure:' + jobType, 'The failure text to Brett did not go out: ' + sendErr, { severity: 'P0', ref: jobType, source: 'send', context: 'original problem: ' + String(errMsg).slice(0, 150) });
+    return { sent: false, error: sendErr };
+  }
+  try { await setConfigKey(env, { key, value: new Date().toISOString() }); } catch (e) { await softFail(env, 'alertAdminOnFailure:debounce', e, { severity: 'P1', ref: key, source: 'write' }); }
   return { sent: true };
 }
 
@@ -19505,8 +19543,8 @@ async function callWithFailureAlert(env, jobType, skillOrEndpoint, fn) {
     return await fn();
   } catch (e) {
     const errMsg = String((e && e.message) || e);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: jobType, Skill_Or_Endpoint: skillOrEndpoint, Success: 'FALSE', Latency_ms: Date.now() - _t0, Notes: `unhandled error: ${errMsg}`.slice(0, 500) }); } catch (_) {}
-    try { await alertAdminOnFailure(env, jobType, errMsg); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: jobType, Skill_Or_Endpoint: skillOrEndpoint, Success: 'FALSE', Latency_ms: Date.now() - _t0, Notes: `unhandled error: ${errMsg}`.slice(0, 500) }); } catch (_) { /* silent-ok: telemetry is best effort; the original error is rethrown and alerted below */ }
+    try { await alertAdminOnFailure(env, jobType, errMsg); } catch (ae) { await softFail(env, 'callWithFailureAlert:' + jobType, ae, { severity: 'P0', ref: jobType, source: 'send', context: 'the alert about "' + errMsg.slice(0, 120) + '" could not be sent' }); }
     throw e;
   }
 }
@@ -19529,9 +19567,15 @@ async function checkDeadManSwitch(env) {
   const msg = gapHrs !== null
     ? `🔴 RidgeCo Hub: no worker job has completed in ~${gapHrs}h — something may be stuck or down.`
     : `🔴 RidgeCo Hub: no worker activity recorded in the last 2 days — something may be stuck or down.`;
-  try { await sendSMS(env, cfg.admin_phone, msg); } catch (_) {}
-  try { await setConfigKey(env, { key, value: new Date().toISOString() }); } catch (_) {}
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'dead_man_switch', Skill_Or_Endpoint: 'checkDeadManSwitch', Success: 'FALSE', Notes: `zero-activity gap; last_activity=${lastActivityISO || 'none in 2d window'}` }); } catch (_) {}
+  // Phase 2: if the text did not reach Brett, say so (P0) and do NOT stamp the 24h debounce, so the next sweep tries again.
+  let sendErr = '';
+  try { sendErr = sendFailure(await sendSMS(env, cfg.admin_phone, msg)); } catch (e) { sendErr = String((e && e.message) || e).slice(0, 200); }
+  if (sendErr) {
+    await softFail(env, 'checkDeadManSwitch:sms', 'The "no worker activity" text to Brett did not go out: ' + sendErr, { severity: 'P0', ref: 'dead_man_switch', source: 'send', context: 'last_activity=' + (lastActivityISO || 'none in 2d window') });
+    return { ok: true, tripped: true, alerted: false, error: sendErr, last_activity: lastActivityISO };
+  }
+  try { await setConfigKey(env, { key, value: new Date().toISOString() }); } catch (e) { await softFail(env, 'checkDeadManSwitch:debounce', e, { severity: 'P1', ref: key, source: 'write' }); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'dead_man_switch', Skill_Or_Endpoint: 'checkDeadManSwitch', Success: 'FALSE', Notes: `zero-activity gap; last_activity=${lastActivityISO || 'none in 2d window'}` }); } catch (_) { /* silent-ok: telemetry is best effort, the text to Brett already went out */ }
   return { ok: true, tripped: true, alerted: true, last_activity: lastActivityISO };
 }
 
@@ -19846,6 +19890,17 @@ async function safeJson(request, opts) {
     if (opts.env && opts.where) await softFail(opts.env, opts.where, 'Request body was not valid JSON: ' + error, { req: opts.req, severity: opts.severity || 'P2', source: 'request' });
     return { ok: false, body: {}, error };
   }
+}
+// Reads the result of sendSMS / smsGatedSend / gmailSendEmail and returns a short error text when the send really failed, '' otherwise.
+// A text that was skipped on purpose (Twilio off, quiet hours, region, duplicate, gate) or only staged is NOT a failure. Twilio answers a refused text with
+// plain JSON (no `sid`) instead of throwing, so a bare `try { await sendSMS() } catch {}` never sees it.
+function sendFailure(r) {
+  if (!r || typeof r !== 'object') return '';
+  if (r.skipped || r.staged || r.held_for_quiet_hours || r.sid || r.sent === true || r.ok === true || r.delivered === true) return '';
+  if (r.error) return String(r.error).slice(0, 200);
+  if (r.sent === false && r.error_code) return 'send failed (code ' + r.error_code + ')';
+  if (r.message || r.code) return String(r.message || ('code ' + r.code)).slice(0, 200);
+  return '';
 }
 // ═══ SOFT-FAILURE-HELPERS-END
 async function failSetConfig(env, key, value) {
@@ -21933,7 +21988,7 @@ async function sendCustomMessage(env, body) {
   // wo_id is set -- see logMessageAudit inside it. With no wo_id (a list-page message, not tied
   // to any work order) there's no WO_Audit row possible, so log to SMS_Logs instead as the
   // durable record of the send attempt.
-  if (!body.wo_id) { try { await logSMS(env, '', kind, recipient.ID, recipient.Phone, msg); } catch (_) {} }
+  if (!body.wo_id) { try { await logSMS(env, '', kind, recipient.ID, recipient.Phone, msg); } catch (e) { await softFail(env, 'sendCustomMessage:smsLog', e, { severity: 'P2', ref: String(recipient.ID || ''), source: 'write', context: 'the text was sent but its SMS_Logs record was not saved' }); } }
 
   return json({
     success: true, sent: r.sent, send_ok: r.send_ok, held_for_quiet_hours: !!r.held_for_quiet_hours,
@@ -22509,7 +22564,7 @@ async function aiCreditMaybeAlert(env, state, errors) {
   if (!res.delivered) {
     errors.push('NEITHER the text nor the email reached Brett - it will be retried on the next detection: ' + warnings.join('; ').slice(0, 300));
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_credit_alert_failed', Skill_Or_Endpoint: 'aiCreditMaybeAlert', Success: 'FALSE', Notes: JSON.stringify({ sms: res.sms, email: res.email }).slice(0, 450) }); }
-    catch (te) { console.error('ai-credit: alert undeliverable and its telemetry write failed:', schedErrText(te)); }
+    catch (te) { console.error('ai-credit: alert undeliverable and its telemetry write failed:', schedErrText(te)); await softFail(env, 'aiCreditMaybeAlert:undeliverable', 'Neither the text nor the email about the AI credit problem reached Brett, and the telemetry row failed too: ' + warnings.join('; ').slice(0, 200), { severity: 'P0', ref: 'ai_credit', source: 'send' }); }
     if (stamped) { try { await aiCreditWriteKeys(env, { [AI_CREDIT_KEYS.alerted]: '', failure_alert_last_sent_ai_credit_paused: '', failure_alert_last_sent_ai_credit_exhausted: '' }); } catch (e) { errors.push('could not clear the alert stamp: ' + schedErrText(e)); } }
   }
   return res;
@@ -26062,6 +26117,7 @@ async function arRemind(env, body) {
   const preview = body.preview === true || body.preview === '1';
   const token = await qbAccessToken(env);
   const items = [];
+  const auditReq = {};   // Phase 2: one audit-log report per request, not one per invoice
   for (const id of ids) {
     let inv = null;
     try {
@@ -26083,7 +26139,7 @@ async function arRemind(env, body) {
     // response that merely lacks a Fault, or the audit log would claim a send that never went.
     try {
       const rr = await fetch(`${qbBase(env)}/${env.QB_REALM_ID}/invoice/${encodeURIComponent(id)}/send?minorversion=73`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json', 'Content-Type': 'application/octet-stream' } });
-      const sres = await rr.json().catch(() => null);
+      const sres = await rr.json().catch(() => null);   // silent-ok: an unreadable answer is treated as "send not confirmed" on the next line
       if (!rr.ok || !sres || sres.Fault || !sres.Invoice) throw new Error('send not confirmed (HTTP ' + rr.status + '): ' + JSON.stringify((sres && sres.Fault) || sres || '').slice(0, 150));
       const es = sres.Invoice.EmailStatus;
       if (es && es !== 'EmailSent') throw new Error('QuickBooks did not send (EmailStatus=' + es + ')');
@@ -26092,7 +26148,7 @@ async function arRemind(env, body) {
         await ensureTab(env, AR_REMINDER_TAB, AR_REMINDER_COLS);
         await ensureColumns(env, AR_REMINDER_TAB, AR_REMINDER_COLS);
         await addRow(env, AR_REMINDER_TAB, { Timestamp: new Date().toISOString(), Invoice_ID: id, Doc: doc, Customer: cust, Amount: bal.toFixed(2), Email: email, Result: 'sent', By: String(body.by || 'command-center') });
-      } catch (_) { /* audit log best-effort; the send already happened */ }
+      } catch (e) { await softFail(env, 'arRemind:auditLog', e, { req: auditReq, severity: 'P1', ref: String(id), source: 'write', context: 'a payment reminder went out but the AR_Reminders log row was not saved, so the reminder history is incomplete' }); }   // the send already happened
     } catch (e) { items.push({ id, doc, customer: cust, balance: +bal.toFixed(2), email, willSend: true, sent: false, reason: String((e && e.message) || e).slice(0, 150) }); }
   }
   return json({ ok: true, preview, count: items.length, to_send: items.filter(i => i.willSend).length, sent: items.filter(i => i.sent).length, skipped: items.filter(i => !i.willSend).length, items });
@@ -26286,7 +26342,7 @@ async function arReportSend(env, body) {
   // report content and link are still the authentic owner's data — nothing is faked.
   const testEmail = typeof body.test_email === 'string' ? body.test_email.trim() : '';
   const { groups } = await arReportRollup(env, {});
-  const results = [];
+  const results = [], auditReq = {};   // Phase 2: one audit-log report per request, not one per owner
   for (const ownerId of ids) {
     const group = groups.find(g => String(g.owner_id) === ownerId);
     if (!group) { results.push({ owner_id: ownerId, sent: false, reason: 'no open items found' }); continue; }
@@ -26306,14 +26362,14 @@ async function arReportSend(env, body) {
       try {
         await ensureTab(env, AR_REPORT_LOG_TAB, AR_REPORT_LOG_COLS);
         await addRow(env, AR_REPORT_LOG_TAB, { Timestamp: new Date().toISOString(), Owner_ID: ownerId, Owner_Name: group.owner_name, Email: sendTo, Total_Open: group.total_open.toFixed(2), Invoice_Count: String(group.invoices.length), Link: link, Result: testEmail ? 'sent (test)' : 'sent', Trigger: testEmail ? 'manual-test' : (body.trigger || 'manual') });
-      } catch (_) { /* audit log best-effort; the send already happened */ }
+      } catch (e) { await softFail(env, 'arReportSend:auditLog', e, { req: auditReq, severity: 'P1', ref: String(ownerId), source: 'write', context: 'a balance summary email went out but its AR_Report_Log row was not saved' }); }   // the send already happened
     } catch (e) {
       const reason = String((e && e.message) || e).slice(0, 200);
       results.push({ owner_id: ownerId, sent: false, reason });
       try {
         await ensureTab(env, AR_REPORT_LOG_TAB, AR_REPORT_LOG_COLS);
         await addRow(env, AR_REPORT_LOG_TAB, { Timestamp: new Date().toISOString(), Owner_ID: ownerId, Owner_Name: group.owner_name, Email: sendTo || '', Total_Open: group.total_open.toFixed(2), Invoice_Count: String(group.invoices.length), Link: link, Result: 'FAILED: ' + reason, Trigger: testEmail ? 'manual-test' : (body.trigger || 'manual') });
-      } catch (_) {}
+      } catch (_) { /* silent-ok: the failed send is already in results for the page; this audit row is best effort */ }
     }
   }
   return json({ ok: true, preview, sent: results.filter(r => r.sent).length, results });
@@ -27666,7 +27722,7 @@ async function ownerOnboardSubmit(env, body, clientIP) {
     if (cfg.admin_phone) {
       await sendSMS(env, cfg.admin_phone, `🆕 ${(c.owner.business_name || (c.owner.first + ' ' + c.owner.last)).trim()} finished owner onboarding: ${c.properties.length} propert${c.properties.length === 1 ? 'y' : 'ies'}.${needsReview ? ' ⚠ ' + warnings.length + ' item(s) need your review (Hub → Owners → Onboarding).' : ''}`);
     }
-  } catch (e) { /* notification is best-effort */ }
+  } catch (e) { await softFail(env, 'ownerOnboardSubmit:adminText', e, { severity: 'P1', ref: 'owner_onboarding', source: 'send', context: 'an owner finished onboarding but the text to Brett did not go out' }); }   // the submission itself is saved, so this stays non-fatal
 
   return json({ success: true, first_name: c.owner.first, properties: c.properties.length });
 }
@@ -28009,7 +28065,7 @@ async function woShareSend(env, body){
   let reason = '';
   if(!ok) reason = !r.send_ok ? ('Blocked by SMS settings: ' + r.gate_snapshot) : 'Send failed — the text did not go through (Twilio). Use Copy message.';
   else if(r.held_for_quiet_hours) reason = 'Held for quiet hours — will send after ' + r.send_after;
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_share_send', Skill_Or_Endpoint:'/wo/share-send', Success: ok ? 'TRUE' : 'FALSE', Notes:`wo=${woId} lang=${lang} sent=${!!r.sent} held=${!!r.held_for_quiet_hours}` }); } catch(_) {}
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_share_send', Skill_Or_Endpoint:'/wo/share-send', Success: ok ? 'TRUE' : 'FALSE', Notes:`wo=${woId} lang=${lang} sent=${!!r.sent} held=${!!r.held_for_quiet_hours}` }); } catch(_) { /* silent-ok: telemetry is best effort, the send result is returned to the caller */ }
   return json({
     success: ok, sent: !!r.sent, held_for_quiet_hours: !!r.held_for_quiet_hours, send_after: r.send_after||'',
     send_ok: !!r.send_ok, gate_snapshot: r.gate_snapshot, test_mode: !!r.test_mode, reason, error: ok ? '' : reason,
@@ -35217,7 +35273,7 @@ async function vendorPaidMessage(env, o) {
   const parts = Array.from(new Set(j.jobs.map(x => x.text)));
   for (const id of j.unresolved) parts.push('bill ' + id);
   const jobs = parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : (parts[0] || 'your recent work');
-  let tpl = null; try { tpl = await getMessageTemplate(env, 'vendor_paid', 'sms'); } catch (_) {}
+  let tpl = null; try { tpl = await getMessageTemplate(env, 'vendor_paid', 'sms'); } catch (e) { await softFail(env, 'vendorPaidMessage:template', e, { severity: 'P2', ref: 'vendor_paid', source: 'read', context: 'the vendor paid text used the built-in wording because the saved template could not be read' }); }
   const def = DEFAULT_MESSAGE_TEMPLATES.find(t => t.Message_Type === 'vendor_paid' && t.Channel === 'sms');
   const text = renderTemplate(tpl ? tpl.Body : def.Body, { FirstName: vendorFirstName(vendor), Amount: fmtMoney(amount), Jobs: jobs, HubUrl: HUB_URL }).replace(/\s+/g, ' ').trim();
   return { text, jobs: j.jobs, unresolved: j.unresolved };
@@ -35244,7 +35300,7 @@ async function qbNotifyVendorPaid(env, body) {
   if (!vendor.Phone) return json({ ok: false, preview, error: (vendor.Name || 'This vendor') + ' has no phone number — no text can be sent.', message: m.text, warnings }, 400);
   if (preview) return json({ ok: true, preview: true, to: vendor.Name || '', phone: vendor.Phone, message: m.text, warnings });
   const r = await smsGatedSend(env, { message_type: 'vendor_paid', recipient_type: 'vendor', vendor, message_body: m.text });
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_paid_text', Skill_Or_Endpoint: '/qb/notify-vendor-paid', Success: r.sent || r.held_for_quiet_hours ? 'TRUE' : 'FALSE', Notes: ('vendor=' + vendor.ID + ' amount=' + amount + ' bills=' + ids.join(',') + ' ' + (r.gate_snapshot || '')).slice(0, 300) }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_paid_text', Skill_Or_Endpoint: '/qb/notify-vendor-paid', Success: r.sent || r.held_for_quiet_hours ? 'TRUE' : 'FALSE', Notes: ('vendor=' + vendor.ID + ' amount=' + amount + ' bills=' + ids.join(',') + ' ' + (r.gate_snapshot || '')).slice(0, 300) }); } catch (_) { /* silent-ok: telemetry is best effort, the send result is returned to the caller */ }
   const sent = !!r.sent, held = !!r.held_for_quiet_hours;
   return json({ ok: sent || held, sent, held, test_mode: !!r.test_mode, message: m.text, warnings,
     error: (sent || held) ? '' : ('Text not sent: ' + String(r.error || r.gate_snapshot || 'blocked by the SMS gate')) });
@@ -41701,14 +41757,17 @@ async function inspDriveMap(env, cand, anchors) {
 // ── Alerts (throttled; failures here must still be visible somewhere) ─────────────────────
 const __inspAlertAt = {};
 async function inspAlert(env, kind, message) {
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-book/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { console.error('insp alert: telemetry write failed:', te && te.message, '| original:', kind, message); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'insp_booking', Skill_Or_Endpoint: 'insp-book/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { /* silent-ok: alert code must not report its own telemetry failure (it would loop); the texts below still go out */ console.error('insp alert: telemetry write failed:', te && te.message, '| original:', kind, message); }
   const now = Date.now();
   if (__inspAlertAt[kind] && now - __inspAlertAt[kind] < 30 * 60000) return;
   __inspAlertAt[kind] = now;
   const cfg = await fetchConfig(env);
   const text = `Inspection booking problem (${kind}): ${message}`;
-  try { if (cfg.admin_phone) await sendSMS(env, cfg.admin_phone, text.slice(0, 300)); } catch (se) { console.error('insp alert: SMS failed:', se && se.message, '| original:', text); }
-  try { await gmailSendEmail(env, { to: cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject: 'Inspection booking problem: ' + kind, html: `<p>${String(text).replace(/</g, '&lt;')}</p>` }); } catch (ee) { console.error('insp alert: email failed:', ee && ee.message, '| original:', text); }
+  // Phase 2: each way of telling Brett is reported (P0) when it does not go out; the original problem text rides along so the ledger row is self-explanatory.
+  let smsErr = '';
+  try { if (cfg.admin_phone) smsErr = sendFailure(await sendSMS(env, cfg.admin_phone, text.slice(0, 300))); } catch (se) { smsErr = String((se && se.message) || se).slice(0, 200); }
+  if (smsErr) { console.error('insp alert: SMS failed:', smsErr, '| original:', text); await softFail(env, 'inspAlert:sms', 'The inspection booking alert text did not go out: ' + smsErr, { severity: 'P0', ref: kind, source: 'send', context: String(text).slice(0, 200) }); }
+  try { await gmailSendEmail(env, { to: cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject: 'Inspection booking problem: ' + kind, html: `<p>${String(text).replace(/</g, '&lt;')}</p>` }); } catch (ee) { console.error('insp alert: email failed:', ee && ee.message, '| original:', text); await softFail(env, 'inspAlert:email', ee, { severity: 'P0', ref: kind, source: 'send', context: String(text).slice(0, 200) }); }
 }
 
 // Oct 20 2026: the background cleaning-coverage guard runs every ~14 min against a Sheets read quota (60/min) that the WHOLE Hub shares.
@@ -42515,12 +42574,17 @@ async function strSystemAlert(env, kind, message) {
     catch (te) { /* silent-ok: alert code must not report its own failure (it would loop); the full text goes to the Worker log */ console.error('str alert: quota-busy telemetry failed:', te && te.message, '| original:', kind, message); }
     return;
   }
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { console.error('str alert: telemetry failed:', te && te.message, '| original:', kind, message); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { /* silent-ok: alert code must not report its own telemetry failure (it would loop); Brett is still texted below */ console.error('str alert: telemetry failed:', te && te.message, '| original:', kind, message); }
   const now = Date.now();
   if (__strSysAt[kind] && now - __strSysAt[kind] < 30 * 60000) return;
   __strSysAt[kind] = now;
-  try { const cfg = await fetchConfig(env); await strSendBrett(env, cfg, 'Cleaning scheduler problem: ' + kind, ('Cleaning scheduler problem (' + kind + '): ' + message).slice(0, 300), [message], true); }
-  catch (e) { console.error('str alert: could not tell Brett:', e && e.message, '| original:', kind, message); }
+  // Phase 2 (typeof: this STR block is also run on its own in tests without the helpers). strSendBrett never throws on a failed text or email; it returns { ok, log }, which used to be dropped here.
+  try {
+    const cfg = await fetchConfig(env);
+    const sent = await strSendBrett(env, cfg, 'Cleaning scheduler problem: ' + kind, ('Cleaning scheduler problem (' + kind + '): ' + message).slice(0, 300), [message], true);
+    const bad = sent && Array.isArray(sent.log) ? sent.log.filter(x => /FAILED|no admin_phone/.test(String(x))) : [];
+    if (bad.length) { console.error('str alert: Brett may not have been told:', bad.join('; '), '| original:', kind, message); if (typeof softFail === 'function') await softFail(env, 'strSystemAlert:' + kind, 'The cleaning scheduler alert did not fully reach Brett: ' + bad.join('; '), { severity: 'P0', ref: kind, source: 'send', context: String(message).slice(0, 200) }); }
+  } catch (e) { console.error('str alert: could not tell Brett:', e && e.message, '| original:', kind, message); if (typeof softFail === 'function') await softFail(env, 'strSystemAlert:' + kind, e, { severity: 'P0', ref: kind, source: 'send', context: String(message).slice(0, 200) }); }
 }
 // SMS + email to Brett. smsOk=false skips the SMS only. Never throws; returns { ok, log }.
 async function strSendBrett(env, cfg, subject, smsText, htmlLines, smsOk) {
