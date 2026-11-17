@@ -10270,7 +10270,9 @@ async function addonOwnerNotice(env, body) {
   if (!ownerEmail) warnings.push('Owner has no email on file — no email will be sent.');
   if (String(owner.Notify_Method || 'sms') === 'none') warnings.push('Owner notification method is set to none.');
   if (String(parent.Managed_By || '') === 'Owner') warnings.push('This job is marked owner-managed.');
-  let _cfg = {}; try { _cfg = await fetchConfig(env); } catch (_) {}
+  if (linesUnreadable) warnings.push('The saved estimate lines could not be read, so this notice uses the item descriptions only.');
+  let _cfg = {};
+  try { _cfg = await fetchConfig(env); } catch (e) { warnings.push('Settings could not be read, so the email and text switches were checked against empty settings (nothing will be emailed).'); await softFail(env, 'addonOwnerNotice:config', e, { req, severity: 'P1', ref: childId, source: 'read' }); }
   const emailGate = addonEmailGate({ cfg: _cfg, property, owner });
   if (!emailGate.ok) warnings.push('Email will NOT be sent: ' + emailGate.reason + '.');
   const already = String(child.Addon_Owner_Notified_Date || '').trim();
