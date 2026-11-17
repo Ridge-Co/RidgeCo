@@ -1294,8 +1294,8 @@ function comparePaidDate(a, b, desc) {
 }
 function fmtPaidDate(d) {
   var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d || ''); if (!m) return '';
-  var mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m[2] - 1];
-  return mon + ' ' + (+m[3]) + ', ' + m[1];
+  var mon = (LANG === 'es' ? ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'] : ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'])[+m[2] - 1];   // Nov 16 2026: Spanish month names
+  return LANG === 'es' ? (+m[3]) + ' ' + mon + ' ' + m[1] : mon + ' ' + (+m[3]) + ', ' + m[1];
 }
 // Active jobs first, then Paid, then Cancelled (each keeps the order it came in). Pure.
 function partitionPaidCancelled(wos) {
