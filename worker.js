@@ -1012,6 +1012,8 @@ const _hubWorkerCore = {
         if (path === '/wo/combine')               return await woCombine(env, body);
         if (path === '/wo/split')                 return await woSplit(env, body);
         if (path === '/wo/duplicate')             return await woDuplicate(env, body);
+        if (path === '/wo/triage-set')            return await woTriageSet(env, body);       // queue #142, admin only (in no ROLE_SCOPES list)
+        if (path === '/wo/triage-preview')        return await woTriagePreview(env, body);   // queue #142, admin only, writes nothing
         if (path === '/wo/bid-group/unlink')      return await woBidGroupUnlink(env, body);
         if (path === '/wo/bid-group/cancel')      return await woBidGroupCancel(env, body);
         if (path === '/turnover/start')           return await startTurnoverManual(env, body);
