@@ -39,6 +39,8 @@ function world() {
   const deps = {
     json: (o, s) => jsonResp(o, s),
     fetchTab: async (env, t) => (tabs[t] || []).map(r => ({ ...r })),
+    softFail: async () => {},
+    fetchTabSoft: async (env, t) => ({ rows: (tabs[t] || []).map(r => ({ ...r })), error: null }),
     fetchConfig: async () => ({ qb_receipts_email: 'qb@example.com' }),
     ensureColumns: async () => {},
     updateRow: async (env, t, id, fields) => { updates.push({ t, id, fields }); const r = (tabs[t] || []).find(x => String(x.ID) === String(id)); if (r) Object.assign(r, fields); },
