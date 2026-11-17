@@ -14685,7 +14685,7 @@ async function backfillApprovalStage(env, body) {
   }
   let written = 0;
   if (apply && plan.length) {
-    try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) {}
+    try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
     try { await ensureColumns(env, 'Scopes', ['Approval_Stage']); } catch (_) {}
     for (const p of plan) {
       try {
