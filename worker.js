@@ -4677,7 +4677,7 @@ async function receiptReconConfirm(env, body) {
   if (noWo && addJson && addJson.success && !addJson.duplicate && addJson.id) {
     try {
       const r = await sendReceiptsToQBEmail(env, { ids: [String(addJson.id)], limit: 1 });
-      const j = await r.json().catch(() => ({}));
+      const j = await r.json().catch(() => ({}));   // silent-ok: an unreadable answer shows as not sent just below
       qbEmail = { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
     } catch (e) { qbEmail = { sent: false, error: String(e && e.message || e) }; }
   }
