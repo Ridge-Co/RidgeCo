@@ -16639,7 +16639,7 @@ async function logAttachment(env, body) {
     // Vendor Additional Work (Sep 30 2026): addon_item = the item index this photo belongs to. The row
     // below is a FIXED object, so the column must exist first and the value must be named here.
     const _addonItem = (body.addon_item === undefined || body.addon_item === null) ? '' : String(body.addon_item).trim();
-    if (_addonItem !== '') { try { await ensureColumns(env, 'Attachments', ['Addon_Item']); } catch(_){} }
+    if (_addonItem !== '') { try { await ensureColumns(env, 'Attachments', ['Addon_Item']); } catch(_){} } // silent-ok: ensureColumns reports its own failure to the ledger
     await addRow(env,'Attachments',{WO_ID:body.wo_id||'',File_Name:body.file_name||'',File_Type:body.file_type||'photo',Drive_File_ID:body.file_id||'',Drive_URL:body.file_url||'',Mime_Type:body.mime_type||'',Created_Date:new Date().toISOString().split('T')[0],Active:'TRUE',Addon_Item:_addonItem});
     // Share the just-uploaded job media anyone-with-link so it opens in the portal without a Google
     // login. This is the resumable-upload path the vendor portal uses (createUploadSession → PUT → here).
