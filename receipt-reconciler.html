@@ -1574,7 +1574,7 @@ async function attachNonBillingRow(id, btn, reason){
   const store = document.getElementById(idAttr+'-store').value.trim();
   const date = document.getElementById(idAttr+'-date').value.trim();
   const description = document.getElementById(idAttr+'-desc').value.trim();
-  statusEl.innerHTML = '<span class="info">Attaching as a reference, not billing…</span>';
+  statusEl.innerHTML = '<span class="info">'+(fixed ? 'Recording the job cost, not billing…' : 'Attaching as a reference, not billing…')+'</span>';
   try {
     const res = await post('/receipt/attach-only', { id, wo_id, amount, store, date, description, customer_card: true });
     if (res.error) throw new Error(res.error);
