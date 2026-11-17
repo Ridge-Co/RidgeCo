@@ -35251,7 +35251,7 @@ async function vendorPaidJobs(env, qbBillIds) {
   const out = { jobs: [], unresolved: [] };
   if (!ids.length) return out;
   const [vbs, irs, mss, wos, props, units] = await Promise.all([
-    fetchTab(env, 'Vendor_Bills').catch(() => []), fetchTab(env, 'Invoice_Review').catch(() => []), fetchTab(env, 'Payment_Milestones').catch(() => []),
+    fetchTabSoft(env, 'Vendor_Bills', { where: 'vendorPaidJobs:Vendor_Bills', severity: 'P1' }).then(r => r.rows), fetchTabSoft(env, 'Invoice_Review', { where: 'vendorPaidJobs:Invoice_Review', severity: 'P1', optional: true }).then(r => r.rows), fetchTabSoft(env, 'Payment_Milestones', { where: 'vendorPaidJobs:Payment_Milestones', severity: 'P1', optional: true }).then(r => r.rows),
     fetchTab(env, 'Work_Orders'), fetchTab(env, 'Properties'), fetchTab(env, 'Units'),
   ]);
   const scopes = mss.length ? await fetchTab(env, 'Scopes').catch(() => []) : [];
