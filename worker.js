@@ -4774,8 +4774,8 @@ async function receiptAttachOnly(env, body) {
         : (fixedPrice ? 'Fixed-price job cost recorded on WO ' + wo_id + ' — not billed to the customer, no invoice line added.' : customerCard ? 'Customer-card receipt attached to WO ' + wo_id + ' as a reference — not billed, not expensed, no invoice line added.' : 'Image attached only — not billed, no invoice line added.'),
     });
   }
-  // Fixed-price cost is OUR expense: send it to the QuickBooks receipts inbox now, like the no-WO expense path. A failure is returned and shown, never swallowed.
-  const qbEmail = (fixedPrice && addJson && addJson.success && !addJson.duplicate && addJson.id) ? await emailExpenseToQB(env, addJson.id) : null;
+  // Fixed-price cost is OUR expense. Nov 17 2026 (Brett): it is NOT emailed now; it waits in the daily QuickBooks batch like every other receipt (hold / reverse in "Waiting to send to QuickBooks").
+  const qbEmail = (fixedPrice && addJson && addJson.success && !addJson.duplicate && addJson.id) ? qbBatchQueuedNote() : null;
   return json({ ok: true, wo_id, property_id, attached_only: true, customer_card: customerCard, fixed_price: fixedPrice, qb_email: qbEmail, receipt_number: String(row.Invoice_Number || '').trim(), ...addJson });
 }
 
