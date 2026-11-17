@@ -32,6 +32,9 @@ function extractSync(name) {
 // ── Pure-function tests (no I/O) ──────────────────────────────────────────────────────────────────────
 const pure = new Function(`
   ${extractSync('_rcNorm')}
+  ${extractSync('_rcStoreKey')}
+  ${extractSync('_rcInvKey')}
+  ${extractSync('receiptDupSignals')}
   ${extractSync('receiptReconGmailIdFromDescription')}
   ${extractSync('receiptReconEntrySource')}
   ${extractSync('receiptReconFindRescanMatches')}
@@ -58,7 +61,7 @@ const { receiptReconGmailIdFromDescription, receiptReconEntrySource, receiptReco
   const candidate = { total: 56.04, store: 'Home Depot', date: '2026-09-20', gmailMessageId: '' };
   const matches = receiptReconFindRescanMatches(candidate, receipts, []);
   ok(matches.length === 1 && matches[0].type === 'receipts', 'flags a re-scan against an already-confirmed Receipts row (the real Sep 22 incident)');
-  ok(/already-processed receipt from 2026-09-20/.test(matches[0].reason) && /WO 4021/.test(matches[0].reason), 'reason names the date and WO so Brett can cross-check at a glance');
+  ok(/Possible duplicate of receipt #R1/.test(matches[0].reason) && /2026-09-20/.test(matches[0].reason) && /WO 4021/.test(matches[0].reason), 'reason names the receipt, date and WO so Brett can cross-check at a glance');
 }
 {
   // Store normalization: "Home Depot" vs "HOME DEPOT #1234" style OCR noise should still match on
@@ -72,7 +75,9 @@ const { receiptReconGmailIdFromDescription, receiptReconEntrySource, receiptReco
   // positive would make Brett distrust the flag and could hide a real second purchase.
   const receipts = [{ ID: 'R3', Active: 'TRUE', Amount: '56.04', Date: '2026-09-20', Store: 'Home Depot' }];
   ok(receiptReconFindRescanMatches({ total: 56.05, store: 'Home Depot', date: '2026-09-20' }, receipts, []).length === 0, 'one cent off -> no false match');
-  ok(receiptReconFindRescanMatches({ total: 56.04, store: 'Home Depot', date: '2026-09-21' }, receipts, []).length === 0, 'different date -> no false match');
+  ok(receiptReconFindRescanMatches({ total: 56.04, store: 'Home Depot', date: '2026-09-21' }, receipts, []).length === 1, 'Nov 17 2026: one day apart still flags (the window is +/-3 days now, was an exact date)');
+  ok(receiptReconFindRescanMatches({ total: 56.04, store: 'Home Depot', date: '2026-09-23' }, receipts, []).length === 1, '+3 days flags');
+  ok(receiptReconFindRescanMatches({ total: 56.04, store: 'Home Depot', date: '2026-09-24' }, receipts, []).length === 0, '+4 days -> no false match');
   ok(receiptReconFindRescanMatches({ total: 56.04, store: 'Lowes', date: '2026-09-20' }, receipts, []).length === 0, 'different store -> no false match (a real second purchase must never be hidden)');
 }
 {
@@ -81,15 +86,15 @@ const { receiptReconGmailIdFromDescription, receiptReconEntrySource, receiptReco
   ok(receiptReconFindRescanMatches({ total: 10.00, store: 'Amazon', date: '2026-09-10' }, receipts, []).length === 0, 'Active=FALSE Receipts row is ignored');
 }
 {
-  // Queue-side: a row Brett already Skipped or confirmed-as-duplicate must flag a re-add; a row
-  // still sitting Pending must NOT (that's not "already dispositioned" — it's just another
-  // candidate waiting on the same decision, not evidence of a prior one).
+  // Queue-side: a row Brett already Skipped or confirmed-as-duplicate flags a re-add. Nov 17 2026: a row still sitting
+  // Pending flags it too (two scans of the same $43.23 Home Depot receipt used to read "no matching entries"); it shows as
+  // an other_queue_row signal, never as dispositioned.
   const queue = [
     { ID: 'Q1', Active: 'TRUE', Status: 'skipped', Total: '56.04', Receipt_Date: '2026-09-20', Vendor: 'Home Depot' },
     { ID: 'Q2', Active: 'TRUE', Status: 'pending', Total: '56.04', Receipt_Date: '2026-09-20', Vendor: 'Home Depot' },
   ];
   const m1 = receiptReconFindRescanMatches({ total: 56.04, store: 'Home Depot', date: '2026-09-20' }, [], queue);
-  ok(m1.length === 1 && m1[0].type === 'queue_dispositioned' && m1[0].queue_id === 'Q1', 'flags against a dispositioned (skipped) queue row, ignores the still-pending one');
+  ok(m1.length === 2 && m1.some(x => x.type === 'queue_dispositioned' && x.queue_id === 'Q1') && m1.some(x => x.type === 'other_queue_row' && x.queue_id === 'Q2'), 'flags against a dispositioned (skipped) queue row AND the still-pending twin');
 }
 {
   const queue = [{ ID: 'Q3', Active: 'TRUE', Status: 'duplicate_confirmed', Total: '12.50', Receipt_Date: '2026-08-01', Vendor: 'Lowes' }];
@@ -115,7 +120,7 @@ const { receiptReconGmailIdFromDescription, receiptReconEntrySource, receiptReco
 console.log(`  (pure) ${pass} passed, ${fail} failed so far`);
 
 // ── End-to-end: the real receiptReconScan, run against a fake world ────────────────────────────────
-function world({ receipts = [], queueRows = [], files = [], extract = () => ({ vendor: 'Home Depot', total: 56.04, date: '2026-09-20', items: [] }) }) {
+function world({ receipts = [], queueRows = [], files = [], rules = [], extract = () => ({ vendor: 'Home Depot', total: 56.04, date: '2026-09-20', items: [] }) }) {
   const added = [];
   const deps = {
     fetchConfig: async () => ({}),
@@ -128,15 +133,20 @@ function world({ receipts = [], queueRows = [], files = [], extract = () => ({ v
     driveDownload: async () => ({ bytes: new ArrayBuffer(1), mime: 'application/pdf' }),
     receiptExtract: async () => extract(),
     receiptSuggestCore: () => ({ verdict: 'review' }),
-    addRow: async (env, tab, row) => { added.push(row); },
+    receiptAccuracyCtx: async () => ({ units: [], myCards: [], custCards: [], vendorInvoiceNames: ['alex busey'], errors: [] }),
+    receiptLoadRules: async () => ({ rules, error: '' }),
+    receiptReconConfirm: async () => ({ json: async () => ({ success: true }) }),
+    updateRow: async () => {},
+    addRow: async (env, tab, row) => { added.push(row); return { json: async () => ({ success: true, id: String(added.length) }) }; },
     setConfigKey: async () => {},
     json: (o) => o,
   };
-  const helperNames = ['receiptReconCutoff', 'receiptBeforeCutoff', 'receiptCutoffNote', '_rcNorm', 'receiptReconGmailIdFromDescription', 'receiptReconEntrySource', 'receiptReconFindRescanMatches'];
+  const helperNames = ['receiptReconCutoff', 'receiptBeforeCutoff', 'receiptCutoffNote', '_rcNorm', '_rcStoreKey', '_rcInvKey', 'receiptDupSignals', 'receiptRuleDecision', 'receiptReconGmailIdFromDescription', 'receiptReconEntrySource', 'receiptReconFindRescanMatches'];
   const helperSrc = helperNames.map(n => extractSync(n)).join('\n');
   const helpers = new Function(`const RECEIPT_RECON_MIN_DATE_DEFAULT = '2026-07-01'; ${helperSrc}; return { ${helperNames.join(', ')} };`)();
   Object.assign(deps, helpers);
   deps.RECEIPT_RECON_QUEUE_HEADERS = [];
+  deps.RECEIPT_AUTO_MAX_PER_SCAN = 4;
   deps.RECEIPT_RECON_FOLDER_ID_DEFAULT = 'FOLDER';
   const names = Object.keys(deps);
   const fn = new Function(...names, aiCreditGuardPrelude() + `return (${extractFn('receiptReconScan')});`)(...names.map(n => deps[n]));
@@ -152,7 +162,7 @@ function world({ receipts = [], queueRows = [], files = [], extract = () => ({ v
   const r = await w.scan({});
   ok(r.scanned === 1 && r.flagged_rescan === 1, 'the resurfaced $56.04 HD receipt is scanned AND flagged (got scanned=' + r.scanned + ' flagged_rescan=' + r.flagged_rescan + ')');
   ok(w.added[0].Status === 'pending', 'CRITICAL: still lands as Pending, never auto-skipped — a false match must never hide a real second purchase');
-  ok(/Possible re-scan/.test(w.added[0].Notes), 'Notes carries the plain-language warning so it is visible even off the dedicated UI');
+  ok(/Possible duplicate/.test(w.added[0].Notes), 'Notes carries the plain-language warning so it is visible even off the dedicated UI');
   const rescan = JSON.parse(w.added[0].Rescan_Match_JSON);
   ok(rescan.length === 1 && rescan[0].type === 'receipts' && rescan[0].receipt_id === 'R100', 'Rescan_Match_JSON references the exact matched Receipts row for the UI link/reference');
 }

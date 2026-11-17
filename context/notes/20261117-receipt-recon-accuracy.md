@@ -1,4 +1,4 @@
-# 2026-11-17 receipt-recon-accuracy (phase 1 built; wiring + UI not started)
+# 2026-11-17 receipt-recon-accuracy (phases 1-2 built; UI not started)
 
 ## CURRENT
 Brett listed 10 Receipt Reconciler problems on Nov 17 (plus an 11th at 2:42pm: a manual way to mark any receipt as a customer-card purchase). All traced to causes in live code/data; all design questions answered. Brief: `context/RECEIPT_RECONCILER_ACCURACY_BUILD_BRIEF_v1.0.md`. Resume with `resume ridgeco receipt accuracy`.
@@ -6,7 +6,11 @@ Brett listed 10 Receipt Reconciler problems on Nov 17 (plus an 11th at 2:42pm: a
 **Phase 1 (done, pushed on `feature/receipt-recon-accuracy`):** pure functions in worker.js, all unit-tested (`test/receipt-accuracy.test.mjs`, 93 assertions; helper `test/_receipt-engine.mjs`):
 `matchReceiptCandidates` / `matchReceiptProperty` (skip inactive, tie prefers property with units/WOs), `receiptUnitHint`, `receiptWORef` (explicit / bare / ambiguous), `receiptPropertyHint`, `rankReceiptWOs` (+ closed within 30 days), `receiptCardStatus`, `receiptCardLast4Strict`, `receiptIsVendorInvoice`, `receiptDupSignals`, `receiptRuleDecision`, and `receiptSuggestCore` (new optional 6th arg `ctx = {units, myCards, vendorInvoiceNames}`; old callers behave as before).
 
-**Phase 2 (not started):** wire the above into `receiptSuggest`, `receiptReconScan` (new extract keys, `existing` push, rules, vendor-invoice skip), `receiptReconFindRescanMatches` (+/-3 days, pending included; update `receipt-recon-rescan-guard.test.mjs`), `receiptCheckDuplicatesOne`, `listReceiptReconQueue`; endpoints `/receipt-recon/cards`, `/receipt-recon/rules*`, `/receipt-recon/mark-customer-card`; `Receipt_Rules` tab; allow-lists (worker.js `HUB_TEST_*` and gh-broker `src/index.ts`). **Phase 3:** receipt-reconciler.html (pickers, Cards panel, Rules, Auto-handled with Undo, duplicate banner, customer-card button), staging Playwright, live read-only check, ridgeco-validate, PR.
+**Phase 2 (done):** wired into `receiptSuggest`, `receiptReconScan`, `receiptReconFindRescanMatches` (+/-3 days, pending included), `receiptCheckDuplicatesOne` and `listReceiptReconQueue`; new handlers + routes `GET /receipt-recon/cards`, `GET /receipt-recon/rules`, `POST /receipt-recon/mark-customer-card`, `/cards`, `/rules`, `/rules/deactivate`; new `Receipt_Rules` tab (created only by the first rule SAVE, never by a GET, since the read-only prod token reaches GETs). Tests: `test/receipt-accuracy-wiring.test.mjs` (81), plus updated rescan-guard and scan-cap tests; all receipt tests and the pre-build-gate test pass.
+Allow-lists: prod read-only token is a deny-list (Sep 24), so the new GETs need no edit; staging write gate `hubTestWriteAllowed` has cases for each new POST (mark-customer-card flag-only, a rule pointing at a property only if it is a TEST- record); gh-broker keeps no path list of its own (checked `src/index.ts`).
+Deviations to flag to Brett: auto-confirm capped at 4 per scan; auto-confirm also blocked when the card last-4 is unknown; rules for Home Depot, Lowe's, Ace, Menards and Sherwin-Williams are forced to Auto=FALSE (always a human check); mark-customer-card keeps the row pending (like Manual_Refund) and Move back to Pending clears it. BUILD_VERSION is frozen, not bumped.
+
+**Phase 3 (not started):** receipt-reconciler.html (pickers, Cards panel, Rules, Auto-handled with Undo, duplicate banner, customer-card button), staging Playwright, live read-only check, ridgeco-validate, PR.
 
 Key find: Properties ID 2 (inactive, no units, no WOs) duplicates ID 11 `928 N Calvert St`; the old matcher picked the first on ties. Vendor Invoice Inbox (Kayla/K&C) is design only, not built.
 

@@ -721,6 +721,8 @@ const _hubWorkerCore = {
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
         if (path === '/receipt-recon/queue')    return await listReceiptReconQueue(env, url);
         if (path === '/receipt-recon/search')   return await receiptReconSearch(env, url);
+        if (path === '/receipt-recon/cards')    return await receiptReconCardsList(env);
+        if (path === '/receipt-recon/rules')    return await receiptReconRulesList(env);
         if (path === '/admin/receipt-duplicate-audit/flags') return await receiptDuplicateAuditFlags(env, url);
         if (path === '/trash/properties')       return await trashListProperties(env);
         if (path === '/trash/week')             return await trashWeek(env, url);
@@ -1178,6 +1180,10 @@ const _hubWorkerCore = {
         if (path === '/receipt-recon/confirm-duplicate') return await receiptReconConfirmDuplicate(env, body);
         if (path === '/receipt-recon/reassign')            return await receiptReconReassign(env, body);
         if (path === '/receipt-recon/mark-refund')          return await receiptReconMarkRefund(env, body);
+        if (path === '/receipt-recon/mark-customer-card')   return await receiptReconMarkCustomerCard(env, body);
+        if (path === '/receipt-recon/cards')                return await receiptReconCards(env, body);
+        if (path === '/receipt-recon/rules')                return await receiptReconRuleSave(env, body);
+        if (path === '/receipt-recon/rules/deactivate')     return await receiptReconRuleDeactivate(env, body);
         if (path === '/receipt-recon/mark-refund-confirmed') return await receiptReconMarkRefundConfirmed(env, body);
         if (path === '/receipt-recon/undo')                 return await receiptReconUndo(env, body);
         if (path === '/receipt-recon/bulk-action')       return await receiptReconBulkAction(env, body);
@@ -3922,18 +3928,47 @@ async function receiptCustomerCards(env) {
   return String(env.RECEIPT_CUSTOMER_CARDS || cfg.receipt_customer_cards || '').split(',').map(s => s.replace(/\D/g,'').slice(-4)).filter(Boolean);
 }
 
+// Nov 17 2026 (RECEIPT_RECONCILER_ACCURACY_BUILD_BRIEF 4b / 4d / 4e) — the lists the accuracy functions need, read ONCE per
+// request. Cards (mine / customer / labels) and the vendor-invoice name list live in Config and are never in the public repo.
+// Fail CLOSED: a list that cannot be read comes back empty and is named in `errors`, so card status shows as unknown
+// (never "mine") and the rules path never auto-confirms; the page shows the errors instead of hiding them.
+function receiptCardListFromCfg(v) { return Array.from(new Set(String(v || '').split(',').map(s => s.replace(/\D/g, '').slice(-4)).filter(s => s.length === 4))); }
+function receiptCardLabelsFromCfg(v) { try { const o = JSON.parse(String(v || '{}')); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; } catch (e) { return {}; } }
+async function receiptAccuracyCtx(env, cfgIn, opts) {
+  opts = opts || {};
+  const ctx = { units: [], myCards: [], custCards: [], labels: {}, vendorInvoiceNames: RECEIPT_VENDOR_INVOICE_NAMES_DEFAULT, errors: [] };
+  let cfg = cfgIn;
+  if (!cfg) { try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; ctx.errors.push('Config: ' + schedErrText(e)); } }
+  ctx.myCards = receiptCardListFromCfg(cfg.receipt_my_cards);
+  ctx.custCards = String(env.RECEIPT_CUSTOMER_CARDS || cfg.receipt_customer_cards || '').split(',').map(s => s.replace(/\D/g, '').slice(-4)).filter(Boolean);
+  ctx.labels = receiptCardLabelsFromCfg(cfg.receipt_card_labels);
+  const names = String(cfg.receipt_vendor_invoice_names || '').split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
+  if (names.length) ctx.vendorInvoiceNames = names;
+  if (!opts.noUnits) { try { ctx.units = await fetchTab(env, 'Units'); } catch (e) { ctx.errors.push('Units: ' + schedErrText(e)); } }
+  return ctx;
+}
+// The rules list. A missing tab is created (new tab only); an unreadable one returns no rules plus an error, so nothing auto-confirms.
+// opts.readOnly (the GET route): never creates the tab, because a GET must not write (the read-only production token reaches GETs).
+async function receiptLoadRules(env, opts) {
+  const readOnly = !!(opts && opts.readOnly);
+  try { if (!readOnly) await ensureTab(env, 'Receipt_Rules', RECEIPT_RULES_HEADERS); return { rules: await fetchTab(env, 'Receipt_Rules'), error: '' }; }
+  catch (e) { if (readOnly && isMissingTabError(e)) return { rules: [], error: '' }; return { rules: [], error: 'Receipt_Rules: ' + schedErrText(e) }; }
+}
+
 // POST /receipt/suggest { po, total, date, store, items, card } — READ-ONLY. Returns the
 // deterministic reconciliation for one already-extracted receipt. Admin-gated; writes nothing.
 async function receiptSuggest(env, body) {
   body = body || {};
   try {
-    const custCards = await receiptCustomerCards(env);
+    const actx = await receiptAccuracyCtx(env);
     const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
     const result = receiptSuggestCore({
       po: body.po || body.po_or_property || '', total: body.total, date: body.date,
       store: body.store || body.vendor || '', items: body.items,
       card: body.card || body.payment_card_last4 || '', customer_name: body.customer_name,
-    }, properties, workorders, receipts, custCards);
+      handwritten_note: body.handwritten_note || '', ship_to_address: body.ship_to_address || '', job_name: body.job_name || '',
+    }, properties, workorders, receipts, actx.custCards, { units: actx.units, myCards: actx.myCards, vendorInvoiceNames: actx.vendorInvoiceNames });
+    if (actx.errors.length) result.list_errors = actx.errors;
     return json(result);
   } catch (e) { return json({ ok: false, error: String(e && e.message || e) }, 500); }
 }
@@ -3946,7 +3981,9 @@ async function receiptSuggest(env, body) {
 // Confirm (POST /receipt-recon/confirm, which calls the same addReceipt() the vendor portal and
 // every manual entry this session used) or Skip. A pending row costs one OCR call and zero other
 // AI tokens; the daily sweep of an empty folder costs nothing at all.
-const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Items_Summary','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active','Duplicate_Confirmed_Date','Duplicate_Evidence_JSON','Duplicate_Checked_Date','Gmail_Message_ID','Entry_Source','Rescan_Match_JSON','Confirmed_Receipt_ID','Manual_Refund'];
+const RECEIPT_RECON_QUEUE_HEADERS = ['ID','Source_File_ID','Source_File_URL','File_Name','Received_Date','Vendor','Receipt_Date','Total','PO_Reference','Items','Items_Summary','Card_Last4','Invoice_Number','Suggestion','Status','Confirmed_WO_ID','Confirmed_Amount','Confirmed_Description','Notes','Active','Duplicate_Confirmed_Date','Duplicate_Evidence_JSON','Duplicate_Checked_Date','Gmail_Message_ID','Entry_Source','Rescan_Match_JSON','Confirmed_Receipt_ID','Manual_Refund','Manual_Customer_Card'];
+// Nov 17 2026 (brief 4e): the "Always" rules tab. Created on first use with ensureTab (NEW tab only); later columns go through ensureColumns.
+const RECEIPT_RULES_HEADERS = ['ID','Match_Vendor','Min_Amount','Max_Amount','Action','Property_ID','Unit_ID','Description','Auto','Active','Created_Date','Hits','Last_Hit_Date'];
 // "Receipts and Invoices" under PAYABLES Inbox (Drive) — the folder Brett has been dropping
 // scans into all session. Overridable without a redeploy via Config key 'receipt_recon_folder_id'.
 const RECEIPT_RECON_FOLDER_ID_DEFAULT = '1-sf6pQN2DD3qj5cPZavy1k0DOfH4U20n';
@@ -3979,15 +4016,12 @@ function receiptReconEntrySource(desc) {
 
 // PURE — cross-checks one about-to-be-queued receipt against (a) an exact re-add of the same
 // source email (Gmail message ID, cheapest/highest-confidence, layer 1), (b) already-confirmed
-// Receipts rows with the same store+amount+date, and (c) Receipt_Recon_Queue rows Brett already
-// dispositioned (skipped / confirmed / duplicate_confirmed — NOT still pending) with the same
-// store+amount+date. Returns a flat array of match objects, each with a ready-to-show `reason`
+// Receipts rows, and (c) EVERY Receipt_Recon_Queue row, pending ones included (Nov 17 2026: it used to
+// skip pending rows and need an exact date). (b) and (c) use receiptDupSignals: same amount, date
+// within 3 days, fuzzy store, or the same invoice number. Returns a flat array of match objects, each with a ready-to-show `reason`
 // string (same shape as receiptCheckDuplicatesOne's evidence array below). Never decides
 // anything — the caller always still queues the row as 'pending'; this only adds the flag.
 function receiptReconFindRescanMatches(candidate, existingReceipts, existingQueueRows) {
-  const amt = (Number(candidate.total) || 0).toFixed(2);
-  const st = _rcNorm(candidate.store);
-  const date = String(candidate.date || '').trim();
   const matches = [];
 
   if (candidate.gmailMessageId) {
@@ -4002,29 +4036,14 @@ function receiptReconFindRescanMatches(candidate, existingReceipts, existingQueu
     }
   }
 
-  if (date && st && Number(amt) > 0) {
-    for (const r of (existingReceipts || [])) {
-      if (r.Active === 'FALSE') continue;
-      if ((Number(r.Amount) || 0).toFixed(2) !== amt) continue;
-      if (String(r.Date || '') !== date) continue;
-      if (_rcNorm(r.Store) !== st) continue;
-      matches.push({
-        type: 'receipts', receipt_id: r.ID, wo_id: r.WO_ID || '', date: r.Date, amount: r.Amount, store: r.Store,
-        reason: `Possible re-scan — matches an already-processed receipt from ${r.Date} ($${(Number(r.Amount) || 0).toFixed(2)} at ${r.Store || 'that store'}${r.WO_ID ? ', WO ' + r.WO_ID : ''}).`,
-      });
-    }
-    for (const r of (existingQueueRows || [])) {
-      const status = r.Status || 'pending';
-      if (status === 'pending') continue;
-      if (String(r.Active || '').toUpperCase() === 'FALSE') continue;
-      if ((Number(r.Total) || 0).toFixed(2) !== amt) continue;
-      if (String(r.Receipt_Date || '') !== date) continue;
-      if (_rcNorm(r.Vendor) !== st) continue;
-      matches.push({
-        type: 'queue_dispositioned', queue_id: r.ID, status, date: r.Receipt_Date, amount: r.Total, store: r.Vendor,
-        reason: `Possible re-scan — matches a previously ${status.replace(/_/g, ' ')} queue entry from ${r.Receipt_Date} ($${(Number(r.Total) || 0).toFixed(2)} at ${r.Vendor || 'that store'}).`,
-      });
-    }
+  // Nov 17 2026 (RECEIPT_RECONCILER_ACCURACY_BUILD_BRIEF 4c): the same amount to the cent, a date within 3 days and a
+  // fuzzy-equal store, OR the same vendor receipt/invoice number at the same amount. Compared with Receipts AND with every
+  // queue row, pending ones included (before this a pending twin was invisible and the date had to match exactly).
+  // Flags only: the caller still queues the row as pending.
+  const seenQueue = new Set(matches.map(m => String(m.queue_id)));
+  for (const sig of receiptDupSignals({ total: candidate.total, date: candidate.date, store: candidate.store, invoice: candidate.invoice }, existingReceipts, existingQueueRows)) {
+    if (sig.queue_id != null && seenQueue.has(String(sig.queue_id))) continue;
+    matches.push(sig);
   }
   return matches;
 }
@@ -4212,9 +4231,15 @@ async function receiptReconScan(env, body) {
   if (!allNew.length) return json({ ok: true, folder_id: folder, scanned: 0, remaining: 0, already_queued: files.length, stuck });
   const newFiles = allNew.slice(0, cap);
 
-  const custCards = await receiptCustomerCards(env);
+  // Nov 17 2026 (accuracy build): card lists, units, vendor-invoice names and the "Always" rules are read once per scan.
+  // A list that cannot be read fails closed (card status unknown, no auto-confirm) and is reported in `list_errors`.
+  const actx = await receiptAccuracyCtx(env, cfg);
+  const custCards = actx.custCards;
+  const rulesLoad = await receiptLoadRules(env);
+  const listErrors = actx.errors.concat(rulesLoad.error ? [rulesLoad.error] : []);
   const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
   let n = 0; const errs = []; let failuresChanged = false; let skippedOld = 0; let flaggedRescan = 0; let configError = ''; let pausedMid = false;
+  let vendorInvoiceSkipped = 0, autoHandled = 0, autoFailed = 0;
   const cutoff = receiptReconCutoff(cfg);
   for (const f of newFiles) {
     try {
@@ -4223,29 +4248,72 @@ async function receiptReconScan(env, body) {
       const po = ex.po_reference || ex.handwritten_note || '';
       const items = Array.isArray(ex.items) ? ex.items : [];
       const itemsSummary = Array.isArray(ex.items_summary) ? ex.items_summary : [];
-      const suggestion = receiptSuggestCore({ po, total: ex.total, date: ex.date, store: ex.vendor, items, card: ex.card_last4 || '', refund: ex.refund === true }, properties, workorders, receipts, custCards);
+      const suggestion = receiptSuggestCore({ po, total: ex.total, date: ex.date, store: ex.vendor, items, card: ex.card_last4 || '', refund: ex.refund === true,
+        handwritten_note: ex.handwritten_note || '', ship_to_address: ex.ship_to_address || '', job_name: ex.job_name || '' }, properties, workorders, receipts, custCards,
+        { units: actx.units, myCards: actx.myCards, vendorInvoiceNames: actx.vendorInvoiceNames });
       const tooOld = receiptBeforeCutoff(ex.date, cutoff);
       if (tooOld) skippedOld++;
+      const isVendorInvoice = suggestion.category === 'vendor_invoice';
       // Part 0 (Sep 22 2026 incident) — cross-check BEFORE this lands as a fresh Pending row.
       // Never auto-skips on a match (a false positive could hide a real second purchase) — only
       // flags the row so Brett sees it the instant he looks at the card, not by memory.
       const gmailId = receiptReconGmailIdFromDescription(f.description);
       const entrySource = receiptReconEntrySource(f.description);
-      const rescanMatches = receiptReconFindRescanMatches({ total: ex.total, store: ex.vendor, date: ex.date, gmailMessageId: gmailId }, receipts, existing);
+      // A vendor invoice never reads as a duplicate of a receipt, and is not compared.
+      const rescanMatches = isVendorInvoice ? [] : receiptReconFindRescanMatches({ total: ex.total, store: ex.vendor, date: ex.date, gmailMessageId: gmailId, invoice: ex.invoice_number || '' }, receipts, existing);
       if (rescanMatches.length) flaggedRescan++;
       // Part 3 (Sep 22 2026 brief) — surface the refund detection in Notes too, not just the
       // Suggestion JSON the card's badge reads, so it's visible even before the UI renders.
       const refundNote = (!tooOld && ex.refund) ? ('🔄 Refund/return detected — ' + (ex.refund_reason || 'review the suggested match or post as a negative expense.')) : '';
-      const notes = tooOld ? receiptCutoffNote(ex.date, cutoff) : [rescanMatches.length ? rescanMatches.map(m => '⚠️ ' + m.reason).join(' ') : '', refundNote].filter(Boolean).join(' ');
-      await addRow(env, 'Receipt_Recon_Queue', {
+      // "Always" rules (brief 4e). The first matching active rule is pre-selected on the card; it auto-confirms only when the rule is
+      // Auto=TRUE and no guard trips (customer card, refund, a duplicate flag, before the cutoff, vendor invoice) and, in addition,
+      // the card is not an UNKNOWN last-4 (it could be a customer's). A receipt with no card digits at all (a subscription invoice) is fine.
+      let ruleDec = null;
+      if (!isVendorInvoice && !tooOld) {
+        ruleDec = receiptRuleDecision({ vendor: ex.vendor, total: ex.total, card_status: suggestion.card_status, category: suggestion.category, duplicate: rescanMatches.length > 0, too_old: tooOld }, rulesLoad.rules);
+        if (ruleDec && suggestion.card_status === 'unknown') { ruleDec.auto = false; ruleDec.blocked.push('card_unknown'); }
+        if (ruleDec) suggestion.rule = { id: String(ruleDec.rule.ID), action: ruleDec.rule.Action, property_id: String(ruleDec.rule.Property_ID || ''), unit_id: String(ruleDec.rule.Unit_ID || ''), description: String(ruleDec.rule.Description || ''), auto: ruleDec.auto, blocked: ruleDec.blocked };
+      }
+      const vendorInvoiceNote = isVendorInvoice ? 'Vendor invoice: belongs in Who To Pay, not receipts. Tap "Move back to Pending" if this is wrong.' : '';
+      const notes = tooOld ? receiptCutoffNote(ex.date, cutoff) : (vendorInvoiceNote || [rescanMatches.length ? rescanMatches.map(m => '⚠️ ' + m.reason).join(' ') : '', refundNote].filter(Boolean).join(' '));
+      const queueRow = {
         Source_File_ID: f.id, Source_File_URL: f.webViewLink || '', File_Name: f.name || '',
         Received_Date: new Date().toISOString(), Vendor: ex.vendor || '', Receipt_Date: ex.date || '',
         Total: (ex.total === null || ex.total === undefined) ? '' : String(ex.total),
         PO_Reference: po, Items: JSON.stringify(items), Items_Summary: JSON.stringify(itemsSummary), Card_Last4: ex.card_last4 || '', Invoice_Number: ex.invoice_number || '',
-        Suggestion: JSON.stringify(suggestion).slice(0, 4000), Status: tooOld ? 'skipped' : 'pending',
+        Suggestion: JSON.stringify(suggestion).slice(0, 4000), Status: (tooOld || isVendorInvoice) ? 'skipped' : 'pending',
         Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: notes, Active: 'TRUE',
         Gmail_Message_ID: gmailId, Entry_Source: entrySource, Rescan_Match_JSON: JSON.stringify(rescanMatches).slice(0, 4000),
-      });
+      };
+      const addedJson = await (await addRow(env, 'Receipt_Recon_Queue', queueRow)).json().catch(() => ({}));
+      if (isVendorInvoice) vendorInvoiceSkipped++;
+      // Same-scan twins: a row added earlier in this loop must be visible to the next file's duplicate check (brief 4c).
+      existing.push(Object.assign({ ID: addedJson && addedJson.id != null ? String(addedJson.id) : '' }, queueRow));
+      // Auto-confirm (brief Q6). Capped per scan: each one costs several subrequests (confirm, Receipts write, QuickBooks email).
+      // Over the cap the row simply stays pending with the rule pre-selected; the next scan or a tap handles it.
+      if (ruleDec && ruleDec.auto && addedJson && addedJson.id != null) {
+        if (autoHandled + autoFailed >= RECEIPT_AUTO_MAX_PER_SCAN) {
+          await updateRow(env, 'Receipt_Recon_Queue', addedJson.id, { Notes: `Rule #${ruleDec.rule.ID} matches (${ruleDec.rule.Action}) but this scan already auto-handled ${RECEIPT_AUTO_MAX_PER_SCAN}; confirm it with one tap.` }).catch(e => errs.push('rule note failed: ' + schedErrText(e)));
+        } else {
+          try {
+            const cr = await receiptReconConfirm(env, { id: addedJson.id, no_wo: true, property_id: ruleDec.rule.Action === 'property' ? String(ruleDec.rule.Property_ID || '') : '', description: ruleDec.rule.Description || undefined });
+            const cj = await cr.json().catch(() => ({}));
+            if (cj && !cj.error && cj.success && !cj.duplicate) {
+              autoHandled++;
+              await updateRow(env, 'Receipt_Recon_Queue', addedJson.id, { Notes: `🤖 Auto-handled by rule #${ruleDec.rule.ID} (${ruleDec.rule.Action === 'property' ? 'always this property' : 'always a business expense'}).` });
+              await updateRow(env, 'Receipt_Rules', ruleDec.rule.ID, { Hits: String((Number(ruleDec.rule.Hits) || 0) + 1), Last_Hit_Date: new Date().toISOString() }).catch(e => errs.push('rule hit count not saved: ' + schedErrText(e)));
+            } else {
+              autoFailed++;
+              const why = (cj && cj.error) || (cj && cj.duplicate ? 'an identical receipt already exists' : 'confirm did not complete');
+              errs.push(`rule #${ruleDec.rule.ID} could not auto-confirm queue #${addedJson.id}: ${why}`);
+              await updateRow(env, 'Receipt_Recon_Queue', addedJson.id, { Notes: `Rule #${ruleDec.rule.ID} matched but auto-confirm did not complete (${String(why).slice(0, 120)}). Left for you.` }).catch(() => {});
+            }
+          } catch (e) {
+            autoFailed++;
+            errs.push(`rule #${ruleDec.rule.ID} auto-confirm threw on queue #${addedJson.id}: ${schedErrText(e)}`);
+          }
+        }
+      }
       n++;
       if (failures[f.id]) { delete failures[f.id]; failuresChanged = true; }
     } catch (e) {
@@ -4259,9 +4327,11 @@ async function receiptReconScan(env, body) {
   }
   if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) { errs.push('could not save the attempt tracker: ' + schedErrText(e)); console.error('receiptReconScan: tracker write failed:', schedErrText(e)); } }
   const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
-  if (pausedMid) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: n, remaining: allNew.length - n, errors: errs, stuck: stuckNow, reason: 'paused: AI credit - the scan stopped when Anthropic credit ran out; remaining receipts wait in Drive' });
-  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow, config_error: configError || undefined });
+  if (pausedMid) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: n, auto_handled: autoHandled, remaining: allNew.length - n, errors: errs, stuck: stuckNow, reason: 'paused: AI credit - the scan stopped when Anthropic credit ran out; remaining receipts wait in Drive' });
+  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, vendor_invoice_skipped: vendorInvoiceSkipped, auto_handled: autoHandled, auto_failed: autoFailed, list_errors: listErrors, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow, config_error: configError || undefined });
 }
+// Most rule auto-confirms one scan will run (each costs several subrequests); the rest stay pending with the rule pre-selected.
+const RECEIPT_AUTO_MAX_PER_SCAN = 4;
 
 // A Worker-side configuration problem (missing/rotated API key), as opposed to a problem with one
 // specific file. Used so a key outage never counts against a file's 3-attempt limit.
@@ -4425,8 +4495,13 @@ async function receiptReconImportStatement(env, body) {
 async function listReceiptReconQueue(env, url) {
   let rows = []; try { rows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { return json([]); }
   const status = url.searchParams.get('status') || 'pending';
+  // Nov 17 2026 (brief 4c): each PENDING row is compared with Receipts and with every other queue row, so both twins show
+  // "Possible duplicate of #N". If Receipts cannot be read the check still runs against the queue, and the page is told.
+  let receiptsForDup = [], dupReadError = '';
+  try { receiptsForDup = await fetchTab(env, 'Receipts'); } catch (e) { dupReadError = 'Receipts could not be read for the duplicate check: ' + schedErrText(e); }
   return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (status === 'all' || (r.Status || 'pending') === status))
     .map(r => {
+      const dupSignals = (r.Status || 'pending') === 'pending' ? receiptDupSignals({ total: r.Total, date: r.Receipt_Date, store: r.Vendor, invoice: r.Invoice_Number }, receiptsForDup, rows, { selfQueueId: r.ID }).slice(0, 5) : [];
       let suggestion = null; try { suggestion = JSON.parse(r.Suggestion || 'null'); } catch (e) {}
       let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) {}
       let items_summary = []; try { items_summary = JSON.parse(r.Items_Summary || '[]'); } catch (e) {}
@@ -4440,7 +4515,17 @@ async function listReceiptReconQueue(env, url) {
       if (String(r.Manual_Refund || '').toUpperCase() === 'TRUE') {
         suggestion = Object.assign({}, suggestion || {}, { category: 'refund', manual_refund: true });
       }
-      return { ...r, suggestion, items, items_summary, duplicate_evidence, rescan_matches };
+      // A vendor invoice moved back to Pending is Brett saying "this IS a receipt": it becomes an ordinary manual card.
+      if (suggestion && suggestion.category === 'vendor_invoice' && (r.Status || 'pending') === 'pending') {
+        suggestion = Object.assign({}, suggestion, { category: 'billable', action: 'need_property', reason: 'Restored from vendor invoice: pick the property and work order.', vendor_invoice_restored: true });
+      }
+      // Nov 17 2026: Brett's manual "this was on a customer's card" for a receipt the scanner missed. Same pattern as
+      // Manual_Refund: only the category the page reads changes (excluded, not billable); the stored Suggestion is untouched,
+      // and "Not a customer-card purchase" restores exactly what the scanner decided. A refund mark wins if both are set.
+      if (String(r.Manual_Customer_Card || '').toUpperCase() === 'TRUE' && !(suggestion && suggestion.manual_refund)) {
+        suggestion = Object.assign({}, suggestion || {}, { category: 'customer_paid', action: 'exclude', manual_customer_card: true, card_status: 'customer' });
+      }
+      return { ...r, suggestion, items, items_summary, duplicate_evidence, rescan_matches, dup_signals: dupSignals, dup_read_error: dupReadError || undefined, auto_handled: /^🤖 Auto-handled by rule/.test(String(r.Notes || '')) };
     }));
 }
 
@@ -4682,7 +4767,10 @@ async function receiptReconUnskip(env, body) {
   const row = rows.find(r => String(r.ID) === String(id));
   if (!row) return json({ error: 'queue row not found' }, 404);
   if (row.Status !== 'skipped') return json({ error: `Only a skipped receipt can be moved back (this one is "${row.Status || 'pending'}").` }, 409);
-  await updateRow(env, 'Receipt_Recon_Queue', id, { Status: 'pending', Notes: '' });
+  const back = { Status: 'pending', Notes: '' };
+  // "Move back to Pending" restores what the scanner decided: a manual customer-card mark does not survive it (Nov 17 2026).
+  if (String(row.Manual_Customer_Card || '').toUpperCase() === 'TRUE') back.Manual_Customer_Card = 'FALSE';
+  await updateRow(env, 'Receipt_Recon_Queue', id, back);
   return json({ ok: true, id });
 }
 
@@ -5093,6 +5181,136 @@ async function receiptReconMarkRefund(env, body) {
   await ensureColumns(env, 'Receipt_Recon_Queue', ['Manual_Refund']);
   await updateRow(env, 'Receipt_Recon_Queue', id, { Manual_Refund: refund ? 'TRUE' : 'FALSE' });
   return json({ ok: true, id, manual_refund: refund });
+}
+
+// POST /receipt-recon/mark-customer-card { id, customer_card, last4?, label? } — Nov 17 2026, Brett: a manual way to say "this
+// was bought on a customer's card" when the scanner missed it. Same shape as mark-refund: it never touches Receipts (a pending row
+// has billed nothing), only sets the flag GET /receipt-recon/queue reads to show the excluded customer_paid card. customer_card:false
+// undoes it. Optionally remembers the last-4 on the customer-card list (exactly four digits, validated BEFORE anything is written).
+async function receiptReconMarkCustomerCard(env, body) {
+  body = body || {};
+  const id = body.id; if (!id) return json({ error: 'id required' }, 400);
+  const flag = body.customer_card !== false;
+  const hasLast4 = flag && body.last4 !== undefined && body.last4 !== null && String(body.last4).trim() !== '';
+  if (hasLast4 && !receiptCardLast4Strict(String(body.last4).trim())) return json({ error: 'last4 must be exactly 4 digits' }, 400);
+  const rows = await fetchTab(env, 'Receipt_Recon_Queue');
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return json({ error: 'queue row not found' }, 404);
+  if ((row.Status || 'pending') !== 'pending') return json({ error: `only a pending row can be toggled this way (this one is ${row.Status})` }, 409);
+  await ensureColumns(env, 'Receipt_Recon_Queue', ['Manual_Customer_Card']);
+  await updateRow(env, 'Receipt_Recon_Queue', id, { Manual_Customer_Card: flag ? 'TRUE' : 'FALSE' });
+  const out = { ok: true, id, manual_customer_card: flag };
+  if (hasLast4) {
+    const r = await receiptCardsChange(env, { last4: String(body.last4).trim(), owner: 'customer', label: body.label });
+    if (r.error) { out.card_saved = false; out.card_error = r.error; } else out.card_saved = true;
+  }
+  return json(out);
+}
+
+// ── Card lists (brief 4b): Config keys receipt_my_cards / receipt_customer_cards (comma last-4s) and receipt_card_labels (JSON).
+// Only the last four digits are ever stored, and never in the repo. Change one card: owner 'mine' | 'customer' | 'remove'.
+async function receiptCardsChange(env, body) {
+  const l4 = receiptCardLast4Strict(String(body && body.last4 != null ? body.last4 : '').trim());
+  if (!l4) return { error: 'last4 must be exactly 4 digits', status: 400 };
+  const owner = String(body.owner || '');
+  if (!['mine', 'customer', 'remove'].includes(owner)) return { error: "owner must be 'mine', 'customer' or 'remove'", status: 400 };
+  const secretCust = String(env.RECEIPT_CUSTOMER_CARDS || '').split(',').map(s => s.replace(/\D/g, '').slice(-4)).filter(s => s.length === 4);
+  if (env.RECEIPT_CUSTOMER_CARDS && (owner === 'customer' ? !secretCust.includes(l4) : secretCust.includes(l4))) {
+    return { error: 'The customer-card list is fixed by the RECEIPT_CUSTOMER_CARDS Cloudflare secret, which wins over the Config list, so this change would have no effect. Change it there.', status: 409 };
+  }
+  const cfg = await fetchConfig(env);
+  const mineOld = receiptCardListFromCfg(cfg.receipt_my_cards), custOld = receiptCardListFromCfg(cfg.receipt_customer_cards);
+  // A card already on its target list keeps its place (so "set it to what it already is" writes nothing); otherwise it is removed
+  // from both lists and added to the target at the end.
+  const mine = (owner === 'mine' && mineOld.includes(l4)) ? mineOld.slice() : mineOld.filter(x => x !== l4);
+  const cust = (owner === 'customer' && custOld.includes(l4)) ? custOld.slice() : custOld.filter(x => x !== l4);
+  if (owner === 'mine' && !mine.includes(l4)) mine.push(l4);
+  if (owner === 'customer' && !cust.includes(l4)) cust.push(l4);
+  const labels = receiptCardLabelsFromCfg(cfg.receipt_card_labels);
+  if (owner === 'remove') delete labels[l4];
+  else if (body.label !== undefined) { const lab = String(body.label || '').trim().slice(0, 40); if (lab) labels[l4] = lab; else delete labels[l4]; }
+  const writes = [];
+  if (mine.join(',') !== mineOld.join(',')) writes.push(['receipt_my_cards', mine.join(',')]);
+  if (cust.join(',') !== custOld.join(',')) writes.push(['receipt_customer_cards', cust.join(',')]);
+  const labOld = JSON.stringify(receiptCardLabelsFromCfg(cfg.receipt_card_labels)), labNew = JSON.stringify(labels);
+  if (labOld !== labNew) writes.push(['receipt_card_labels', labNew]);
+  for (const [key, value] of writes) {
+    const r = await setConfigKey(env, { key, value });
+    const j = await r.json().catch(() => ({}));
+    if (j && j.error) return { error: 'could not save ' + key + ': ' + j.error, status: 500 };
+  }
+  return { ok: true, last4: l4, owner, changed: writes.map(w => w[0]) };
+}
+async function receiptReconCards(env, body) {
+  const r = await receiptCardsChange(env, body || {});
+  if (r.error) return json({ error: r.error }, r.status || 400);
+  return json(r);
+}
+// GET /receipt-recon/cards — read-only.
+async function receiptReconCardsList(env) {
+  const ctx = await receiptAccuracyCtx(env, null, { noUnits: true });
+  const rows = list => list.map(l => ({ last4: l, label: ctx.labels[l] || '' }));
+  return json({ ok: true, mine: rows(ctx.myCards), customer: rows(ctx.custCards), customer_from_secret: !!env.RECEIPT_CUSTOMER_CARDS, errors: ctx.errors });
+}
+
+// ── "Always" rules (brief 4e). Tab Receipt_Rules. A rule is "always a business expense" or "always this property" for a vendor.
+// No hard delete: a rule is deactivated. Vendors Brett buys billable job materials from can never auto-confirm: a rule for one of them
+// is saved with Auto off (it still pre-selects the card) and the response says so.
+const RECEIPT_RULE_NO_AUTO_VENDORS = ['home depot', 'lowes', 'ace hardware', 'menards', 'sherwin williams'];
+async function receiptReconRulesList(env) {
+  const r = await receiptLoadRules(env, { readOnly: true });
+  if (r.error) return json({ ok: false, error: r.error, rules: [] }, 500);
+  const isOff = x => String(x.Active == null ? 'TRUE' : x.Active).toUpperCase() === 'FALSE';
+  return json({ ok: true, rules: r.rules.filter(x => !isOff(x)).concat(r.rules.filter(isOff)) });
+}
+async function receiptReconRuleSave(env, body) {
+  body = body || {};
+  const vendor = String(body.match_vendor || '').trim();
+  const key = _rcNorm(vendor);
+  if (key.length < 3) return json({ error: 'match_vendor needs at least 3 letters or digits, so one rule cannot swallow every receipt' }, 400);
+  const action = String(body.action || '');
+  if (!['business', 'property'].includes(action)) return json({ error: "action must be 'business' or 'property'" }, 400);
+  const num = v => (v === undefined || v === null || String(v).trim() === '') ? '' : Number(v);
+  const lo = num(body.min_amount), hi = num(body.max_amount);
+  if ((lo !== '' && !isFinite(lo)) || (hi !== '' && !isFinite(hi))) return json({ error: 'min_amount and max_amount must be numbers or blank' }, 400);
+  if (lo !== '' && hi !== '' && lo > hi) return json({ error: 'min_amount cannot be more than max_amount' }, 400);
+  let propertyId = '';
+  if (action === 'property') {
+    propertyId = String(body.property_id || '').trim();
+    if (!propertyId) return json({ error: 'property_id required for an always-this-property rule' }, 400);
+    const props = await fetchTab(env, 'Properties');
+    const p = props.find(x => String(x.ID) === propertyId);
+    if (!p) return json({ error: `No property with ID "${propertyId}"` }, 400);
+    if (!_rcPropActive(p)) return json({ error: 'That property is inactive' }, 400);
+  }
+  const loaded = await receiptLoadRules(env);
+  if (loaded.error) return json({ error: loaded.error }, 500);
+  const warnings = [];
+  let auto = body.auto === false || String(body.auto).toUpperCase() === 'FALSE' ? 'FALSE' : 'TRUE';
+  if (RECEIPT_RULE_NO_AUTO_VENDORS.some(v => (' ' + key + ' ').indexOf(' ' + v + ' ') >= 0)) {
+    if (auto === 'TRUE') warnings.push(`"${vendor}" is a store you buy billable job materials from, so this rule will pre-select the card but not auto-confirm.`);
+    auto = 'FALSE';
+  }
+  const fields = { Match_Vendor: vendor, Min_Amount: lo === '' ? '' : String(lo), Max_Amount: hi === '' ? '' : String(hi), Action: action, Property_ID: propertyId, Unit_ID: String(body.unit_id || ''), Description: String(body.description || '').slice(0, 200), Auto: auto, Active: 'TRUE' };
+  if (body.id) {
+    const existing = loaded.rules.find(r => String(r.ID) === String(body.id));
+    if (!existing) return json({ error: 'rule not found' }, 404);
+    await updateRow(env, 'Receipt_Rules', body.id, fields);
+    return json({ ok: true, id: String(body.id), updated: true, warnings });
+  }
+  const twin = loaded.rules.find(r => String(r.Active == null ? 'TRUE' : r.Active).toUpperCase() !== 'FALSE' && _rcNorm(r.Match_Vendor) === key && String(r.Action) === action && String(r.Property_ID || '') === propertyId);
+  if (twin) return json({ error: `An active rule for "${vendor}" already exists (#${twin.ID}). Edit that one.`, existing_id: String(twin.ID) }, 409);
+  const added = await (await addRow(env, 'Receipt_Rules', Object.assign({ Created_Date: new Date().toISOString(), Hits: '0', Last_Hit_Date: '' }, fields))).json().catch(() => ({}));
+  if (!added || added.error || added.id == null) return json({ error: (added && added.error) || 'the rule could not be saved' }, 500);
+  return json({ ok: true, id: String(added.id), created: true, auto: auto === 'TRUE', warnings });
+}
+async function receiptReconRuleDeactivate(env, body) {
+  const id = body && body.id; if (!id) return json({ error: 'id required' }, 400);
+  const loaded = await receiptLoadRules(env);
+  if (loaded.error) return json({ error: loaded.error }, 500);
+  if (!loaded.rules.find(r => String(r.ID) === String(id))) return json({ error: 'rule not found' }, 404);
+  await updateRow(env, 'Receipt_Rules', id, { Active: 'FALSE' });
+  return json({ ok: true, id: String(id), active: false });
 }
 
 // POST /receipt-recon/mark-refund-confirmed { id } — undo a receipt that was wrongly confirmed
@@ -26331,11 +26549,11 @@ async function receiptExtract(env, bytes, mime) {
   const media = isPdf
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: b64 } }
     : { type: 'image', source: { type: 'base64', media_type: (String(mime).split(';')[0] || 'image/jpeg'), data: b64 } };
-  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), invoice_number (the vendor's OWN invoice/receipt number exactly as printed — often labelled Invoice #, Inv No, Receipt #, Ticket #, Order #; return "" if there isn't one or you cannot read it confidently), items (array of short strings, one per distinct line item purchased, VERBATIM as printed — e.g. "GLIDDEN PREMIUM INT PAINT"; empty array if unreadable), items_summary (array of short GENERALIZED category words for what was bought, one per distinct item/group — e.g. "paint", "primer", "batteries", "tape" instead of the verbatim brand/SKU text in items; collapse near-duplicates, e.g. two paint SKUs both become one "paint" entry; empty array if unreadable), card_last4 (the LAST 4 DIGITS ONLY of the payment card shown on the receipt, else ""), refund_signal_text (verbatim any text on the receipt indicating this is a RETURN/REFUND rather than a purchase — e.g. "REFUND-CUSTOMER COPY", "RETURN", "ORIG REC:", "CREDIT MEMO" — else ""; if present, also make `+"`total`"+` the NEGATIVE amount refunded to the customer even if the printed digits show it as positive), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
+  const prompt = `You are a receipt data extractor for a property-maintenance business. Read this receipt carefully, INCLUDING any hand-written markings AND any printed reference line such as "PO", "LBA/PO", "PO#", account, or job reference (these often carry the account name like "BMORE" or a property address like "1214 n calvert apt 3"). Return ONLY strict minified JSON with keys: vendor (string), date ("YYYY-MM-DD" or ""), total (number or null — the invoice/charged total), handwritten_note (verbatim hand-written text, else ""), po_reference (verbatim the printed PO/LBA/PO/account/job reference line, else ""), ship_to_address (verbatim any printed delivery / ship-to / job-site address, else ""), job_name (verbatim any printed job name or project name line, else ""), invoice_number (the vendor's OWN invoice/receipt number exactly as printed — often labelled Invoice #, Inv No, Receipt #, Ticket #, Order #; return "" if there isn't one or you cannot read it confidently), items (array of short strings, one per distinct line item purchased, VERBATIM as printed — e.g. "GLIDDEN PREMIUM INT PAINT"; empty array if unreadable), items_summary (array of short GENERALIZED category words for what was bought, one per distinct item/group — e.g. "paint", "primer", "batteries", "tape" instead of the verbatim brand/SKU text in items; collapse near-duplicates, e.g. two paint SKUs both become one "paint" entry; empty array if unreadable), card_last4 (the LAST 4 DIGITS ONLY of the payment card shown on the receipt, else ""), refund_signal_text (verbatim any text on the receipt indicating this is a RETURN/REFUND rather than a purchase — e.g. "REFUND-CUSTOMER COPY", "RETURN", "ORIG REC:", "CREDIT MEMO" — else ""; if present, also make `+"`total`"+` the NEGATIVE amount refunded to the customer even if the printed digits show it as positive), suggested_category (exactly one of: "customer WO","owned-property","BMore business","personal/HSA"), confidence (0..1). Use BOTH the hand-written note AND the po_reference to choose the category: a property address or job/WO reference ⇒ "customer WO" (or "owned-property" if it's one of Brett's own properties), an account like "BMORE" with no job/property ⇒ "BMore business". Either, both, or neither may be present. JSON only, no prose.`;
   const r = await routeAI(env, { type: 'receipt_parse', moneyFacing: true, media, prompt, maxTokens: 700, source: 'receiptExtract' });
   const txt = (r.result || '').trim();
   try { return receiptApplyRefundDetection(JSON.parse(txt.replace(/^```json?/i, '').replace(/```$/, '').trim())); }
-  catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', invoice_number: '', items: [], items_summary: [], card_last4: '', suggested_category: '', confidence: 0, refund: false, refund_reason: '' }; }
+  catch (e) { return { _raw: txt.slice(0, 300), _parse_error: true, vendor: '', date: '', total: null, handwritten_note: '', ship_to_address: '', job_name: '', invoice_number: '', items: [], items_summary: [], card_last4: '', suggested_category: '', confidence: 0, refund: false, refund_reason: '' }; }
 }
 
 // Read a BULK VENDOR STATEMENT (photo/scan/PDF — Home Depot, Lowe's, a credit card, a future Ace
@@ -30645,6 +30863,16 @@ async function hubTestWriteAllowed(env, path, body) {
     // reasoning as the duplicate-audit paths above, no protected record to gate on.
     return true;
   }
+  // Nov 17 2026 (receipt accuracy build). mark-customer-card only flips a flag on a queue row (never touches Receipts), same class as
+  // mark-refund; the optional last4 would write a Config list, so the staging token may only use the flag-only form.
+  if (path === '/receipt-recon/mark-customer-card') return !(body && body.last4);
+  // The card lists are last-4 digits in Config (nothing else). Rules write only the Receipt_Rules tab; an always-this-property rule
+  // must point at a TEST- property so a staging rule can never target a real one. Deactivate only flips Active on a rule.
+  if (path === '/receipt-recon/cards' || path === '/receipt-recon/rules/deactivate') return true;
+  if (path === '/receipt-recon/rules') {
+    if (body && body.action === 'property') return !!(body.property_id && await isTestRecord(env, 'Properties', body.property_id));
+    return true;
+  }
   if (path === '/receipt-recon/mark-refund-confirmed' || path === '/receipt-recon/undo') {
     // Can void a real Receipts row for a 'confirmed' queue row — resolve it the same way
     // findReceiptForQueueRow does and require that Receipts row's own Property to be TEST-.
@@ -34882,6 +35110,16 @@ async function receiptCheckDuplicatesOne(env, row, opts) {
     }
   } catch (e) { /* best-effort — a Receipts read failure shouldn't block the QB checks below */ }
 
+  // Nov 17 2026 (brief 4c): the other Receipt_Recon_Queue rows, pending ones included (the check used to ignore the queue
+  // entirely, which is why two scans of the same $43.23 Home Depot receipt read "no matching entries"). Same amount, date within
+  // 3 days, fuzzy store, or the same vendor invoice number. A failed read is reported, never swallowed.
+  try {
+    const queueRows = opts.queueRows || await fetchTab(env, 'Receipt_Recon_Queue');
+    for (const s of receiptDupSignals({ total: amount, date, store: row.Vendor, invoice: row.Invoice_Number }, [], queueRows, { selfQueueId: row.ID })) {
+      evidence.push({ signal: 'other_queue_row', queue_id: s.queue_id, status: s.status, amount: s.amount, date: s.date, store: s.store, by: s.by, reason: s.reason });
+    }
+  } catch (e) { evidence.push({ signal: 'qb_check_error', reason: 'Could not compare with the other queue rows: ' + (e && e.message || e) }); }
+
   if (Number(amount) > 0 && date) {
     try {
       const token = opts.token || await qbAccessToken(env);
@@ -34942,7 +35180,7 @@ async function receiptReconCheckDuplicatesBulk(env, body) {
     const row = rows.find(r => String(r.ID) === String(id));
     if (!row) { results.push({ id, error: 'not found' }); continue; }
     try {
-      const evidence = await receiptCheckDuplicatesOne(env, row, { token, allInvoices });
+      const evidence = await receiptCheckDuplicatesOne(env, row, { token, allInvoices, queueRows: rows });
       await updateRow(env, 'Receipt_Recon_Queue', id, {
         Duplicate_Evidence_JSON: JSON.stringify(evidence).slice(0, 8000),
         Duplicate_Checked_Date: new Date().toISOString(),

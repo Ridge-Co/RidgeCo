@@ -29,7 +29,7 @@ function extractSync(name) {
   for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}') { d--; if (d === 0) { i++; break; } } }
   return src.slice(start, i);
 }
-const helpers = new Function(`const RECEIPT_RECON_MIN_DATE_DEFAULT = '2026-07-01'; ${extractSync('receiptReconCutoff')}; ${extractSync('receiptBeforeCutoff')}; ${extractSync('receiptCutoffNote')}; ${extractSync('_rcNorm')}; ${extractSync('receiptReconGmailIdFromDescription')}; ${extractSync('receiptReconEntrySource')}; ${extractSync('receiptReconFindRescanMatches')}; ${extractSync('receiptReconIsConfigError')}; return { receiptReconIsConfigError, receiptReconCutoff, receiptBeforeCutoff, receiptCutoffNote, _rcNorm, receiptReconGmailIdFromDescription, receiptReconEntrySource, receiptReconFindRescanMatches };`)();
+const helpers = new Function(`const RECEIPT_RECON_MIN_DATE_DEFAULT = '2026-07-01'; ${extractSync('receiptReconCutoff')}; ${extractSync('receiptBeforeCutoff')}; ${extractSync('receiptCutoffNote')}; ${extractSync('_rcNorm')}; ${extractSync('_rcStoreKey')}; ${extractSync('_rcInvKey')}; ${extractSync('receiptDupSignals')}; ${extractSync('receiptRuleDecision')}; ${extractSync('receiptReconGmailIdFromDescription')}; ${extractSync('receiptReconEntrySource')}; ${extractSync('receiptReconFindRescanMatches')}; ${extractSync('receiptReconIsConfigError')}; return { receiptRuleDecision, receiptDupSignals, receiptReconIsConfigError, receiptReconCutoff, receiptBeforeCutoff, receiptCutoffNote, _rcNorm, receiptReconGmailIdFromDescription, receiptReconEntrySource, receiptReconFindRescanMatches };`)();
 
 function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
   const queue = [];
@@ -46,7 +46,12 @@ function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
     driveDownload: async (tok, id) => { downloads++; cur = id; return { bytes: new ArrayBuffer(1), mime: 'application/pdf' }; },
     receiptExtract: async (env, bytes, mime) => { if (cfg.__bad && cfg.__bad.has(cur)) throw new Error('Could not process image'); return { vendor: 'Home Depot', total: 12.34, date: dateFor(cur), items: [] }; },
     receiptSuggestCore: () => ({ verdict: 'review' }),
-    addRow: async (env, tab, row) => { queue.push(row); },
+    receiptAccuracyCtx: async () => ({ units: [], myCards: [], custCards: [], vendorInvoiceNames: [], errors: [] }),
+    receiptLoadRules: async () => ({ rules: [], error: '' }),
+    receiptReconConfirm: async () => ({ json: async () => ({ success: true }) }),
+    updateRow: async () => {},
+    RECEIPT_AUTO_MAX_PER_SCAN: 4,
+    addRow: async (env, tab, row) => { queue.push(row); return { json: async () => ({ success: true, id: String(queue.length) }) }; },
     setConfigKey: async (env, { key, value }) => { cfg[key] = value; },
     json: (o) => o,
     ...helpers,
