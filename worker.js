@@ -10131,7 +10131,7 @@ async function addonWithdraw(env, body, callerRole, callerSessionId) {
     const es = String((est && est.Status) || 'Pending');
     if (!['Pending', 'Needs Info', ''].includes(es)) return json({ error: 'Too late to withdraw — this was already ' + es }, 400);
   } else if (status !== 'Draft') return json({ error: 'This job is not additional work' }, 400);
-  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   const now = new Date().toISOString();
   await updateWOFields(env, childId, {
     Voided: 'TRUE', Void_Reason: 'Other', Void_Reason_Detail: 'Additional work withdrawn by vendor', Voided_By: 'vendor:' + vendorId, Voided_Date: now,
