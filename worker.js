@@ -26259,7 +26259,7 @@ async function arReportLinkAuth(env, tok) {
 async function arReportRevoke(env, body) {
   const ownerId = String((body && body.owner_id) || '').trim();
   if (!ownerId) return json({ error: 'owner_id required' }, 400);
-  try { await ensureColumns(env, 'Owners', ['AR_Report_Rev']); } catch (e) {}
+  try { await ensureColumns(env, 'Owners', ['AR_Report_Rev']); } catch (e) {} // silent-ok: ensureColumns reports its own failure to the ledger
   const owners = await fetchTab(env, 'Owners');
   const owner = owners.find(o => String(o.ID) === ownerId);
   if (!owner) return json({ error: 'Owner not found' }, 404);
