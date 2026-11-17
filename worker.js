@@ -38361,7 +38361,7 @@ async function qbSendCombinedInvoice(env, ctx) {
         fee: String(leadIr.Instant_Fee || '').trim() === '' ? { on: rowBuilds.some(rb => rb.feeOn), amount: feeTotal } : null,
       });
     } catch (e) {
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_netting_persist_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + leadIr.ID + ' ' + String((e && e.message) || e)).slice(0, 480) }); } catch (_) {}
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_netting_persist_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + leadIr.ID + ' ' + String((e && e.message) || e)).slice(0, 480) }); } catch (_) { /* silent-ok: the failure is returned to the page just below */ }
       return json({ ok: false, error: 'Could not save the billing decision on this review row (' + String((e && e.message) || e).slice(0, 140) + ') — nothing was sent to QuickBooks.', warnings }, 500);
     }
 
