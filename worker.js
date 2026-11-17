@@ -14634,7 +14634,7 @@ async function setApprovalStage(env, { woId, scopeId, stage, onlyFrom }) {
   let ok = false;
   try {
     if (woId) {
-      try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) {}
+      try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
       if (onlyFrom) {
         const wo = findWO(await fetchTab(env, 'Work_Orders'), woId);
         if (!wo || !onlyFrom.includes(String(wo.Approval_Stage || ''))) return false;
