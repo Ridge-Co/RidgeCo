@@ -29285,23 +29285,32 @@ async function fetchTabs(env, tabs, opts) {
       const bkey = missing.slice().sort().join('|');
       const shared = !(env && env.__CRON__);   // background (cron) batches are paced: never shared with people
       let bp = shared ? __batchInflight.get(bkey) : null;
+      const joined = !!bp;
       if (bp) __meterSaved(env, 'join');
+      const readBatch = async () => {
+        const d = await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
+        const ranges=d.valueRanges||[];
+        missing.forEach((t,i)=>{
+          const values=(ranges[i]&&ranges[i].values)||[];
+          const _t = Date.now(); __tabCache.set(t, { data: { values }, exp: _t+TAB_CACHE_MS, at: _t });
+        });
+      };
       if (!bp) {
-        bp = (async () => {
-          const d = await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
-          const ranges=d.valueRanges||[];
-          missing.forEach((t,i)=>{
-            const values=(ranges[i]&&ranges[i].values)||[];
-            const _t = Date.now(); __tabCache.set(t, { data: { values }, exp: _t+TAB_CACHE_MS, at: _t });
-          });
-        })();
+        bp = readBatch();
         if (shared) {
           __batchInflight.set(bkey, bp);
           const clear = () => { if (__batchInflight.get(bkey) === bp) __batchInflight.delete(bkey); };
           bp.then(clear, clear);
         }
       }
-      await bp;
+      try { await bp; }
+      catch (e) {
+        // Nov 17 2026 (Needs Attention F-1794619593801-52rc, -r8hm, -ljf6, -gvl8): PR #549 only taught the single-tab read (sheetsRequest) to
+        // survive this. A joiner of a shared BATCH read whose leader's request ended first got "This promise was created by a request that has
+        // since ended" thrown at it, which became a 500 on /hub-bootstrap, /vendor-workorders and the vendor/owner lists. Do our own read instead.
+        if (joined && __isCrossRequestPromiseError(e)) await readBatch();
+        else throw e;
+      }
     }
     catch (e) {
       // Opt-in, read-only callers only: if EVERY tab we still need has a recent good copy,
