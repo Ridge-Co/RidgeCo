@@ -55,7 +55,8 @@ ok(/if \(path === '\/receipt-recon\/search'\)\s+return await receiptReconSearch\
   // so both reversal routes get the identical not-yet-emailed-to-QuickBooks check.
   const core = grab('voidConfirmedReceiptForQueueRow');
   ok(/voidConfirmedReceiptForQueueRow\(env, row,/.test(body) && /if \(result\.error\) return json\(\{ error: result\.error \}, result\.status\)/.test(body), 'mark-refund-confirmed runs the shared reversal core and surfaces its error');
-  ok(/QB_Email_Sent \|\| ''\)\.toUpperCase\(\) === 'TRUE'/.test(core), 'the shared reversal core checks the same QB_Email_Sent guard as reassign');
+  ok(/QB_Email_Sent \|\| ''\)\.toUpperCase\(\) === 'TRUE'/.test(core) && !/fix it in QuickBooks directly rather than here/.test(core), 'the shared reversal core no longer refuses an already-emailed receipt (Nov 17 2026): it reverses it and reports qb_delete_needed');
+  ok(/qbBatchStatus\(original\) === 'sending'/.test(core) && /QB_Reversed_Date/.test(core) && /qbDeleteNeeded\(original, row\.ID\)/.test(core), 'the shared reversal core refuses only a receipt claimed by a sender, records QB_Reversed_Date and builds qb_delete_needed');
   ok(/Status: 'pending', Manual_Refund: 'TRUE'/.test(body), 'mark-refund-confirmed drops the row back to Pending with Manual_Refund set — reuses the existing refund UI rather than a second posting path');
   ok(/Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Confirmed_Receipt_ID: ''/.test(body), 'mark-refund-confirmed clears the stale Confirmed_* fields so the row reads as a fresh pending refund');
 }
