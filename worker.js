@@ -14365,7 +14365,11 @@ function etDateString(date) { return new Intl.DateTimeFormat('en-CA', { timeZone
 async function processEstimateReminders(env, nowArg) {
   const now = nowArg || new Date();
   { const h = etHour(now); if (h < 8 || h >= 18) return { skipped: 'outside the 8am-6pm ET reminder window' }; }
-  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
+  // Phase 2: this job claims the day in Config BEFORE it texts, so two overlapping runs cannot double-send. With the settings unreadable it cannot tell whether today was already
+  // claimed, so it sends nothing this run (reported, P0) instead of guessing "not yet" and risking a second round of reminder texts to owners.
+  let cfg = {};
+  try { cfg = await fetchConfig(env); }
+  catch (e) { await softFail(env, 'processEstimateReminders:config', e, { severity: 'P0', source: 'read', context: 'estimate reminder texts were NOT sent this run because settings could not be read' }); return { skipped: 'settings could not be read; no reminders sent this run' }; }
   const today = etDateString(now);
   if (cfg.estimate_reminder_last_date === today) return { skipped: 'already sent today' };
   const [ests, wos, vendors] = await Promise.all([fetchTab(env, 'Estimates'), fetchTab(env, 'Work_Orders'), fetchTab(env, 'Vendors')]);
