@@ -114,4 +114,34 @@ const s2 = await W.receiptReconSearch(env, new URL('https://x/receipt-recon/sear
 ok(s2.body.results[0].receipt_number === '99431' && s2.body.results[0].non_billing === true, 'search shows the customer-card row with its number and non_billing true');
 ok(!/undefined/.test(JSON.stringify(s2.body)), 'no "undefined" in search output');
 
+console.log('fixed-price job cost (Brett: 8616 Tower Bridge Way, Lowe\'s $6.33, 2026-10-05, receipt 36109)');
+sheets.Work_Orders.push({ ID: '1002', Property_ID: '11', Status: 'In Progress' });
+sheets.Invoice_Review.push({ ID: '8', WO_ID: '1002', Active: 'TRUE', Own_Materials: '0', Own_Material_IDs: '', Customer_Total: '500', QB_Invoice_ID: '' });
+sheets.Receipt_Recon_Queue.push(q({ ID: '179', Vendor: "Lowe's", Total: '6.33', Receipt_Date: '2026-10-05', PO_Reference: '8616 tower bridge way', Invoice_Number: '36109', Manual_Customer_Card: '', Suggestion: JSON.stringify({ category: 'billable', action: 'need_property' }) }));
+const qbBefore = spies.sendReceiptsToQBEmail, irBefore = spies.appendReceiptToInvoiceReview;
+const fp = await W.receiptAttachOnly(env, { id: '179', wo_id: '1002', amount: '6.33', description: 'fasteners', store: "Lowe's", date: '2026-10-05', non_billing_reason: 'fixed_price' });
+ok(fp.body.ok && fp.body.fixed_price === true && fp.body.customer_card === false && fp.body.receipt_number === '36109', 'fixed-price attach succeeds, reports fixed_price and the receipt number');
+const fr = sheets.Receipts.find(r => r.Description === 'fasteners');
+ok(fr.WO_ID === '1002' && fr.Property_ID === '11' && fr.Non_Billable === 'TRUE' && fr.Non_Billable_Reason === 'fixed_price', 'Receipts row carries the WO, the property, the ONE non-billing flag and reason fixed_price');
+ok(fr.Category === 'company' && fr.Receipt_Number === '36109' && Number(fr.Amount) === 6.33, 'recorded as a company expense (our cost) with receipt number 36109 and $6.33');
+ok(spies.sendReceiptsToQBEmail === qbBefore + 1 && fp.body.qb_email && fp.body.qb_email.sent === true, 'the expense IS sent to the QuickBooks receipts inbox (fixed-price cost is ours)');
+ok(spies.appendReceiptToInvoiceReview === irBefore, 'never folded into an invoice (appendReceiptToInvoiceReview not called)');
+const ir2 = sheets.Invoice_Review.find(r => r.ID === '8');
+ok(ir2.Own_Materials === '0' && ir2.Own_Material_IDs === '' && ir2.Customer_Total === '500', 'the WO invoice row is untouched: no materials, no markup base, total unchanged');
+ok(sheets.Attachments.some(a => a.WO_ID === '1002' && a.Receipt_ID === fr.ID), 'receipt image is attached to the WO');
+ok(sheets.Receipt_Recon_Queue.find(r => r.ID === '179').Status === 'attached_only' && /not billed/.test(sheets.Receipt_Recon_Queue.find(r => r.ID === '179').Notes), 'queue row leaves Pending with a plain note');
+const l3 = await W.listReceipts(env, new URL('https://x/receipts?wo_id=1002'));
+ok(l3.body[0].Non_Billing === 'TRUE' && l3.body[0].Non_Billable_Reason === 'fixed_price', 'GET /receipts flags it Non_Billing and returns the reason for the WO tag');
+ok((await W.nonBillingReceiptIdsAmong(env, [fr.ID])).includes(fr.ID), 'invoice approval backstop refuses it');
+const bud2 = W.scopeMaterialsBudgetSummary(10, 13, '1002', sheets.Receipts);
+ok(bud2.actual === 6.33, 'scope materials ACTUAL counts the fixed-price cost (it is our spend) while the customer-card reference stays out');
+const s3 = await W.receiptReconSearch(env, new URL('https://x/receipt-recon/search?q=36109'));
+ok(s3.body.results.length === 1 && s3.body.results[0].non_billable_reason === 'fixed_price', 'search by receipt number finds it and shows the reason');
+ok(/String\(r\.Non_Billable_Reason \|\| ''\) !== 'fixed_price'/.test(sweep), 'QB sweep still skips customer-card references but not fixed-price costs');
+// the customer-card path is unchanged: still NOT sent to QuickBooks
+const qb2 = spies.sendReceiptsToQBEmail;
+sheets.Receipt_Recon_Queue.push(q({ ID: '12' }));
+await W.receiptAttachOnly(env, { id: '12', wo_id: '1001', customer_card: true });
+ok(spies.sendReceiptsToQBEmail === qb2 && sheets.Receipts.find(r => r.Non_Billable_Reason === 'customer_card'), 'customer-card attach still sends nothing to QuickBooks and is tagged customer_card');
+
 console.log(`\nreceipt-customer-card-nonbilling: ${n}/${n} passing`);
