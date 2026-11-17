@@ -13026,7 +13026,7 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   ];
   const subject = isEs ? `Hemos recibido su factura — OT ${woId}` : `We've received your invoice — WO ${woId}`;
   let emailOutcome = 'failed';
-  try { await gmailSendEmail(env, { to: vendor.Email, subject, html: html.filter(Boolean).join('\n') }); emailOutcome = 'sent'; } catch (e) { emailOutcome = 'failed'; throw e; }
+  try { await gmailSendEmail(env, { to: vendor.Email, subject, html: html.filter(Boolean).join('\n') }); emailOutcome = 'sent'; } catch (e) { emailOutcome = 'failed'; await softFail(env, 'vendorInvoiceConfirm:send', e, { req, severity: 'P0', ref: String(woId), source: 'send', context: 'vendor invoice confirmation email' }); throw e; }
   finally {
     // Per-WO communication audit (Sep 20 2026) — same visibility as the SMS side (smsGatedSend).
     try { await logMessageAudit(env, { woId, channel: 'email', recipientName: vendor.Name || vendor.First_Name || '', recipientType: 'vendor', messageType: 'vendor_invoice_confirmation', messageBody: subject + '\n\n' + html.filter(Boolean).join('\n'), outcome: emailOutcome }); } catch (e) {}
