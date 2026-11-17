@@ -19,7 +19,7 @@ function make(over = {}) {
     updateRowVerified: async (e, tab, id, f) => { if (state.writeThrows) throw new Error('read-back mismatch'); log.writes.push({ id, f }); },
     logTelemetry: async (e, r) => { log.tele.push(r); },
     reportFailure: async (e, f) => { log.fails.push(f); },
-    logWOAudit: async (e, id, by, role, field, o, n, notes) => { log.audit.push({ id, field, o, n, notes }); },
+    logWOAudit: async (e, id, by, role, field, o, n, notes) => { if (state.auditThrows) throw new Error('audit down'); log.audit.push({ id, field, o, n, notes }); },
     fetchTab: async () => state.rows,
     findWO: (rows, id) => rows.find(r => r.ID === id),
     json: (o, s = 200) => ({ body: o, status: s }),
