@@ -23167,7 +23167,7 @@ async function opsQueueSync(env, body, opts) {
       if (queueStageOf(r, _nowMs) === 'merged') { await queueDeployStep(env, r, _nowMs, changed, deployMissing, errors); continue; }
       let n = cleanPrNumber(r.PR_Number);
       if (!n) {
-        if (prList === null) prList = await ghPublicJson('/pulls?state=all&sort=created&direction=desc&per_page=60', env);
+        if (prList === null) { ghTried++; prList = await ghPublicJson('/pulls?state=all&sort=created&direction=desc&per_page=60', env); }
         const hit = matchPrToItem(prList, r.ID);
         if (hit) n = String(hit.number);
       }
