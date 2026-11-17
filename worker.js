@@ -9060,7 +9060,7 @@ async function intakeEmail(env, body, retryRow) {
         property_id: a.property.ID, unit_id: a.unit_id || '', tenant_id: a.tenant_id || '', type: 'manual', trade: '', priority: 'normal',
         description: (p.title + (p.description ? ' - ' + p.description : '')).slice(0, 1500),
         owner_wo_ref: refTag, wo_contact_name: c0.name || '', wo_contact_phone: c0.phones && c0.phones[0] ? normalizePhone(c0.phones[0]) : '',
-        tenant_notify_created: false, tenant_notify_updates: false, created_by: 'buildium-email', notes,
+        tenant_notify_created: false, tenant_notify_updates: false, created_by: 'buildium-email', notes, __triage: true,
       };
       const cr = await createWorkOrder(env, woBody);
       const cj = await cr.json();
