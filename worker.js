@@ -4781,6 +4781,16 @@ async function receiptAttachOnly(env, body) {
   return json({ ok: true, wo_id, property_id, attached_only: true, customer_card: customerCard, receipt_number: String(row.Invoice_Number || '').trim(), ...addJson });
 }
 
+// Nov 17 2026: send ONE already-written Receipts row to the QuickBooks receipts inbox now (fixed-price job costs are our expense). Never throws:
+// the outcome comes back as { sent, error } and the page shows it, so a failed email is visible, not swallowed.
+async function emailExpenseToQB(env, receiptId) {
+  try {
+    const r = await sendReceiptsToQBEmail(env, { ids: [String(receiptId)], limit: 1 });
+    const j = await r.json();
+    return { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
+  } catch (e) { return { sent: false, error: String(e && e.message || e) }; } // silent-ok: the error is returned to the caller and shown on the page
+}
+
 // Receipt-date cutoff (Brett, Sep 22 2026: "exclude items that go back to 2025 and 2023").
 // Old receipts reach the queue when paper receipts get scanned into the folder (e.g. a Jun 2025
 // Surplus City receipt scanned Aug 26 2026) — the email pull never goes before Jul 1. Anything
