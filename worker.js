@@ -38060,7 +38060,7 @@ async function qbSendInvoice(env, body) {
               warnings.push('Fee credit: $' + used.applied.toFixed(2) + ' of the credit owed to ' + vendDisplay + ' was taken off this bill\'s deduction (credit left $' + used.balance.toFixed(2) + ').');
             } catch (e) {
               warnings.push('⚠ The bill went out with a $' + adjFinal.credit_applied.toFixed(2) + ' fee-credit line, but recording the credit as used failed (' + String((e && e.message) || e).slice(0, 120) + ') — post a matching negative entry on ' + vendDisplay + '\'s fee-credit ledger by hand or the credit will be used twice.');
-              await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' vendor=' + vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
+              await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' vendor=' + vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => { /* silent-ok: the credit failure is already shown in the warning above */ });
             }
           }
           if (adjFinal.fee > 0) warnings.push('Instant-pay fee: send $' + adjFinal.bill_total.toFixed(2) + ' to ' + vendDisplay + ' (bill $' + money2(vendorCostGross - loanAdj.deduction).toFixed(2) + (creditVend > 0 ? ' − $' + creditVend.toFixed(2) + ' already billed' : '') + (depCredit ? ' − $' + depCredit.amount.toFixed(2) + ' deposit already paid' : '') + ' − $' + adjFinal.fee.toFixed(2) + ' fee).');
