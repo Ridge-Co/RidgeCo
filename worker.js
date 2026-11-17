@@ -18252,8 +18252,11 @@ async function doorWatchdogCron(env) {
   } catch (e) {
     const m = String((e && e.message) || e).slice(0, 300);
     console.error('door-watchdog: pass threw:', m);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: DOOR_WD_JOB, Skill_Or_Endpoint: 'scheduled/door-watchdog', Success: 'FALSE', Notes: ('unexpected throw: ' + m).slice(0, 480) }); } catch (e2) { console.error('door-watchdog: telemetry write failed after throw:', e2 && e2.message); }
-    try { await alertAdminOnFailure(env, 'door_watchdog', m); } catch (e3) { console.error('door-watchdog: admin alert failed after throw:', e3 && e3.message); }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: DOOR_WD_JOB, Skill_Or_Endpoint: 'scheduled/door-watchdog', Success: 'FALSE', Notes: ('unexpected throw: ' + m).slice(0, 480) }); } catch (e2) { await softFail(env, 'doorWatchdog:telemetry', e2, { severity: 'P1', ref: DOOR_WD_JOB, source: 'write', context: 'the pass threw: ' + m.slice(0, 150) }); }
+    try {
+      const al = await alertAdminOnFailure(env, 'door_watchdog', m);
+      if (al && al.error) console.error('door-watchdog: admin alert did not go out:', al.error);   // alertAdminOnFailure already reported this to the ledger (P0)
+    } catch (e3) { await softFail(env, 'doorWatchdog:alert', e3, { severity: 'P0', ref: DOOR_WD_JOB, source: 'send', context: 'the door watchdog pass threw and the alert to Brett could not be sent: ' + m.slice(0, 150) }); }
     return { ok: false, errors: ['pass threw: ' + m] };
   }
 }
