@@ -2553,6 +2553,7 @@ function loadPortalAttachments(woId, opts) {
       if (!byType[t]) byType[t] = [];
       byType[t].push(f);
     });
+    if (window.JobOrder) JobOrder.setAfter(woId, (byType.after || []).length);   // Nov 17 2026: the bill rules need the real after-photo count
     var TYPE_ORDER = ['before','after','report','receipt','other'];
     var TYPE_LABELS = { before:'Before', after:'After', report:'Report Issue', receipt:t('Purchase receipt'), other:'File' };
     var combined = []; // built once per load, in TYPE_ORDER, for the lightbox to swipe across
