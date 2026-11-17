@@ -368,7 +368,22 @@ var ES_RULES = [
   [/^Approved by (.+)$/, function(m){ return 'Aprobado por ' + m[1]; }],
   [/^Reason: (.+)$/, function(m){ return 'Motivo: ' + m[1]; }],
   [/^▾ View (\d+) prior versions?$/, function(m){ return '▾ Ver ' + m[1] + (m[1] === '1' ? ' versión anterior' : ' versiones anteriores'); }],
-  [/^Upload failed: (.+)$/, function(m){ return 'Falló la carga: ' + m[1]; }]
+  [/^Upload failed: (.+)$/, function(m){ return 'Falló la carga: ' + m[1]; }],
+  // Nov 16 2026 — dynamic strings found in English in a Spanish session
+  [/^Account locked\. Try again in (\d+) minutes?\.$/, function(m){ return 'Cuenta bloqueada. Intente de nuevo en ' + m[1] + (m[1] === '1' ? ' minuto.' : ' minutos.'); }],
+  [/^PIN not found\. (\d+) attempts? remaining\.$/, function(m){ return 'PIN no encontrado. ' + (m[1] === '1' ? 'Le queda 1 intento.' : 'Le quedan ' + m[1] + ' intentos.'); }],
+  [/^Something went wrong on our side\. Please try again; if it keeps happening, tell Ridge Co and quote ref (\S+?)\.$/, function(m){ return 'Algo salió mal de nuestra parte. Intente de nuevo; si sigue pasando, avise a Ridge Co e indique la referencia ' + m[1] + '.'; }],
+  [/^This work order is not assigned to you[\s\S]*? \/ (Esta orden de trabajo[\s\S]*)$/, function(m){ return m[1]; }],
+  [/^✓ Bill submitted! Total: (\$[\d.,]+)$/, function(m){ return '✓ ¡Factura enviada! Total: ' + m[1]; }],
+  [/^✓ Job logged(?: — (.+?))?!$/, function(m){ return '✓ ¡Trabajo registrado' + (m[1] ? ' — ' + m[1] : '') + '!'; }],
+  [/^Error: (.+)$/, function(m){ return 'Error: ' + esT(m[1]); }],
+  [/^Unexpected response \(HTTP (\d+)\)$/, function(m){ return 'Respuesta inesperada (HTTP ' + m[1] + ')'; }],
+  [/^↻ Retrying… \((\d+)\/(\d+)\)$/, function(m){ return '↻ Reintentando… (' + m[1] + '/' + m[2] + ')'; }],
+  [/^↑ Uploading… \(attempt (\d+)\)$/, function(m){ return '↑ Subiendo… (intento ' + m[1] + ')'; }],
+  [/^⏱ Flat rate = (\$[\d.,]+)$/, function(m){ return '⏱ Precio fijo = ' + m[1]; }],
+  [/^📋 Flat: (\$[\d.,]+)$/, function(m){ return '📋 Precio fijo: ' + m[1]; }],
+  [/^Property (\d+)$/, function(m){ return 'Propiedad ' + m[1]; }],
+  [/^Receipt: (.+)$/, function(m){ return 'Recibo de compra: ' + m[1]; }]
 ];
 var _esLower = null;
 function _esDict() {
