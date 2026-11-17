@@ -4381,7 +4381,7 @@ var ES = {
 
 function t(key) {
   if (LANG !== 'es') return key;
-  return ES[key] !== undefined ? ES[key] : key;
+  return ES[key] !== undefined ? ES[key] : esT(key);   // Nov 16 2026: strings not in ES fall back to the shared vendor-i18n.js dictionary instead of staying English
 }
 
 function applyTranslations() {
