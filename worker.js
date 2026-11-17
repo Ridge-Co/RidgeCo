@@ -15156,7 +15156,7 @@ async function addEstimateVersion(env, body) {
   if (changeReasonEn) { try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); row.Change_Reason_EN = changeReasonEn; } catch (_) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ } }
   if (overMax && overMaxReason) { try { await ensureColumns(env, 'Estimates', ['Over_Max_Reason', 'Over_Max_Reason_EN']); row.Over_Max_Reason = overMaxReason; row.Over_Max_Reason_EN = overMaxReasonEn; } catch (_) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ } }
   await addRow(env, 'Estimates', row);
-  try { await updateWOField(env, woId, 'Current_Estimate', subtotal.toFixed(2)); } catch(e) {}
+  try { await updateWOField(env, woId, 'Current_Estimate', subtotal.toFixed(2)); } catch(e) { await softFail(env, 'addEstimateVersion:currentEstimate', e, { severity: 'P1', ref: String(woId), source: 'write', context: 'the estimate saved but the Work Order still shows the old Current_Estimate amount' }); }
   // Approval stage: a first/normal estimate puts the job in Estimated. A revision that arrives AFTER
   // the job was approved/proposed/signed means something changed — do NOT silently reset the stage
   // (that hides a signed job's change); flag it "revised" so Brett reviews it (change order vs
