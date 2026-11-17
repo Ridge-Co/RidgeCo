@@ -9456,6 +9456,19 @@ function hubBillSubmit(k, woId) {
   var receiptsTotal = receiptItems.reduce(function(s, r) { return s + r.amount; }, 0);
   var receiptsReimburse = receiptItems.reduce(function(s, r) { return s + (r.pay === 'account' ? 0 : r.amount); }, 0);
 
+  // Nov 17 2026 (Brett): same order as the vendor portal. Job marked Complete first, then a bill; the bill needs a description,
+  // 1 after photo, and a receipt picture on the job when any line is paid back. Checked once; passing sets the flag and re-enters.
+  if (!_hubBillGate[k]) {
+    say('Checking the job…', 'var(--muted)');
+    hubBillNeeds(k, woId, receiptItems, function(missing) {
+      if (missing.length) { hubBillShowNeeds(k, woId, missing); return; }
+      _hubBillGate[k] = true;
+      hubBillSubmit(k, woId);
+    });
+    return;
+  }
+  _hubBillGate[k] = false;
+
   // Field names are the Vendor_Bills column headers, and must match what the portal sends
   // byte for byte — the billing panel reads these by name.
   var body = {
