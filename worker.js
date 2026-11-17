@@ -4666,6 +4666,7 @@ async function receiptReconConfirm(env, body) {
     added_by: 'Receipt Reconciler', added_by_id: 'receipt-recon', role: 'hub', category,
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source, allow_negative: (noWo && isRefundRow),
+    receipt_number: row.Invoice_Number || '',   // Nov 17 2026: the OCR'd receipt/order number persists on the WO side (blank stays blank)
   });
   const addJson = await addResp.json().catch(() => ({}));
   let invoiceLink = null;
