@@ -1805,13 +1805,14 @@ async function markRefundConfirmed(id, btn){
 // was already emailed to QuickBooks.
 async function undoConfirmation(id, btn){
   const statusEl = document.getElementById('rc'+id+'-status');
-  if (!confirm('Undo this confirmation? This reverses the amount out of the invoice/work order and removes the attached image, then drops it back into Pending. Only works if it hasn\'t already been emailed to QuickBooks.')) return;
+  if (!confirm('Undo this confirmation? This reverses the amount out of the invoice/work order and removes the attached image, then drops it back into Pending. If it was already emailed to QuickBooks, you will be shown what to delete there by hand.')) return;
   if (btn) btn.disabled = true;
   if (statusEl) statusEl.innerHTML = '<span class="info">Undoing…</span>';
   try {
     const res = await post('/receipt-recon/undo', { id });
     if (res.error) throw new Error(res.error);
-    if (statusEl) statusEl.innerHTML = '<span class="ok">✓ Undone — back in Pending, invoice and attachment reversed.</span>';
+    if (res.qb_delete_needed) qbbShowDeleteNeeded(res.qb_delete_needed);
+    if (statusEl) statusEl.innerHTML = '<span class="ok">✓ Undone — back in Pending, invoice and attachment reversed.'+(res.qb_delete_needed?' Delete it in QuickBooks by hand (see the red box).':'')+'</span>';
     finishCard(id);
   } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
