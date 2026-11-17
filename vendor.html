@@ -1962,6 +1962,7 @@ function loadVendorBillSummary(woId, idx) {
       if (btn) btn.textContent = t('💰 Submit Invoice');
       window._vendorBillCache = window._vendorBillCache || {};
       delete window._vendorBillCache[woId];
+      if (window.JobOrder) JobOrder.cardNeeds(woId, idx);   // Nov 17 2026: a Complete job with no invoice yet says so, in red
       return;
     }
     // Persistent confirmation (Sep 20 2026, Brett's ask) — visible on the COLLAPSED card, not
