@@ -14181,6 +14181,7 @@ async function approveInvoiceReviewBulk(env, body) {
   // Same signed-scope-proposal receipt backstop as approveInvoiceReview (Sep 22 2026) — read
   // Scopes/Scope_Signatures at most once for the whole batch, and only if some approval carries
   // receipts. A failed read fails just the approvals that carry receipts, never silently passes them.
+  let _nbRows = null;
   let _cover = null, _coverErr = null, _coverLoaded = false;
   const coverFor = async woId => {
     if (!_coverLoaded) {
