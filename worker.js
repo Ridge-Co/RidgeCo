@@ -10284,7 +10284,7 @@ async function addonOwnerNotice(env, body) {
   let smsResult = { sent: false, reason: 'no owner phone' };
   if (owner.Phone) {
     try { smsResult = await smsGatedSend(env, { wo_id: parent.ID, message_type: 'owner_addon_notice', recipient_type: 'owner', owner, property, message_body: msg.sms }); }
-    catch (e) { smsResult = { sent: false, reason: String((e && e.message) || e) }; }
+    catch (e) { smsResult = { sent: false, reason: String((e && e.message) || e) }; await softFail(env, 'addonOwnerNotice:sms', e, { req, severity: 'P0', ref: childId, source: 'send', context: 'owner text for additional work' }); }
   }
   let emailResult = { sent: false, reason: 'no owner email' };
   if (ownerEmail && !emailGate.ok) emailResult = { sent: false, reason: emailGate.reason };
