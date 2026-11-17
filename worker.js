@@ -19099,7 +19099,10 @@ async function failOpenList(env, url) {
   const rows = all.filter(r => showAll || FAIL_OPEN.indexOf(r.Status) >= 0).sort((a, b) => failSevRank(a.Severity) - failSevRank(b.Severity) || (a.Last_Seen < b.Last_Seen ? 1 : -1));
   const open = all.filter(r => FAIL_OPEN.indexOf(r.Status) >= 0);
   let alertsOn = null;
-  try { const c = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values || []); alertsOn = String(c.failure_alert_enabled || '').toUpperCase() === 'TRUE'; } catch (e) { alertsOn = null; }
+  if (__failAlertsCache && Date.now() - __failAlertsCache.at < FAIL_ALERTS_CACHE_MS) alertsOn = __failAlertsCache.v;
+  else {
+    try { const c = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values || []); alertsOn = String(c.failure_alert_enabled || '').toUpperCase() === 'TRUE'; __failAlertsCache = { at: Date.now(), v: alertsOn }; } catch (e) { alertsOn = null; }
+  }
   return json({ ok: true, as_of: new Date().toISOString(), alerts_on: alertsOn, counts: { open: open.length, P0: open.filter(r => r.Severity === 'P0').length, P1: open.filter(r => r.Severity === 'P1').length, P2: open.filter(r => r.Severity === 'P2').length, acknowledged: open.filter(r => r.Status === 'acknowledged').length }, failures: rows.map(r => { const o = Object.assign({}, r); delete o._row; return o; }) });
 }
 // POST /failure/update { id, status, notes?, fixed_in? } - admin only (not in any ROLE_SCOPES list).
