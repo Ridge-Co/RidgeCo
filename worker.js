@@ -22112,8 +22112,9 @@ async function staleWos(env, url) {
 function formatDigestText(d) {
   const L = [];
   L.push(`RIDGE CO — DAILY DIGEST · ${d.stamp}`); L.push('');
-  if ((d.healthAlerts && d.healthAlerts.length) || (d.stuckReceipts && d.stuckReceipts.length)) {
+  if ((d.healthAlerts && d.healthAlerts.length) || (d.stuckReceipts && d.stuckReceipts.length) || (d.warnings && d.warnings.length)) {
     L.push('▶ SYSTEM HEALTH');
+    (d.warnings||[]).forEach(x=>L.push('⚠ '+x+' (numbers below may be incomplete)'));
     (d.healthAlerts||[]).forEach(x=>L.push('⚠ '+x));
     (d.stuckReceipts||[]).forEach(x=>L.push('⚠ Receipt could not be read after 3 tries: '+x));
     L.push('');
