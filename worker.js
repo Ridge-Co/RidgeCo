@@ -19075,7 +19075,7 @@ async function smsGatedSend(env, opts) {
     try {
       const t = await translateForVendorDetailed(env, opts.vendor, messageBody);
       if (t.translated) { originalBody = t.original; translatedTo = 'es'; messageBody = t.text; }
-    } catch (e) { /* fail open: English goes out */ }
+    } catch (e) { await softFail(env, 'smsGatedSend:translate', e, { severity: 'P2', ref: String((opts.vendor && opts.vendor.ID) || ''), source: 'translate', context: 'the vendor text went out in English because translation failed' }); }   // fails open on purpose: English goes out
   }
   // D-16 (Oct 23 2026): make the text plain BEFORE it is queued, so the Message_Queue row shows exactly what is sent and Twilio bills 160-character
   // pieces. A Spanish vendor text keeps its accents (stripping them changes meaning) but still gets plain dashes, quotes and dots.
