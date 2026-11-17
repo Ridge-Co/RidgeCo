@@ -1375,7 +1375,7 @@ function rowCard(r){
   // same endpoint, but the amount field above is negative so it posts as money back.
   if (!excluded && isPendingLike) {
     const kerns = kernsProperty();
-    html += '<div class="rc-expense"><span class="rc-expense-label">'+(isRefund ? 'No match, or only a partial refund? Post as a negative expense — no work order:' : 'Expense only — no work order, straight to QuickBooks:')+'</span>'
+    html += '<div class="rc-expense"><span class="rc-expense-label">'+(isRefund ? 'No match, or only a partial refund? Post as a negative expense — no work order:' : 'Expense only — no work order, goes in the daily QuickBooks batch:')+'</span>'
       + '<button class="btn small expbtn" onclick="confirmExpense(\''+r.ID+'\', this, \'ridgeco\')">🧾 Ridge Co expense</button>'
       + (kerns ? '<button class="btn small expbtn" onclick="confirmExpense(\''+r.ID+'\', this, \'kerns\')">🏡 1864 Kerns School Rd</button>' : '')
       + (!isCompany && !isRefund ? '<button class="btn small expbtn secondaryexp" onclick="confirmExpense(\''+r.ID+'\', this, \'selected\')">Expense to the property picked above</button>' : '')
