@@ -26,6 +26,7 @@ var ES_EXTRA = {
 "Could not mark the job complete. Try again.": "No se pudo marcar el trabajo como completo. Intente de nuevo.",
 "Marked complete from the invoice screen.": "Marcado como completo desde la pantalla de la factura.",
 "Job complete. Send your invoice now?": "Trabajo completo. ¿Envía su factura ahora?",
+"Send your invoice now?": "¿Envía su factura ahora?",
 "Send invoice now": "Enviar factura ahora",
 "Later": "Más tarde",
 "Why is the job on hold?": "¿Por qué está el trabajo en espera?",
