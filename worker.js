@@ -31619,7 +31619,7 @@ async function propertyUpdate(env, body) {
     try { await ensureColumns(env, 'Properties', PROPERTY_SOURCE_FIELDS); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   }
   if (fields.Commercial_Subtype !== undefined) {
-    try { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); } catch (_) {}
+    try { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   }
   return await updateRow(env, 'Properties', body.id, fields);
 }
