@@ -3428,7 +3428,7 @@ async function nonBillingReceiptIdsAmong(env, ids, rows) {
   return all.filter(r => want.has(String(r.ID)) && receiptIsNonBilling(r)).map(r => String(r.ID));
 }
 async function addReceipt(env, body) {
-  const { wo_id, property_id, amount, description, store, date, added_by, added_by_id, role, category, source_file_id, source_file_url, payment_source, allow_negative, non_billable, receipt_number } = body;
+  const { wo_id, property_id, amount, description, store, date, added_by, added_by_id, role, category, source_file_id, source_file_url, payment_source, allow_negative, non_billable, receipt_number, non_billable_reason } = body;
   if (!amount && amount !== 0) return json({ error: 'amount required' }, 400);
   const amt = parseFloat(amount);
   if (isNaN(amt) || amt === 0) return json({ error: 'amount must be non-zero' }, 400);
