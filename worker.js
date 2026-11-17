@@ -12062,7 +12062,7 @@ async function updateStatus(env, body) {
   if (body.status === 'Complete' || body.status === 'Pending Invoice')
     fields.Completed_Date = wo.Completed_Date || new Date().toISOString();
   if (body.status === 'On Hold') {
-    try { await ensureColumns(env, 'Work_Orders', ['Hold_Reason']); } catch (_) {}
+    try { await ensureColumns(env, 'Work_Orders', ['Hold_Reason']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
     fields.Hold_Reason = holdReason;
   }
   await updateWOFields(env, body.wo_id, fields);
