@@ -3409,6 +3409,24 @@ async function listReceipts(env, url) {
 // otherwise. payment_source is 'company_card' (default) or 'vendor_reimburse' (the vendor
 // paid out of pocket and needs it added to what they're owed) — never silently inferred from
 // role, since Brett himself sometimes logs an entry on a vendor's behalf.
+// PURE — Nov 17 2026 (Brett: a customer-card receipt is attached to a work order as a reference for the customer, never billed).
+// True for a Receipts row that must NEVER reach customer billing: materials totals, markup, invoice picker/approval, scope actuals.
+// Non_Billable=TRUE is the explicit flag written by the customer-card attach; Category customer_paid / attached_only are the same
+// intent written by older paths ("image on file, deliberately never billed"), so every consumer treats them identically.
+function receiptIsNonBilling(rc) {
+  if (!rc) return false;
+  if (String(rc.Non_Billable || '').trim().toUpperCase() === 'TRUE') return true;
+  const c = String(rc.Category || '').trim().toLowerCase();
+  return c === 'customer_paid' || c === 'attached_only';
+}
+// Backstop for the invoice-approval endpoints: which of these receipt IDs are non-billing. Throws if the Receipts tab cannot be read
+// (the caller refuses the approval rather than guess). `rows` lets the bulk approval read the tab once.
+async function nonBillingReceiptIdsAmong(env, ids, rows) {
+  const want = new Set((ids || []).map(x => String(x)));
+  if (!want.size) return [];
+  const all = rows || await fetchTab(env, 'Receipts');
+  return all.filter(r => want.has(String(r.ID)) && receiptIsNonBilling(r)).map(r => String(r.ID));
+}
 async function addReceipt(env, body) {
   const { wo_id, property_id, amount, description, store, date, added_by, added_by_id, role, category, source_file_id, source_file_url, payment_source, allow_negative } = body;
   if (!amount && amount !== 0) return json({ error: 'amount required' }, 400);
