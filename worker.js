@@ -23189,10 +23189,19 @@ async function opsQueueSync(env, body, opts) {
       if (queueStageOf(r, _nowMs) === 'merged') await queueDeployStep(env, r, _nowMs, changed, deployMissing, errors);
     } catch (e) {
       const _msg = String((e && e.message) || e);
-      // Tick mode (scheduler job queue_sync): GitHub rate-limiting the Hub's shared address is expected and is simply retried on the next
-      // tick, so it is returned as rate_limited instead of failing the job every 15 minutes. The daily run (hub_impr_daily) stays strict.
-      if (opts && opts.tick && /HTTP (403|429)/.test(_msg)) rateLimited.push({ id: r.ID, error: _msg }); else errors.push({ id: r.ID, error: _msg });
+      // GitHub rate-limiting the Hub's shared address is expected and is simply retried on the next tick, so it is returned as rate_limited
+      // instead of failing the job. Nov 17 2026 (Needs Attention F-1794918668628-m9oi): this used to apply to the 15-minute tick only, and the
+      // strict daily run (hub_impr_daily, 07:30 ET) filed a P0 every morning for the same refusal. Every mode now treats it the same, and the
+      // "GitHub refused every lookup" case below files ONE calm P2 so a permanently blocked sync can never go unseen.
+      if (/HTTP (403|429)/.test(_msg)) rateLimited.push({ id: r.ID, error: _msg }); else errors.push({ id: r.ID, error: _msg });
     }
+  }
+  if (rateLimited.length && ghTried > 0 && rateLimited.length >= ghTried && !changed.length) {
+    const rep = await reportFailure(env, { system: 'hub', source: 'worker', where: 'queue_sync_github_blocked', ref: 'queue_sync', severity: 'P2',
+      message: 'The queue sync could not read GitHub: it refused ' + rateLimited.length + ' of ' + ghTried + ' lookups (HTTP 403/429, GitHub rate-limits the Hub\'s shared address). Build progress on the Proposals page may be out of date. '
+        + (env && env.GITHUB_READ_TOKEN ? 'A GITHUB_READ_TOKEN is set but GitHub still refused it, so it may be expired or lack read access to the repo.'
+          : 'No GITHUB_READ_TOKEN is set. Fix: add a read-only GitHub token as the Worker secret GITHUB_READ_TOKEN in Cloudflare (never paste it into chat); until then the Proposals page syncs from your browser.') });
+    if (!rep || rep.ok !== true) errors.push({ id: '', error: 'could not file the GitHub-blocked failure row: ' + ((rep && rep.error) || (rep && rep.dropped ? 'rate-capped' : 'unknown')) });
   }
   return json({ ok: errors.length === 0, checked: inflight.length, changed, errors, remaining: _more, stuck, deploy_missing: deployMissing, rate_limited: rateLimited });
 }
