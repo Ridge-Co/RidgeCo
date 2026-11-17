@@ -20138,8 +20138,15 @@ async function smsDeliveryCheckPass(env, deps) {
     try {
       const r = await (deps.sendEmail || gmailSendEmail)(env, { to, subject: c.subject, html: c.html });
       emailed = !!(r && (r.sent || r.staged));
-      if (!emailed) fail('send_email', 'email send returned no confirmation');
-      else no_retry = true;                                 // a message went out - a retry must not send it twice
+      if (emailed) no_retry = true;                         // a message went out - a retry must not send it twice
+      else if (r && r.demo_blocked && ev.level !== 'alert') {
+        // Nov 17 2026 (Needs Attention F-1794744137851-q3be and F-1794744130410-ffrw): the demo safety guard held this CLEAN-day summary back (the
+        // admin address sat on a demo test slot that had used its 5 emails). That is the guard working, not a send failure, and the guard's own rule
+        // is "a demo block is never a P0". The check itself is fine, so the job stays green and the clean day is counted; the reason is a warning
+        // (shown in the job result) and the guard already logged demo_send_blocked. An ALERT email held back this way is still a failure below.
+        warnings.push('summary email held back by the demo safety guard: ' + String(r.reason || 'no reason given').slice(0, 160));
+      }
+      else fail('send_email', 'email send returned no confirmation' + (r && r.reason ? ': ' + String(r.reason).slice(0, 160) : ''));
     } catch (e) { fail('send_email', e); }
   }
   if (!errors.length) {
