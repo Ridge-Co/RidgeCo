@@ -4775,7 +4775,7 @@ async function receiptAttachOnly(env, body) {
       Status: 'attached_only', Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
       Confirmed_Receipt_ID: addJson.duplicate ? '' : String(addJson.id || ''),
       Notes: addJson.duplicate ? 'Image already attached to that WO — not re-attached.'
-        : (customerCard ? 'Customer-card receipt attached to WO ' + wo_id + ' as a reference — not billed, not expensed, no invoice line added.' : 'Image attached only — not billed, no invoice line added.'),
+        : (fixedPrice ? 'Fixed-price job cost recorded on WO ' + wo_id + ' — not billed to the customer, no invoice line added.' : customerCard ? 'Customer-card receipt attached to WO ' + wo_id + ' as a reference — not billed, not expensed, no invoice line added.' : 'Image attached only — not billed, no invoice line added.'),
     });
   }
   return json({ ok: true, wo_id, property_id, attached_only: true, customer_card: customerCard, receipt_number: String(row.Invoice_Number || '').trim(), ...addJson });
