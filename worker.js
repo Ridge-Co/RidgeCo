@@ -10339,7 +10339,7 @@ async function woVoid(env, body) {
   const combinedInto = reason === 'Combined' ? (body.combined_into_wo_id || '') : '';
   if (reason === 'Combined' && !combinedInto) return json({ error: 'combined_into_wo_id required when reason is Combined' }, 400);
 
-  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, woId);
   if (!wo) return json({ error: 'WO not found' }, 404);
