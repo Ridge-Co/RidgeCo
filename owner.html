@@ -199,6 +199,32 @@ body{font-size:15px}
 label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font-size:13px}
 @media (hover:hover){.filter-row select,.filter-row input,.inline-edit input{font-size:13px !important}}
 </style>
+<style id="oa-approvals">
+/* Approvals tab (queue #138 Phase 1). DESIGN.md: tokens, 13/15/17px, 8px radius, 44px targets, 16px inputs. */
+.oa-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px}
+.oa-title{font-size:17px;font-weight:700;line-height:1.2;margin-bottom:4px}
+.oa-sub{font-size:15px;color:var(--muted);margin-bottom:8px}
+.oa-price{font-size:17px;font-weight:700;margin-bottom:4px}
+.oa-meta{font-size:13px;color:var(--muted);margin-bottom:12px}
+.oa-actions{display:flex;flex-wrap:wrap;gap:8px}
+.oa-actions .btn,.oa-actions a.btn{min-height:44px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;font-size:15px;letter-spacing:normal;padding:8px 16px}
+.oa-main{flex:1 1 100%}
+.oa-box{margin-top:12px;border-top:1px solid var(--border);padding-top:12px}
+.oa-box label{display:block;font-size:13px;font-weight:600;margin-bottom:4px}
+.oa-box input,.oa-box textarea{font-size:16px;width:100%;margin-bottom:12px;padding:8px 12px}
+.oa-chip{display:inline-block;font-size:13px;font-weight:600;padding:4px 8px;border-radius:var(--radius);margin-bottom:8px}
+.oa-chip.ok{background:#eaf6ee;color:var(--accent2)}
+.oa-chip.no{background:#fdecea;color:var(--danger)}
+.oa-chip.q{background:#e8f0fb;color:var(--accent)}
+.oa-badge{display:inline-block;min-width:20px;padding:0 6px;margin-left:6px;border-radius:999px;background:var(--danger);color:#fff;font-size:13px;font-weight:700;line-height:20px;text-align:center}
+.oa-answered summary{font-size:15px;font-weight:600;min-height:44px;display:flex;align-items:center;cursor:pointer}
+.oa-answered summary::before{content:'\25B8';margin-right:8px}
+.oa-answered[open] summary::before{content:'\25BE'}
+.oa-wrap{max-width:720px;margin:0 auto;padding:0 16px}
+@media (max-width:420px){.oa-wrap{padding:0 12px}}
+@media (min-width:700px){.oa-main{flex:0 0 auto}}
+@media (max-width:700px){.tabs.oa-five{flex-wrap:wrap}.tabs.oa-five .tab{flex:1 1 30%}}
+</style>
 <link rel="manifest" href="manifest-owner.webmanifest"><script src="push-client.js" defer></script></head>
 <body>
 
