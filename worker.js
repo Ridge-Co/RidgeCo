@@ -19491,8 +19491,15 @@ async function alertAdminOnFailure(env, jobType, errMsg) {
   if (!cfg.admin_phone) return { skipped: true, reason: 'admin_phone not set' };
   const key = `failure_alert_last_sent_${jobType}`;
   if (!alertDebounceOk(cfg, key, Date.now(), 3600000)) return { skipped: true, reason: 'already alerted within the last hour' };
-  try { await sendSMS(env, cfg.admin_phone, `🔴 ${jobType} failed: ${String(errMsg).slice(0, 200)}`); } catch (_) {}
-  try { await setConfigKey(env, { key, value: new Date().toISOString() }); } catch (_) {}
+  // Phase 2 (Nov 17 2026): the alert that tells Brett something broke must not fail silently itself. A text that did not go out is reported (P0) and is NOT debounced,
+  // so the next failure tries again instead of waiting an hour; the old code stamped the debounce and answered { sent: true } either way.
+  let sendErr = '';
+  try { sendErr = sendFailure(await sendSMS(env, cfg.admin_phone, `🔴 ${jobType} failed: ${String(errMsg).slice(0, 200)}`)); } catch (e) { sendErr = String((e && e.message) || e).slice(0, 200); }
+  if (sendErr) {
+    await softFail(env, 'alertAdminOnFailure:' + jobType, 'The failure text to Brett did not go out: ' + sendErr, { severity: 'P0', ref: jobType, source: 'send', context: 'original problem: ' + String(errMsg).slice(0, 150) });
+    return { sent: false, error: sendErr };
+  }
+  try { await setConfigKey(env, { key, value: new Date().toISOString() }); } catch (e) { await softFail(env, 'alertAdminOnFailure:debounce', e, { severity: 'P1', ref: key, source: 'write' }); }
   return { sent: true };
 }
 
