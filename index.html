@@ -2780,6 +2780,7 @@ function renderWOPage() {
   wos.sort(function(a,b){
     if (sort==='date-asc') return new Date(a.Created_Date)-new Date(b.Created_Date);
     if (sort==='priority') { var d=(PRI[(a.Priority||'normal').toLowerCase()]??2)-(PRI[(b.Priority||'normal').toLowerCase()]??2); return d!==0?d:new Date(b.Created_Date)-new Date(a.Created_Date); }
+    if (sort==='triage') { var tr=triRank(a)-triRank(b); if (tr!==0) return tr; var pd=(PRI[(a.Priority||'normal').toLowerCase()]??2)-(PRI[(b.Priority||'normal').toLowerCase()]??2); return pd!==0?pd:new Date(b.Created_Date)-new Date(a.Created_Date); }
     if (sort==='status') return (STA[a.Status]??99)-(STA[b.Status]??99);
     if (sort==='address') { var pa=state.properties.find(function(p){return p.ID===a.Property_ID;}); var pb=state.properties.find(function(p){return p.ID===b.Property_ID;}); return (pa?.Address||'').localeCompare(pb?.Address||''); }
     return new Date(b.Created_Date)-new Date(a.Created_Date);
