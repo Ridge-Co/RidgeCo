@@ -20687,7 +20687,7 @@ async function schedRunSweepWork(env) {
   detail.estimate_reminders = await schedStep('estimate_reminders', () => processEstimateReminders(env), errors);
   detail.deposit_paid = await schedStep('deposit_paid', async () => {
     try { return await processDepositPaidSweep(env); }
-    catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_cron', Skill_Or_Endpoint: 'scheduler/sweep_work', Success: 'FALSE', Notes: schedErrText(e) }); } catch (e2) { console.error('deposit_sweep_cron telemetry failed:', schedErrText(e2)); } throw e; }
+    catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_cron', Skill_Or_Endpoint: 'scheduler/sweep_work', Success: 'FALSE', Notes: schedErrText(e) }); } catch (e2) { console.error('deposit_sweep_cron telemetry failed:', schedErrText(e2)); } throw e; }   // silent-ok: the sweep error is rethrown and recorded by schedStep
   }, errors);
   return { ok: !errors.length, errors, detail };
 }
@@ -21261,7 +21261,7 @@ async function schedRunNext(env, ctx, opts) {
   if (ov.errors.length) {
     const msg = (sentSchedule ? 'the schedule sent by the Apps Script JOBS table was rejected: ' : 'the stored schedule is invalid: ') + ov.errors.join('; ');
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'scheduler_job', Skill_Or_Endpoint: 'schedule_overrides', Success: 'FALSE', Notes: msg.slice(0, 480) }); }
-    catch (e) { console.error('scheduler: schedule rejected and telemetry write failed:', msg, schedErrText(e)); }
+    catch (e) { console.error('scheduler: schedule rejected and telemetry write failed:', msg, schedErrText(e)); }   // silent-ok: the 400 response below carries the rejection message
     return { status: 400, body: Object.assign({}, base, { ok: false, error: msg.slice(0, 500) }) };
   }
   jobs = ov.jobs;
@@ -22031,12 +22031,15 @@ function activeRows(rows) { return rows.filter(r => String(r.Active||'').toUpper
 
 async function buildDigest(env) {
   const today = etTodayISO();
+  const req = {};   // one report per `where` per digest run (soft-failure helpers)
+  const warnings = [];
+  const readTab = async tab => {
+    const r = await fetchTabSoft(env, tab, { where: 'digest:read:' + tab, req, severity: 'P1' });
+    if (r.error) warnings.push('Could not read ' + tab + ': ' + r.error);
+    return r.rows;
+  };
   const [wos0, bills, props0, vendors, tenants0] = await Promise.all([
-    fetchTab(env,'Work_Orders').catch(()=>[]),
-    fetchTab(env,'Vendor_Bills').catch(()=>[]),
-    fetchTab(env,'Properties').catch(()=>[]),
-    fetchTab(env,'Vendors').catch(()=>[]),
-    fetchTab(env,'Tenants').catch(()=>[]),
+    readTab('Work_Orders'), readTab('Vendor_Bills'), readTab('Properties'), readTab('Vendors'), readTab('Tenants'),
   ]);
   const wos = demoHide(wos0), props = demoHide(props0), tenants = demoHide(tenants0);   // demo work orders/properties never reach Brett's digest
   const open = wos.filter(w => OPEN_WO_STATUSES.includes(w.Status));
@@ -22062,19 +22065,26 @@ async function buildDigest(env) {
         healthAlerts.push(`${jt}: ${Math.round(jm.success_rate * 100)}% success (${jm.fail}/${jm.count} failed) — last 24h`);
       }
     }
-  } catch (e) { /* non-fatal — health check must never break the digest */ }
+  } catch (e) {   // the digest still goes out, but the unreadable health data is reported and shown in it
+    await softFail(env, 'digest:health-alerts', e, { req, severity: 'P2' });
+    warnings.push('Could not check job success rates: ' + String((e && e.message) || e).slice(0, 120));
+  }
   // Receipts that failed intake 3x and were given up on (receiptScan fix, greenlit #17) —
   // surfaced here rather than silently retried forever with no way for Brett to find out.
   let stuckReceipts = [];
   try {
     const cfg = await fetchConfig(env);
-    const failures = JSON.parse(cfg.receipt_intake_failures || '{}');
+    const failures = parseJsonCell(cfg.receipt_intake_failures, {}, { env, where: 'digest:receipt_intake_failures', ref: 'receipt_intake_failures', req, severity: 'P1' });
     stuckReceipts = Object.values(failures).filter(x => x.attempts >= 3).map(x => `${x.name} — ${x.error}`);
-  } catch (e) { /* non-fatal */ }
+  } catch (e) {
+    await softFail(env, 'digest:stuck-receipts', e, { req, severity: 'P1' });
+    warnings.push('Could not check for receipts that failed to read: ' + String((e && e.message) || e).slice(0, 120));
+  }
   // Tenant fix-checks (Oct 16 2026): answers waiting for Brett + checks nobody answered. An unreadable list is reported IN the digest, never skipped.
   const fuDigest = await fuDigestLines(env);
+  await softFlush(env, req);   // sends the queued corrupt-cell report before the digest returns
   return {
-    followups: fuDigest.lines, followupsError: fuDigest.error,
+    followups: fuDigest.lines, followupsError: fuDigest.error, warnings,
     today, stamp: etStamp(),
     overdue: overdue.map(label), dueToday: dueToday.map(label), onHold: onHold.map(label), urgent: urgent.map(label),
     pendingBills: pendingBills.map(b=>`Bill ${b.ID} · ${b.Vendor_Name||('V-'+(b.Vendor_ID||'?'))} · WO-${b.WO_ID||'?'} · $${(parseFloat(b.Total||b.Customer_Total||0)||0).toFixed(2)}`),
@@ -22111,8 +22121,9 @@ async function staleWos(env, url) {
 function formatDigestText(d) {
   const L = [];
   L.push(`RIDGE CO — DAILY DIGEST · ${d.stamp}`); L.push('');
-  if ((d.healthAlerts && d.healthAlerts.length) || (d.stuckReceipts && d.stuckReceipts.length)) {
+  if ((d.healthAlerts && d.healthAlerts.length) || (d.stuckReceipts && d.stuckReceipts.length) || (d.warnings && d.warnings.length)) {
     L.push('▶ SYSTEM HEALTH');
+    (d.warnings||[]).forEach(x=>L.push('⚠ '+x+' (numbers below may be incomplete)'));
     (d.healthAlerts||[]).forEach(x=>L.push('⚠ '+x));
     (d.stuckReceipts||[]).forEach(x=>L.push('⚠ Receipt could not be read after 3 tries: '+x));
     L.push('');
@@ -22169,7 +22180,7 @@ async function digestResponse(env, url) {
       Success: 'TRUE', Latency_ms: Date.now() - _t0,
       Notes: (delivery && delivery.delivered) ? 'delivered' : 'preview',
     });
-  } catch (_) { /* telemetry is best-effort; never let it take down the host job */ }
+  } catch (_) { /* silent-ok: telemetry row is a best-effort side effect of the digest */ }
   return json({ ok:true, text: formatDigestText(digest), digest, delivery });
 }
 
@@ -30377,40 +30388,40 @@ async function health(env, url) {
   // config — so a bad setup (wrong Worker/environment, wrong Sheet key/typo, malformed JSON)
   // can be diagnosed from a plain curl instead of needing the admin token or guessing.
   out.pricing = { secret_set: false, sheet_set: false, parses_ok: false };
-  try { out.pricing.secret_set = !!(env && env.PRICING_CONFIG); } catch (_) {}
-  try { const cfg = await fetchConfig(env); out.pricing.sheet_set = !!(cfg && cfg.pricing_config); } catch (_) {}
-  try { const pc = await getPricingConfig(env); out.pricing.parses_ok = !!(pc && Array.isArray(pc.tiers) && pc.tiers.length > 0); } catch (_) {}
+  out.warnings = [];   // config checks that could not run; shown here instead of a silent false
+  const healthWarn = (what, e) => out.warnings.push(what + ': ' + String((e && e.message) || e).slice(0, 120));
+  out.pricing.secret_set = !!(env && env.PRICING_CONFIG);
+  try { const cfg = await fetchConfig(env); out.pricing.sheet_set = !!(cfg && cfg.pricing_config); } catch (e) { healthWarn('pricing config unreadable', e); }
+  try { const pc = await getPricingConfig(env); out.pricing.parses_ok = !!(pc && Array.isArray(pc.tiers) && pc.tiers.length > 0); } catch (e) { healthWarn('pricing config did not parse', e); }
   // Gmail OAuth (B-210) config-presence check — same never-expose-values pattern as pricing
   // above. Confirms the 4 Cloudflare secrets actually landed and are non-empty, without
   // proving the refresh token is still valid (that needs a real send — see /gmail/test).
   out.gmail = { client_id_set: false, client_secret_set: false, refresh_token_set: false, sender_set: false };
-  try {
-    out.gmail.client_id_set = !!(env && env.GMAIL_CLIENT_ID);
-    out.gmail.client_secret_set = !!(env && env.GMAIL_CLIENT_SECRET);
-    out.gmail.refresh_token_set = !!(env && env.GMAIL_REFRESH_TOKEN);
-    out.gmail.sender_set = !!(env && env.GMAIL_SENDER);
-  } catch (_) {}
+  out.gmail.client_id_set = !!(env && env.GMAIL_CLIENT_ID);
+  out.gmail.client_secret_set = !!(env && env.GMAIL_CLIENT_SECRET);
+  out.gmail.refresh_token_set = !!(env && env.GMAIL_REFRESH_TOKEN);
+  out.gmail.sender_set = !!(env && env.GMAIL_SENDER);
   // "Reconnect Gmail" (Sep 22 2026): whether a sign-in-flow token is stored in Config, and when —
   // presence/date only, never the value. The live no-send check is ADMIN-only: GET /gmail/token-check.
   try {
     const _cfg = await fetchConfig(env);
     out.gmail.config_token_set = !!String(_cfg.GMAIL_REFRESH_TOKEN || '').trim();
     out.gmail.config_token_updated = _cfg.GMAIL_TOKEN_UPDATED || '';
-  } catch (_) {}
+  } catch (e) { healthWarn('Gmail sign-in token status unreadable', e); }
 
   // Twilio (TWILIO_SMS_BUILD_BRIEF_v1.0) — same never-expose-values, presence-only pattern.
   // twilio_enabled reflects the live Config kill switch, not the secrets — lets Brett confirm
   // from a plain curl whether sends are actually live without opening the Hub.
   out.twilio = { sid_set: false, api_key_sid_set: false, api_key_secret_set: false, from_set: false, twilio_enabled: false, test_mode: true };
+  out.twilio.sid_set = !!(env && env.TWILIO_SID);
+  out.twilio.api_key_sid_set = !!(env && env.TWILIO_API_SID);
+  out.twilio.api_key_secret_set = !!(env && env.TWILIO_API_KEY);
+  out.twilio.from_set = !!(env && env.TWILIO_FROM);
   try {
-    out.twilio.sid_set = !!(env && env.TWILIO_SID);
-    out.twilio.api_key_sid_set = !!(env && env.TWILIO_API_SID);
-    out.twilio.api_key_secret_set = !!(env && env.TWILIO_API_KEY);
-    out.twilio.from_set = !!(env && env.TWILIO_FROM);
     const cfg = await fetchConfig(env);
     out.twilio.twilio_enabled = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
     out.twilio.test_mode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
-  } catch (_) {}
+  } catch (e) { healthWarn('Twilio kill-switch unreadable, so the defaults shown may be wrong', e); }
   // Cron-sweep token presence (Sep 14 2026) — same never-expose-values pattern. LEGACY (Oct 12 2026): the GitHub
   // Actions sweep is gone; the Apps Script scheduler authenticates with Config `Scheduler_Token` instead (see
   // out.scheduler below). CRON_SWEEP_TOKEN now only guards the manual POST /cron/sweep.
@@ -42074,12 +42085,14 @@ async function inspStrGuardTick(env, opts) {
     items[key].ids.push(bl.ID); items[key].lines.push(`${bl.Date} ${bl.Start_Time}–${bl.End_Time} (${bl.Customer_ID ? cname(bl.Customer_ID) : 'any customer'}) is CLOSED to booking until a cleaner is scheduled. ${inspStrDayText(inspStrDayInfo(st, bl.Date), st.label)}`);
   }
   for (const it of Object.values(items)) it.sig = it.ids.slice().sort().join(',') + '|' + it.bucket;
-  let prev = {}; try { prev = JSON.parse(cfg.STR_GUARD_NOTIFIED || '{}') || {}; } catch (e) { console.error('insp: STR_GUARD_NOTIFIED unreadable, treating as empty:', e && e.message); }
+  let prev = {};
+  try { prev = JSON.parse(cfg.STR_GUARD_NOTIFIED || '{}') || {}; }
+  catch (e) { await softFail(env, 'insp-str-guard:STR_GUARD_NOTIFIED', 'STR_GUARD_NOTIFIED could not be read, so already-sent guard notices may be sent again: ' + ((e && e.message) || e), { severity: 'P0', ref: 'STR_GUARD_NOTIFIED' }); }
   const fresh = Object.entries(items).filter(([k, it]) => prev[k] !== it.sig);
   const resolved = Object.keys(prev).filter(k => !items[k] && k.slice(2) >= inspAddDays(today, -1));
   const out = { enabled: true, items: Object.fromEntries(Object.entries(items).map(([k, it]) => [k, { sig: it.sig, lines: it.lines }])), new: fresh.map(f => f[0]), resolved };
   if (dry || (!fresh.length && !resolved.length)) {
-    if (!dry && !fresh.length && !resolved.length) { const keep = {}; for (const k of Object.keys(items)) keep[k] = items[k].sig; if (JSON.stringify(keep) !== JSON.stringify(prev)) { try { await setConfigKey(env, { key: 'STR_GUARD_NOTIFIED', value: JSON.stringify(keep) }); } catch (e) { console.error('insp: could not prune STR_GUARD_NOTIFIED:', e && e.message); } } }
+    if (!dry && !fresh.length && !resolved.length) { const keep = {}; for (const k of Object.keys(items)) keep[k] = items[k].sig; if (JSON.stringify(keep) !== JSON.stringify(prev)) { const w = await tryWrite(env, () => setConfigKey(env, { key: 'STR_GUARD_NOTIFIED', value: JSON.stringify(keep) }), { where: 'insp-str-guard:prune-notified', ref: 'STR_GUARD_NOTIFIED', severity: 'P1' }); out.prune_error = w.error || undefined; } }
     return out;
   }
   const nA = fresh.filter(([k]) => k[0] === 'A').length, nB = fresh.filter(([k]) => k[0] === 'B').length;
