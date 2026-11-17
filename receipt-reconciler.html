@@ -73,6 +73,16 @@
   .rc-bulk-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
   .rc-count-label{font-size:11px;font-weight:bold;color:var(--accent);white-space:nowrap;}
   .rc-bulk-exp{display:flex;gap:6px;align-items:center;}
+  .rc-banner{background:#fdecea;border:1px solid #f4b8b1;color:#b42318;border-radius:var(--radius);padding:8px 10px;margin-bottom:10px;font-size:12px;line-height:1.5;}
+  .rc-dup{background:#fdf2e2;border:1px solid #f0d49a;color:#7a5200;border-radius:var(--radius);padding:8px 10px;margin-bottom:8px;font-size:12px;line-height:1.5;}
+  .rc-hint{background:#eef2ff;border:1px solid #c7d2fe;border-radius:var(--radius);padding:8px 10px;margin-bottom:8px;font-size:12px;line-height:1.5;display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
+  details.rc-panel{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:0 12px;margin-bottom:10px;}
+  details.rc-panel > summary{cursor:pointer;font-weight:bold;font-size:13px;min-height:44px;display:flex;align-items:center;}
+  .rc-prow{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;border-top:1px solid var(--border);padding:8px 0;font-size:12px;}
+  .rc-pform{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;border-top:1px solid var(--border);padding:10px 0;}
+  .rc-pform label{display:block;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px;}
+  .rc-pform input,.rc-pform select{min-height:44px;font-size:16px;}
+  .rc-panel .btn{min-height:44px;}
 </style>
 <style id="mobile-input-font">
 /* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch screens or Android/iOS zoom the page on focus. Mouse/desktop density unchanged. */
@@ -212,6 +222,7 @@
   <div class="row" id="rc-filter-bar" style="display:none">
     <input id="rc-filter-input" placeholder="Filter this list by amount, store, or notes…" style="flex:1" oninput="onQueueFilterInput(this.value)">
   </div>
+  <div id="rc-panels"></div>
   <div id="list"><div class="empty">Loading…</div></div>
 </div>
 
@@ -469,6 +480,7 @@ async function loadQueue(){
   const list = document.getElementById('list');
   list.innerHTML = '<div class="empty">Loading…</div>';
   toggleFilterBar(false);
+  { const pb = document.getElementById('rc-panels'); if (pb) pb.innerHTML = ''; }
   if (curStatus === 'trucks') { await loadTruckStock(status, list); return; }
   if (curStatus === 'audit') { await loadAudit(status, list); return; }
   if (curStatus === 'search') { await loadSearchTab(status, list); return; }
@@ -487,6 +499,7 @@ async function loadQueue(){
     const filterInput = document.getElementById('rc-filter-input');
     if (filterInput) filterInput.value = queueFilterText;
     toggleFilterBar(true);
+    await loadPanels(lastQueueRows);
     renderFiltered();
     status.textContent = '✅ '+(rows||[]).length+' '+curStatus+(queueFilterText?' ('+filterQueueRows(queueFilterText).length+' shown, filtered)':'');
   } catch(e){ list.innerHTML = '<div class="empty err">❌ '+esc(e.message)+'</div>'; }
@@ -758,6 +771,10 @@ function flagPill(f){
     duplicate_on_wo: ['danger','Duplicate — already on that WO'],
     wo_already_invoiced: ['warn','Suggested WO already invoiced/paid'],
     no_open_wo: ['warn','No open WO at this property'],
+    po_ambiguous: ['warn','PO number is ambiguous — pick the property or work order'],
+    card_unknown: ['warn','Card not on either list'],
+    card_not_read: ['warn','Card digits not read from the receipt'],
+    card_conflict: ['warn','Card is a customer card but the PO says business'],
   };
   const [cls,label] = map[f] || ['muted', f];
   return '<span class="pill '+cls+'">'+esc(label)+'</span>';
@@ -765,6 +782,7 @@ function flagPill(f){
 function categoryPill(cat, action){
   if (cat === 'refund') return '<span class="pill warn">🔄 REFUND — find a match or post as expense</span>';
   if (cat === 'company') return '<span class="pill muted">BMore business expense — not billable</span>';
+  if (cat === 'vendor_invoice') return '<span class="pill muted">Vendor invoice — belongs in Who To Pay (Hub), not receipts</span>';
   if (cat === 'customer_paid') return '<span class="pill muted">Paid on customer card — not billable</span>';
   if (action === 'need_property') return '<span class="pill warn">Can\'t resolve property — assign manually</span>';
   if (action === 'skip_duplicate') return '<span class="pill danger">Duplicate</span>';
@@ -777,7 +795,11 @@ function categoryPill(cat, action){
 function propertyOptions(selectedId){
   const sorted = allProperties.slice().sort((a,b) => String(a.Address||'').localeCompare(String(b.Address||'')));
   let opts = '<option value="">— pick a property —</option>';
-  for (const p of sorted) opts += '<option value="'+esc(p.ID)+'"'+(String(p.ID)===String(selectedId)?' selected':'')+'>'+esc(p.Address||('Property '+p.ID))+'</option>';
+  for (const p of sorted) {
+    // Inactive properties are hidden (Nov 17 2026) unless one is already the selected value, so an old row never silently loses its property.
+    if (String(p.Active == null ? '' : p.Active).toUpperCase() === 'FALSE' && String(p.ID) !== String(selectedId)) continue;
+    opts += '<option value="'+esc(p.ID)+'"'+(String(p.ID)===String(selectedId)?' selected':'')+'>'+esc(p.Address||('Property '+p.ID))+'</option>';
+  }
   return opts;
 }
 
@@ -865,6 +887,13 @@ function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId, receiptDate
     html += '<optgroup label="Open at this property">' + openOrdered.map((w,i) => opt(w, rankedIds.includes(String(w.ID)) ? ' ★ suggested' : '')).join('') + '</optgroup>';
   } else {
     html += '<optgroup label="Open at this property"><option value="" disabled>— none open —</option></optgroup>';
+  }
+  // Closed work orders from the last 30 days (counted from today or from the receipt date) are always offered: a receipt often lands just after the job closes.
+  if (!showClosed) {
+    const DAY = 86400000, now = Date.now(), rd = Date.parse(String(receiptDate || '').slice(0, 10) + 'T00:00:00Z');
+    const recent = closed.filter(w => { const t = Date.parse(String(w.Completed_Date || '').slice(0, 10) + 'T00:00:00Z'); return !isNaN(t) && (Math.abs(now - t) <= 30 * DAY || (!isNaN(rd) && Math.abs(rd - t) <= 30 * DAY)); })
+      .sort((a,b) => Number(b.ID)-Number(a.ID));
+    if (recent.length) html += '<optgroup label="Closed in the last 30 days">' + recent.map(w => opt(w, '')).join('') + '</optgroup>';
   }
   if (showClosed) {
     const closedSorted = closed.slice().sort((a,b) => Number(b.ID)-Number(a.ID));
@@ -1136,6 +1165,41 @@ function evidenceHtml(r){
   return html;
 }
 
+// Effective card status: the stored suggestion is a snapshot from scan time, so a card added to a list since then is honoured here.
+function effCardStatus(r, sug){
+  const l4 = String(r.Card_Last4 || '').replace(/\D/g, '').slice(-4);
+  if (l4.length === 4 && cardsInfo) {
+    if ((cardsInfo.mine || []).some(c => c.last4 === l4)) return 'mine';
+    if ((cardsInfo.customer || []).some(c => c.last4 === l4)) return 'customer';
+  }
+  return sug.card_status || '';
+}
+function dupSignalsHtml(r){
+  const d = r.dup_signals || [];
+  if (!d.length || (r.Status || 'pending') !== 'pending') return '';
+  return '<div class="rc-dup"><b>⚠️ Possible duplicate</b> (flag only — nothing is skipped for you)'
+    + d.map(x => '<div>'+esc(x.reason)+'</div>').join('') + '</div>';
+}
+function cardHintHtml(r, sug){
+  if ((r.Status || 'pending') !== 'pending') return '';
+  const l4 = String(r.Card_Last4 || '').replace(/\D/g, '').slice(-4);
+  if (effCardStatus(r, sug) !== 'unknown' || l4.length !== 4) return '';
+  return '<div class="rc-hint"><span>Card …'+esc(l4)+' is not on either list. Whose is it?</span>'
+    + '<button class="btn secondary small" onclick="setCardOwner(\''+esc(r.ID)+'\',\''+l4+'\',\'mine\',this)">This is my card</button>'
+    + '<button class="btn secondary small" onclick="setCardOwner(\''+esc(r.ID)+'\',\''+l4+'\',\'customer\',this)">Customer\'s card</button></div>';
+}
+function ruleHintHtml(sug){
+  const ru = sug && sug.rule; if (!ru) return '';
+  const what = ru.action === 'property' ? 'always this property' : 'always a business expense';
+  const why = (ru.blocked || []).length ? ' Not auto-handled: ' + ru.blocked.map(b => String(b).replace(/_/g, ' ')).join(', ') + '.' : (ru.auto ? '' : ' Pre-selected only (auto is off for this rule).');
+  return '<div class="rc-hint"><span>📌 Rule #'+esc(ru.id)+': '+what+'.'+esc(why)+'</span></div>';
+}
+function placeHintHtml(sug, r){
+  const cands = (sug && sug.property_hint && sug.property_hint.candidates) || [];
+  if (!((sug.flags || []).includes('po_ambiguous') || sug.action === 'need_property') || !cands.length || (r.Status || 'pending') !== 'pending') return '';
+  return '<div class="rc-hint"><span>Could be: '+cands.slice(0, 3).map(c => esc(c.address)).join(' · ')+'</span></div>';
+}
+
 function rowCard(r){
   const sug = r.suggestion || {};
   // 'company' (a Ridge Co business expense — no customer, sometimes no property either) now
@@ -1149,7 +1213,7 @@ function rowCard(r){
   const excluded = ['customer_paid'].includes(sug.category);
   const isPendingLike = (r.Status||'pending') === 'pending';
   const isDuplicateFlagged = (sug.flags||[]).includes('duplicate_on_wo');
-  const propId = (sug.property && sug.property.id) || '';
+  const propId = (sug.property && sug.property.id) || (sug.rule && sug.rule.action === 'property' ? sug.rule.property_id : '') || '';
   const idAttr = 'rc'+r.ID;
   let html = '<div class="rcard'+(excluded?' excl':'')+'" id="'+idAttr+'">';
   html += '<div class="rc-top"><div style="display:flex;gap:8px;align-items:flex-start">'
@@ -1164,6 +1228,7 @@ function rowCard(r){
 
   const flags = sug.flags || [];
   if (flags.length) html += '<div class="rc-flags">'+flags.map(flagPill).join('')+'</div>';
+  html += dupSignalsHtml(r) + cardHintHtml(r, sug) + ruleHintHtml(sug) + placeHintHtml(sug, r);
 
   // Part 1 (Sep 22 2026 brief): when this receipt is flagged as a possible duplicate, show
   // whether ITS OWN image field is actually populated yet — checked against the Receipts row's
@@ -1216,7 +1281,15 @@ function rowCard(r){
   // a Milam Ridge cabin receipt would pick that property with still no WO.
   if (isCompany && isPendingLike) {
     html += '<div class="rc-fields">'
-      + '<div class="full"><label>Property (optional — leave blank for general Ridge Co overhead)</label><select id="'+idAttr+'-prop">'+propertyOptions(propId)+'</select></div>'
+      + '<div class="full"><label>Property (optional — leave blank for general Ridge Co overhead)</label><select id="'+idAttr+'-prop" onchange="refreshUnitSelect(\''+r.ID+'\')">'+propertyOptions(propId)+'</select></div>'
+      + '<div class="full"><label class="rc-closed-toggle" style="display:inline-flex;min-height:44px"><input type="checkbox" id="'+idAttr+'-bill" onchange="toggleBillCustomer(\''+r.ID+'\')"> Bill this to a customer instead (pick a unit and work order)</label></div>'
+      + '<div class="full rc-fields" id="'+idAttr+'-billbox" style="display:none">'
+      + '<div><label>Unit (optional)</label><select id="'+idAttr+'-unit" onchange="refreshWoSelect(\''+r.ID+'\')">'+unitOptions(propId, '')+'</select></div>'
+      + '<div><label>Work order</label><select id="'+idAttr+'-wo" onchange="document.getElementById(\''+idAttr+'-wo-manual\').value=\'\';checkManualWo(\''+r.ID+'\')"></select></div>'
+      + '<div class="full"><label class="rc-closed-toggle" style="display:inline-flex"><input type="checkbox" id="'+idAttr+'-showclosed" onchange="refreshWoSelect(\''+r.ID+'\')"> Also show older closed work orders</label></div>'
+      + '<div class="full"><label>...or type a WO number</label><input id="'+idAttr+'-wo-manual" list="wo-datalist" placeholder="e.g. 1234" oninput="document.getElementById(\''+idAttr+'-wo\').value=\'\';checkManualWo(\''+r.ID+'\')"><div class="rc-wo-check" id="'+idAttr+'-wo-check"></div></div>'
+      + '<div class="full rc-wo-detail" id="'+idAttr+'-wo-detail"></div><div class="full rc-posting" id="'+idAttr+'-posting"></div>'
+      + '</div>'
       + '<div><label>Amount</label><input id="'+idAttr+'-amt" value="'+esc(money(r.Total))+'"></div>'
       + '<div><label>Store</label><input id="'+idAttr+'-store" value="'+esc(r.Vendor||'')+'"></div>'
       + '<div><label>Date</label><input id="'+idAttr+'-date" value="'+esc(r.Receipt_Date||'')+'"></div>'
@@ -1260,7 +1333,8 @@ function rowCard(r){
   html += '<div class="rc-foot">' + fileLink + '<div class="actions">';
   if (isPendingLike) {
     if (!excluded && !isCompany && !isRefund) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm</button>';
-    if (isCompany) html += '<button class="btn small" onclick="confirmBusinessExpense(\''+r.ID+'\', this)">✓ Confirm as business expense</button>';
+    if (isCompany) html += '<button class="btn small" id="'+idAttr+'-bizbtn" onclick="confirmBusinessExpense(\''+r.ID+'\', this)">✓ Confirm as business expense</button>'
+      + '<button class="btn small" id="'+idAttr+'-billbtn" style="display:none" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm to this work order</button>';
     if (isDuplicateFlagged) html += '<button class="btn small warnbtn" onclick="confirmDuplicate(\''+r.ID+'\', this)">🖐 Confirm duplicate</button>';
     // Part 2: an alternative to Confirm/Confirm-duplicate — attach this receipt's own image to
     // the WO picked above WITHOUT billing it. Reuses the same Part 5 WO picker already rendered
@@ -1274,6 +1348,10 @@ function rowCard(r){
     // since that's a real scanner finding, not a manual guess.
     if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', true, this)">🔄 Mark as refund</button>';
     if (isRefund && sug.manual_refund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', false, this)">↩ Not a refund</button>';
+    const ccL4 = String(r.Card_Last4 || '').replace(/\D/g, '').slice(-4);
+    if (!excluded && !isRefund && ccL4.length === 4) html += '<label class="rc-closed-toggle" style="min-height:44px"><input type="checkbox" id="'+idAttr+'-cc-save"> also remember …'+esc(ccL4)+' as a customer card</label>';
+    if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="markCustomerCard(\''+r.ID+'\', true, this)">💳 This was on a customer\'s card</button>';
+    if (sug.manual_customer_card) html += '<button class="btn secondary small" onclick="markCustomerCard(\''+r.ID+'\', false, this)">↩ Not a customer-card purchase</button>';
     html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\', this)">Skip</button>';
   } else {
     if (r.Status === 'skipped') html += '<button class="btn secondary small" onclick="unskipRow(\''+r.ID+'\', this)">↩ Move back to Pending</button>';
@@ -1501,6 +1579,140 @@ async function submitReassign(id, btn){
     statusEl.innerHTML = '<span class="ok">✓ Reassigned to '+esc(wo_id||('Property '+property_id))+'.</span>';
     finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+// ── Nov 17 2026 accuracy build: customer-card mark, card owner one-tap, bill-instead toggle ──────
+function toggleBillCustomer(id){
+  const idAttr = 'rc'+id, on = document.getElementById(idAttr+'-bill').checked;
+  document.getElementById(idAttr+'-billbox').style.display = on ? '' : 'none';
+  document.getElementById(idAttr+'-bizbtn').style.display = on ? 'none' : '';
+  document.getElementById(idAttr+'-billbtn').style.display = on ? '' : 'none';
+  if (on) refreshWoSelect(id);
+}
+async function markCustomerCard(id, flag, btn){
+  let last4 = '';
+  if (flag) {
+    const r = rowsById[id] || {}, cb = document.getElementById('rc'+id+'-cc-save');
+    if (cb && cb.checked) last4 = String(r.Card_Last4 || '').replace(/\D/g, '').slice(-4);
+  }
+  if (btn) btn.disabled = true;
+  const statusEl = document.getElementById('rc'+id+'-status');
+  if (statusEl) statusEl.innerHTML = '<span class="info">Saving…</span>';
+  try {
+    const res = await post('/receipt-recon/mark-customer-card', flag ? { id, customer_card: true, last4: last4 || undefined } : { id, customer_card: false });
+    if (res.error) throw new Error(res.error);
+    if (res.card_error) toast('<span class="err">Marked, but the card was not saved: '+esc(res.card_error)+'</span>');
+    await loadQueue();
+  } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+async function setCardOwner(id, last4, owner, btn){
+  if (btn) btn.disabled = true;
+  const statusEl = document.getElementById('rc'+id+'-status');
+  try {
+    const res = owner === 'customer'
+      ? await post('/receipt-recon/mark-customer-card', { id, customer_card: true, last4 })
+      : await post('/receipt-recon/cards', { last4, owner: 'mine' });
+    if (res.error) throw new Error(res.error);
+    if (res.card_error) toast('<span class="err">'+esc(res.card_error)+'</span>');
+    await loadQueue();
+  } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+// ── Panels above the list: errors, Auto-handled (Undo), Cards, Rules ───────────────────────────
+let cardsInfo = null, rulesInfo = null, autoRows = [], panelErrors = [];
+const openPanels = new Set();
+// Two-tap confirm without a browser pop-up: the first tap re-labels the button, a second tap within 6 seconds goes ahead.
+function armed(btn, label){
+  if (btn && btn.dataset.armed === '1') { btn.dataset.armed = ''; return true; }
+  if (btn) { const old = btn.textContent; btn.dataset.armed = '1'; btn.textContent = label; setTimeout(() => { if (btn.dataset.armed === '1') { btn.dataset.armed = ''; btn.textContent = old; } }, 6000); }
+  return false;
+}
+function panelToggle(name, el){ if (el.open) openPanels.add(name); else openPanels.delete(name); }
+async function loadPanels(rows){
+  panelErrors = [];
+  const tryGet = async (path, label) => { try { const d = await get(path); if (d && d.ok === false) throw new Error(d.error || 'failed'); return d; } catch(e){ panelErrors.push(label + ': ' + e.message); return null; } };
+  const [c, ru, conf] = await Promise.all([
+    tryGet('/receipt-recon/cards', 'Card lists could not be read'),
+    tryGet('/receipt-recon/rules', 'Always-rules could not be read'),
+    tryGet('/receipt-recon/queue?status=confirmed', 'Auto-handled list could not be read'),
+  ]);
+  cardsInfo = c; rulesInfo = ru;
+  if (c && c.errors && c.errors.length) c.errors.forEach(e => panelErrors.push(e));
+  const cutoff = Date.now() - 14 * 86400000;
+  autoRows = Array.isArray(conf) ? conf.filter(x => x.auto_handled && (Date.parse(x.Received_Date || '') || 0) >= cutoff) : [];
+  const dupErr = (rows || []).find(x => x.dup_read_error);
+  if (dupErr) panelErrors.push(dupErr.dup_read_error);
+  (rows || []).forEach(x => { const le = x.suggestion && x.suggestion.list_errors; if (le && le.length) le.forEach(e => { if (!panelErrors.includes(e)) panelErrors.push(e); }); });
+  renderPanels();
+}
+function renderPanels(){
+  const box = document.getElementById('rc-panels'); if (!box) return;
+  let h = '';
+  if (panelErrors.length) h += '<div class="rc-banner"><b>⚠️ Something could not be checked.</b> Until it is fixed, card status shows as unknown and nothing is auto-handled.<br>'+panelErrors.map(esc).join('<br>')+'</div>';
+  // Auto-handled
+  h += '<details class="rc-panel" '+(openPanels.has('auto')?'open':'')+' ontoggle="panelToggle(\'auto\',this)"><summary>🤖 Auto-handled by rules (last 14 days): '+autoRows.length+'</summary>';
+  h += autoRows.length ? autoRows.map(x => '<div class="rc-prow" id="ah'+esc(x.ID)+'"><span><b>'+esc(x.Vendor||'(vendor unknown)')+'</b> $'+money(x.Total)+' · '+esc(x.Receipt_Date||'')+'<br><span class="info">'+esc(x.Notes||'')+'</span></span><button class="btn secondary small" onclick="autoUndo(\''+esc(x.ID)+'\', this)">↩ Undo</button></div>').join('') : '<div class="rc-prow info">Nothing was handled automatically in the last 14 days.</div>';
+  h += '</details>';
+  // Cards
+  h += '<details class="rc-panel" '+(openPanels.has('cards')?'open':'')+' ontoggle="panelToggle(\'cards\',this)"><summary>💳 Cards</summary>';
+  if (!cardsInfo) h += '<div class="rc-prow err">The card lists could not be loaded.</div>';
+  else {
+    const row = (c, owner) => '<div class="rc-prow"><span>…'+esc(c.last4)+(c.label?' · '+esc(c.label):'')+' <span class="pill '+(owner==='mine'?'suggest':'warn')+'">'+(owner==='mine'?'mine':'customer')+'</span></span><button class="btn secondary small" onclick="cardChange(\''+esc(c.last4)+'\',\'remove\',this)">Remove</button></div>';
+    h += (cardsInfo.mine||[]).map(c => row(c,'mine')).join('') + (cardsInfo.customer||[]).map(c => row(c,'customer')).join('');
+    if (!(cardsInfo.mine||[]).length && !(cardsInfo.customer||[]).length) h += '<div class="rc-prow info">No cards saved yet. Only the last 4 digits are ever stored.</div>';
+    if (cardsInfo.customer_from_secret) h += '<div class="rc-prow info">The customer list is fixed by a Cloudflare secret; changes to it must be made there.</div>';
+    h += '<div class="rc-pform"><div><label>Last 4</label><input id="rc-card-l4" inputmode="numeric" maxlength="4" style="width:90px" placeholder="1234"></div>'
+      + '<div><label>Label (optional)</label><input id="rc-card-label" maxlength="40" style="width:150px" placeholder="e.g. Lowe\'s card"></div>'
+      + '<div><label>Whose</label><select id="rc-card-owner"><option value="mine">Mine</option><option value="customer">Customer</option></select></div>'
+      + '<button class="btn small" onclick="cardAdd(this)">Save card</button></div>';
+  }
+  h += '</details>';
+  // Rules
+  h += '<details class="rc-panel" '+(openPanels.has('rules')?'open':'')+' ontoggle="panelToggle(\'rules\',this)"><summary>📌 Always-rules: '+(rulesInfo?(rulesInfo.rules||[]).filter(x => String(x.Active==null?'TRUE':x.Active).toUpperCase()!=='FALSE').length:'?')+' active</summary>';
+  if (!rulesInfo) h += '<div class="rc-prow err">The rules could not be loaded.</div>';
+  else {
+    h += (rulesInfo.rules||[]).map(x => {
+      const off = String(x.Active==null?'TRUE':x.Active).toUpperCase()==='FALSE';
+      const prop = allProperties.find(p => String(p.ID) === String(x.Property_ID));
+      const what = x.Action === 'property' ? 'always ' + (prop ? prop.Address : 'property '+x.Property_ID) : 'always a business expense';
+      const rng = (x.Min_Amount||x.Max_Amount) ? ' · $'+esc(x.Min_Amount||'0')+'–'+esc(x.Max_Amount||'any') : '';
+      return '<div class="rc-prow"'+(off?' style="opacity:.55"':'')+'><span><b>'+esc(x.Match_Vendor)+'</b> → '+esc(what)+rng+' · '+(String(x.Auto).toUpperCase()==='TRUE'?'auto':'pre-select only')+' · used '+esc(x.Hits||0)+'×'+(off?' · <i>off</i>':'')+'</span>'
+        + (off ? '' : '<button class="btn secondary small" onclick="ruleDeactivate(\''+esc(x.ID)+'\', this)">Turn off</button>')+'</div>';
+    }).join('') || '<div class="rc-prow info">No rules yet.</div>';
+    h += '<div class="rc-pform"><div><label>Vendor name</label><input id="rc-rule-vendor" style="width:150px" placeholder="e.g. Google LLC"></div>'
+      + '<div><label>Always</label><select id="rc-rule-action" onchange="document.getElementById(\'rc-rule-prop-wrap\').style.display=this.value===\'property\'?\'\':\'none\'"><option value="business">a business expense</option><option value="property">this property</option></select></div>'
+      + '<div id="rc-rule-prop-wrap" style="display:none"><label>Property</label><select id="rc-rule-prop" style="max-width:200px">'+propertyOptions('')+'</select></div>'
+      + '<div><label>Min $</label><input id="rc-rule-min" inputmode="decimal" style="width:70px"></div><div><label>Max $</label><input id="rc-rule-max" inputmode="decimal" style="width:70px"></div>'
+      + '<div><label>Auto-confirm</label><select id="rc-rule-auto"><option value="true">Yes</option><option value="false">No, pre-select only</option></select></div>'
+      + '<button class="btn small" onclick="ruleSave(this)">Save rule</button></div>';
+  }
+  h += '</details>';
+  box.innerHTML = h;
+}
+async function panelAction(btn, fn){
+  if (btn) btn.disabled = true;
+  try { await fn(); await loadQueue(); }
+  catch(e){ toast('<span class="err">❌ '+esc(e.message)+'</span>'); if (btn) btn.disabled = false; }
+}
+function cardAdd(btn){ panelAction(btn, async () => {
+  const last4 = document.getElementById('rc-card-l4').value.replace(/\D/g, '');
+  if (last4.length !== 4) throw new Error('Enter exactly 4 digits.');
+  const res = await post('/receipt-recon/cards', { last4, owner: document.getElementById('rc-card-owner').value, label: document.getElementById('rc-card-label').value });
+  if (res.error) throw new Error(res.error);
+}); }
+function cardChange(last4, owner, btn){ if (owner === 'remove' && !armed(btn, 'Tap again to remove')) return; panelAction(null, async () => { const res = await post('/receipt-recon/cards', { last4, owner }); if (res.error) throw new Error(res.error); }); }
+function ruleSave(btn){ panelAction(btn, async () => {
+  const action = document.getElementById('rc-rule-action').value;
+  const body = { match_vendor: document.getElementById('rc-rule-vendor').value.trim(), action, min_amount: document.getElementById('rc-rule-min').value.trim(), max_amount: document.getElementById('rc-rule-max').value.trim(), auto: document.getElementById('rc-rule-auto').value === 'true' };
+  if (action === 'property') body.property_id = document.getElementById('rc-rule-prop').value;
+  const res = await post('/receipt-recon/rules', body);
+  if (res.error) throw new Error(res.error);
+  (res.warnings || []).forEach(w => toast('<span class="warn">'+esc(w)+'</span>'));
+}); }
+function ruleDeactivate(id, btn){ if (!armed(btn, 'Tap again to turn off')) return; panelAction(btn, async () => { const res = await post('/receipt-recon/rules/deactivate', { id }); if (res.error) throw new Error(res.error); }); }
+async function autoUndo(id, btn){
+  if (!armed(btn, 'Tap again to undo')) return;
+  panelAction(btn, async () => { const res = await post('/receipt-recon/undo', { id }); if (res.error) throw new Error(res.error); toast('<span class="ok">↩ Undone — back in Pending.</span>'); });
 }
 
 // Pending-row manual refund toggle. The card re-renders with different fields once the category

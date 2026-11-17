@@ -25,7 +25,9 @@ const body = [
   grab('receiptSuggestCore'),
   'return receiptSuggestCore;',
 ].join('\n');
-const receiptSuggestCore = new Function(body)();
+void body; // the shared loader now carries the Nov 17 2026 helper functions too
+import { E } from './_receipt-engine.mjs';
+const receiptSuggestCore = E.receiptSuggestCore;
 
 let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
 const PROPS = [ { ID: 8, Address: '3014 N Calvert St' } ];
