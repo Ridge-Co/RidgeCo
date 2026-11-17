@@ -14208,6 +14208,15 @@ async function approveInvoiceReviewBulk(env, body) {
       catch (e) { results.push({ bill_id, wo_id, success: false, error: 'Could not confirm whether this job is billed through a signed proposal — its receipts were not billed. Try again.' }); continue; }
       if (covered) { results.push({ bill_id, wo_id, success: false, error: `Billed through signed proposal Scope #${covered.scope_id} — its receipts can't be invoiced again here. Untick them and re-approve.`, scope_covered: covered }); continue; }
     }
+    {
+      const _ids = String(a.own_material_ids || '').split(',').map(x => x.trim()).filter(Boolean);
+      if (_ids.length) {
+        let _nb = [];
+        try { if (!_nbRows) _nbRows = await fetchTab(env, 'Receipts'); _nb = await nonBillingReceiptIdsAmong(env, _ids, _nbRows); }
+        catch (e) { results.push({ bill_id, wo_id, success: false, error: 'Could not confirm which receipts are billable (the Receipts tab could not be read) — nothing was billed. Try again.' }); continue; }
+        if (_nb.length) { results.push({ bill_id, wo_id, success: false, code: 'receipt_not_billable', error: `Receipt(s) ${_nb.join(', ')} are reference-only (customer card or attached image) and can't be billed. Untick them and re-approve.` }); continue; }
+      }
+    }
     // Same dedup rule as the single-item approve: approving the same bill/job twice hands
     // back the existing row instead of logging a duplicate.
     const already = bill_id
