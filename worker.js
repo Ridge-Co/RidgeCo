@@ -26117,6 +26117,7 @@ async function arRemind(env, body) {
   const preview = body.preview === true || body.preview === '1';
   const token = await qbAccessToken(env);
   const items = [];
+  const auditReq = {};   // Phase 2: one audit-log report per request, not one per invoice
   for (const id of ids) {
     let inv = null;
     try {
