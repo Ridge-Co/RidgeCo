@@ -7,6 +7,8 @@
 //   2. a comment-only catch                catch (e) { /* ignore */ }
 //   3. a log-only catch                    catch (e) { console.error('x', e); }
 //   4. a swallowing promise .catch         .catch(() => {})  .catch(() => null)  .catch(function () {})  .catch(() => [])
+//   5. a return-default catch (Nov 17)     catch (e) { return null; }   catch { return []; }   catch (e) { return false; }   catch { return; }
+//      (a comment before the return does not make it visible: the caller still cannot tell "no data" from "the read failed")
 // A handler that is genuinely benign is allowed when its line carries   // silent-ok: <a reason of 3 or more words>
 // (a shorter reason is itself a finding).
 //
