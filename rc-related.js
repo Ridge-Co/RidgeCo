@@ -39,6 +39,6 @@
     if (first && first.nextSibling) bar.insertBefore(wrap, first.nextSibling); else bar.appendChild(wrap);
   } catch (e) {
     console.error('rc-related.js failed', e);
-    try { if (window.hubReportFailure) window.hubReportFailure('rc-related.js', String((e && e.message) || e), {}); } catch (e2) { console.error('failure report failed', e2); }
+    try { if (window.hubReportFailure) window.hubReportFailure('rc-related.js', String((e && e.message) || e), {}); } catch (e2) { console.error('failure report failed', e2); } // silent-ok: the failure reporter itself failed, console is the last resort
   }
 })();

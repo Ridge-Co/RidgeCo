@@ -9511,7 +9511,7 @@ async function createWorkOrder(env, body) {
     }
   } catch (e) { /* non-fatal */ }
   if (body.__triage === true) await triageIntakeSafe(env, woId, { description: body.description, trade: body.trade, priority: body.priority });   // queue #142: fail-open, never throws
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_create', Skill_Or_Endpoint:'/workorder', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${body.trade||''} type=${body.type||'manual'}` }); } catch(_){}
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_create', Skill_Or_Endpoint:'/workorder', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${body.trade||''} type=${body.type||'manual'}` }); } catch(_){} // silent-ok: telemetry is best effort, a logging miss must not fail the request
   return json({ success: true, id: woId });
 }
 
@@ -10451,7 +10451,7 @@ async function woBulkVoid(env, body) {
     } catch (e) { skipped.push({ id, reason: e.message || 'Void failed' }); }
   }
 
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_bulk_void', Skill_Or_Endpoint: '/wo/bulk-void', Success: 'TRUE', Notes: `voided=${voided.length} skipped=${skipped.length}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_bulk_void', Skill_Or_Endpoint: '/wo/bulk-void', Success: 'TRUE', Notes: `voided=${voided.length} skipped=${skipped.length}` }); } catch (_) {} // silent-ok: telemetry is best effort, a logging miss must not fail the request
 
   return json({ success: true, voided, skipped, voided_count: voided.length, skipped_count: skipped.length });
 }
@@ -10713,7 +10713,7 @@ async function woCombine(env, body) {
     }
   } catch (e) { /* non-fatal — combine already succeeded */ }
 
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_combine', Skill_Or_Endpoint: '/wo/combine', Success: 'TRUE', Notes: `survivor=${survivorId} combined=${combinedIds.join(',')}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_combine', Skill_Or_Endpoint: '/wo/combine', Success: 'TRUE', Notes: `survivor=${survivorId} combined=${combinedIds.join(',')}` }); } catch (_) {} // silent-ok: telemetry is best effort, a logging miss must not fail the request
 
   const mergedFieldsApplied = {};
   for (const f of WO_COMBINE_MERGE_FIELDS) if (Object.prototype.hasOwnProperty.call(fieldsToApply, f)) mergedFieldsApplied[f] = fieldsToApply[f];
@@ -10969,7 +10969,7 @@ async function woSplit(env, body) {
     }
   } catch (e) { /* non-fatal — split already succeeded */ }
 
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_split', Skill_Or_Endpoint: '/wo/split', Success: 'TRUE', Notes: `original=${originalId} new=${createdWoIds.join(',')}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_split', Skill_Or_Endpoint: '/wo/split', Success: 'TRUE', Notes: `original=${originalId} new=${createdWoIds.join(',')}` }); } catch (_) {} // silent-ok: telemetry is best effort, a logging miss must not fail the request
 
   return json({ success: true, original_wo_id: originalId, new_wo_ids: createdWoIds });
 }
@@ -12131,7 +12131,7 @@ async function updateStatus(env, body) {
       if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
     }
   }
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_status', Skill_Or_Endpoint:'/status', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`status=${body.status||''}` }); } catch(_){}
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_status', Skill_Or_Endpoint:'/status', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`status=${body.status||''}` }); } catch(_){} // silent-ok: telemetry is best effort, a logging miss must not fail the request
   return json({ success: true });
 }
 
@@ -15777,7 +15777,7 @@ async function createTurnoverWOs(env, body) {
     Turnover_Release_Date: releaseDate,
   });
 
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_start', Skill_Or_Endpoint: '/turnover', Success: 'TRUE', Notes: `unit=${unitId} group=${groupId} source=${body.source || 'manual'}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_start', Skill_Or_Endpoint: '/turnover', Success: 'TRUE', Notes: `unit=${unitId} group=${groupId} source=${body.source || 'manual'}` }); } catch (_) {} // silent-ok: telemetry is best effort, a logging miss must not fail the request
 
   return json({ success: true, group_id: groupId, wo_ids: woIds, release_date: releaseDate || null });
 }
@@ -15827,7 +15827,7 @@ async function releaseTurnoverCleaningIfReady(env, groupId) {
   const allDone = others.length > 0 && others.every(w => TURNOVER_RELEASE_DONE_STATUSES.includes(w.Status));
   if (allDone) {
     await updateWOFields(env, cleaning.ID, { Status: 'New', Hold_Reason: '' });
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_release', Skill_Or_Endpoint: 'updateStatus', Success: 'TRUE', Notes: `group=${groupId} reason=repairs_paint_complete` }); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_release', Skill_Or_Endpoint: 'updateStatus', Success: 'TRUE', Notes: `group=${groupId} reason=repairs_paint_complete` }); } catch (_) {} // silent-ok: telemetry is best effort, a logging miss must not fail the request
   }
 }
 
@@ -15840,7 +15840,7 @@ async function releaseTurnoverByDate(env) {
     && w.Turnover_Release_Date && w.Turnover_Release_Date <= today);
   for (const w of due) {
     await updateWOFields(env, w.ID, { Status: 'New', Hold_Reason: '' });
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_release', Skill_Or_Endpoint: 'scheduled/turnover-date', Success: 'TRUE', Notes: `wo=${w.ID} group=${w.Turnover_Group_ID} reason=date_fallback` }); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_release', Skill_Or_Endpoint: 'scheduled/turnover-date', Success: 'TRUE', Notes: `wo=${w.ID} group=${w.Turnover_Group_ID} reason=date_fallback` }); } catch (_) {} // silent-ok: telemetry is best effort, a logging miss must not fail the request
   }
 }
 
@@ -16833,7 +16833,7 @@ async function scheduleWO(env, body) {
       if (r.sent) await updateWOFields(env, body.wo_id, { Owner_Notified: 'TRUE' });
     }
   }
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_schedule', Skill_Or_Endpoint:'/schedule', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`window=${body.window||''} new_status=${updates.Status||wo.Status||''}` }); } catch(_){}
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_schedule', Skill_Or_Endpoint:'/schedule', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`window=${body.window||''} new_status=${updates.Status||wo.Status||''}` }); } catch(_){} // silent-ok: telemetry is best effort, a logging miss must not fail the request
   return json({success:true,tenant_sms:tenantSMSSent,notify_queued:notifyQueued,owner_sms:ownerSMSSent,new_status:updates.Status||wo.Status});
 }
 
@@ -23166,7 +23166,7 @@ async function runWeeklyReview(env, opts) {
     logged = true;
   } catch (e) { loggedError = String((e && e.message) || e).slice(0, 200); console.error('weekly review: history row not saved:', loggedError); }   // the review still returns - with logged:false + logged_error, which the scheduler job reports
   // Self-instrument (PAT-031): the reviewer is itself a measured job.
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'weekly_review', Skill_Or_Endpoint: 'runWeeklyReview', Success: 'TRUE', Latency_ms: Date.now() - _t0, Notes: `${metrics.total} rows/${days}d` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'weekly_review', Skill_Or_Endpoint: 'runWeeklyReview', Success: 'TRUE', Latency_ms: Date.now() - _t0, Notes: `${metrics.total} rows/${days}d` }); } catch (_) {} // silent-ok: telemetry is best effort, a logging miss must not fail the request
   return { ok: true, window_days: days, metrics, proposal, items: proposalItems, thin_data: thinData, logged, logged_error: loggedError || undefined, delivery };
 }
 
@@ -47754,7 +47754,7 @@ async function fiTranscribeFinish(env, bytes, mime, label, fetchImpl) {
   const silent = (x) => x.ok && (!x.text || /^\[no speech\]$/i.test(x.text));
   let retried = false;
   if (silent(r)) { retried = true; r = await fiGeminiTranscribe(env, new Uint8Array(bytes), mime === 'audio/mp4' ? 'audio/aac' : mime, fetchImpl); }
-  try { await logTelemetry(env, { Source: 'field-inspect', Job_Type: 'fi_transcribe', Skill_Or_Endpoint: '/fi/transcribe', Tier_Requested: 'CHEAP', Model_Used: FI_TRANSCRIBE_MODEL, Tokens_In: r.tokens_in || 0, Tokens_Out: r.tokens_out || 0, Latency_ms: Date.now() - t0, Success: r.ok ? 'TRUE' : 'FALSE', Notes: (r.ok ? '' : String(r.message || '').slice(0, 150)) + ' bytes=' + bytes.byteLength }); } catch (_) { /* telemetry is best-effort; the result below is what the caller sees */ }
+  try { await logTelemetry(env, { Source: 'field-inspect', Job_Type: 'fi_transcribe', Skill_Or_Endpoint: '/fi/transcribe', Tier_Requested: 'CHEAP', Model_Used: FI_TRANSCRIBE_MODEL, Tokens_In: r.tokens_in || 0, Tokens_Out: r.tokens_out || 0, Latency_ms: Date.now() - t0, Success: r.ok ? 'TRUE' : 'FALSE', Notes: (r.ok ? '' : String(r.message || '').slice(0, 150)) + ' bytes=' + bytes.byteLength }); } catch (_) { /* telemetry is best-effort; the result below is what the caller sees */ } // silent-ok: telemetry is best effort, a logging miss must not fail the request
   if (!r.ok) return fiErr(r.status || 502, r.error || 'transcribe_failed', r.message);
   if (!r.text || /^\[no speech\]$/i.test(r.text)) return fiErr(422, 'no_speech', 'No speech could be heard in that recording' + (retried ? ' (tried twice)' : '') + '. If you can hear speech in it, tap Retry once more — quiet recordings sometimes fail.');
   return json({ ok: true, transcript: r.text, truncated: r.truncated, label: fiStr(label, 120), bytes: bytes.byteLength, model: FI_TRANSCRIBE_MODEL, mime_used: r.mime_used });

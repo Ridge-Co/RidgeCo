@@ -53,7 +53,7 @@
   RC.report = function (where, message) {
     var line = '[rc-ui] ' + where + ': ' + message;
     if (RC.problems.length < 50) RC.problems.push(line);
-    try { if (typeof console !== 'undefined') console.error(line); } catch (e) { /* console blocked: RC.problems still has it */ }
+    try { if (typeof console !== 'undefined') console.error(line); } catch (e) { /* console blocked: RC.problems still has it */ } // silent-ok: console blocked, the problems list still records it
     try { if (root && typeof root.hubReportFailure === 'function') root.hubReportFailure('rc-ui:' + where, String(message).slice(0, 300)); }
     catch (e) { RC.problems.push('[rc-ui] reporter failed: ' + e); }
   };

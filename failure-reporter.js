@@ -31,7 +31,7 @@
     ps.setAttribute('data-hub-print-hide', '1');
     ps.textContent = '@media print{#hub-fail-badge,#hub-fail-toast{display:none!important;visibility:hidden!important}}';
     (document.head || document.documentElement).appendChild(ps);
-  } catch (e) { try { console.error('[failure-reporter] print style failed', e); } catch (x) { /* no console */ } }
+  } catch (e) { try { console.error('[failure-reporter] print style failed', e); } catch (x) { /* no console */ } } // silent-ok: the failure reporter cannot report its own print-style failure, no console left
   var REPORT_PAGE = /(^|\/)(inspection-report|inspection-photos)\.html$/i.test(location.pathname);
   // Nov 12 2026 (Brett): the red "N problems" badge never shows on the customer pages (tenant, vendor, owner), even on a device that has his admin token saved
   // (his own phone), because that is where customers' screens get shown to prospects. Failures on those pages are still REPORTED (section 1 is untouched); only the badge is skipped.
@@ -42,11 +42,11 @@
   // Oct 21 2026: phones and browsers kill in-flight requests when a tab is backgrounded, the screen locks or the page navigates ("Load failed" on
   // Safari, "Failed to fetch" on Chrome). Those are not Hub failures. Remember when the page was last hidden so such an error can be recognised.
   var lastHiddenAt = 0;
-  function noteHidden() { try { if (document.visibilityState === 'hidden') lastHiddenAt = Date.now(); } catch (e) { /* no visibility API: the Hub check below still decides */ } }
+  function noteHidden() { try { if (document.visibilityState === 'hidden') lastHiddenAt = Date.now(); } catch (e) { /* no visibility API: the Hub check below still decides */ } } // silent-ok: no visibility API, the Hub check still decides
   try { document.addEventListener('visibilitychange', noteHidden); window.addEventListener('pageshow', function () { unloading = false; }); noteHidden(); } catch (e) { consoleErr('[failure-reporter] visibility watch failed', e); }
-  function recentlyHidden() { try { return document.visibilityState === 'hidden' || (lastHiddenAt && Date.now() - lastHiddenAt < 15000); } catch (e) { return false; } }
+  function recentlyHidden() { try { return document.visibilityState === 'hidden' || (lastHiddenAt && Date.now() - lastHiddenAt < 15000); } catch (e) { return false; } } // silent-ok: visibility probe failed, treated as not recently hidden
 
-  function consoleErr() { try { console.error.apply(console, arguments); } catch (e) { /* console unavailable: nothing else exists to tell */ } }
+  function consoleErr() { try { console.error.apply(console, arguments); } catch (e) { /* console unavailable: nothing else exists to tell */ } } // silent-ok: console unavailable, nothing else exists to tell
   function clip(s, n) { s = (s == null ? '' : String(s)).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 
   // Friendly, non-blocking notice (one per 20 s). Text only, no HTML from the error is ever inserted.
@@ -60,7 +60,7 @@
       t.textContent = es ? 'Algo no funcionó. Ya nos avisaron y lo vamos a arreglar.' : "Something didn't work. We've been notified and will fix it.";
       t.style.cssText = 'position:fixed;left:50%;bottom:18px;transform:translateX(-50%);max-width:92vw;background:#0e1621;color:#fff;font:600 13px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:10px 14px;border-radius:10px;box-shadow:0 4px 18px rgba(0,0,0,.35);z-index:2147483000';
       document.body.appendChild(t);
-      setTimeout(function () { try { t.remove(); } catch (e) { /* element already gone */ } }, 7000);
+      setTimeout(function () { try { t.remove(); } catch (e) { /* element already gone */ } }, 7000); // silent-ok: toast element already gone, nothing to remove
     } catch (e) { consoleErr('[failure-reporter] toast failed', e); }
   }
 
@@ -132,7 +132,7 @@
             try {
               if (unloading || recentlyHidden()) return;
               realFetch(WORKER + '/version', { cache: 'no-store' }).then(function (r) {
-                if (r && r.status < 500) { try { console.warn('[failure-reporter] one request failed but the Hub answers; not reported:', path); } catch (w) { /* silent-ok: console may be unavailable in locked-down webviews */ } return; }
+                if (r && r.status < 500) { try { console.warn('[failure-reporter] one request failed but the Hub answers; not reported:', path); } catch (w) { /* silent-ok: console may be unavailable in locked-down webviews */ } return; } // silent-ok: console may be unavailable in locked-down webviews, debug note only
                 if (report('api ' + path, msg + ' (Hub check: HTTP ' + (r && r.status) + ')')) toast();
               }, function (probeErr) {
                 if (unloading || recentlyHidden()) return;
@@ -160,7 +160,7 @@
         try {
           if (unloading || recentlyHidden() || navigator.onLine === false) return;
           realFetch(WORKER + '/version', { cache: 'no-store' }).then(function (r) {
-            if (r && r.status < 500) { try { console.warn('[failure-reporter] a request failed but the Hub answers; not reported:', where); } catch (w) { /* silent-ok: console may be unavailable in locked-down webviews */ } return; }
+            if (r && r.status < 500) { try { console.warn('[failure-reporter] a request failed but the Hub answers; not reported:', where); } catch (w) { /* silent-ok: console may be unavailable in locked-down webviews */ } return; } // silent-ok: console may be unavailable in locked-down webviews, debug note only
             if (report(where, msg + ' (Hub check: HTTP ' + (r && r.status) + ')', extra)) toast();
           }, function (probeErr) {
             if (unloading || recentlyHidden()) return;
@@ -220,7 +220,7 @@
         .then(function (d) {
           if (!d) return;
           var c = d.counts || {}, n = Math.max(0, (c.open || 0) - (c.acknowledged || 0)), w = c.P0 ? 'P0' : (c.P1 ? 'P1' : 'P2');
-          try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ t: Date.now(), n: n, w: w })); } catch (e) { /* cache is optional */ }
+          try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ t: Date.now(), n: n, w: w })); } catch (e) { /* cache is optional */ } // silent-ok: storage blocked or full, the value is just not remembered
           paint(n, w);
         })
         .catch(function (e) { consoleErr('[failure-reporter] badge refresh failed', e); });

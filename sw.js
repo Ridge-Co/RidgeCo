@@ -18,7 +18,7 @@ self.addEventListener('notificationclick', function(e){
   e.notification.close();
   var want = (e.notification.data && e.notification.data.url) || '';
   var target = self.registration.scope;
-  try { var u = new URL(want, self.registration.scope); if (u.origin === self.location.origin) target = u.href; } catch (err) { /* keep the site root */ }
+  try { var u = new URL(want, self.registration.scope); if (u.origin === self.location.origin) target = u.href; } catch (err) { /* keep the site root */ } // silent-ok: bad notification url, falls back to the site root
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(list){
     for (var i = 0; i < list.length; i++) { if (list[i].url === target && 'focus' in list[i]) return list[i].focus(); }
     return self.clients.openWindow(target);
