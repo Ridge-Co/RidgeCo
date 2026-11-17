@@ -26362,7 +26362,7 @@ async function arReportSend(env, body) {
       try {
         await ensureTab(env, AR_REPORT_LOG_TAB, AR_REPORT_LOG_COLS);
         await addRow(env, AR_REPORT_LOG_TAB, { Timestamp: new Date().toISOString(), Owner_ID: ownerId, Owner_Name: group.owner_name, Email: sendTo, Total_Open: group.total_open.toFixed(2), Invoice_Count: String(group.invoices.length), Link: link, Result: testEmail ? 'sent (test)' : 'sent', Trigger: testEmail ? 'manual-test' : (body.trigger || 'manual') });
-      } catch (_) { /* audit log best-effort; the send already happened */ }
+      } catch (e) { await softFail(env, 'arReportSend:auditLog', e, { req: auditReq, severity: 'P1', ref: String(ownerId), source: 'write', context: 'a balance summary email went out but its AR_Report_Log row was not saved' }); }   // the send already happened
     } catch (e) {
       const reason = String((e && e.message) || e).slice(0, 200);
       results.push({ owner_id: ownerId, sent: false, reason });
