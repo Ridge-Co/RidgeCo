@@ -34,7 +34,7 @@ const scopeCoveringSignatureForWO = async () => null;
 const logTelemetry = async () => {};
 const _rcNorm = s => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 
-const code = [grab('receiptIsNonBilling'), grab('nonBillingReceiptIdsAmong', true), grab('addReceipt', true), grab('emailExpenseToQB', true), grab('receiptAttachOnly', true), grab('receiptReconConfirm', true),
+const code = [grab('receiptIsNonBilling'), grab('nonBillingReceiptIdsAmong', true), grab('addReceipt', true), grab('qbBatchQueuedNote'), grab('receiptAttachOnly', true), grab('receiptReconConfirm', true),
   grab('listReceipts', true), grab('scopeMaterialsBudgetSummary'), grab('receiptReconSearch', true)].join('\n');
 const W = new Function('json', 'fetchTab', 'addRow', 'updateRow', 'ensureColumns', 'findRecentDuplicate', 'appendReceiptToInvoiceReview', 'sendReceiptsToQBEmail', 'scopeCoveringSignatureForWO', 'logTelemetry', '_rcNorm',
   code + '\nreturn { receiptIsNonBilling, nonBillingReceiptIdsAmong, addReceipt, receiptAttachOnly, receiptReconConfirm, listReceipts, scopeMaterialsBudgetSummary, receiptReconSearch };')(
