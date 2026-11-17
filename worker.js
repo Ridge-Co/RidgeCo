@@ -5385,7 +5385,7 @@ async function receiptReconUndo(env, body) {
     Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Confirmed_Receipt_ID: '',
     Notes: `Undone ${new Date().toISOString().slice(0, 10)} — was ${row.Status}. Re-confirm it correctly, or use "Confirm duplicate" if it turns out to be one.`,
   });
-  return json({ ok: true, id, voided_receipt_id: result.voidedId, invoice_unlink: result.invoiceUnlink, attachment_void: result.attachmentVoid });
+  return json({ ok: true, id, voided_receipt_id: result.voidedId, invoice_unlink: result.invoiceUnlink, attachment_void: result.attachmentVoid, qb_delete_needed: result.qbDeleteNeeded });
 }
 
 // GET /receipt-recon/search?q=<amount|store|description text>&date=<yyyy-mm-dd> — Brett, Sep 23
