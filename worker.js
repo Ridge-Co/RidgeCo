@@ -12943,7 +12943,7 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
     // Ask once, via SMS (subject to the standing Config.TWILIO_ENABLED switch, same as every
     // other SMS in this file) — never re-nudge on every future bill while Email stays blank.
     if (!vendor.Email_Request_Sent_Date) {
-      try { await ensureColumns(env, 'Vendors', ['Email_Request_Sent_Date']); } catch (e) {}
+      try { await ensureColumns(env, 'Vendors', ['Email_Request_Sent_Date']); } catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
       const vname = (vendor.First_Name || (vendor.Name || '').split(' ')[0] || '').trim();
       const msg = (vendor.Language === 'es')
         ? `Hola${vname ? ' ' + vname : ''}, no tenemos un correo electrónico registrado para usted. Agréguelo en su portal de proveedores de Ridge Co para recibir una copia de cada factura que envíe y la fecha de pago.`
