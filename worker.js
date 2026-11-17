@@ -38580,7 +38580,7 @@ async function deliveriesList(env, url) {
     };
   });
   out.sort((a, b) => String(a.expected_date || '9999').localeCompare(String(b.expected_date || '9999')));
-  return json({ today, count: out.length, deliveries: out });
+  return json({ today, count: out.length, deliveries: out, warnings });
 }
 
 // POST /delivery/add — create a delivery. If no WO is linked and we know the property,
