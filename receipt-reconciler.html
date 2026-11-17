@@ -1564,7 +1564,7 @@ async function attachNonBillingRow(id, btn, reason){
   const woSel = document.getElementById(idAttr+'-wo');
   const woManual = document.getElementById(idAttr+'-wo-manual');
   const wo_id = (woManual && woManual.value.trim()) || (woSel ? woSel.value.trim() : '');
-  if (!wo_id){ statusEl.innerHTML = '<span class="err">Pick a work order (or type one) to attach this to, or Skip it.</span>'; if (btn) btn.disabled = false; return; }
+  if (!wo_id){ statusEl.innerHTML = '<span class="err">Pick a work order (or type one) '+(fixed ? 'for this fixed-price job' : 'to attach this to, or Skip it')+'.</span>'; if (btn) btn.disabled = false; return; }
   if (!allWOs.some(w => String(w.ID) === wo_id)){
     statusEl.innerHTML = '<span class="err">✗ No work order with ID "'+esc(wo_id)+'" exists — check the number.</span>';
     if (btn) btn.disabled = false;
