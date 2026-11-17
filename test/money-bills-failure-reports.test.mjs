@@ -24,6 +24,7 @@ const world = {
   reportFailure: async (env, f) => { REPORTED.push(f); return { ok: true }; },
   fetchTab: async (env, tab) => { if (BAD_TABS.includes(tab)) throw new Error(tab + ' read failed'); return ROWS[tab] || []; },
   json: (b, s) => ({ body: b, status: s || 200 }),
+  findWO: (rows, id) => rows.find(r => String(r.ID) === String(id)),
   propUnitText: (p, u) => (p && p.Address) || '',
 };
 const names = Object.keys(world);
