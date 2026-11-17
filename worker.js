@@ -6154,7 +6154,7 @@ async function woPushToScope(env, body) {
   } catch (e) { await softFail(env, 'woPushToScope:markConverted', e, { severity: 'P1', ref: String(estimate.ID), source: 'write', context: 'the items went onto the Scope but the estimate was not marked Converted, so it can be pushed a second time and duplicate the items' }); }
 
   await setApprovalStage(env, { woId, scopeId, stage: 'Proposed' });
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_push_to_scope', Skill_Or_Endpoint: '/wo/push-to-scope', Success: 'TRUE', Notes: `wo=${woId} estimate=${estimate.ID} scope=${scopeId} created=${willCreate}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_push_to_scope', Skill_Or_Endpoint: '/wo/push-to-scope', Success: 'TRUE', Notes: `wo=${woId} estimate=${estimate.ID} scope=${scopeId} created=${willCreate}` }); } catch (_) { /* silent-ok: telemetry is best effort, the push result is returned to the page */ }
 
   return json({
     success: true, applied: true, wo_id: woId, scope_id: scopeId, created_new_scope: willCreate,
