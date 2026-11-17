@@ -14642,7 +14642,7 @@ async function setApprovalStage(env, { woId, scopeId, stage, onlyFrom }) {
       await updateWOFields(env, woId, { Approval_Stage: stage, Estimate_Revised: '' }); ok = true;
     }
     if (scopeId) {
-      try { await ensureColumns(env, 'Scopes', ['Approval_Stage']); } catch (_) {}
+      try { await ensureColumns(env, 'Scopes', ['Approval_Stage']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
       await updateRow(env, 'Scopes', scopeId, { Approval_Stage: stage }); ok = true;
     }
   } catch (_) { /* best-effort */ }
