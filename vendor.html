@@ -3907,6 +3907,7 @@ function calcBillTotal() {
   document.getElementById('bill-breakdown').innerHTML = breakdown.join('<br>') || '<span style="color:var(--muted)">Enter hours or items above</span>';
   document.getElementById('bill-grand-total').textContent = '$' + total.toFixed(2);
   recheckReconcileAgainstEntries();
+  if (window.JobOrder) JobOrder.refreshBillPanel();   // receipt amounts / who-paid changes can add or clear a red line
 }
 
 // Brett, Sep 2026: don't submit immediately — walk through a short guided review first (ask
