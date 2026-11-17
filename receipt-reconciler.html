@@ -1588,7 +1588,7 @@ function toggleReassign(id){
     + '<div class="full"><label>Description</label><textarea id="'+idAttr+'-ra-desc">'+esc(r.Confirmed_Description||'')+'</textarea></div>'
     + '</div>'
     + '<div class="row"><button class="btn small warnbtn" onclick="submitReassign(\''+id+'\', this)">Post reassignment</button>'
-    + '<span style="font-size:11px;color:var(--muted)">Voids the original BMore/Ridge Co expense (only works if it hasn\'t been emailed to QuickBooks yet) and posts a fresh receipt to whatever you pick here.</span></div>';
+    + '<span style="font-size:11px;color:var(--muted)">Voids the original BMore/Ridge Co expense (if it was already emailed to QuickBooks you will be told what to delete there by hand) and posts a fresh receipt to whatever you pick here.</span></div>';
   refreshReassignWo(id);
 }
 function refreshReassignUnit(id){
