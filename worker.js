@@ -33330,6 +33330,7 @@ async function qbMapEntity(env, body) {
 // verification (<=10 min later) repairs it exactly as before. A failure is never memoized.
 const COLS_OK_MS = 10 * 60 * 1000;
 const __colsOk = new Map(); // "tab|col1,col2,..." -> verifiedAtMs
+const __ensureColsReq = {}; // one ledger report per tab per isolate (soft-failure helpers dedupe by `where` on this object); the Telemetry row below still goes out on every failure
 async function ensureColumns(env, tab, columns) {
   const _memo = (typeof __colsOk !== 'undefined') ? __colsOk : null; // null when a test slices this function out of module scope
   const _ck = tab + '|' + (columns || []).join(',');
