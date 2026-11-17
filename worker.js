@@ -10969,7 +10969,7 @@ async function woSplit(env, body) {
     }
   } catch (e) { /* non-fatal — split already succeeded */ }
 
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_split', Skill_Or_Endpoint: '/wo/split', Success: 'TRUE', Notes: `original=${originalId} new=${createdWoIds.join(',')}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_split', Skill_Or_Endpoint: '/wo/split', Success: 'TRUE', Notes: `original=${originalId} new=${createdWoIds.join(',')}` }); } catch (_) {} // silent-ok: telemetry is best effort, a logging miss must not fail the request
 
   return json({ success: true, original_wo_id: originalId, new_wo_ids: createdWoIds });
 }
