@@ -10290,11 +10290,15 @@ async function addonOwnerNotice(env, body) {
   if (ownerEmail && !emailGate.ok) emailResult = { sent: false, reason: emailGate.reason };
   else if (ownerEmail) {
     try { const _er = await gmailSendEmail(env, { to: ownerEmail, subject: msg.subject, html: msg.html, recipientType: 'owner' }); emailResult = (_er && _er.sent === false) ? { sent: false, staged: !!_er.staged, reason: _er.note || 'not sent' } : { sent: true }; }
-    catch (e) { emailResult = { sent: false, reason: String((e && e.message) || e) }; }
+    catch (e) { emailResult = { sent: false, reason: String((e && e.message) || e) }; await softFail(env, 'addonOwnerNotice:email', e, { req, severity: 'P0', ref: childId, source: 'send', context: 'owner email for additional work' }); }
   }
   const anyOut = !!(smsResult && (smsResult.sent || smsResult.held_for_quiet_hours)) || emailResult.sent;
-  if (anyOut) { try { await updateWOFields(env, childId, { Addon_Owner_Notified_Date: new Date().toISOString() }); } catch (_) {} }
-  try { await logWOAudit(env, childId, 'admin', 'admin', 'Addon_Owner_Notified', '', anyOut ? 'sent' : 'not sent', 'Owner information notice'); } catch (_) {}
+  if (anyOut) {
+    try { await updateWOFields(env, childId, { Addon_Owner_Notified_Date: new Date().toISOString() }); }
+    catch (e) { warnings.push('The notice went out but the "owner notified" date could not be saved. Check before sending it again.'); await softFail(env, 'addonOwnerNotice:stamp', e, { req, severity: 'P1', ref: childId, source: 'write', context: 'the owner was told but Addon_Owner_Notified_Date is blank, so a second send is not blocked' }); }
+  }
+  try { await logWOAudit(env, childId, 'admin', 'admin', 'Addon_Owner_Notified', '', anyOut ? 'sent' : 'not sent', 'Owner information notice'); }
+  catch (e) { await softFail(env, 'addonOwnerNotice:audit', e, { req, severity: 'P2', ref: childId, source: 'write' }); }
   return json({ success: true, sms: { sent: !!(smsResult && smsResult.sent), held_for_quiet_hours: !!(smsResult && smsResult.held_for_quiet_hours), gate_snapshot: (smsResult && (smsResult.gate_snapshot || smsResult.reason)) || '' }, email: emailResult, warnings });
 }
 
