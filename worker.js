@@ -4306,7 +4306,7 @@ async function receiptReconScan(env, body) {
               autoFailed++;
               const why = (cj && cj.error) || (cj && cj.duplicate ? 'an identical receipt already exists' : 'confirm did not complete');
               errs.push(`rule #${ruleDec.rule.ID} could not auto-confirm queue #${addedJson.id}: ${why}`);
-              await updateRow(env, 'Receipt_Recon_Queue', addedJson.id, { Notes: `Rule #${ruleDec.rule.ID} matched but auto-confirm did not complete (${String(why).slice(0, 120)}). Left for you.` }).catch(() => {});
+              await updateRow(env, 'Receipt_Recon_Queue', addedJson.id, { Notes: `Rule #${ruleDec.rule.ID} matched but auto-confirm did not complete (${String(why).slice(0, 120)}). Left for you.` }).catch(e2 => errs.push('note on queue #' + addedJson.id + ' not saved: ' + schedErrText(e2)));
             }
           } catch (e) {
             autoFailed++;

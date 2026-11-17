@@ -19,7 +19,7 @@ test('per-file problems are NOT config errors', () => {
 });
 test('scan loop breaks on config error before recording a per-file failure', () => {
   const s = src.indexOf('async function receiptReconScan');
-  const body = src.slice(s, s + 9000);
+  const body = src.slice(s, s + 40000);
   const iBreak = body.indexOf('receiptReconIsConfigError(e && e.message)');
   const iRecord = body.indexOf('failures[f.id] = {');
   assert.ok(iBreak > 0 && iRecord > iBreak, 'config check must precede failure recording');
