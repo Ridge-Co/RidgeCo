@@ -722,6 +722,7 @@ const _hubWorkerCore = {
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
         if (path === '/receipt-recon/queue')    return await listReceiptReconQueue(env, url);
         if (path === '/receipt-recon/search')   return await receiptReconSearch(env, url);
+        if (path === '/receipts/qb-batch')      return await qbBatchList(env);
         if (path === '/receipt-recon/cards')    return await receiptReconCardsList(env);
         if (path === '/receipt-recon/rules')    return await receiptReconRulesList(env);
         if (path === '/admin/receipt-duplicate-audit/flags') return await receiptDuplicateAuditFlags(env, url);
