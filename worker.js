@@ -30398,7 +30398,7 @@ async function health(env, url) {
     const _cfg = await fetchConfig(env);
     out.gmail.config_token_set = !!String(_cfg.GMAIL_REFRESH_TOKEN || '').trim();
     out.gmail.config_token_updated = _cfg.GMAIL_TOKEN_UPDATED || '';
-  } catch (_) {}
+  } catch (e) { healthWarn('Gmail sign-in token status unreadable', e); }
 
   // Twilio (TWILIO_SMS_BUILD_BRIEF_v1.0) — same never-expose-values, presence-only pattern.
   // twilio_enabled reflects the live Config kill switch, not the secrets — lets Brett confirm
