@@ -1782,12 +1782,13 @@ async function markRefundPending(id, refund, btn){
 // switching to the Pending tab shows it with the normal find-match/negative-expense refund UI.
 async function markRefundConfirmed(id, btn){
   const statusEl = document.getElementById('rc'+id+'-status');
-  if (!confirm('Pull this receipt back into Pending as a refund? If it was already billed, the original expense/receipt gets voided first (only works if it hasn\'t been emailed to QuickBooks yet) — then it shows up in Pending flagged as a refund, same flow as any other refund.')) return;
+  if (!confirm('Pull this receipt back into Pending as a refund? If it was already billed, the original expense/receipt gets voided first (if it was already emailed to QuickBooks you will be shown what to delete there by hand) — then it shows up in Pending flagged as a refund, same flow as any other refund.')) return;
   if (btn) btn.disabled = true;
   if (statusEl) statusEl.innerHTML = '<span class="info">Converting to a refund…</span>';
   try {
     const res = await post('/receipt-recon/mark-refund-confirmed', { id });
     if (res.error) throw new Error(res.error);
+    if (res.qb_delete_needed) qbbShowDeleteNeeded(res.qb_delete_needed);
     if (statusEl) statusEl.innerHTML = '<span class="ok">✓ Moved back to Pending, flagged as a refund.</span>';
     finishCard(id);
   } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
