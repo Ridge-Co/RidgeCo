@@ -234,7 +234,7 @@ const FORBIDDEN_NAME = /cost|bill|markup|margin|admin_notes|entry_notes|internal
 }
 
 // ── 5. the other owner read routes carry nothing internal either ─────────────────────────────────
-const COVERED_GET = ['/owner-workorders', '/owner-properties', '/wo-audit', '/attachments', '/owner-notifications', '/owner/tenant-roster', '/owner-file/view', '/demo/test-status', '/push/vapid-key', '/push/devices', '/owner-by-pin'];
+const COVERED_GET = ['/owner-workorders', '/owner-properties', '/wo-audit', '/attachments', '/owner-notifications', '/owner/tenant-roster', '/owner/approvals', '/owner-file/view', '/demo/test-status', '/push/vapid-key', '/push/devices', '/owner-by-pin'];
 {
   const n = await call('GET', '/owner-notifications', OWN1);
   t('owner notifications: only the four settings', n.status === 200 && Object.keys(n.json).sort().join() === 'low,method,normal,urgent' && !n.text.includes(LEAK), n);
