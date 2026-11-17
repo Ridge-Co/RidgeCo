@@ -55,6 +55,9 @@ function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
     addRow: async (env, tab, row) => { queue.push(row); return { json: async () => ({ success: true, id: String(queue.length) }) }; },
     setConfigKey: async (env, { key, value }) => { cfg[key] = value; },
     json: (o) => o,
+    // Nov 17 2026 (PR #583): the scan files errored files in the Hub failure ledger. Fake ledger records every report.
+    reportFailure: async (env, f) => { reports.push(f); },
+    failTrim: new Function(extractSync('failTrim') + '; return failTrim;')(),   // the REAL trimmer
     ...helpers,
     RECEIPT_RECON_QUEUE_HEADERS: [], RECEIPT_RECON_FOLDER_ID_DEFAULT: 'FOLDER',
   };
