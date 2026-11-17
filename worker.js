@@ -6066,7 +6066,7 @@ async function woPushToScope(env, body) {
       const need = lineItems.map((li, i) => (li && li.desc && !li.desc_en && plausiblyNonEnglish(li.desc)) ? i : -1).filter(i => i >= 0);
       const tr = await translateBatchToEnglish(env, need.map(i => lineItems[i].desc));
       if (tr.ok) need.forEach((i, k) => { if (String(tr.out[k]).trim().toLowerCase() !== String(lineItems[i].desc).trim().toLowerCase()) lineItems[i] = Object.assign({}, lineItems[i], { desc_en: tr.out[k] }); });
-    } catch (_) {}
+    } catch (e) { await softFail(env, 'woPushToScope:translate', e, { severity: 'P2', ref: String(estimate.ID), source: 'translate', context: 'estimate lines were converted without English descriptions' }); }
   }
 
   // ---- Resolve target scope: reuse Work_Orders.Scope_ID if already set, else preview a new one.
