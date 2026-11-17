@@ -1200,6 +1200,17 @@ function placeHintHtml(sug, r){
   return '<div class="rc-hint"><span>Could be: '+cands.slice(0, 3).map(c => esc(c.address)).join(' · ')+'</span></div>';
 }
 
+// A row scanned before the accuracy build can carry an inactive duplicate property (928 N Calvert St: ID 2, inactive, vs ID 11).
+// The stored suggestion is a snapshot, so map it to the ACTIVE property with the same address; if there is none, leave it blank to pick.
+function resolveActivePropertyId(id){
+  if (!id) return '';
+  const isOff = p => String(p.Active == null ? '' : p.Active).toUpperCase() === 'FALSE';
+  const p = allProperties.find(x => String(x.ID) === String(id));
+  if (!p || !isOff(p)) return String(id);
+  const twin = allProperties.find(x => !isOff(x) && String(x.Address || '').trim().toLowerCase() === String(p.Address || '').trim().toLowerCase());
+  return twin ? String(twin.ID) : '';
+}
+
 function rowCard(r){
   const sug = r.suggestion || {};
   // 'company' (a Ridge Co business expense — no customer, sometimes no property either) now
@@ -1213,7 +1224,7 @@ function rowCard(r){
   const excluded = ['customer_paid'].includes(sug.category);
   const isPendingLike = (r.Status||'pending') === 'pending';
   const isDuplicateFlagged = (sug.flags||[]).includes('duplicate_on_wo');
-  const propId = (sug.property && sug.property.id) || (sug.rule && sug.rule.action === 'property' ? sug.rule.property_id : '') || '';
+  const propId = resolveActivePropertyId((sug.property && sug.property.id) || (sug.rule && sug.rule.action === 'property' ? sug.rule.property_id : '') || '');
   const idAttr = 'rc'+r.ID;
   let html = '<div class="rcard'+(excluded?' excl':'')+'" id="'+idAttr+'">';
   html += '<div class="rc-top"><div style="display:flex;gap:8px;align-items:flex-start">'

@@ -11,7 +11,7 @@ const props = [{ ID: '2', Address: '928 N Calvert St', Active: 'FALSE' }, { ID: 
 const wos = [{ ID: '1001', Property_ID: '11', Status: 'In Progress', Description: 'open job', Created_Date: old }, { ID: '1002', Property_ID: '11', Status: 'Paid', Description: 'closed recently', Created_Date: old, Completed_Date: recent }, { ID: '1003', Property_ID: '11', Status: 'Paid', Description: 'closed long ago', Created_Date: old, Completed_Date: old }];
 const q = (o) => Object.assign({ Status: 'pending', Vendor: 'Home Depot', Total: '43.23', Receipt_Date: today, Received_Date: new Date().toISOString(), Card_Last4: '', items: [], items_summary: [], duplicate_evidence: [], rescan_matches: [], Active: 'TRUE' }, o);
 const pending = [
-  q({ ID: '1', suggestion: { category: 'billable', action: 'suggest', property: { id: '11', address: '928 N Calvert St' }, flags: ['card_unknown'], card_status: 'unknown', rule: { id: '7', action: 'business', blocked: ['card_unknown'], auto: false } }, Card_Last4: '4444', dup_signals: [{ reason: 'Possible duplicate of queue entry #2 (pending): $43.23 at Home Depot on ' + today + '.' }] }),
+  q({ ID: '1', suggestion: { category: 'billable', action: 'suggest', property: { id: '2', address: '928 N Calvert St' }, flags: ['card_unknown'], card_status: 'unknown', rule: { id: '7', action: 'business', blocked: ['card_unknown'], auto: false } }, Card_Last4: '4444', dup_signals: [{ reason: 'Possible duplicate of queue entry #2 (pending): $43.23 at Home Depot on ' + today + '.' }] }),
   q({ ID: '2', Vendor: 'Google LLC', suggestion: { category: 'company', action: 'exclude', flags: [] } }),
   q({ ID: '3', suggestion: { category: 'customer_paid', action: 'exclude', manual_customer_card: true, flags: [] } }),
   q({ ID: '4', suggestion: { category: 'billable', action: 'need_property', flags: ['po_ambiguous'], property_hint: { candidates: [{ id: '11', address: '1220 Anywhere St' }, { id: '85', address: '928 N Calvert St' }] } }, dup_read_error: 'Receipts could not be read for the duplicate check: boom' }),
@@ -47,6 +47,7 @@ for (const vp of [{ n: '412', w: 412, h: 915, mobile: true }, { n: '1366', w: 13
   const txt = sel => page.locator(sel).first().innerText();
   const propOpts = await page.locator('#rc1-prop option').allInnerTexts();
   ok(propOpts.filter(t => /928 N Calvert/.test(t)).length === 1, 'inactive duplicate property is hidden from the picker (one 928 N Calvert St)');
+  ok(await page.locator('#rc1-prop').inputValue() === '11', 'a stale suggestion pointing at the inactive duplicate property (ID 2) pre-selects the active twin (ID 11)');
   ok(/Possible duplicate/.test(await txt('#rc1')) && /queue entry #2/.test(await txt('#rc1')), 'duplicate banner names the other entry');
   ok(/not on either list/.test(await txt('#rc1')) && await page.locator('#rc1 button:has-text("This is my card")').count() === 1, 'unknown card shows the one-tap "my card / customer\'s card" buttons');
   ok(/Rule #7: always a business expense/.test(await txt('#rc1')), 'a rule that matched is shown on the card');
