@@ -6271,7 +6271,7 @@ async function scopeProposalSend(env, body) {
     await ensureColumns(env, 'Scopes', ['Sent_Date', 'Sent_To', 'Send_Count']);
     const nextCount = String((parseInt(s.Send_Count || '0', 10) || 0) + 1);
     // A resend puts the card back to "waiting" (queue #138): the owner's earlier decline/question is cleared; the history stays in Ops_Telemetry.
-    const _clearResp = String(s.Owner_Response || '') ? { Owner_Response: '', Owner_Response_At: '', Owner_Response_By: '', Owner_Response_Text: '' } : {};
+    const _clearResp = String(s.Owner_Response || '') ? { Owner_Response: '', Owner_Response_At: '', Owner_Response_By: '', Owner_Response_Text: '', Owner_Response_Alerted: '' } : {};
     await updateRow(env, 'Scopes', id, { Sent_Date: new Date().toISOString(), Sent_To: email, Send_Count: nextCount, ..._clearResp });
   } catch (_) { /* the email already sent successfully; a failure to stamp the Scopes row shouldn't be reported as a send failure */ }
 
