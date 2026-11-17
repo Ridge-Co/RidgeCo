@@ -287,10 +287,11 @@ ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (
   globalThis.fetch = async () => ({ ok: false, status: 403, json: async () => ({}) });
   const r = await L.opsQueueSync(env, { prs: [{ number: 77, state: 'closed', merged_at: 'x' }] }, { ignoreSuppliedPrs: true });
   eq(SHEET[0].Build_State, 'pr_open', 'PR data from the narrow build-session token is ignored (cannot mark an item live)');
-  eq(r.body.errors.length, 1, 'and the Worker-side GitHub failure is reported');
+  eq(r.body.rate_limited.length, 1, 'and the Worker-side GitHub refusal is reported as rate_limited');
+  ok((globalThis.__failures || []).some(f => f.where === 'queue_sync_github_blocked' && f.severity === 'P2'), 'GitHub refusing every lookup files one P2 failure row');
   resetSheet([{ ID: '62', Title: 'x', Status: 'done', PR_Number: '77', Build_State: 'pr_open' }]);
   const r2 = await L.opsQueueSync(env, {});
-  ok(r2.body.errors.length === 1, 'missing-row / GitHub failures are reported');
+  ok(r2.body.rate_limited.length === 1, 'GitHub refusals are reported');
   ok(/_its\.every\(i => !findQueueMatch\(/.test(src), 'staging-token /ops-approve refuses TEST- titles that fuzzy-match a real row');
 }
 
