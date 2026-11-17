@@ -654,6 +654,7 @@ const _hubWorkerCore = {
         if (path === '/vendor-by-pin')          return await vendorByPin(env, url);
         if (path === '/owner-properties')       return await ownerProperties(env, url, callerRole);
         if (path === '/owner/tenant-roster')    return await ownerRosterList(env, callerRole, callerSessionId, url);   // owner session (own id) or admin ?owner_id=
+        if (path === '/owner/approvals')        return await ownerApprovals(env, callerRole, callerSessionId, url);   // queue #138: owner session (own id) or admin ?owner_id=; behind Config owner_approvals_enabled
         if (path === '/vendor-workorders')      return await vendorWorkorders(env, url, callerRole, callerSessionId);
         if (path === '/tenant-workorders')      return await tenantWorkorders(env, url, callerRole, callerSessionId);
         if (path === '/owner-workorders')       return await ownerWorkorders(env, url, callerRole, callerSessionId);
