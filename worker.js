@@ -6057,7 +6057,7 @@ async function woPushToScope(env, body) {
     return json({ error: `Estimate ${estimate.ID} (v${estimate.Version}) is not the approved estimate on this WO — the approved one is ${approved[0].ID} (v${approved[0].Version}).` }, 400);
   }
 
-  let lineItems = []; try { lineItems = JSON.parse(estimate.Line_Items || '[]'); } catch (_) {}
+  let lineItems = []; try { lineItems = JSON.parse(estimate.Line_Items || '[]'); } catch (e) { await softFail(env, 'woPushToScope:lineItems', e, { severity: 'P1', ref: String(estimate.ID), source: 'parse', context: 'the approved estimate lines are unreadable, so nothing could be converted to a Scope' }); }
   if (!Array.isArray(lineItems) || !lineItems.length) return json({ error: `Estimate ${estimate.ID} has no line items to convert.` }, 400);
   // Older estimates (pre desc_en) written in Spanish: translate the lines that lack an English copy
   // in memory only, so the proposal is English regardless. A translation miss keeps the original.
