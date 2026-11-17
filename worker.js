@@ -26921,7 +26921,7 @@ async function sendReceiptsToQBEmail(env, opts) {
 
   let queueRows = []; try { queueRows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { await softFail(env, 'sendReceiptsToQB:queueRead', e, { severity: 'P2', ref: '', source: 'read', context: 'the receipt queue could not be read, so forwarded receipts may be missing queue details' }); }
   const [properties, workorders] = await Promise.all([
-    fetchTab(env, 'Properties').catch(() => []), fetchTab(env, 'Work_Orders').catch(() => []),
+    fetchTabSoft(env, 'Properties', { where: 'sendReceiptsToQB:Properties', severity: 'P2' }).then(r => r.rows), fetchTabSoft(env, 'Work_Orders', { where: 'sendReceiptsToQB:Work_Orders', severity: 'P2' }).then(r => r.rows),
   ]);
 
   let sent = 0, sentNoFile = 0; const failed = [];
