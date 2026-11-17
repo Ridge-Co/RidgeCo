@@ -2556,7 +2556,7 @@ function renderDashboard() {
   document.getElementById('stat-invoiced').textContent = wos.filter(function(w){return w.Status==='Invoiced';}).length;
   document.getElementById('stat-props').textContent = state.properties.length;
   var active = wos.filter(function(w){return !closed.includes(w.Status);})
-    .sort(function(a,b){return ({urgent:0,normal:1,low:2}[a.Priority]||1)-({urgent:0,normal:1,low:2}[b.Priority]||1);})
+    .sort(function(a,b){var t=triRank(a)-triRank(b); if(t!==0) return t; return ({urgent:0,normal:1,low:2}[a.Priority]||1)-({urgent:0,normal:1,low:2}[b.Priority]||1);})
     .slice(0,15);
   var el = document.getElementById('dashboard-wo-list');
   el.innerHTML = active.length ? active.map(woCard).join('') : '<div class="loading">No active work orders</div>';
