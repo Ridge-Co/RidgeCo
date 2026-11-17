@@ -40368,7 +40368,7 @@ async function trashUnbilled(env, url) {
       }
     }
   }
-  return json({ generated_at: new Date().toISOString(), this_week: thisWeek, prev_week: prevWeek, count: items.length, items });
+  return json({ generated_at: new Date().toISOString(), this_week: thisWeek, prev_week: prevWeek, count: items.length, items, warnings });
 }
 
 // POST /trash/invoice { property_id, week?, preview_only? } — assemble + send the
