@@ -20795,11 +20795,30 @@ async function schedRunDailyReceipts(env) {
 async function schedRunDailyReceiptsPost(env) {
   const errors = [], detail = {};
   const flags = { paused: false };
-  detail.items_summary = await schedAiStep('backfill_items_summary', () => backfillItemsSummary(env, {}), errors, flags);   // Oct 16 2026: AI paused -> this one step waits (idempotent, retried tomorrow); the QB email below does not need AI
-  detail.purge_duplicates = await schedStep('purge_confirmed_duplicates', () => purgeConfirmedDuplicateReceipts(env), errors);
+  // Nov 17 2026: the QuickBooks email is a BATCH, sent here once a day (the time is this job's `at`, edited in the HubScheduler.gs JOBS table / the schedule override).
+  // It goes FIRST and pages: at most a few receipts per call (Cloudflare subrequest budget), then {partial:true} so the scheduler resumes it on a later tick
+  // (SCHED_PARTIAL_GAP_MS apart) until nothing is left. The summary/purge steps below run on the slice that finishes the batch. A failed receipt is
+  // reported as a job failure (failure ledger + /cron/status), never swallowed; failed rows are not re-sent in the same run.
   const before = errors.length;
-  detail.qb_email = await schedStep('send_receipts_to_qb_email', () => sendReceiptsToQBEmail(env, {}), errors);
-  return { ok: !errors.length, errors, detail, no_retry: errors.length > before, warnings: flags.paused ? ['items summary skipped: paused (AI credit) - it is retried automatically after AI resumes'] : undefined };   // a half-failed email batch is not blindly re-sent
+  detail.qb_email = await schedStep('send_receipts_to_qb_email', () => sendReceiptsToQBEmail(env, { release: true }), errors);
+  const q = detail.qb_email || {};
+  const failN = Array.isArray(q.failed) ? q.failed.length : 0;
+  const failText = failN ? `${failN} receipt(s) could not be sent to QuickBooks (receipt ${q.failed.slice(0, 3).map(f => f.id).join(', ')}): ${String(q.failed[0].error || '').slice(0, 160)}` : '';
+  if (errors.length === before && q.remaining > 0 && (q.sent || 0) > 0) {
+    // More are waiting: resume on the next slice. A receipt that failed in this slice is already in the failure ledger (P1, one row per receipt) and shown as "failed" on the review list.
+    return { ok: true, errors, detail, partial: true, progress_made: true, warnings: failN ? [failText + ' (more are still being sent)'] : undefined };
+  }
+  if (failN) errors.push({ step: 'send_receipts_to_qb_email', error: failText });
+  if (errors.length === before && q.remaining > 0) errors.push({ step: 'send_receipts_to_qb_email', error: `${q.remaining} receipt(s) are still waiting but none could be sent in this run` });
+  const qbFailed = errors.length > before;
+  detail.items_summary = await schedAiStep('backfill_items_summary', () => backfillItemsSummary(env, {}), errors, flags);   // Oct 16 2026: AI paused -> this one step waits (idempotent, retried tomorrow); the QB email above does not need AI
+  detail.purge_duplicates = await schedStep('purge_confirmed_duplicates', () => purgeConfirmedDuplicateReceipts(env), errors);
+  const warnings = [];
+  if (flags.paused) warnings.push('items summary skipped: paused (AI credit) - it is retried automatically after AI resumes');
+  if (q.stuck > 0) warnings.push(`${q.stuck} receipt(s) are stuck in "sending" and were NOT re-sent - open Waiting to send to QuickBooks`);
+  if (q.held > 0) warnings.push(`${q.held} receipt(s) are on hold and were not sent`);
+  if (Array.isArray(q.warnings) && q.warnings.length) warnings.push(`${q.warnings.length} receipt(s) went to QuickBooks without their image`);
+  return { ok: !errors.length, errors, detail, no_retry: qbFailed, warnings: warnings.length ? warnings : undefined };   // a half-failed email batch is not blindly re-sent
 }
 async function schedRunDailyTurnover(env) {
   const errors = [];
