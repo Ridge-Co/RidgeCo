@@ -14278,7 +14278,7 @@ const ESTIMATE_SMS_DEFAULT_SINCE = '2026-09-29T00:00:00.000Z';
 const NEEDS_INFO_RESUME_DAYS = 3;
 const REMINDER_MIN_AGE_HOURS = 12; // an estimate posted this morning already got its own text
 async function getAdminSmsRecipient(env) {
-  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
+  let cfg = {}; try { cfg = await fetchConfig(env); } catch (e) { await softFail(env, 'getAdminSmsRecipient:config', e, { severity: 'P1', source: 'read', context: 'the admin text went to the built-in fallback number because settings could not be read' }); }
   return { Name: 'Brett', Phone: cfg.ADMIN_SMS_PHONE || cfg.TWILIO_TEST_RECIPIENT || '+14439617927' };
 }
 // "20 E Eager St Apt 3" for a work order — property + unit (Brett Oct 19). Falls back to the property alone,
