@@ -13539,7 +13539,7 @@ async function editVendorBillReceipts(env, body) {
     fields.Status = 'submitted';
     resetToSubmitted = true;
     if (liveIR) {
-      try { await updateRow(env, 'Invoice_Review', liveIR.ID, { Active: 'FALSE' }); } catch (e) { /* non-fatal — the stale row is now orphaned but harmless; Review Bills re-derives from Vendor_Bills */ }
+      try { await updateRow(env, 'Invoice_Review', liveIR.ID, { Active: 'FALSE' }); } catch (e) { await softFail(env, 'editVendorBillReceipts:orphanReview', e, { severity: 'P2', ref: String(billId), source: 'write', context: 'the bill was reset to submitted but its old review row was not deactivated' }); }
     }
   }
 
