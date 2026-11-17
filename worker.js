@@ -14017,7 +14017,7 @@ async function approveInvoiceReview(env, body) {
         differs: !sameCents(already.Customer_Total, customer_total),
         qb_status: already.QB_Invoice_Status || 'pending' });
     }
-  } catch (e) { /* tab unreadable — fall through and let the append surface the real error */ }
+  } catch (e) { await softFail(env, 'approveInvoiceReview:dupCheck', e, { severity: 'P1', ref: String(wo_id || ''), source: 'read', context: 'the already-approved check could not read Invoice_Review, so a second review row may be created' }); }   // falls through and lets the append surface the real error
   // Neither tab has these columns yet, and updateRow/addRow map by header — a write to a
   // column that isn't there reports success and stores nothing.
   try {
