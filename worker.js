@@ -6270,7 +6270,9 @@ async function scopeProposalSend(env, body) {
   try {
     await ensureColumns(env, 'Scopes', ['Sent_Date', 'Sent_To', 'Send_Count']);
     const nextCount = String((parseInt(s.Send_Count || '0', 10) || 0) + 1);
-    await updateRow(env, 'Scopes', id, { Sent_Date: new Date().toISOString(), Sent_To: email, Send_Count: nextCount });
+    // A resend puts the card back to "waiting" (queue #138): the owner's earlier decline/question is cleared; the history stays in Ops_Telemetry.
+    const _clearResp = String(s.Owner_Response || '') ? { Owner_Response: '', Owner_Response_At: '', Owner_Response_By: '', Owner_Response_Text: '' } : {};
+    await updateRow(env, 'Scopes', id, { Sent_Date: new Date().toISOString(), Sent_To: email, Send_Count: nextCount, ..._clearResp });
   } catch (_) { /* the email already sent successfully; a failure to stamp the Scopes row shouldn't be reported as a send failure */ }
 
   // Owner heads-up text (Oct 14 2026): on the FIRST send only (a resend would just nag), unless sms_again:true.
