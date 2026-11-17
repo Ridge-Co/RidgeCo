@@ -8358,13 +8358,16 @@ async function ownerApprovalRespond(env, callerRole, callerSessionId, body) {
   const wanted = action === 'decline' ? 'declined' : 'question';
   // double-tap guard: the same answer within 2 minutes returns the first result and does nothing else (no second text)
   const prevAt = Date.parse(s.Owner_Response_At || '');
-  if (String(s.Owner_Response || '') === wanted && String(s.Owner_Response_Text || '') === text && prevAt && Date.now() - prevAt >= 0 && Date.now() - prevAt < OWNER_APPROVAL_DOUBLE_TAP_MS) {
+  const isDup = !!(String(s.Owner_Response || '') === wanted && String(s.Owner_Response_Text || '') === text && prevAt && Date.now() - prevAt >= 0 && Date.now() - prevAt < OWNER_APPROVAL_DOUBLE_TAP_MS);
+  if (isDup && String(s.Owner_Response_Alerted || '').trim()) {
     return json({ ok: true, saved: true, duplicate: true, state: wanted === 'declined' ? 'declined' : 'waiting' });
   }
+  // isDup with no Owner_Response_Alerted: the answer is already saved but Brett was never texted (for example the read-back was
+  // quota-blocked and the owner was told "try again"). Do not save it again; go straight to the text below (gate D2, Nov 17 2026).
   const nowIso = new Date(Date.now()).toISOString();   // the same clock the double-tap guard above reads
-  try {
+  if (!isDup) try {
     await ensureColumns(env, 'Scopes', OWNER_APPROVAL_RESPONSE_COLS);
-    await updateRowVerified(env, 'Scopes', scopeId, { Owner_Response: wanted, Owner_Response_At: nowIso, Owner_Response_By: name, Owner_Response_Text: text });
+    await updateRowVerified(env, 'Scopes', scopeId, { Owner_Response: wanted, Owner_Response_At: nowIso, Owner_Response_By: name, Owner_Response_Text: text, Owner_Response_Alerted: '' });
   } catch (e) {
     try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_save_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `owner=${ownerId} scope=${scopeId} ${schedErrText(e)}`.slice(0, 480) }); } catch (te) { console.error('owner_approval_save_failed telemetry failed:', schedErrText(te)); }
     return json({ error: 'Not saved, try again.', saved: false }, 500);   // no text is sent for an answer that was not saved
