@@ -12988,7 +12988,7 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   }
   if (fileToken) {
     let receipts = [];
-    try { receipts = JSON.parse(billRow.Receipts_JSON || '[]'); } catch (e) {}
+    try { receipts = JSON.parse(billRow.Receipts_JSON || '[]'); } catch (e) { await softFail(env, 'vendorInvoiceConfirm:receipts', e, { req, severity: 'P2', ref: String(woId), source: 'parse', context: 'the confirmation email went out without receipt links' }); }
     (Array.isArray(receipts) ? receipts : []).forEach((r, i) => {
       if (!r || r.pay === 'account' || !r.url) return;
       const fid = driveIdFromUrl(r.url);
