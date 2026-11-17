@@ -5411,7 +5411,7 @@ async function receiptReconSearch(env, url) {
   const hasAmount = qRaw.replace(/[^0-9.]/g, '').length > 0 && !isNaN(qAmount);
 
   let properties = [], workorders = [];
-  try { properties = await fetchTab(env, 'Properties'); } catch (e) {}
+  try { properties = await fetchTab(env, 'Properties'); } catch (e) { await softFail(env, 'receiptReconSearch:properties', e, { severity: 'P2', ref: '', source: 'read', context: 'the properties list could not be read, so search results may be missing property names' }); }
   try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) {}
   const propById = new Map(properties.map(p => [String(p.ID), p]));
   const woById = new Map(workorders.map(w => [String(w.ID), w]));
