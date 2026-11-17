@@ -52,9 +52,16 @@ count="$(find "$SKILLS_DIR" -name SKILL.md | wc -l | tr -d ' ')"
 echo "Scanning $count skill file(s) under $SKILLS_DIR against $BASELINE"
 args=(scan "$SKILLS_DIR" --no-llm --format markdown -o "$OUT/skill-scan.md")
 [ -f "$BASELINE" ] && args+=(--baseline "$BASELINE")
-skillspector "${args[@]}" >/dev/null 2>&1; rc=$?
+skillspector "${args[@]}" >"$OUT/skillspector.log" 2>&1; rc=$?
 if [ -s "$OUT/skill-scan.md" ]; then
   [ -n "${GITHUB_STEP_SUMMARY:-}" ] && cat "$OUT/skill-scan.md" >> "$GITHUB_STEP_SUMMARY"
+fi
+# SkillSpector exits 1 WITH a report for findings and 2 with NO report when it breaks (checked Nov 17 2026 at the pinned commit).
+# Anything other than "1 with a report" is the scanner failing, not a finding: say so, show why, and fail as exit 2.
+if [ "$rc" -ne 0 ] && { [ "$rc" -ne 1 ] || [ ! -s "$OUT/skill-scan.md" ]; }; then
+  echo "::error title=Skill scan: scanner error::SkillSpector exited $rc without a usable report, so the skills were NOT checked. Last lines of its log:"
+  tail -n 20 "$OUT/skillspector.log"
+  exit 2
 fi
 if [ "$rc" -ne 0 ]; then
   echo "::error title=Skill scan::SkillSpector found something new in $SKILLS_DIR (exit $rc). Read the report in the run summary. If a finding is a false alarm, review it, then re-run: skillspector baseline $SKILLS_DIR -o $BASELINE --no-llm --reason \"why it is safe\""
