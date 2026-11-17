@@ -121,5 +121,10 @@ t('enrichWO strips Triage_ for tenant/owner/vendor/shared', /startsWith\('Triage
 t('routes exist', src.includes("path === '/wo/triage-set'") && src.includes("path === '/wo/triage-preview'"));
 const rs = src.slice(src.indexOf('const ROLE_SCOPES'), src.indexOf('const ROLE_SCOPES') + 40000);
 t('triage paths are in no ROLE_SCOPES list (admin only)', src.indexOf('const ROLE_SCOPES') > 0 && !/triage-(set|preview)/.test(rs.slice(0, rs.indexOf('\n};') > 0 ? rs.indexOf('\n};') : 20000)));
+// a failed audit row is reported, never only console.error (gate C3, Nov 17 2026)
+{ const x = make({ auditThrows: true }); const r = await x.triageWorkOrder(x.env, 'WO-1', { description: 'water pouring from ceiling', trade: '', priority: 'normal' }, 'rules');
+  eq('audit failure: still stamped Emergency', r.tier, 'Emergency'); t('audit failure: reported to the failure ledger', x.log.fails.some(f => f.where === 'wo_triage_audit' && f.severity === 'P2')); }
+{ const x = make({ auditThrows: true }); const r = await x.woTriageSet(x.env, { wo_id: 'WO-1', tier: 'Emergency', reason: 'tenant called' });
+  eq('audit failure: tier-set still ok', r.body.success, true); t('audit failure on tier-set: reported', x.log.fails.some(f => f.where === 'wo_triage_audit')); }
 console.log(`wo-triage: ${pass} pass, ${fail} fail`);
 process.exit(fail ? 1 : 0);
