@@ -13916,7 +13916,7 @@ async function qbUndoSend(env, body) {
         await updateRow(env, LOAN_LEDGER_TAB, entry.ID, { Active: 'FALSE' });
         loanReversed = Math.abs(parseFloat(entry.Amount) || 0);
       }
-    } catch (e) { /* no ledger tab / nothing to reverse — not fatal */ }
+    } catch (e) { if (!/Unable to parse range|not found|does not exist/i.test(String((e && e.message) || e))) await softFail(env, 'qbUndoSend:loanReverse', e, { severity: 'P1', ref: String(ir.ID || ''), source: 'write', context: 'the QuickBooks send was undone but a loan-ledger deduction may not have been reversed' }); }
 
     // A signed-proposal final billing: put its payments back to pending so they can be billed again
     // (otherwise the proposal would show as fully invoiced against a QuickBooks invoice that is gone).
