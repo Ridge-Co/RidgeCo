@@ -27049,6 +27049,104 @@ async function sendReceiptsToQBEmail(env, opts) {
   return json({ ok: true, sent, sent_without_attachment: sentNoFile, blocked, failed, warnings, remaining: pending.length - batch.length, held: heldN, stuck: stuckN });
 }
 
+// ── QB batch: review list, hold/release, "delete it in QuickBooks" tick-list (Nov 17 2026) ──────────────────────────────────────────────────────
+// PURE. Whole hours from `etNow` ({date, minutes}) until the daily job's slot. lastKey = the ET day the job last finished ('' if never).
+// Not yet run today and the slot is still ahead: hours to the slot today. Slot passed and not run: 0 (next scheduler tick). Already ran today: tomorrow's slot.
+function qbBatchHoursUntil(etNow, atHHMM, lastKey) {
+  const at = schedAtMinutes(atHHMM);
+  if (lastKey && lastKey === etNow.date) return Math.max(0, Math.round((1440 - etNow.minutes + at) / 60 * 10) / 10);
+  if (etNow.minutes < at) return Math.round((at - etNow.minutes) / 60 * 10) / 10;
+  return 0;
+}
+// PURE. The row the review list shows for one waiting receipt. `q` = the Receipt_Recon_Queue row that confirmed it (or null), `wo`/`prop` may be null.
+function qbBatchListItem(r, q, wo, prop) {
+  const st = qbBatchStatus(r);
+  const sendingSince = Date.parse(r.QB_Batch_Sent_Date || '');
+  return {
+    receipt_id: String(r.ID), status: st,
+    stuck: st === 'sending' && (!sendingSince || Date.now() - sendingSince > 15 * 60 * 1000),
+    store: r.Store || '', amount: r.Amount || '', date: r.Date || '',
+    receipt_number: String(r.Receipt_Number || (q && q.Invoice_Number) || ''),
+    wo_id: r.WO_ID || '', wo_description: wo ? String(wo.Description || '').slice(0, 120) : '',
+    property_id: r.Property_ID || '', property_address: prop ? (prop.Address || '') : '',
+    queue_id: q ? String(q.ID) : '', can_reverse: !!q && st !== 'sending',
+    error: r.QB_Batch_Error || '', last_attempt: r.QB_Batch_Sent_Date || '',
+  };
+}
+// GET /receipts/qb-batch — everything the "Waiting to send to QuickBooks" panel shows. Read-only.
+async function qbBatchList(env) {
+  let receipts, queue;
+  try { [receipts, queue] = await Promise.all([fetchTab(env, 'Receipts'), fetchTab(env, 'Receipt_Recon_Queue')]); }
+  catch (e) { return json({ ok: false, error: 'Could not read Receipts: ' + String(e && e.message || e) }, 500); }
+  const [properties, workorders] = await Promise.all([fetchTab(env, 'Properties').catch(() => []), fetchTab(env, 'Work_Orders').catch(() => [])]);
+  const qByReceipt = new Map(); for (const q of queue) { if (q.Confirmed_Receipt_ID && ['confirmed', 'attached_only'].includes(q.Status)) qByReceipt.set(String(q.Confirmed_Receipt_ID), q); }
+  const propById = new Map(properties.map(p => [String(p.ID), p])), woById = new Map(workorders.map(w => [String(w.ID), w]));
+  const items = receipts.filter(r => qbBatchWaiting(r))
+    .map(r => qbBatchListItem(r, qByReceipt.get(String(r.ID)) || null, r.WO_ID ? woById.get(String(r.WO_ID)) : null, r.Property_ID ? propById.get(String(r.Property_ID)) : null))
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const cleanup = receipts.filter(r => String(r.QB_Reversed_Date || '').trim() && String(r.QB_Delete_Confirmed || '').toUpperCase() !== 'TRUE')
+    .map(r => ({ receipt_id: String(r.ID), vendor: r.Store || '', amount: r.Amount || '', receipt_date: r.Date || '', email_subject: r.QB_Email_Subject || qbBatchSubject(r), qb_email_sent_date: r.QB_Email_Sent_Date || '', reversed_date: r.QB_Reversed_Date || '' }));
+  // When is the next send? From the scheduler's own schedule (the HubScheduler.gs JOBS table is the one place the time is edited).
+  let nextSend = null, scheduleNote = '';
+  try {
+    const st = schedParseState(schedCell(await schedReadConfigRows(env, false), SCHED_STATE_KEY));
+    const eff = schedEffective(st);
+    const job = (eff.jobs || SCHED_JOBS).find(j => j.name === 'daily_receipts_post');
+    const js = st && st.jobs && st.jobs.daily_receipts_post;
+    if (job && !job.disabled) nextSend = { at: job.at, hours_until: qbBatchHoursUntil(schedEtParts(new Date()), job.at, js && js.last_key) };
+    else scheduleNote = 'The daily QuickBooks send is switched off in the scheduler, so nothing goes out until it is switched on or you tap Send batch now.';
+    if (eff.schedule_error) scheduleNote = eff.schedule_error;
+  } catch (e) { scheduleNote = 'Could not read the scheduler to say when the next send is: ' + String(e && e.message || e).slice(0, 160); }
+  const count = (s) => items.filter(i => i.status === s).length;
+  return json({ ok: true, items: items.slice(0, 300), total: items.length, counts: { ready: count('ready'), held: count('held'), failed: count('failed'), sending: count('sending') }, cleanup, next_send: nextSend, schedule_note: scheduleNote });
+}
+// POST /receipts/qb-batch/action { receipt_id, action: 'hold' | 'release' | 'mark_sent' } — hold = skip until released; release = back to ready (also how a failed or
+// interrupted 'sending' receipt is retried); mark_sent = a person checked QuickBooks/Gmail and the email did go out (only for an interrupted 'sending' row).
+async function qbBatchAction(env, body) {
+  const id = String(body && body.receipt_id || '').trim(); if (!id) return json({ error: 'receipt_id required' }, 400);
+  const action = String(body.action || '');
+  if (!['hold', 'release', 'mark_sent'].includes(action)) return json({ error: "action must be 'hold', 'release' or 'mark_sent'" }, 400);
+  try { await ensureColumns(env, 'Receipts', QB_BATCH_COLS.concat(['QB_Email_Sent', 'QB_Email_Sent_Date'])); }
+  catch (e) { return json({ error: 'Could not prepare the Receipts columns: ' + String(e && e.message || e) }, 500); }
+  const r = (await fetchTab(env, 'Receipts')).find(x => String(x.ID) === id);
+  if (!r) return json({ error: 'receipt not found' }, 404);
+  if (!qbBatchWaiting(r)) return json({ error: qbBatchStatus(r) === 'sent' ? 'That receipt was already emailed to QuickBooks. Use Reverse on the Confirmed tab if it was wrong.' : 'That receipt is not waiting for QuickBooks.' }, 409);
+  const st = qbBatchStatus(r);
+  if (action === 'hold') {
+    if (st === 'sending') return json({ error: 'That receipt is being sent right now. Wait a minute, or release it first if it is stuck.' }, 409);
+    await qbBatchWrite(env, id, { QB_Batch_Status: 'held', QB_Batch_Error: '' });
+  } else if (action === 'release') {
+    await qbBatchWrite(env, id, { QB_Batch_Status: 'ready', QB_Batch_Error: '' });
+  } else {
+    if (st !== 'sending') return json({ error: 'Only a receipt stuck in "sending" can be marked as sent.' }, 409);
+    const nowIso = new Date().toISOString();
+    await qbBatchWrite(env, id, { QB_Email_Sent: 'TRUE', QB_Email_Sent_Date: r.QB_Batch_Sent_Date || nowIso, QB_Batch_Status: 'sent', QB_Batch_Error: '' });
+  }
+  return json({ ok: true, receipt_id: id, status: action === 'hold' ? 'held' : action === 'release' ? 'ready' : 'sent' });
+}
+// POST /receipts/qb-batch/delete-done { receipt_id, done? } — Brett ticks "I deleted it in QuickBooks" for a receipt reversed after it was sent.
+async function qbBatchDeleteDone(env, body) {
+  const id = String(body && body.receipt_id || '').trim(); if (!id) return json({ error: 'receipt_id required' }, 400);
+  const done = !(body.done === false || String(body.done).toUpperCase() === 'FALSE');
+  try { await ensureColumns(env, 'Receipts', QB_BATCH_COLS); } catch (e) { return json({ error: 'Could not prepare the Receipts columns: ' + String(e && e.message || e) }, 500); }
+  const r = (await fetchTab(env, 'Receipts')).find(x => String(x.ID) === id);
+  if (!r) return json({ error: 'receipt not found' }, 404);
+  if (!String(r.QB_Reversed_Date || '').trim()) return json({ error: 'That receipt was not reversed after being sent, so there is nothing to delete in QuickBooks.' }, 409);
+  await qbBatchWrite(env, id, { QB_Delete_Confirmed: done ? 'TRUE' : 'FALSE', QB_Delete_Confirmed_Date: done ? new Date().toISOString() : '' });
+  return json({ ok: true, receipt_id: id, done });
+}
+// PURE. The qb_email field the confirm/reassign answers carry now that nothing is emailed at that moment.
+function qbBatchQueuedNote() { return { sent: false, queued: true, error: null, note: 'Waiting in the daily QuickBooks batch.' }; }
+// PURE. What the screen shows when a receipt that was already emailed is reversed: the exact thing to delete by hand in QuickBooks.
+function qbDeleteNeeded(original, queueId) {
+  return {
+    receipt_id: String(original.ID), queue_id: queueId ? String(queueId) : '', hub_receipt_number: String(original.ID),
+    vendor: original.Store || '', amount: original.Amount || '', receipt_date: original.Date || '',
+    email_subject: original.QB_Email_Subject || qbBatchSubject(original), qb_email_sent_date: original.QB_Email_Sent_Date || '',
+  };
+}
+// ═══ QB-BATCH-END ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
 function bytesToB64(buf) {
   const b = new Uint8Array(buf); let s = ''; const CH = 0x8000;
   for (let i = 0; i < b.length; i += CH) s += String.fromCharCode.apply(null, b.subarray(i, i + CH));
