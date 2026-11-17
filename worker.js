@@ -19544,7 +19544,7 @@ async function checkDeadManSwitch(env) {
     return { ok: true, tripped: true, alerted: false, error: sendErr, last_activity: lastActivityISO };
   }
   try { await setConfigKey(env, { key, value: new Date().toISOString() }); } catch (e) { await softFail(env, 'checkDeadManSwitch:debounce', e, { severity: 'P1', ref: key, source: 'write' }); }
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'dead_man_switch', Skill_Or_Endpoint: 'checkDeadManSwitch', Success: 'FALSE', Notes: `zero-activity gap; last_activity=${lastActivityISO || 'none in 2d window'}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'dead_man_switch', Skill_Or_Endpoint: 'checkDeadManSwitch', Success: 'FALSE', Notes: `zero-activity gap; last_activity=${lastActivityISO || 'none in 2d window'}` }); } catch (_) { /* silent-ok: telemetry is best effort, the text to Brett already went out */ }
   return { ok: true, tripped: true, alerted: true, last_activity: lastActivityISO };
 }
 
