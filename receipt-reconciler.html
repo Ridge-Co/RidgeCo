@@ -1066,7 +1066,8 @@ function updateWoDetail(id){
   const receiptDate = dateEl ? dateEl.value.trim() : '';
   const link = 'index.html?wo=' + encodeURIComponent(wo.ID);
   const dl = woDatesLabel(wo);
-  let html = '<a href="'+esc(link)+'" target="_blank" rel="noopener">Open WO '+esc(wo.ID)+' ↗</a>'
+  const rnChip = receiptNumChip(rowsById[id] || {});
+  let html = (rnChip ? rnChip + ' ' : '') + '<a href="'+esc(link)+'" target="_blank" rel="noopener">Open WO '+esc(wo.ID)+' ↗</a>'
     + ' · ' + (dl ? esc(dl.charAt(0).toUpperCase()+dl.slice(1)) : '<span class="warn">no opened/closed date on file for this WO</span>');
   const warn = woDateWindowWarning(receiptDate, wo);
   if (warn) html += '<div class="rc-wo-warn">'+esc(warn.message)+'</div>';
