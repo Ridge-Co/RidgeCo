@@ -14,6 +14,7 @@ const pending = [
   q({ ID: '1', suggestion: { category: 'billable', action: 'suggest', property: { id: '2', address: '928 N Calvert St' }, flags: ['card_unknown'], card_status: 'unknown', rule: { id: '7', action: 'business', blocked: ['card_unknown'], auto: false } }, Card_Last4: '4444', dup_signals: [{ reason: 'Possible duplicate of queue entry #2 (pending): $43.23 at Home Depot on ' + today + '.' }] }),
   q({ ID: '2', Vendor: 'Google LLC', suggestion: { category: 'company', action: 'exclude', flags: [] } }),
   q({ ID: '3', suggestion: { category: 'customer_paid', action: 'exclude', manual_customer_card: true, flags: [] } }),
+  q({ ID: '5', Card_Last4: '1661', suggestion: { category: 'billable', action: 'need_property', flags: [] } }),
   q({ ID: '4', suggestion: { category: 'billable', action: 'need_property', flags: ['po_ambiguous'], property_hint: { candidates: [{ id: '11', address: '1220 Anywhere St' }, { id: '85', address: '928 N Calvert St' }] } }, dup_read_error: 'Receipts could not be read for the duplicate check: boom' }),
 ];
 const confirmed = [q({ ID: '9', Status: 'confirmed', Vendor: 'Apple Valley Waste', Notes: '🤖 Auto-handled by rule #3 (always this property).', auto_handled: true })];
@@ -64,6 +65,7 @@ for (const vp of [{ n: '412', w: 412, h: 915, mobile: true }, { n: '1366', w: 13
   const banner = await txt('.rc-banner');
   ok(/Receipts could not be read/.test(banner), 'a duplicate-check read failure shows an error banner');
   // panels
+  ok(await page.locator('details.rc-sub-panel[open]').count() === 0 && await page.locator('#rc-card-l4').isHidden() && await page.locator('#rc-rule-vendor').isHidden(), 'the add-a-card and add-a-rule forms are collapsed until opened');
   await page.locator('details.rc-panel summary:has-text("Auto-handled")').click();
   ok(/Apple Valley Waste/.test(await txt('#rc-panels')) && await page.locator('#ah9 button:has-text("Undo")').count() === 1, 'Auto-handled list shows the row with an Undo button');
   await page.locator('#ah9 button').click();
@@ -71,15 +73,20 @@ for (const vp of [{ n: '412', w: 412, h: 915, mobile: true }, { n: '1366', w: 13
   await page.locator('#ah9 button').click(); await page.waitForTimeout(500);
   ok(calls.some(c => c.path === '/receipt-recon/undo' && c.body.id === '9'), 'second tap sends the undo');
   // mark customer card with remember
-  await page.locator('#rc1-cc-save').check();
-  await page.locator('#rc1 button:has-text("This was on a customer")').click(); await page.waitForTimeout(500);
-  ok(calls.some(c => c.path === '/receipt-recon/mark-customer-card' && c.body.id === '1' && c.body.customer_card === true && c.body.last4 === '4444'), 'customer-card button sends the mark with the remembered last-4');
+  ok(await page.locator('#rc5 .rc-hint').count() === 0 && await page.locator('[id$="-cc-save"]').count() === 0, 'a card already saved as MINE (1661) shows no "remember as customer card" prompt at all');
+  ok(await page.locator('#rc1 button:has-text("This is my card")').count() === 1 && await page.locator('#rc1 .rc-hint button:text-is("Customer\'s card")').count() === 1, 'an unknown card offers both "my card" and "customer\'s card"');
+  await page.locator('#rc1 button:has-text("This is my card")').click(); await page.waitForTimeout(500);
+  ok(calls.some(c => c.path === '/receipt-recon/cards' && c.body.last4 === '4444' && c.body.owner === 'mine') && !calls.some(c => c.path === '/receipt-recon/mark-customer-card' && c.body.id === '1'), '"This is my card" saves it as mine and does not mark the receipt as a customer purchase');
+  await page.locator('#rc1 .rc-hint button:text-is("Customer\'s card")').click(); await page.waitForTimeout(500);
+  ok(calls.some(c => c.path === '/receipt-recon/mark-customer-card' && c.body.id === '1' && c.body.customer_card === true && c.body.last4 === '4444'), '"Customer\'s card" marks the receipt and remembers the last-4');
   await page.locator('#rc4 button:has-text("This was on a customer")').click(); await page.waitForTimeout(500);
-  ok(calls.some(c => c.path === '/receipt-recon/mark-customer-card' && c.body.id === '4' && c.body.last4 === undefined), 'without the checkbox no card is saved');
+  ok(calls.some(c => c.path === '/receipt-recon/mark-customer-card' && c.body.id === '4' && c.body.last4 === undefined), 'the plain customer-card button saves no card');
   await page.locator('details.rc-panel summary:has-text("Always-rules")').click();
+  await page.locator('details.rc-sub-panel summary:has-text("Add a rule")').click();
   await page.fill('#rc-rule-vendor', 'Google LLC'); await page.locator('button:has-text("Save rule")').click(); await page.waitForTimeout(500);
   ok(calls.some(c => c.path === '/receipt-recon/rules' && c.body.match_vendor === 'Google LLC' && c.body.action === 'business'), 'saving a rule posts it');
   await page.locator('details.rc-panel summary:has-text("Cards")').click();
+  await page.locator('details.rc-sub-panel summary:has-text("Add a card")').click();
   await page.fill('#rc-card-l4', '12'); await page.locator('button:has-text("Save card")').click(); await page.waitForTimeout(300);
   ok(!calls.some(c => c.path === '/receipt-recon/cards' && c.body.last4 === '12'), 'a card with fewer than 4 digits is refused before anything is sent');
   const sw = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

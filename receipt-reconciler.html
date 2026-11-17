@@ -78,7 +78,9 @@
   .rc-hint{background:#eef2ff;border:1px solid #c7d2fe;border-radius:var(--radius);padding:8px 10px;margin-bottom:8px;font-size:12px;line-height:1.5;display:flex;gap:8px;flex-wrap:wrap;align-items:center;}
   details.rc-panel{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:0 12px;margin-bottom:10px;}
   details.rc-panel > summary{cursor:pointer;font-weight:bold;font-size:13px;min-height:44px;display:flex;align-items:center;}
-  .rc-prow{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;border-top:1px solid var(--border);padding:8px 0;font-size:12px;}
+  .rc-prow{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;border-top:1px solid var(--border);padding:2px 0;font-size:12px;}
+  details.rc-sub-panel{border-top:1px solid var(--border);}
+  details.rc-sub-panel > summary{cursor:pointer;font-size:13px;font-weight:bold;color:var(--accent);min-height:44px;display:flex;align-items:center;}
   .rc-pform{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;border-top:1px solid var(--border);padding:10px 0;}
   .rc-pform label{display:block;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px;}
   .rc-pform input,.rc-pform select{min-height:44px;font-size:16px;}
@@ -1183,7 +1185,8 @@ function dupSignalsHtml(r){
 function cardHintHtml(r, sug){
   if ((r.Status || 'pending') !== 'pending') return '';
   const l4 = String(r.Card_Last4 || '').replace(/\D/g, '').slice(-4);
-  if (effCardStatus(r, sug) !== 'unknown' || l4.length !== 4) return '';
+  if (l4.length !== 4 || !cardsInfo) return '';   // lists not loaded: say nothing here (the page banner already reports it)
+  if ((cardsInfo.mine || []).some(c => c.last4 === l4) || (cardsInfo.customer || []).some(c => c.last4 === l4)) return '';
   return '<div class="rc-hint"><span>Card …'+esc(l4)+' is not on either list. Whose is it?</span>'
     + '<button class="btn secondary small" onclick="setCardOwner(\''+esc(r.ID)+'\',\''+l4+'\',\'mine\',this)">This is my card</button>'
     + '<button class="btn secondary small" onclick="setCardOwner(\''+esc(r.ID)+'\',\''+l4+'\',\'customer\',this)">Customer\'s card</button></div>';
@@ -1359,8 +1362,6 @@ function rowCard(r){
     // since that's a real scanner finding, not a manual guess.
     if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', true, this)">🔄 Mark as refund</button>';
     if (isRefund && sug.manual_refund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', false, this)">↩ Not a refund</button>';
-    const ccL4 = String(r.Card_Last4 || '').replace(/\D/g, '').slice(-4);
-    if (!excluded && !isRefund && ccL4.length === 4) html += '<label class="rc-closed-toggle" style="min-height:44px"><input type="checkbox" id="'+idAttr+'-cc-save"> also remember …'+esc(ccL4)+' as a customer card</label>';
     if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="markCustomerCard(\''+r.ID+'\', true, this)">💳 This was on a customer\'s card</button>';
     if (sug.manual_customer_card) html += '<button class="btn secondary small" onclick="markCustomerCard(\''+r.ID+'\', false, this)">↩ Not a customer-card purchase</button>';
     html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\', this)">Skip</button>';
@@ -1601,11 +1602,7 @@ function toggleBillCustomer(id){
   if (on) refreshWoSelect(id);
 }
 async function markCustomerCard(id, flag, btn){
-  let last4 = '';
-  if (flag) {
-    const r = rowsById[id] || {}, cb = document.getElementById('rc'+id+'-cc-save');
-    if (cb && cb.checked) last4 = String(r.Card_Last4 || '').replace(/\D/g, '').slice(-4);
-  }
+  const last4 = '';   // remembering a card is done by the one-tap buttons that only appear for a card on neither list
   if (btn) btn.disabled = true;
   const statusEl = document.getElementById('rc'+id+'-status');
   if (statusEl) statusEl.innerHTML = '<span class="info">Saving…</span>';
@@ -1665,17 +1662,17 @@ function renderPanels(){
   h += autoRows.length ? autoRows.map(x => '<div class="rc-prow" id="ah'+esc(x.ID)+'"><span><b>'+esc(x.Vendor||'(vendor unknown)')+'</b> $'+money(x.Total)+' · '+esc(x.Receipt_Date||'')+'<br><span class="info">'+esc(x.Notes||'')+'</span></span><button class="btn secondary small" onclick="autoUndo(\''+esc(x.ID)+'\', this)">↩ Undo</button></div>').join('') : '<div class="rc-prow info">Nothing was handled automatically in the last 14 days.</div>';
   h += '</details>';
   // Cards
-  h += '<details class="rc-panel" '+(openPanels.has('cards')?'open':'')+' ontoggle="panelToggle(\'cards\',this)"><summary>💳 Cards</summary>';
+  h += '<details class="rc-panel" '+(openPanels.has('cards')?'open':'')+' ontoggle="panelToggle(\'cards\',this)"><summary>💳 Cards: '+(cardsInfo?((cardsInfo.mine||[]).length+' mine · '+(cardsInfo.customer||[]).length+' customer'):'?')+'</summary>';
   if (!cardsInfo) h += '<div class="rc-prow err">The card lists could not be loaded.</div>';
   else {
     const row = (c, owner) => '<div class="rc-prow"><span>…'+esc(c.last4)+(c.label?' · '+esc(c.label):'')+' <span class="pill '+(owner==='mine'?'suggest':'warn')+'">'+(owner==='mine'?'mine':'customer')+'</span></span><button class="btn secondary small" onclick="cardChange(\''+esc(c.last4)+'\',\'remove\',this)">Remove</button></div>';
     h += (cardsInfo.mine||[]).map(c => row(c,'mine')).join('') + (cardsInfo.customer||[]).map(c => row(c,'customer')).join('');
     if (!(cardsInfo.mine||[]).length && !(cardsInfo.customer||[]).length) h += '<div class="rc-prow info">No cards saved yet. Only the last 4 digits are ever stored.</div>';
     if (cardsInfo.customer_from_secret) h += '<div class="rc-prow info">The customer list is fixed by a Cloudflare secret; changes to it must be made there.</div>';
-    h += '<div class="rc-pform"><div><label>Last 4</label><input id="rc-card-l4" inputmode="numeric" maxlength="4" style="width:90px" placeholder="1234"></div>'
+    h += '<details class="rc-sub-panel" '+(openPanels.has('cardadd')?'open':'')+' ontoggle="panelToggle(\'cardadd\',this)"><summary>＋ Add a card</summary><div class="rc-pform"><div><label>Last 4</label><input id="rc-card-l4" inputmode="numeric" maxlength="4" style="width:90px" placeholder="1234"></div>'
       + '<div><label>Label (optional)</label><input id="rc-card-label" maxlength="40" style="width:150px" placeholder="e.g. Lowe\'s card"></div>'
       + '<div><label>Whose</label><select id="rc-card-owner"><option value="mine">Mine</option><option value="customer">Customer</option></select></div>'
-      + '<button class="btn small" onclick="cardAdd(this)">Save card</button></div>';
+      + '<button class="btn small" onclick="cardAdd(this)">Save card</button></div></details>';
   }
   h += '</details>';
   // Rules
@@ -1690,19 +1687,19 @@ function renderPanels(){
       return '<div class="rc-prow"'+(off?' style="opacity:.55"':'')+'><span><b>'+esc(x.Match_Vendor)+'</b> → '+esc(what)+rng+' · '+(String(x.Auto).toUpperCase()==='TRUE'?'auto':'pre-select only')+' · used '+esc(x.Hits||0)+'×'+(off?' · <i>off</i>':'')+'</span>'
         + (off ? '' : '<button class="btn secondary small" onclick="ruleDeactivate(\''+esc(x.ID)+'\', this)">Turn off</button>')+'</div>';
     }).join('') || '<div class="rc-prow info">No rules yet.</div>';
-    h += '<div class="rc-pform"><div><label>Vendor name</label><input id="rc-rule-vendor" style="width:150px" placeholder="e.g. Google LLC"></div>'
+    h += '<details class="rc-sub-panel" '+(openPanels.has('ruleadd')?'open':'')+' ontoggle="panelToggle(\'ruleadd\',this)"><summary>＋ Add a rule</summary><div class="rc-pform"><div><label>Vendor name</label><input id="rc-rule-vendor" style="width:150px" placeholder="e.g. Google LLC"></div>'
       + '<div><label>Always</label><select id="rc-rule-action" onchange="document.getElementById(\'rc-rule-prop-wrap\').style.display=this.value===\'property\'?\'\':\'none\'"><option value="business">a business expense</option><option value="property">this property</option></select></div>'
       + '<div id="rc-rule-prop-wrap" style="display:none"><label>Property</label><select id="rc-rule-prop" style="max-width:200px">'+propertyOptions('')+'</select></div>'
       + '<div><label>Min $</label><input id="rc-rule-min" inputmode="decimal" style="width:70px"></div><div><label>Max $</label><input id="rc-rule-max" inputmode="decimal" style="width:70px"></div>'
       + '<div><label>Auto-confirm</label><select id="rc-rule-auto"><option value="true">Yes</option><option value="false">No, pre-select only</option></select></div>'
-      + '<button class="btn small" onclick="ruleSave(this)">Save rule</button></div>';
+      + '<button class="btn small" onclick="ruleSave(this)">Save rule</button></div></details>';
   }
   h += '</details>';
   box.innerHTML = h;
 }
 async function panelAction(btn, fn){
   if (btn) btn.disabled = true;
-  try { await fn(); await loadQueue(); }
+  try { await fn(); openPanels.delete('cardadd'); openPanels.delete('ruleadd'); await loadQueue(); }
   catch(e){ toast('<span class="err">❌ '+esc(e.message)+'</span>'); if (btn) btn.disabled = false; }
 }
 function cardAdd(btn){ panelAction(btn, async () => {
