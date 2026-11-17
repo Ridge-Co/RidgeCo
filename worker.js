@@ -7331,7 +7331,7 @@ function scopeMaterialsBudgetSummary(budgetCost, budgetPrice, woId, receipts) {
   if (receipts === null) return { budget_cost: budgetCost, budget_price: budgetPrice, actual: null, receipt_count: null, variance: null, state: 'unknown' };
   // Vendor-logged receipts (Role 'vendor') are the vendor's own purchases, inside their cost — not
   // Ridge Co spending — so they never count toward "actual" here.
-  const mine = woId ? (receipts || []).filter(rc => String(rc.WO_ID) === String(woId) && String(rc.Active || '').toUpperCase() !== 'FALSE' && (parseFloat(rc.Amount) || 0) > 0 && String(rc.Role || '').toLowerCase() !== 'vendor') : [];
+  const mine = woId ? (receipts || []).filter(rc => String(rc.WO_ID) === String(woId) && String(rc.Active || '').toUpperCase() !== 'FALSE' && !receiptIsNonBilling(rc) && (parseFloat(rc.Amount) || 0) > 0 && String(rc.Role || '').toLowerCase() !== 'vendor') : [];
   const actual = +mine.reduce((sum, rc) => sum + (parseFloat(rc.Amount) || 0), 0).toFixed(2);
   const variance = +(budgetCost - actual).toFixed(2); // + = under budget, - = over
   // No materials budget → 'none': those receipts aren't part of the proposal and keep billing
