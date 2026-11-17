@@ -4749,7 +4749,11 @@ async function receiptAttachOnly(env, body) {
   // a reference only. customer_card:true is accepted only for a row that really is marked customer-card (Manual_Customer_Card, or the scanner's
   // customer_paid category), and writes Category 'customer_paid' + Non_Billable 'TRUE'. Nothing else changes: still addReceipt only, never
   // the invoice-review fold or the QuickBooks receipt email (the QB sweep also skips Non_Billable rows). Every billing path ignores the row via receiptIsNonBilling.
-  const customerCard = body.customer_card === true || String(body.customer_card).toUpperCase() === 'TRUE';
+  // Nov 17 2026 (Brett, fixed-price jobs): non_billing_reason 'fixed_price' = a cost we paid on a job whose price already covers it. SAME non-billing flag
+  // (Non_Billable TRUE, never in the invoice / materials / markup), but it IS our expense: Category 'company' with the WO and property on it, and it goes to
+  // the QuickBooks receipts inbox like any expense. 'customer_card' (or the older customer_card:true) = the customer's money, never our expense.
+  const fixedPrice = String(body.non_billing_reason || '') === 'fixed_price';
+  const customerCard = !fixedPrice && (body.customer_card === true || String(body.customer_card).toUpperCase() === 'TRUE' || String(body.non_billing_reason || '') === 'customer_card');
   if (customerCard) {
     let _sug = null; try { _sug = JSON.parse(row.Suggestion || 'null'); } catch (e) {} // silent-ok: an unreadable Suggestion just means no scanner category, and the 409 below tells the user
     const isCcRow = String(row.Manual_Customer_Card || '').toUpperCase() === 'TRUE' || !!(_sug && _sug.category === 'customer_paid');
