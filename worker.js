@@ -40345,10 +40345,10 @@ async function trashUnbilled(env, url) {
   const thisWeek = trashWeekKey(today.toISOString().slice(0,10));
   const prevD = new Date(thisWeek + 'T12:00:00Z'); prevD.setUTCDate(prevD.getUTCDate() - 7);
   const prevWeek = prevD.toISOString().slice(0,10);
-  let props = [], visits = [], skips = [];
-  try { props  = await fetchTab(env, 'Trash_Properties'); } catch (e) {}
-  try { visits = await fetchTab(env, 'Trash_Visits'); } catch (e) {}
-  try { skips  = await fetchTab(env, 'Trash_Skips'); } catch (e) {}
+  // This powers the push nudge: an unreadable tab must not look like "nothing needs attention", so it is reported (P1) and returned as a warning.
+  const req = {}, warnings = [];
+  const rd = async tab => { const r = await fetchTabSoft(env, tab, { where: 'trash:read:' + tab, req, severity: 'P1', optional: true }); if (r.error) warnings.push('Could not read ' + tab + ': ' + r.error); return r.rows; };
+  let props = await rd('Trash_Properties'); const visits = await rd('Trash_Visits'), skips = await rd('Trash_Skips');
   props = props.filter(p => p.Active !== 'FALSE');
   const items = [];
   for (const week of [prevWeek, thisWeek]) {
