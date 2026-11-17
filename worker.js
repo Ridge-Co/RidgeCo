@@ -22171,7 +22171,7 @@ async function digestResponse(env, url) {
       Success: 'TRUE', Latency_ms: Date.now() - _t0,
       Notes: (delivery && delivery.delivered) ? 'delivered' : 'preview',
     });
-  } catch (_) { /* telemetry is best-effort; never let it take down the host job */ }
+  } catch (_) { /* silent-ok: telemetry row is a best-effort side effect of the digest */ }
   return json({ ok:true, text: formatDigestText(digest), digest, delivery });
 }
 
