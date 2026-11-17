@@ -17333,7 +17333,7 @@ async function setWishlistStatus(env, body) {
   const ALLOWED = ['Active','In progress','Done','Not applicable'];
   if (id === undefined || id === null || id === '') return json({ error: 'id required' }, 400);
   if (!ALLOWED.includes(status)) return json({ error: 'invalid status' }, 400);
-  try { await ensureColumns(env, 'Wishlist', ['Status']); } catch (e) { /* if it already exists, updateRow proceeds */ }
+  try { await ensureColumns(env, 'Wishlist', ['Status']); } catch (e) { /* if it already exists, updateRow proceeds */ } // silent-ok: ensureColumns reports its own failure to the ledger
   return await updateRow(env, 'Wishlist', id, { Status: status });
 }
 
