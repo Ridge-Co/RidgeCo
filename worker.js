@@ -4290,7 +4290,7 @@ async function receiptReconScan(env, body) {
         Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Notes: notes, Active: 'TRUE',
         Gmail_Message_ID: gmailId, Entry_Source: entrySource, Rescan_Match_JSON: JSON.stringify(rescanMatches).slice(0, 4000),
       };
-      const addedJson = await (await addRow(env, 'Receipt_Recon_Queue', queueRow)).json().catch(() => ({}));
+      const addedJson = await (await addRow(env, 'Receipt_Recon_Queue', queueRow)).json().catch(e => receiptJsonFail(env, 'receipt.queue.add', e));
       if (isVendorInvoice) vendorInvoiceSkipped++;
       // Same-scan twins: a row added earlier in this loop must be visible to the next file's duplicate check (brief 4c).
       existing.push(Object.assign({ ID: addedJson && addedJson.id != null ? String(addedJson.id) : '' }, queueRow));
@@ -4302,7 +4302,7 @@ async function receiptReconScan(env, body) {
         } else {
           try {
             const cr = await receiptReconConfirm(env, { id: addedJson.id, no_wo: true, property_id: ruleDec.rule.Action === 'property' ? String(ruleDec.rule.Property_ID || '') : '', description: ruleDec.rule.Description || undefined });
-            const cj = await cr.json().catch(() => ({}));
+            const cj = await cr.json().catch(e => receiptJsonFail(env, 'receipt.auto.confirm', e));
             if (cj && !cj.error && cj.success && !cj.duplicate) {
               autoHandled++;
               await updateRow(env, 'Receipt_Recon_Queue', addedJson.id, { Notes: `🤖 Auto-handled by rule #${ruleDec.rule.ID} (${ruleDec.rule.Action === 'property' ? 'always this property' : 'always a business expense'}).` });
@@ -5241,7 +5241,7 @@ async function receiptCardsChange(env, body) {
   if (labOld !== labNew) writes.push(['receipt_card_labels', labNew]);
   for (const [key, value] of writes) {
     const r = await setConfigKey(env, { key, value });
-    const j = await r.json().catch(() => ({}));
+    const j = await r.json().catch(e => receiptJsonFail(env, 'receipt.cards.save', e));
     if (j && j.error) return { error: 'could not save ' + key + ': ' + j.error, status: 500 };
   }
   return { ok: true, last4: l4, owner, changed: writes.map(w => w[0]) };
@@ -5305,9 +5305,14 @@ async function receiptReconRuleSave(env, body) {
   }
   const twin = loaded.rules.find(r => String(r.Active == null ? 'TRUE' : r.Active).toUpperCase() !== 'FALSE' && _rcNorm(r.Match_Vendor) === key && String(r.Action) === action && String(r.Property_ID || '') === propertyId);
   if (twin) return json({ error: `An active rule for "${vendor}" already exists (#${twin.ID}). Edit that one.`, existing_id: String(twin.ID) }, 409);
-  const added = await (await addRow(env, 'Receipt_Rules', Object.assign({ Created_Date: new Date().toISOString(), Hits: '0', Last_Hit_Date: '' }, fields))).json().catch(() => ({}));
+  const added = await (await addRow(env, 'Receipt_Rules', Object.assign({ Created_Date: new Date().toISOString(), Hits: '0', Last_Hit_Date: '' }, fields))).json().catch(e => receiptJsonFail(env, 'receipt.rule.add', e));
   if (!added || added.error || added.id == null) return json({ error: (added && added.error) || 'the rule could not be saved' }, 500);
   return json({ ok: true, id: String(added.id), created: true, auto: auto === 'TRUE', warnings });
+}
+// A receipt-reconciler response that did not come back as JSON. Reported (P1, one row per call), then the caller carries on with {} exactly as before.
+async function receiptJsonFail(env, where, err) {
+  await reportFailure(env, { system: 'hub', source: 'receipt', where, ref: '', err, severity: 'P1' });
+  return {};
 }
 async function receiptReconRuleDeactivate(env, body) {
   const id = body && body.id; if (!id) return json({ error: 'id required' }, 400);
