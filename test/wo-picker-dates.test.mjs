@@ -74,5 +74,59 @@ const completeButOpen = { ID: '6001', Status: 'Complete', Created_Date: '2026-08
 const lateReceipt = woDateWindowWarning('2026-09-01', completeButOpen);
 ok(lateReceipt && lateReceipt.type === 'after_close', 'a receipt dated after Completed_Date still warns even though Status=Complete is grouped as "open" in the picker');
 
+// ── Nov 17 2026: closed/past WOs are offered for a whole YEAR; blank Completed_Date falls back to Created_Date ──────────────────────
+// Loads the REAL functions + the REAL woSelectHTML out of the page, with the real WOStatus (wo-status.js) so "closed" really means
+// "not in WOStatus.sets.ACTIVE" exactly as it does in the shipped page.
+const woStatusSrc = readFileSync(join(here, '..', 'wo-status.js'), 'utf8');
+const WOStatus = new Function(woStatusSrc.replace(/console\.log[\s\S]*$/, '') + '\nreturn WOStatus;')();
+ok(/const OPEN_WO_STATUSES = WOStatus\.sets\.ACTIVE;/.test(src), 'page still derives open vs closed from WOStatus.sets.ACTIVE (kept in sync with wo-status.js)');
+const constMatch = src.match(/const RECENT_CLOSED_DAYS = (\d+);/);
+ok(constMatch && Number(constMatch[1]) === 365, 'RECENT_CLOSED_DAYS is 365 (a year)');
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const day = n => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+const build = (wos) => new Function('allWOs', 'OPEN_WO_STATUSES', 'esc',
+  isoConst + constMatch[0] + '\n' + grab('recentClosedLabel') + '\n' + grab('woClosedRefDate') + '\n' + grab('woClosedInWindow') + '\n' + grab('woDatesLabel') + '\n' + grab('woDateWindowWarning') + '\n' + grab('woSelectHTML') + '\nreturn { woSelectHTML, woClosedRefDate, woClosedInWindow, recentClosedLabel };'
+)(wos, WOStatus.sets.ACTIVE, esc);
+const P = '11';
+const wos = [
+  { ID: '2001', Property_ID: P, Status: 'In Progress', Description: 'open', Created_Date: day(-5) },
+  { ID: '2002', Property_ID: P, Status: 'Paid', Description: 'closed 10d ago', Created_Date: day(-30), Completed_Date: day(-10) },
+  { ID: '2003', Property_ID: P, Status: 'Paid', Description: 'closed 200d ago', Created_Date: day(-230), Completed_Date: day(-200) },
+  { ID: '2004', Property_ID: P, Status: 'Paid', Description: 'closed 364d ago', Created_Date: day(-380), Completed_Date: day(-364) },
+  { ID: '2005', Property_ID: P, Status: 'Paid', Description: 'closed 400d ago', Created_Date: day(-430), Completed_Date: day(-400) },
+  { ID: '2006', Property_ID: P, Status: 'Cancelled', Description: 'blank completed, created 40d ago', Created_Date: day(-40), Completed_Date: '' },
+  { ID: '2007', Property_ID: P, Status: 'Declined', Description: 'blank completed, created 500d ago', Created_Date: day(-500), Completed_Date: '' },
+  { ID: '2008', Property_ID: P, Status: 'Invoiced', Description: 'no dates at all', Created_Date: '', Completed_Date: '' },
+  { ID: '2009', Property_ID: P, Status: 'Complete', Description: 'Complete is ACTIVE so it is an open-group WO', Created_Date: day(-900), Completed_Date: day(-800) },
+];
+const api = build(wos);
+const groups = html => [...html.matchAll(/<optgroup label="([^"]*)">([\s\S]*?)<\/optgroup>/g)].map(m => ({ label: m[1], ids: [...m[2].matchAll(/<option value="(\d+)"/g)].map(x => x[1]) }));
+const def = groups(api.woSelectHTML(P, '', false, null, '', ''));
+const recent = def.find(g => /^Closed in the last/.test(g.label));
+ok(!!recent && recent.label === 'Closed in the last year', 'default view has a "Closed in the last year" group, label matches the 365-day window (' + (recent && recent.label) + ')');
+ok(api.recentClosedLabel() === 'Closed in the last year', 'label helper follows the window');
+ok(recent && ['2002', '2003', '2004'].every(id => recent.ids.includes(id)), 'WOs closed 10, 200 and 364 days ago show by default');
+ok(recent && !recent.ids.includes('2005'), 'a WO closed 400 days ago is NOT in the default window');
+ok(recent && recent.ids.includes('2006'), 'a Cancelled WO with a BLANK Completed_Date falls back to Created_Date (40d) and shows');
+ok(recent && !recent.ids.includes('2007'), 'blank Completed_Date + Created_Date 500 days ago is outside the window (not vanishing by a bug, just old)');
+ok(recent && recent.ids.includes('2008'), 'a closed WO with no usable date at all stays listed (cannot be shown to be old, must not vanish)');
+ok(!def.some(g => g.label === 'Open at this property' && g.ids.includes('2002')), 'closed WOs never leak into the open group');
+const openG = def.find(g => g.label === 'Open at this property');
+ok(openG && openG.ids.includes('2001') && openG.ids.includes('2009'), 'open group holds In Progress and Complete (WOStatus.sets.ACTIVE)');
+const all = groups(api.woSelectHTML(P, '', true, null, '', ''));
+const allClosed = all.find(g => g.label === 'Closed / past at this property');
+ok(allClosed && ['2002', '2003', '2004', '2005', '2006', '2007', '2008'].every(id => allClosed.ids.includes(id)), 'the checkbox ("show closed/past") still lists EVERY closed WO, including old and undated ones');
+ok(!all.some(g => /^Closed in the last/.test(g.label)), 'with the checkbox on there is just the one full closed group (no duplicates)');
+// receipt date window: a receipt dated near an old close pulls that WO into the default view
+const rdOld = day(-395);
+const withReceipt = groups(api.woSelectHTML(P, '', false, null, '', rdOld)).find(g => /^Closed in the last/.test(g.label));
+ok(withReceipt && withReceipt.ids.includes('2005'), 'a receipt dated within a year of the WO close (400d ago) still offers it');
+ok(api.woClosedRefDate({ Completed_Date: '2026-03-01', Created_Date: '2026-01-01' }) === '2026-03-01', 'Completed_Date wins when present');
+ok(api.woClosedRefDate({ Completed_Date: '', Completed_At: '2026-02-02T10:00:00Z', Created_Date: '2026-01-01' }) === '2026-02-02', 'Completed_At is the second choice');
+ok(api.woClosedRefDate({ Completed_Date: 'junk', Created_Date: '2026-01-01' }) === '2026-01-01', 'a garbled Completed_Date falls back to Created_Date');
+ok(api.woClosedRefDate({}) === '' && api.woClosedRefDate(null) === '', 'no dates / null -> empty, never throws');
+const noDay = api.woSelectHTML('', '', false, null, '', '');
+ok(/pick a property first/.test(noDay), 'no property picked still returns the placeholder');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
