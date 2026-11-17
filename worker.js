@@ -10568,7 +10568,7 @@ async function woCombine(env, body) {
   if (!combinedIds.length) return json({ error: 'combined_wo_ids required (at least one)' }, 400);
   if (combinedIds.includes(String(survivorId))) return json({ error: 'survivor_wo_id cannot also appear in combined_wo_ids' }, 400);
 
-  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   const workorders = await fetchTab(env, 'Work_Orders');
   const survivor = findWO(workorders, survivorId);
   if (!survivor) return json({ error: `Survivor work order ${survivorId} not found` }, 404);
