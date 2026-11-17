@@ -15165,7 +15165,7 @@ async function addEstimateVersion(env, body) {
     const wo = findWO(await fetchTab(env, 'Work_Orders'), woId);
     const cur = String((wo && wo.Approval_Stage) || '');
     if (['Approved', 'Proposed', 'Pre-approved'].includes(cur) && nextVersion > 1) {
-      try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) {}
+      try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
       await updateWOFields(env, woId, { Estimate_Revised: 'v' + nextVersion + ' $' + subtotal.toFixed(2) + ' (' + new Date().toISOString().slice(0, 10) + ')' });
     } else {
       await setApprovalStage(env, { woId, stage: 'Estimated' });
