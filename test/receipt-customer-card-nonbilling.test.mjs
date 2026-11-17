@@ -89,7 +89,7 @@ ok((await W.nonBillingReceiptIdsAmong(env, [])).length === 0, 'no ids -> nothing
 const approve = grab('approveInvoiceReview', true), bulk = grab('approveInvoiceReviewBulk', true), sweep = grab('sendReceiptsToQBEmail', true);
 ok(/nonBillingReceiptIdsAmong\(env, _ownIds\)/.test(approve) && /receipt_not_billable/.test(approve) && /\}, 503\)/.test(approve.slice(approve.indexOf('nonBillingReceiptIdsAmong'))), 'single approval refuses reference-only receipts (409) and fails closed (503) when Receipts cannot be read');
 ok(/nonBillingReceiptIdsAmong\(env, _ids, _nbRows\)/.test(bulk) && /receipt_not_billable/.test(bulk), 'bulk approval refuses them per item too');
-ok(/Non_Billable \|\| ''\)\.toUpperCase\(\) !== 'TRUE'/.test(sweep), 'the daily QuickBooks receipt sweep skips Non_Billable rows (a customer\'s card was never a Ridge Co purchase)');
+ok(/Non_Billable \|\| ''\)\.toUpperCase\(\) === 'TRUE' && String\(r\.Non_Billable_Reason/.test(sweep), 'the daily QuickBooks receipt sweep skips Non_Billable customer-card rows (a customer\'s card was never a Ridge Co purchase)');
 ok(/r\.Non_Billing !== 'TRUE'/.test(idx), 'index.html invoice materials picker never lists a Non_Billing receipt, so it can never be ticked or priced with markup');
 ok(/r\.Non_Billing === 'TRUE' \? 0/.test(idx), 'index.html WO receipts total excludes reference-only receipts');
 // invoice build reads only Own_Material_IDs: simulate a stale page sending the receipt id anyway
