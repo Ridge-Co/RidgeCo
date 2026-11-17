@@ -137,7 +137,7 @@ const bud2 = W.scopeMaterialsBudgetSummary(10, 13, '1002', sheets.Receipts);
 ok(bud2.actual === 6.33, 'scope materials ACTUAL counts the fixed-price cost (it is our spend) while the customer-card reference stays out');
 const s3 = await W.receiptReconSearch(env, new URL('https://x/receipt-recon/search?q=36109'));
 ok(s3.body.results.length === 1 && s3.body.results[0].non_billable_reason === 'fixed_price', 'search by receipt number finds it and shows the reason');
-ok(/String\(r\.Non_Billable_Reason \|\| ''\) !== 'fixed_price'/.test(sweep), 'QB sweep still skips customer-card references but not fixed-price costs');
+ok(/String\(r\.Non_Billable_Reason \|\| ''\) !== 'fixed_price'/.test(sweep), 'QB batch (qbBatchWaiting) still skips customer-card references but not fixed-price costs');
 // the customer-card path is unchanged: still NOT sent to QuickBooks
 const qb2 = spies.sendReceiptsToQBEmail;
 sheets.Receipt_Recon_Queue.push(q({ ID: '12' }));
