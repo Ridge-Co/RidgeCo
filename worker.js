@@ -31425,6 +31425,19 @@ async function hubTestWriteAllowed(env, path, body) {
     if (body && body.action === 'property') return !!(body.property_id && await isTestRecord(env, 'Properties', body.property_id));
     return true;
   }
+  // Nov 17 2026 (QB batch): hold/release/mark-sent and the delete-in-QuickBooks tick change ONE Receipts row, so that row's Property must be TEST-;
+  // send-now emails every waiting receipt, so the staging token may only send explicitly named TEST receipts (staging stubs the email anyway).
+  if (path === '/receipts/qb-batch/action' || path === '/receipts/qb-batch/delete-done') {
+    const rc = (await fetchTab(env, 'Receipts')).find(r => String(r.ID) === String(body && body.receipt_id));
+    return !!(rc && rc.Property_ID && await isTestRecord(env, 'Properties', rc.Property_ID));
+  }
+  if (path === '/receipts/qb-batch/send-now') {
+    const ids = (body && Array.isArray(body.ids)) ? body.ids.map(String) : [];
+    if (!ids.length) return false;
+    const all = await fetchTab(env, 'Receipts');
+    for (const id of ids) { const rc = all.find(r => String(r.ID) === id); if (!rc || !rc.Property_ID || !(await isTestRecord(env, 'Properties', rc.Property_ID))) return false; }
+    return true;
+  }
   if (path === '/receipt-recon/mark-refund-confirmed' || path === '/receipt-recon/undo') {
     // Can void a real Receipts row for a 'confirmed' queue row — resolve it the same way
     // findReceiptForQueueRow does and require that Receipts row's own Property to be TEST-.
