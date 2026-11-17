@@ -14090,7 +14090,7 @@ async function approveInvoiceReview(env, body) {
     const parsed = await addRes.clone().json();
     if (parsed && parsed.error) return addRes;      // missing tab / no header row — surface it
     realId = String(parsed && parsed.id || '');
-  } catch (e) { /* fall through with an empty id rather than fail the whole approval */ }
+  } catch (e) { await softFail(env, 'approveInvoiceReview:newId', e, { severity: 'P1', ref: String(wo_id || ''), source: 'parse', context: 'the invoice review row was added but its new id could not be read back, so the instant-pay pad was not verified' }); }   // falls through with an empty id rather than failing the whole approval
   if (padRes.pad > 0 && realId) {
     // A pad that did not land would send the vendor a legacy deduction while the customer's price was built on a pad: say so, never go quiet.
     try {
