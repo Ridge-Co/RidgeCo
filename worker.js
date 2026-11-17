@@ -921,6 +921,7 @@ const _hubWorkerCore = {
         if (path === '/tenant/move-out')          return await processMoveOut(env, body);
         if (path === '/owner/tenant-roster/preview') return await ownerRosterPreview(env, callerRole, callerSessionId, body);
         if (path === '/owner/tenant-roster/apply')   return await ownerRosterApply(env, callerRole, callerSessionId, body);
+        if (path === '/owner/approval/respond')      return await ownerApprovalRespond(env, callerRole, callerSessionId, body);   // queue #138: decline / question; saved + read back before Brett is texted
         if (path === '/assign')                   return await assignVendor(env, body);
         if (path === '/status')                   return await callWithFailureAlert(env, 'wo_status', '/status', () => updateStatus(env, body));
         if (path === '/wo/checklist')             return await saveChecklist(env, body);
