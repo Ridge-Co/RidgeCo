@@ -23,7 +23,7 @@ function grabConst(name) {
 const H = new Function(
   [grab('calcTieredEstimate'), grab('scopeItemsPricing'), grab('scopeCleanVariants'), grab('scopeCleanItems'),
    grabConst('SCOPE_MATERIALS_MODES'), grab('scopeCleanMaterialsPricing'), grab('scopeParseMaterialsPricing'),
-   grab('scopeComputeMilestoneAmounts'), grab('scopeMaterialsBudgetSummary'), grab('scopeCoveringSignature'),
+   grab('scopeComputeMilestoneAmounts'), grab('receiptIsNonBilling'), grab('scopeMaterialsBudgetSummary'), grab('scopeCoveringSignature'),
    grab('gmailRefreshCandidates'), grab('gmailIdTokenEmail'), grab('findVendorPricingLeak')].join('\n') +
   '\nreturn { calcTieredEstimate, scopeItemsPricing, scopeCleanVariants, scopeCleanItems, scopeCleanMaterialsPricing, scopeParseMaterialsPricing, scopeComputeMilestoneAmounts, scopeMaterialsBudgetSummary, scopeCoveringSignature, gmailRefreshCandidates, gmailIdTokenEmail, findVendorPricingLeak };'
 )();
