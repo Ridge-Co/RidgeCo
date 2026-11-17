@@ -3667,6 +3667,7 @@ function uploadReceiptPhoto(n, input) {
     .then(function(res){
       if (res.url) {
         _uploadedPhotos[n] = res.url;
+        if (window.JobOrder) JobOrder.refreshBillPanel();   // this receipt now has its picture
         statusEl.textContent = '✓ Uploaded';
         statusEl.style.color = 'var(--accent2)';
         lblEl.style.borderColor = 'var(--accent2)';
