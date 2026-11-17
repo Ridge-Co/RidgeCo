@@ -9799,8 +9799,9 @@ function loadInvoiceMaterials(k) {
     // vendor) the bill is built from logged time and carries no receipt, so the receipt
     // fell into a gap: off the picker AND off the bill. Now it shows here; vendor-logged
     // ones just aren't ticked by default (see below), so nothing is double-billed silently.
+    // Nov 17 2026: a reference-only receipt (customer card / attached image, Non_Billing from the Worker) is never a candidate for the invoice.
     var mine = rows.filter(function(r) {
-      return r.Active !== 'FALSE' &&
+      return r.Active !== 'FALSE' && r.Non_Billing !== 'TRUE' &&
              (parseFloat(r.Amount) || 0) > 0;
     });
     _invMat[k] = mine;
