@@ -5136,10 +5136,11 @@ async function receiptReconReassign(env, body) {
 
   // Void the original expense row — same soft-delete pattern used everywhere else (Active:
   // 'FALSE'), never a hard delete, so it stays visible/auditable on the Receipts tab.
-  await updateRow(env, 'Receipts', original.ID, {
+  if (wasSentToQB) await ensureColumns(env, 'Receipts', QB_BATCH_COLS);
+  await updateRow(env, 'Receipts', original.ID, Object.assign({
     Active: 'FALSE',
-    Description: (original.Description || '') + ` [reassigned ${new Date().toISOString().slice(0, 10)} — replaced by a new Receipts row on ` + (wo_id ? `WO ${wo_id}` : `Property ${property_id}`) + ']',
-  });
+    Description: (original.Description || '') + ` [reassigned ${new Date().toISOString().slice(0, 10)} — replaced by a new Receipts row on ` + (wo_id ? `WO ${wo_id}` : `Property ${property_id}`) + (wasSentToQB ? '; it was already emailed to QuickBooks, delete that entry by hand' : '') + ']',
+  }, wasSentToQB ? { QB_Reversed_Date: new Date().toISOString(), QB_Delete_Confirmed: 'FALSE' } : {}));
 
   const category = wo_id ? 'billable' : 'company';
   const addResp = await addReceipt(env, {
