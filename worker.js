@@ -29281,15 +29281,16 @@ async function fetchTabs(env, tabs, opts) {
       const shared = !(env && env.__CRON__);   // background (cron) batches are paced: never shared with people
       let bp = shared ? __batchInflight.get(bkey) : null;
       if (bp) __meterSaved(env, 'join');
+      const __readOwn = async () => {
+        const d = await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
+        const ranges=d.valueRanges||[];
+        missing.forEach((t,i)=>{
+          const values=(ranges[i]&&ranges[i].values)||[];
+          const _t = Date.now(); __tabCache.set(t, { data: { values }, exp: _t+TAB_CACHE_MS, at: _t });
+        });
+      };
       if (!bp) {
-        bp = (async () => {
-          const d = await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
-          const ranges=d.valueRanges||[];
-          missing.forEach((t,i)=>{
-            const values=(ranges[i]&&ranges[i].values)||[];
-            const _t = Date.now(); __tabCache.set(t, { data: { values }, exp: _t+TAB_CACHE_MS, at: _t });
-          });
-        })();
+        bp = __readOwn();
         if (shared) {
           __batchInflight.set(bkey, bp);
           const clear = () => { if (__batchInflight.get(bkey) === bp) __batchInflight.delete(bkey); };
