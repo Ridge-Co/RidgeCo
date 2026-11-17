@@ -26,8 +26,10 @@ Skills live in `.claude/skills/`. These rules apply to every session, scheduled 
 - Outside skills are vetted and pinned in `context/THIRD_PARTY_SKILLS.md`. Never install or update one without re-vetting it there.
 
 ## MANDATORY: load context before writing code
-1. Read ALL files in `/context/`, starting with `/context/CURRENT.md`, **then every file in `/context/notes/`** (newest
-   first; one note per PR since Oct 21 2026, newer than CURRENT.md; see `context/notes/README.md`) (CURRENT.md names the active
+1. Read `/context/CURRENT.md` (a short index since Nov 17 2026), **then the recent files in `/context/notes/`** (newest
+   first, about the last two weeks; grep older notes for your topic; see `context/notes/README.md`). **The old 446 KB log is on branch
+   `archive/current-md-history`: never read it whole, grep it.** Other context files: the ALWAYS-LOAD set CURRENT.md lists, the rest on demand (grep
+   first; SESSION_EFFICIENCY_PROTOCOL_v1.0 governs) (CURRENT.md names the active
    versions of the Context Document, Best Practices, CREDENTIALS_MAP, VENTURES, FEATURE_LOG,
    BACKLOG, CAPTURE_INBOX, HANDWRITING_KEY). Read every file it lists. **Exception:**
    `CREDENTIALS_MAP.md` itself now lives in `brett332/data/CREDENTIALS_MAP.md` (private repo,
