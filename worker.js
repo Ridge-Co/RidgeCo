@@ -722,6 +722,7 @@ const _hubWorkerCore = {
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
         if (path === '/receipt-recon/queue')    return await listReceiptReconQueue(env, url);
         if (path === '/receipt-recon/search')   return await receiptReconSearch(env, url);
+        if (path === '/receipts/qb-batch')      return await qbBatchList(env);
         if (path === '/receipt-recon/cards')    return await receiptReconCardsList(env);
         if (path === '/receipt-recon/rules')    return await receiptReconRulesList(env);
         if (path === '/admin/receipt-duplicate-audit/flags') return await receiptDuplicateAuditFlags(env, url);
@@ -1203,7 +1204,10 @@ const _hubWorkerCore = {
         if (path === '/receipt-recon/unskip')     return await receiptReconUnskip(env, body);
         if (path === '/receipt-recon/skip-before-cutoff') return await receiptReconSkipBeforeCutoff(env, body);
         if (path === '/receipt-recon/purge-duplicates')  return await purgeConfirmedDuplicateReceipts(env);
-        if (path === '/receipts/send-to-qb-email') return await sendReceiptsToQBEmail(env, body);
+        if (path === '/receipts/send-to-qb-email') return await sendReceiptsToQBEmail(env, Object.assign({}, body, { release: true, manual: true }));   // explicit tap/backfill = a real send; everything else only queues (Nov 17 2026)
+        if (path === '/receipts/qb-batch/send-now') return await sendReceiptsToQBEmail(env, { limit: body && body.limit, ids: body && body.ids, release: true, manual: true });   // "Send batch now" (the page calls it until remaining is 0)
+        if (path === '/receipts/qb-batch/action') return await qbBatchAction(env, body);
+        if (path === '/receipts/qb-batch/delete-done') return await qbBatchDeleteDone(env, body);
         if (path === '/receipt-recon/backfill-items-summary') return await backfillItemsSummary(env, body);
         if (path === '/trash/property/add')       return await trashAddProperty(env, body);
         if (path === '/trash/property/update')    return await updateRow(env, 'Trash_Properties', body.id, body.fields);
@@ -4692,17 +4696,9 @@ async function receiptReconConfirm(env, body) {
       Notes: addJson.duplicate ? 'Auto-skipped — an identical receipt already exists on that WO.' : '',
     });
   }
-  // Expense receipts go to QuickBooks' receipts inbox right away rather than waiting for the
-  // 7am sweep (which only takes 8 a day) — Brett is clearing a backlog and wants each one done
-  // when he taps it. Work-order receipts keep going through the normal daily sweep.
-  let qbEmail = null;
-  if (noWo && addJson && addJson.success && !addJson.duplicate && addJson.id) {
-    try {
-      const r = await sendReceiptsToQBEmail(env, { ids: [String(addJson.id)], limit: 1 });
-      const j = await r.json().catch(() => ({}));
-      qbEmail = { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
-    } catch (e) { qbEmail = { sent: false, error: String(e && e.message || e) }; }
-  }
+  // Nov 17 2026 (Brett): NOTHING is emailed to QuickBooks at confirm any more. The receipt waits in the daily batch (blank/'ready' in QB_Batch_Status) and
+  // can be held or reversed from "Waiting to send to QuickBooks" before it goes. qb_email says so, so the page never reports a send that did not happen.
+  const qbEmail = (addJson && addJson.success && !addJson.duplicate && addJson.id) ? qbBatchQueuedNote() : null;
   return json({ ok: true, wo_id, property_id, receipt_number: String(row.Invoice_Number || '').trim(), ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
 }
 
@@ -4778,19 +4774,9 @@ async function receiptAttachOnly(env, body) {
         : (fixedPrice ? 'Fixed-price job cost recorded on WO ' + wo_id + ' — not billed to the customer, no invoice line added.' : customerCard ? 'Customer-card receipt attached to WO ' + wo_id + ' as a reference — not billed, not expensed, no invoice line added.' : 'Image attached only — not billed, no invoice line added.'),
     });
   }
-  // Fixed-price cost is OUR expense: send it to the QuickBooks receipts inbox now, like the no-WO expense path. A failure is returned and shown, never swallowed.
-  const qbEmail = (fixedPrice && addJson && addJson.success && !addJson.duplicate && addJson.id) ? await emailExpenseToQB(env, addJson.id) : null;
+  // Fixed-price cost is OUR expense. Nov 17 2026 (Brett): it is NOT emailed now; it waits in the daily QuickBooks batch like every other receipt (hold / reverse in "Waiting to send to QuickBooks").
+  const qbEmail = (fixedPrice && addJson && addJson.success && !addJson.duplicate && addJson.id) ? qbBatchQueuedNote() : null;
   return json({ ok: true, wo_id, property_id, attached_only: true, customer_card: customerCard, fixed_price: fixedPrice, qb_email: qbEmail, receipt_number: String(row.Invoice_Number || '').trim(), ...addJson });
-}
-
-// Nov 17 2026: send ONE already-written Receipts row to the QuickBooks receipts inbox now (fixed-price job costs are our expense). Never throws:
-// the outcome comes back as { sent, error } and the page shows it, so a failed email is visible, not swallowed.
-async function emailExpenseToQB(env, receiptId) {
-  try {
-    const r = await sendReceiptsToQBEmail(env, { ids: [String(receiptId)], limit: 1 });
-    const j = await r.json();
-    return { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
-  } catch (e) { return { sent: false, error: String(e && e.message || e) }; } // silent-ok: the error is returned to the caller and shown on the page
 }
 
 // Receipt-date cutoff (Brett, Sep 22 2026: "exclude items that go back to 2025 and 2023").
@@ -5136,16 +5122,21 @@ async function voidConfirmedReceiptForQueueRow(env, row, noteTag) {
   await ensureColumns(env, 'Receipt_Recon_Queue', ['Confirmed_Receipt_ID', 'Manual_Refund']);
   const original = await findReceiptForQueueRow(env, row);
   if (!original) return { error: 'Could not find the original Receipts row for this confirmation — nothing was changed. Check the Receipts tab directly.', status: 404 };
-  if (String(original.QB_Email_Sent || '').toUpperCase() === 'TRUE') {
-    return { error: `This receipt was already emailed to QuickBooks on ${String(original.QB_Email_Sent_Date || '').slice(0, 10)} — fix it in QuickBooks directly rather than here (${noteTag === 'undone' ? 'undoing' : 'reversing'} it here would leave QuickBooks out of sync).`, status: 409 };
+  // Nov 17 2026 (Brett): a receipt already emailed to QuickBooks can be reversed. The Hub side is voided exactly as before; QuickBooks has no delete-by-API here, so the
+  // caller gets qb_delete_needed (what to delete by hand). QB_Email_Sent history is kept, QB_Reversed_Date records it, and the voided row never blocks a resend
+  // because a corrected re-confirm writes a NEW Receipts row. Only a receipt claimed by a sender right now is refused (its email may be in flight).
+  if (qbBatchStatus(original) === 'sending') {
+    return { error: 'That receipt is being emailed to QuickBooks right now (or a send was interrupted). Open "Waiting to send to QuickBooks", release it or mark it sent, then try again.', status: 409 };
   }
-  await updateRow(env, 'Receipts', original.ID, {
+  const wasSent = String(original.QB_Email_Sent || '').toUpperCase() === 'TRUE';
+  if (wasSent) await ensureColumns(env, 'Receipts', QB_BATCH_COLS);
+  await updateRow(env, 'Receipts', original.ID, Object.assign({
     Active: 'FALSE',
-    Description: (original.Description || '') + ` [${noteTag} ${new Date().toISOString().slice(0, 10)} — pulled back into Receipt Reconciler for reversal]`,
-  });
+    Description: (original.Description || '') + ` [${noteTag} ${new Date().toISOString().slice(0, 10)} — pulled back into Receipt Reconciler for reversal` + (wasSent ? '; it was already emailed to QuickBooks, delete that entry by hand' : '') + ']',
+  }, wasSent ? { QB_Reversed_Date: new Date().toISOString(), QB_Delete_Confirmed: 'FALSE' } : {}));
   const invoiceUnlink = await removeReceiptFromInvoiceReview(env, { receipt_id: original.ID, amount: Number(original.Amount || row.Confirmed_Amount || 0) });
   const attachmentVoid = await voidAttachmentForReceipt(env, original.ID);
-  return { voidedId: original.ID, invoiceUnlink, attachmentVoid };
+  return { voidedId: original.ID, invoiceUnlink, attachmentVoid, qbDeleteNeeded: wasSent ? qbDeleteNeeded(original, row.ID) : null };
 }
 
 // POST /receipt-recon/reassign { id, wo_id?, property_id, amount?, description?, store?, date? }
@@ -5177,9 +5168,11 @@ async function receiptReconReassign(env, body) {
   await ensureColumns(env, 'Receipt_Recon_Queue', ['Confirmed_Receipt_ID', 'Manual_Refund']);
   const original = await findReceiptForQueueRow(env, row);
   if (!original) return json({ error: 'Could not find the original Receipts row for this confirmation — nothing was changed. Check the Receipts tab directly.' }, 404);
-  if (String(original.QB_Email_Sent || '').toUpperCase() === 'TRUE') {
-    return json({ error: `This receipt was already emailed to QuickBooks on ${String(original.QB_Email_Sent_Date || '').slice(0, 10)} — fix it in QuickBooks directly rather than here (reassigning would double it up).` }, 409);
-  }
+  // Nov 17 2026: an already-emailed receipt CAN be reassigned now. The old row is voided and the response carries qb_delete_needed (the QuickBooks entry to delete by hand);
+  // the corrected row is a NEW Receipts row that goes out in the next batch. Only a receipt that is being sent this very moment is refused.
+  if (qbBatchStatus(original) === 'sending') return json({ error: 'That receipt is being emailed to QuickBooks right now (or a send was interrupted). Open "Waiting to send to QuickBooks", release or mark it sent, then try again.' }, 409);
+  const wasSentToQB = String(original.QB_Email_Sent || '').toUpperCase() === 'TRUE';
+  const qbDeleteNeededFor = wasSentToQB ? qbDeleteNeeded(original, id) : null;
 
   const amount = (body.amount !== undefined && body.amount !== null && body.amount !== '') ? body.amount : (row.Confirmed_Amount || row.Total);
   const description = body.description || row.Confirmed_Description || row.PO_Reference || row.Vendor || '';
@@ -5188,10 +5181,11 @@ async function receiptReconReassign(env, body) {
 
   // Void the original expense row — same soft-delete pattern used everywhere else (Active:
   // 'FALSE'), never a hard delete, so it stays visible/auditable on the Receipts tab.
-  await updateRow(env, 'Receipts', original.ID, {
+  if (wasSentToQB) await ensureColumns(env, 'Receipts', QB_BATCH_COLS);
+  await updateRow(env, 'Receipts', original.ID, Object.assign({
     Active: 'FALSE',
-    Description: (original.Description || '') + ` [reassigned ${new Date().toISOString().slice(0, 10)} — replaced by a new Receipts row on ` + (wo_id ? `WO ${wo_id}` : `Property ${property_id}`) + ']',
-  });
+    Description: (original.Description || '') + ` [reassigned ${new Date().toISOString().slice(0, 10)} — replaced by a new Receipts row on ` + (wo_id ? `WO ${wo_id}` : `Property ${property_id}`) + (wasSentToQB ? '; it was already emailed to QuickBooks, delete that entry by hand' : '') + ']',
+  }, wasSentToQB ? { QB_Reversed_Date: new Date().toISOString(), QB_Delete_Confirmed: 'FALSE' } : {}));
 
   const category = wo_id ? 'billable' : 'company';
   const addResp = await addReceipt(env, {
@@ -5211,16 +5205,8 @@ async function receiptReconReassign(env, body) {
     else invoiceLink = await appendReceiptToInvoiceReview(env, { wo_id, receipt_id: addJson.id, amount });
   }
 
-  // Same "expense goes to QuickBooks right away" behavior receiptReconConfirm already uses for a
-  // no-WO receipt (Sep 22 2026) — a WO-bound reassign follows the normal daily sweep instead.
-  let qbEmail = null;
-  if (!wo_id && addJson && addJson.success && !addJson.duplicate && addJson.id) {
-    try {
-      const r = await sendReceiptsToQBEmail(env, { ids: [String(addJson.id)], limit: 1 });
-      const j = await r.json().catch(() => ({}));
-      qbEmail = { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
-    } catch (e) { qbEmail = { sent: false, error: String(e && e.message || e) }; }
-  }
+  // Nov 17 2026: the replacement row waits in the daily QuickBooks batch like every other confirmed receipt (no immediate send).
+  const qbEmail = (addJson && addJson.success && !addJson.duplicate && addJson.id) ? qbBatchQueuedNote() : null;
 
   if (addJson && addJson.success) {
     await updateRow(env, 'Receipt_Recon_Queue', id, {
@@ -5230,7 +5216,7 @@ async function receiptReconReassign(env, body) {
     });
   }
 
-  return json({ ok: true, wo_id, property_id, voided_receipt_id: original.ID, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
+  return json({ ok: true, wo_id, property_id, voided_receipt_id: original.ID, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail, qb_delete_needed: qbDeleteNeededFor });
 }
 
 // POST /receipt-recon/mark-refund { id, refund } — manual override for a PENDING receipt the
@@ -5411,7 +5397,7 @@ async function receiptReconMarkRefundConfirmed(env, body) {
     Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Confirmed_Receipt_ID: '',
     Notes: `Marked as a refund ${new Date().toISOString().slice(0, 10)} — was ${row.Status}.`,
   });
-  return json({ ok: true, id, voided_receipt_id: result.voidedId, invoice_unlink: result.invoiceUnlink, attachment_void: result.attachmentVoid });
+  return json({ ok: true, id, voided_receipt_id: result.voidedId, invoice_unlink: result.invoiceUnlink, attachment_void: result.attachmentVoid, qb_delete_needed: result.qbDeleteNeeded });
 }
 
 // POST /receipt-recon/undo { id } — Sep 28 2026, Brett: "need to make it reversible... need to be
@@ -5442,7 +5428,7 @@ async function receiptReconUndo(env, body) {
     Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Confirmed_Receipt_ID: '',
     Notes: `Undone ${new Date().toISOString().slice(0, 10)} — was ${row.Status}. Re-confirm it correctly, or use "Confirm duplicate" if it turns out to be one.`,
   });
-  return json({ ok: true, id, voided_receipt_id: result.voidedId, invoice_unlink: result.invoiceUnlink, attachment_void: result.attachmentVoid });
+  return json({ ok: true, id, voided_receipt_id: result.voidedId, invoice_unlink: result.invoiceUnlink, attachment_void: result.attachmentVoid, qb_delete_needed: result.qbDeleteNeeded });
 }
 
 // GET /receipt-recon/search?q=<amount|store|description text>&date=<yyyy-mm-dd> — Brett, Sep 23
@@ -20870,11 +20856,30 @@ async function schedRunDailyReceipts(env) {
 async function schedRunDailyReceiptsPost(env) {
   const errors = [], detail = {};
   const flags = { paused: false };
-  detail.items_summary = await schedAiStep('backfill_items_summary', () => backfillItemsSummary(env, {}), errors, flags);   // Oct 16 2026: AI paused -> this one step waits (idempotent, retried tomorrow); the QB email below does not need AI
-  detail.purge_duplicates = await schedStep('purge_confirmed_duplicates', () => purgeConfirmedDuplicateReceipts(env), errors);
+  // Nov 17 2026: the QuickBooks email is a BATCH, sent here once a day (the time is this job's `at`, edited in the HubScheduler.gs JOBS table / the schedule override).
+  // It goes FIRST and pages: at most a few receipts per call (Cloudflare subrequest budget), then {partial:true} so the scheduler resumes it on a later tick
+  // (SCHED_PARTIAL_GAP_MS apart) until nothing is left. The summary/purge steps below run on the slice that finishes the batch. A failed receipt is
+  // reported as a job failure (failure ledger + /cron/status), never swallowed; failed rows are not re-sent in the same run.
   const before = errors.length;
-  detail.qb_email = await schedStep('send_receipts_to_qb_email', () => sendReceiptsToQBEmail(env, {}), errors);
-  return { ok: !errors.length, errors, detail, no_retry: errors.length > before, warnings: flags.paused ? ['items summary skipped: paused (AI credit) - it is retried automatically after AI resumes'] : undefined };   // a half-failed email batch is not blindly re-sent
+  detail.qb_email = await schedStep('send_receipts_to_qb_email', () => sendReceiptsToQBEmail(env, { release: true }), errors);
+  const q = detail.qb_email || {};
+  const failN = Array.isArray(q.failed) ? q.failed.length : 0;
+  const failText = failN ? `${failN} receipt(s) could not be sent to QuickBooks (receipt ${q.failed.slice(0, 3).map(f => f.id).join(', ')}): ${String(q.failed[0].error || '').slice(0, 160)}` : '';
+  if (errors.length === before && q.remaining > 0 && (q.sent || 0) > 0) {
+    // More are waiting: resume on the next slice. A receipt that failed in this slice is already in the failure ledger (P1, one row per receipt) and shown as "failed" on the review list.
+    return { ok: true, errors, detail, partial: true, progress_made: true, warnings: failN ? [failText + ' (more are still being sent)'] : undefined };
+  }
+  if (failN) errors.push({ step: 'send_receipts_to_qb_email', error: failText });
+  if (errors.length === before && q.remaining > 0) errors.push({ step: 'send_receipts_to_qb_email', error: `${q.remaining} receipt(s) are still waiting but none could be sent in this run` });
+  const qbFailed = errors.length > before;
+  detail.items_summary = await schedAiStep('backfill_items_summary', () => backfillItemsSummary(env, {}), errors, flags);   // Oct 16 2026: AI paused -> this one step waits (idempotent, retried tomorrow); the QB email above does not need AI
+  detail.purge_duplicates = await schedStep('purge_confirmed_duplicates', () => purgeConfirmedDuplicateReceipts(env), errors);
+  const warnings = [];
+  if (flags.paused) warnings.push('items summary skipped: paused (AI credit) - it is retried automatically after AI resumes');
+  if (q.stuck > 0) warnings.push(`${q.stuck} receipt(s) are stuck in "sending" and were NOT re-sent - open Waiting to send to QuickBooks`);
+  if (q.held > 0) warnings.push(`${q.held} receipt(s) are on hold and were not sent`);
+  if (Array.isArray(q.warnings) && q.warnings.length) warnings.push(`${q.warnings.length} receipt(s) went to QuickBooks without their image`);
+  return { ok: !errors.length, errors, detail, no_retry: qbFailed, warnings: warnings.length ? warnings : undefined };   // a half-failed email batch is not blindly re-sent
 }
 async function schedRunDailyTurnover(env) {
   const errors = [];
@@ -21240,7 +21245,7 @@ const SCHED_PF_WHAT = {
   daily_digest: 'builds the morning digest and texts it to the admin phone',
   daily_receipts: 'scans the receipt inbox (skips and reports "paused: AI credit" while Anthropic credit is out)',
   ai_credit_probe: 'does nothing unless AI is paused; while paused, at most hourly, makes one 1-token Claude call and clears the pause (plus one "AI is back" notice) if it works',
-  daily_receipts_post: 'emails newly scanned receipts to QuickBooks',
+  daily_receipts_post: 'sends the day\'s batch of confirmed receipts to QuickBooks',
   daily_turnover: 'releases turnover work orders due today',
   daily_qb_sync: 'syncs QuickBooks payments and the deposit-paid sweep',
   sms_delivery_check: 'reads the last day of outbound texts from Twilio, flags carrier-filtered / unregistered / link texts that fail, and emails Brett the result',
@@ -26954,59 +26959,108 @@ function _recoverReceiptSourceFile(receiptRow, queueRows) {
   return hit ? { id: hit.Source_File_ID, url: hit.Source_File_URL || '' } : { id: '', url: '' };
 }
 
-// POST /receipts/send-to-qb-email {limit?} — Brett, Sep 2026: every receipt that runs through
+// ═══ QB-BATCH-BEGIN (Nov 17 2026, Brett: "receipt emails to QuickBooks go out in a batch, once a day, not the moment I tap confirm") ═══════════════
+// ONE sender: sendReceiptsToQBEmail below, called only by the daily job (schedRunDailyReceiptsPost) and by the explicit "Send batch now" /
+// /receipts/send-to-qb-email tap (both pass release:true). Confirm, attach, reassign and every other path just leave the Receipts row waiting.
+// A Receipts row's batch state lives in QB_Batch_Status: blank or 'ready' = waits for the next batch; 'held' = skipped until released;
+// 'sending' = claimed by a sender (written BEFORE the email, so a crash between the email and the flag can never send it twice);
+// 'failed' = the last send attempt failed (shown on screen, retried by the next day's batch or a manual send); 'sent' = emailed.
+// QB_Email_Sent stays the long-standing "emailed" flag and is never cleared. A receipt reversed after it was sent keeps its sent history and gets
+// QB_Reversed_Date; the Receipts row is voided (Active FALSE) so a corrected re-confirm writes a NEW row that sends normally.
+const QB_BATCH_COLS = ['QB_Batch_Status', 'QB_Batch_Sent_Date', 'QB_Reversed_Date', 'QB_Email_Subject', 'QB_Batch_Error', 'QB_Delete_Confirmed', 'QB_Delete_Confirmed_Date'];
+const QB_BATCH_MAX_PER_CALL = 8;       // Cloudflare subrequest budget: ~6-8 subrequests per receipt (claim write, Drive, Gmail, final write) + a few reads. Bigger backlogs page across scheduler slices.
+const QB_BATCH_DEFAULT_PER_CALL = 5;
+// PURE. 'sent' | 'held' | 'sending' | 'failed' | 'ready' (blank counts as ready: every row written before this build was already waiting for the daily sweep).
+function qbBatchStatus(r) {
+  if (!r) return 'ready';
+  if (String(r.QB_Email_Sent || '').toUpperCase() === 'TRUE') return 'sent';
+  const s = String(r.QB_Batch_Status || '').trim().toLowerCase();
+  return (s === 'held' || s === 'sending' || s === 'failed') ? s : 'ready';
+}
+// PURE. A live Receipts row that is going (or could go) to QuickBooks and has not been emailed yet.
+function qbBatchWaiting(r) {
+  if (!r || String(r.Active || '').toUpperCase() === 'FALSE') return false;
+  if (String(r.Payment_Source || 'company_card') === 'vendor_reimburse') return false;   // never a Ridge Co card purchase: nothing to reconcile against a statement
+  if (String(r.Non_Billable || '').toUpperCase() === 'TRUE' && String(r.Non_Billable_Reason || '') !== 'fixed_price') return false;   // customer-card references were never our purchase; a fixed-price job cost IS ours
+  return qbBatchStatus(r) !== 'sent';
+}
+// PURE. Is this waiting row due in a batch run? ready: yes. failed: only on a later day than the failed attempt (or on a manual send), so one bad row cannot loop within a day.
+// held and sending are never auto-sent: held = Brett said wait; sending = a sender claimed it and did not finish (a person decides: release or mark sent).
+function qbBatchSendable(r, o) {
+  if (!qbBatchWaiting(r)) return false;
+  const st = qbBatchStatus(r);
+  if (st === 'ready') return true;
+  if (st === 'failed') return !!(o && o.manual) || String(r.QB_Batch_Sent_Date || '').slice(0, 10) < String((o && o.today) || new Date().toISOString().slice(0, 10));
+  return false;
+}
+function qbBatchSubject(r) { return `Receipt — ${r.Store || 'Unknown vendor'} — $${r.Amount || ''}`; }
+// updateRow does not throw on a missing row / missing column (it returns a JSON error), so a marker write is only believed when it says success.
+async function qbBatchWrite(env, id, fields) {
+  const res = await updateRow(env, 'Receipts', id, fields);
+  const j = (res && typeof res.json === 'function') ? await res.json().catch(() => null) : null;
+  if (!j || j.success !== true || j.message === 'No matching fields') throw new Error('Receipts row ' + id + ' was not updated (' + ((j && (j.error || j.message)) || 'no answer') + ')');
+}
+
+// POST /receipts/send-to-qb-email {limit?, ids?} — Brett, Sep 2026: every receipt that runs through
 // the Reconciler is Brett's own money out (an "internal expense" — the vendor-fronted-materials
 // case is a different animal, handled entirely through Vendor_Bills and never touches this tab),
 // so every row here needs to reach QuickBooks' own receipts-capture inbox for bank/credit-card
-// reconciliation — regardless of whether it's also tied to a work order/customer invoice. This
-// applies going forward (called from the daily cron below) AND retroactively: running this once
-// against the full Receipts tab is the backfill for everything already reconciled to a WO before
-// this existed. Bounded per call (default 8, max 10 — Cloudflare's per-invocation subrequest
-// budget; a batch of 25 hit "Too many subrequests" live around #16-21) — call it again (or let
-// the cron do it) to keep working through a large backlog; already-sent rows are skipped so
-// repeat calls are always safe.
+// reconciliation — regardless of whether it's also tied to a work order/customer invoice.
+// Nov 17 2026: this is now the ONE sender and it runs as a daily BATCH (see QB-BATCH above). Without release:true it sends NOTHING and says so
+// (callers that still ask for an immediate send of one id, such as a fixed-price attach, just leave the row in the batch).
+// Paging: at most QB_BATCH_MAX_PER_CALL per call (Cloudflare's per-invocation subrequest budget: a batch of 25 hit "Too many subrequests"
+// live around #16-21 on Sep 10 2026); the response says how many remain and the daily job returns partial:true so the scheduler resumes it
+// on the next tick. Nothing is dropped: the rest simply wait for the next slice, and failures are reported (failure ledger + response).
 async function sendReceiptsToQBEmail(env, opts) {
-  // Discovered live (Sep 10 2026): a batch of 25 blew through Cloudflare's per-invocation
-  // subrequest budget partway through (driveDownload + gmail send + updateRow's own
-  // read-then-write is ~3-4 subrequests per receipt, on top of 5 for the initial tab reads) —
-  // requests started failing with "Too many subrequests" around #16-21. Capped conservatively
-  // here instead of guessing at the account's actual plan/limit; a larger backlog just takes
-  // more calls (the daily cron, or Brett/Claude calling this again — already-sent rows are
-  // always skipped so repeat calls are safe and cheap).
-  const limit = Math.max(1, Math.min(10, parseInt(opts && opts.limit) || 8));
+  opts = opts || {};
+  if (opts.release !== true) {
+    return json({ ok: true, sent: 0, queued: true, note: 'Receipts are not emailed to QuickBooks one at a time any more. This one waits in the daily batch (Receipt Reconciler > Waiting to send to QuickBooks).' });
+  }
+  const limit = Math.max(1, Math.min(QB_BATCH_MAX_PER_CALL, parseInt(opts.limit) || QB_BATCH_DEFAULT_PER_CALL));
   const cfg = await fetchConfig(env).catch(() => ({}));
   const qbEmail = (cfg.qb_receipts_email || env.QB_RECEIPTS_EMAIL || '').trim();
   if (!qbEmail) return json({ ok: false, error: 'qb_receipts_email is not set — add it as a Config/Settings key (or QB_RECEIPTS_EMAIL secret) first: the email address QuickBooks gave you for forwarding receipts.' }, 400);
 
-  try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date']); } catch (e) {}
+  // The batch columns MUST exist before anything is claimed: the 'sending' marker is the double-send guard, and a write to a missing column is silently dropped (rule 174).
+  try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date', 'Payment_Source'].concat(QB_BATCH_COLS)); }
+  catch (e) { return json({ ok: false, error: 'Could not prepare the Receipts columns, so nothing was emailed to QuickBooks: ' + String(e && e.message || e) }, 500); }
 
   let all = []; try { all = await fetchTab(env, 'Receipts'); } catch (e) { return json({ ok: false, error: 'Could not read Receipts: ' + (e.message || e) }, 500); }
-  // vendor_reimburse rows never touched a Ridge Co card — nothing to reconcile against a bank/CC
-  // statement, and sending them would just clutter QuickBooks' receipts inbox with entries that
-  // don't correspond to any real transaction on the account being reconciled.
-  const onlyIds = (opts && Array.isArray(opts.ids) && opts.ids.length) ? new Set(opts.ids.map(String)) : null;
-  const pending = all.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Email_Sent || '').toUpperCase() !== 'TRUE' && String(r.Payment_Source || 'company_card') !== 'vendor_reimburse'
-    && !(String(r.Non_Billable || '').toUpperCase() === 'TRUE' && String(r.Non_Billable_Reason || '') !== 'fixed_price')   // customer-card references were never a Ridge Co purchase; a fixed-price job cost IS ours
-    && (!onlyIds || onlyIds.has(String(r.ID))));
+  const onlyIds = (opts.ids && Array.isArray(opts.ids) && opts.ids.length) ? new Set(opts.ids.map(String)) : null;
+  const today = new Date().toISOString().slice(0, 10);
+  const waiting = all.filter(r => qbBatchWaiting(r));
+  const heldN = waiting.filter(r => qbBatchStatus(r) === 'held').length;
+  const stuckN = waiting.filter(r => qbBatchStatus(r) === 'sending').length;
+  const pending = waiting.filter(r => qbBatchSendable(r, { manual: opts.manual === true, today }) && (!onlyIds || onlyIds.has(String(r.ID))));
   const batch = pending.slice(0, limit);
-  if (!batch.length) return json({ ok: true, sent: 0, remaining: 0, note: 'nothing pending' });
+  if (!batch.length) return json({ ok: true, sent: 0, remaining: 0, held: heldN, stuck: stuckN, failed: [], note: 'nothing pending' });
 
-  let queueRows = []; try { queueRows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) {}
+  let queueRows = []; try { queueRows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.read_queue', ref: '', err: e, severity: 'P2' }); }
   const [properties, workorders] = await Promise.all([
     fetchTab(env, 'Properties').catch(() => []), fetchTab(env, 'Work_Orders').catch(() => []),
   ]);
 
-  let sent = 0, sentNoFile = 0; const failed = [];
+  let sent = 0, sentNoFile = 0, blocked = 0; const failed = [], warnings = [];
   for (const r of batch) {
+    const subject = qbBatchSubject(r);
+    // 1. CLAIM. Written (and checked) BEFORE the email. If this cannot be saved the receipt is NOT emailed: better one waiting receipt than a double send.
+    try { await qbBatchWrite(env, r.ID, { QB_Batch_Status: 'sending', QB_Batch_Sent_Date: new Date().toISOString(), QB_Email_Subject: subject, QB_Batch_Error: '' }); }
+    catch (e) {
+      const msg = 'could not mark it as sending, so it was NOT emailed: ' + String(e && e.message || e);
+      failed.push({ id: r.ID, error: msg });
+      await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.claim', ref: String(r.ID), err: e, message: 'Receipt ' + r.ID + ' ' + msg, severity: 'P1' });
+      continue;
+    }
+    // 2. SEND.
+    let attachment = null, attachErr = null, emailRes = null;
     try {
       const src = _recoverReceiptSourceFile(r, queueRows);
-      let attachment = null;
       if (src.id) {
         try {
           const tok = await getAccessToken(env);
           const dl = await driveDownload(tok, src.id);
           attachment = { filename: `receipt_${r.ID}`, mimeType: dl.mime || 'application/octet-stream', base64Data: bytesToB64(dl.bytes) };
-        } catch (e) { /* fall through — send without an attachment rather than failing the row */ }
+        } catch (e) { attachErr = e; }   // the email still goes (nothing may fall out of reconciliation); the missing image is reported below, not hidden
       }
       const wo = r.WO_ID ? workorders.find(w => String(w.ID) === String(r.WO_ID)) : null;
       const prop = r.Property_ID ? properties.find(p => String(p.ID) === String(r.Property_ID)) : null;
@@ -27019,18 +27073,140 @@ async function sendReceiptsToQBEmail(env, opts) {
         `<p>${context}</p>`,
         `<p style="color:#888;font-size:11px">Ridge Co Hub Receipts row #${_escHtml(r.ID)}${src.url ? ' · <a href="' + _escHtml(src.url) + '">original scan</a>' : ' · no scanned image on file for this entry'}</p>`,
       ].join('\n');
-      await gmailSendEmailWithAttachment(env, {
-        to: qbEmail, subject: `Receipt — ${r.Store || 'Unknown vendor'} — $${r.Amount || ''}`, html, attachment,
-      });
-      await updateRow(env, 'Receipts', r.ID, { QB_Email_Sent: 'TRUE', QB_Email_Sent_Date: new Date().toISOString() });
-      sent++; if (!attachment) sentNoFile++;
+      emailRes = await gmailSendEmailWithAttachment(env, { to: qbEmail, subject, html, attachment });
     } catch (e) {
-      failed.push({ id: r.ID, error: String(e && e.message || e) });
+      // Nothing was sent. Put the row in 'failed' (visible on the review list, retried by the next day's batch) rather than leaving it claimed.
+      const msg = String(e && e.message || e);
+      failed.push({ id: r.ID, error: msg });
+      await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.send', ref: String(r.ID), err: e, message: 'Receipt ' + r.ID + ' could not be emailed to QuickBooks: ' + msg, severity: 'P1' });
+      try { await qbBatchWrite(env, r.ID, { QB_Batch_Status: 'failed', QB_Batch_Error: msg.slice(0, 300) }); }
+      catch (e2) { await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.mark_failed', ref: String(r.ID), err: e2, message: 'Receipt ' + r.ID + ' failed to send AND the failed flag could not be saved (it stays "sending" and will not be re-sent by itself)', severity: 'P1' }); }
+      await new Promise(res => setTimeout(res, 400));
+      continue;
+    }
+    if (emailRes && emailRes.demo_blocked) {
+      // Demo-safety guard refused the send: not emailed, so it must NOT be marked sent. Back to ready.
+      blocked++;
+      try { await qbBatchWrite(env, r.ID, { QB_Batch_Status: 'ready', QB_Batch_Error: String(emailRes.reason || 'email blocked by the demo guard').slice(0, 300) }); }
+      catch (e2) { failed.push({ id: r.ID, error: 'blocked by the demo guard and could not be put back to ready: ' + String(e2 && e2.message || e2) }); }
+      continue;
+    }
+    // 3. RECORD. The email is gone. If this write fails the row stays 'sending' (never re-sent by itself) and the failure is loud.
+    try {
+      const nowIso = new Date().toISOString();
+      await qbBatchWrite(env, r.ID, { QB_Email_Sent: 'TRUE', QB_Email_Sent_Date: nowIso, QB_Batch_Status: 'sent', QB_Batch_Sent_Date: nowIso, QB_Batch_Error: '' });
+    } catch (e) {
+      const msg = 'was emailed to QuickBooks but the sent flag could not be saved (it stays "sending" so it is NOT re-sent; check the Receipts row): ' + String(e && e.message || e);
+      failed.push({ id: r.ID, error: msg, emailed: true });
+      await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.record_sent', ref: String(r.ID), err: e, message: 'Receipt ' + r.ID + ' ' + msg, severity: 'P1' });
+    }
+    sent++; if (!attachment) sentNoFile++;
+    if (attachErr) {
+      warnings.push({ id: r.ID, warning: 'emailed without the receipt image (Drive download failed: ' + String(attachErr && attachErr.message || attachErr).slice(0, 160) + ')' });
+      await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.attachment', ref: String(r.ID), err: attachErr, message: 'Receipt ' + r.ID + ' went to QuickBooks without its image', severity: 'P2' });
     }
     await new Promise(res => setTimeout(res, 400)); // pace Gmail/Drive calls, matches existing convention
   }
-  return json({ ok: true, sent, sent_without_attachment: sentNoFile, failed, remaining: pending.length - batch.length + failed.length });
+  return json({ ok: true, sent, sent_without_attachment: sentNoFile, blocked, failed, warnings, remaining: pending.length - batch.length, held: heldN, stuck: stuckN });
 }
+
+// ── QB batch: review list, hold/release, "delete it in QuickBooks" tick-list (Nov 17 2026) ──────────────────────────────────────────────────────
+// PURE. Whole hours from `etNow` ({date, minutes}) until the daily job's slot. lastKey = the ET day the job last finished ('' if never).
+// Not yet run today and the slot is still ahead: hours to the slot today. Slot passed and not run: 0 (next scheduler tick). Already ran today: tomorrow's slot.
+function qbBatchHoursUntil(etNow, atHHMM, lastKey) {
+  const at = schedAtMinutes(atHHMM);
+  if (lastKey && lastKey === etNow.date) return Math.max(0, Math.round((1440 - etNow.minutes + at) / 60 * 10) / 10);
+  if (etNow.minutes < at) return Math.round((at - etNow.minutes) / 60 * 10) / 10;
+  return 0;
+}
+// PURE. The row the review list shows for one waiting receipt. `q` = the Receipt_Recon_Queue row that confirmed it (or null), `wo`/`prop` may be null.
+function qbBatchListItem(r, q, wo, prop) {
+  const st = qbBatchStatus(r);
+  const sendingSince = Date.parse(r.QB_Batch_Sent_Date || '');
+  return {
+    receipt_id: String(r.ID), status: st,
+    stuck: st === 'sending' && (!sendingSince || Date.now() - sendingSince > 15 * 60 * 1000),
+    store: r.Store || '', amount: r.Amount || '', date: r.Date || '',
+    receipt_number: String(r.Receipt_Number || (q && q.Invoice_Number) || ''),
+    wo_id: r.WO_ID || '', wo_description: wo ? String(wo.Description || '').slice(0, 120) : '',
+    property_id: r.Property_ID || '', property_address: prop ? (prop.Address || '') : '',
+    queue_id: q ? String(q.ID) : '', can_reverse: !!q && st !== 'sending',
+    error: r.QB_Batch_Error || '', last_attempt: r.QB_Batch_Sent_Date || '',
+  };
+}
+// GET /receipts/qb-batch — everything the "Waiting to send to QuickBooks" panel shows. Read-only.
+async function qbBatchList(env) {
+  let receipts, queue;
+  try { [receipts, queue] = await Promise.all([fetchTab(env, 'Receipts'), fetchTab(env, 'Receipt_Recon_Queue')]); }
+  catch (e) { return json({ ok: false, error: 'Could not read Receipts: ' + String(e && e.message || e) }, 500); }
+  const [properties, workorders] = await Promise.all([fetchTab(env, 'Properties').catch(() => []), fetchTab(env, 'Work_Orders').catch(() => [])]);
+  const qByReceipt = new Map(); for (const q of queue) { if (q.Confirmed_Receipt_ID && ['confirmed', 'attached_only'].includes(q.Status)) qByReceipt.set(String(q.Confirmed_Receipt_ID), q); }
+  const propById = new Map(properties.map(p => [String(p.ID), p])), woById = new Map(workorders.map(w => [String(w.ID), w]));
+  const items = receipts.filter(r => qbBatchWaiting(r))
+    .map(r => qbBatchListItem(r, qByReceipt.get(String(r.ID)) || null, r.WO_ID ? woById.get(String(r.WO_ID)) : null, r.Property_ID ? propById.get(String(r.Property_ID)) : null))
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const cleanup = receipts.filter(r => String(r.QB_Reversed_Date || '').trim() && String(r.QB_Delete_Confirmed || '').toUpperCase() !== 'TRUE')
+    .map(r => ({ receipt_id: String(r.ID), vendor: r.Store || '', amount: r.Amount || '', receipt_date: r.Date || '', email_subject: r.QB_Email_Subject || qbBatchSubject(r), qb_email_sent_date: r.QB_Email_Sent_Date || '', reversed_date: r.QB_Reversed_Date || '' }));
+  // When is the next send? From the scheduler's own schedule (the HubScheduler.gs JOBS table is the one place the time is edited).
+  let nextSend = null, scheduleNote = '';
+  try {
+    const st = schedParseState(schedCell(await schedReadConfigRows(env, false), SCHED_STATE_KEY));
+    const eff = schedEffective(st);
+    const job = (eff.jobs || SCHED_JOBS).find(j => j.name === 'daily_receipts_post');
+    const js = st && st.jobs && st.jobs.daily_receipts_post;
+    if (job && !job.disabled) nextSend = { at: job.at, hours_until: qbBatchHoursUntil(schedEtParts(new Date()), job.at, js && js.last_key) };
+    else scheduleNote = 'The daily QuickBooks send is switched off in the scheduler, so nothing goes out until it is switched on or you tap Send batch now.';
+    if (eff.schedule_error) scheduleNote = eff.schedule_error;
+  } catch (e) { scheduleNote = 'Could not read the scheduler to say when the next send is: ' + String(e && e.message || e).slice(0, 160); }
+  const count = (s) => items.filter(i => i.status === s).length;
+  return json({ ok: true, items: items.slice(0, 300), total: items.length, counts: { ready: count('ready'), held: count('held'), failed: count('failed'), sending: count('sending') }, cleanup, next_send: nextSend, schedule_note: scheduleNote });
+}
+// POST /receipts/qb-batch/action { receipt_id, action: 'hold' | 'release' | 'mark_sent' } — hold = skip until released; release = back to ready (also how a failed or
+// interrupted 'sending' receipt is retried); mark_sent = a person checked QuickBooks/Gmail and the email did go out (only for an interrupted 'sending' row).
+async function qbBatchAction(env, body) {
+  const id = String(body && body.receipt_id || '').trim(); if (!id) return json({ error: 'receipt_id required' }, 400);
+  const action = String(body.action || '');
+  if (!['hold', 'release', 'mark_sent'].includes(action)) return json({ error: "action must be 'hold', 'release' or 'mark_sent'" }, 400);
+  try { await ensureColumns(env, 'Receipts', QB_BATCH_COLS.concat(['QB_Email_Sent', 'QB_Email_Sent_Date'])); }
+  catch (e) { return json({ error: 'Could not prepare the Receipts columns: ' + String(e && e.message || e) }, 500); }
+  const r = (await fetchTab(env, 'Receipts')).find(x => String(x.ID) === id);
+  if (!r) return json({ error: 'receipt not found' }, 404);
+  if (!qbBatchWaiting(r)) return json({ error: qbBatchStatus(r) === 'sent' ? 'That receipt was already emailed to QuickBooks. Use Reverse on the Confirmed tab if it was wrong.' : 'That receipt is not waiting for QuickBooks.' }, 409);
+  const st = qbBatchStatus(r);
+  if (action === 'hold') {
+    if (st === 'sending') return json({ error: 'That receipt is being sent right now. Wait a minute, or release it first if it is stuck.' }, 409);
+    await qbBatchWrite(env, id, { QB_Batch_Status: 'held', QB_Batch_Error: '' });
+  } else if (action === 'release') {
+    await qbBatchWrite(env, id, { QB_Batch_Status: 'ready', QB_Batch_Error: '' });
+  } else {
+    if (st !== 'sending') return json({ error: 'Only a receipt stuck in "sending" can be marked as sent.' }, 409);
+    const nowIso = new Date().toISOString();
+    await qbBatchWrite(env, id, { QB_Email_Sent: 'TRUE', QB_Email_Sent_Date: r.QB_Batch_Sent_Date || nowIso, QB_Batch_Status: 'sent', QB_Batch_Error: '' });
+  }
+  return json({ ok: true, receipt_id: id, status: action === 'hold' ? 'held' : action === 'release' ? 'ready' : 'sent' });
+}
+// POST /receipts/qb-batch/delete-done { receipt_id, done? } — Brett ticks "I deleted it in QuickBooks" for a receipt reversed after it was sent.
+async function qbBatchDeleteDone(env, body) {
+  const id = String(body && body.receipt_id || '').trim(); if (!id) return json({ error: 'receipt_id required' }, 400);
+  const done = !(body.done === false || String(body.done).toUpperCase() === 'FALSE');
+  try { await ensureColumns(env, 'Receipts', QB_BATCH_COLS); } catch (e) { return json({ error: 'Could not prepare the Receipts columns: ' + String(e && e.message || e) }, 500); }
+  const r = (await fetchTab(env, 'Receipts')).find(x => String(x.ID) === id);
+  if (!r) return json({ error: 'receipt not found' }, 404);
+  if (!String(r.QB_Reversed_Date || '').trim()) return json({ error: 'That receipt was not reversed after being sent, so there is nothing to delete in QuickBooks.' }, 409);
+  await qbBatchWrite(env, id, { QB_Delete_Confirmed: done ? 'TRUE' : 'FALSE', QB_Delete_Confirmed_Date: done ? new Date().toISOString() : '' });
+  return json({ ok: true, receipt_id: id, done });
+}
+// PURE. The qb_email field the confirm/reassign answers carry now that nothing is emailed at that moment.
+function qbBatchQueuedNote() { return { sent: false, queued: true, error: null, note: 'Waiting in the daily QuickBooks batch.' }; }
+// PURE. What the screen shows when a receipt that was already emailed is reversed: the exact thing to delete by hand in QuickBooks.
+function qbDeleteNeeded(original, queueId) {
+  return {
+    receipt_id: String(original.ID), queue_id: queueId ? String(queueId) : '', hub_receipt_number: String(original.ID),
+    vendor: original.Store || '', amount: original.Amount || '', receipt_date: original.Date || '',
+    email_subject: original.QB_Email_Subject || qbBatchSubject(original), qb_email_sent_date: original.QB_Email_Sent_Date || '',
+  };
+}
+// ═══ QB-BATCH-END ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
 function bytesToB64(buf) {
   const b = new Uint8Array(buf); let s = ''; const CH = 0x8000;
@@ -27047,6 +27223,8 @@ function bytesToB64(buf) {
 async function gmailSendEmailWithAttachment(env, { to, subject, html, attachment }) {
   if (!to) throw new Error('gmailSendEmailWithAttachment: to required');
   { const _dg = await demoGuardEmail(env, { to, subject, html }); if (_dg) return { sent: false, skipped: true, demo_blocked: true, limit: !!_dg.limit, reason: 'email not sent: ' + _dg.reason }; }   // Nov 11 2026 demo safety guard
+  // Nov 17 2026: staging never sends a real attachment email (same stub/redirect policy as gmailSendEmail; the old code would have really sent it).
+  if (env.__STAGING__ ?? isStaging(env)) return await gmailSendEmail(env, { to, subject, html, _demoChecked: true });
   const accessToken = await gmailAccessToken(env);
   const from = env.GMAIL_SENDER || 'ridgecomaintenance@gmail.com';
   const subjectEncoded = `=?UTF-8?B?${btoa(unescape(encodeURIComponent(subject || '')))}?=`;
@@ -31478,6 +31656,19 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/receipt-recon/cards' || path === '/receipt-recon/rules/deactivate') return true;
   if (path === '/receipt-recon/rules') {
     if (body && body.action === 'property') return !!(body.property_id && await isTestRecord(env, 'Properties', body.property_id));
+    return true;
+  }
+  // Nov 17 2026 (QB batch): hold/release/mark-sent and the delete-in-QuickBooks tick change ONE Receipts row, so that row's Property must be TEST-;
+  // send-now emails every waiting receipt, so the staging token may only send explicitly named TEST receipts (staging stubs the email anyway).
+  if (path === '/receipts/qb-batch/action' || path === '/receipts/qb-batch/delete-done') {
+    const rc = (await fetchTab(env, 'Receipts')).find(r => String(r.ID) === String(body && body.receipt_id));
+    return !!(rc && rc.Property_ID && await isTestRecord(env, 'Properties', rc.Property_ID));
+  }
+  if (path === '/receipts/qb-batch/send-now') {
+    const ids = (body && Array.isArray(body.ids)) ? body.ids.map(String) : [];
+    if (!ids.length) return false;
+    const all = await fetchTab(env, 'Receipts');
+    for (const id of ids) { const rc = all.find(r => String(r.ID) === id); if (!rc || !rc.Property_ID || !(await isTestRecord(env, 'Properties', rc.Property_ID))) return false; }
     return true;
   }
   if (path === '/receipt-recon/mark-refund-confirmed' || path === '/receipt-recon/undo') {

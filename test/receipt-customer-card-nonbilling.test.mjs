@@ -34,7 +34,7 @@ const scopeCoveringSignatureForWO = async () => null;
 const logTelemetry = async () => {};
 const _rcNorm = s => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 
-const code = [grab('receiptIsNonBilling'), grab('nonBillingReceiptIdsAmong', true), grab('addReceipt', true), grab('emailExpenseToQB', true), grab('receiptAttachOnly', true), grab('receiptReconConfirm', true),
+const code = [grab('receiptIsNonBilling'), grab('nonBillingReceiptIdsAmong', true), grab('addReceipt', true), grab('qbBatchQueuedNote'), grab('receiptAttachOnly', true), grab('receiptReconConfirm', true),
   grab('listReceipts', true), grab('scopeMaterialsBudgetSummary'), grab('receiptReconSearch', true)].join('\n');
 const W = new Function('json', 'fetchTab', 'addRow', 'updateRow', 'ensureColumns', 'findRecentDuplicate', 'appendReceiptToInvoiceReview', 'sendReceiptsToQBEmail', 'scopeCoveringSignatureForWO', 'logTelemetry', '_rcNorm',
   code + '\nreturn { receiptIsNonBilling, nonBillingReceiptIdsAmong, addReceipt, receiptAttachOnly, receiptReconConfirm, listReceipts, scopeMaterialsBudgetSummary, receiptReconSearch };')(
@@ -86,7 +86,7 @@ const nb = await W.nonBillingReceiptIdsAmong(env, [rc.ID, '900']);
 ok(nb.length === 1 && nb[0] === rc.ID, 'approval backstop identifies exactly the reference-only receipt');
 ok((await W.nonBillingReceiptIdsAmong(env, [])).length === 0, 'no ids -> nothing to check, no sheet read needed');
 // static wiring of the two approval endpoints + QB sweep + invoice picker
-const approve = grab('approveInvoiceReview', true), bulk = grab('approveInvoiceReviewBulk', true), sweep = grab('sendReceiptsToQBEmail', true);
+const approve = grab('approveInvoiceReview', true), bulk = grab('approveInvoiceReviewBulk', true), sweep = grab('qbBatchWaiting');
 ok(/nonBillingReceiptIdsAmong\(env, _ownIds\)/.test(approve) && /receipt_not_billable/.test(approve) && /\}, 503\)/.test(approve.slice(approve.indexOf('nonBillingReceiptIdsAmong'))), 'single approval refuses reference-only receipts (409) and fails closed (503) when Receipts cannot be read');
 ok(/nonBillingReceiptIdsAmong\(env, _ids, _nbRows\)/.test(bulk) && /receipt_not_billable/.test(bulk), 'bulk approval refuses them per item too');
 ok(/Non_Billable \|\| ''\)\.toUpperCase\(\) === 'TRUE' && String\(r\.Non_Billable_Reason/.test(sweep), 'the daily QuickBooks receipt sweep skips Non_Billable customer-card rows (a customer\'s card was never a Ridge Co purchase)');
@@ -124,7 +124,7 @@ ok(fp.body.ok && fp.body.fixed_price === true && fp.body.customer_card === false
 const fr = sheets.Receipts.find(r => r.Description === 'fasteners');
 ok(fr.WO_ID === '1002' && fr.Property_ID === '11' && fr.Non_Billable === 'TRUE' && fr.Non_Billable_Reason === 'fixed_price', 'Receipts row carries the WO, the property, the ONE non-billing flag and reason fixed_price');
 ok(fr.Category === 'company' && fr.Receipt_Number === '36109' && Number(fr.Amount) === 6.33, 'recorded as a company expense (our cost) with receipt number 36109 and $6.33');
-ok(spies.sendReceiptsToQBEmail === qbBefore + 1 && fp.body.qb_email && fp.body.qb_email.sent === true, 'the expense IS sent to the QuickBooks receipts inbox (fixed-price cost is ours)');
+ok(spies.sendReceiptsToQBEmail === qbBefore && fp.body.qb_email && fp.body.qb_email.queued === true && fp.body.qb_email.sent === false, 'Nov 17 batch: the fixed-price expense is NOT emailed at attach; it waits in the daily QuickBooks batch (fixed-price cost is ours, so it is waiting, not skipped)');
 ok(spies.appendReceiptToInvoiceReview === irBefore, 'never folded into an invoice (appendReceiptToInvoiceReview not called)');
 const ir2 = sheets.Invoice_Review.find(r => r.ID === '8');
 ok(ir2.Own_Materials === '0' && ir2.Own_Material_IDs === '' && ir2.Customer_Total === '500', 'the WO invoice row is untouched: no materials, no markup base, total unchanged');
@@ -137,7 +137,7 @@ const bud2 = W.scopeMaterialsBudgetSummary(10, 13, '1002', sheets.Receipts);
 ok(bud2.actual === 6.33, 'scope materials ACTUAL counts the fixed-price cost (it is our spend) while the customer-card reference stays out');
 const s3 = await W.receiptReconSearch(env, new URL('https://x/receipt-recon/search?q=36109'));
 ok(s3.body.results.length === 1 && s3.body.results[0].non_billable_reason === 'fixed_price', 'search by receipt number finds it and shows the reason');
-ok(/String\(r\.Non_Billable_Reason \|\| ''\) !== 'fixed_price'/.test(sweep), 'QB sweep still skips customer-card references but not fixed-price costs');
+ok(/String\(r\.Non_Billable_Reason \|\| ''\) !== 'fixed_price'/.test(sweep), 'QB batch (qbBatchWaiting) still skips customer-card references but not fixed-price costs');
 // the customer-card path is unchanged: still NOT sent to QuickBooks
 const qb2 = spies.sendReceiptsToQBEmail;
 sheets.Receipt_Recon_Queue.push(q({ ID: '12' }));
