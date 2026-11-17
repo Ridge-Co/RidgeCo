@@ -44,7 +44,7 @@
   var lastHiddenAt = 0;
   function noteHidden() { try { if (document.visibilityState === 'hidden') lastHiddenAt = Date.now(); } catch (e) { /* no visibility API: the Hub check below still decides */ } } // silent-ok: no visibility API, the Hub check still decides
   try { document.addEventListener('visibilitychange', noteHidden); window.addEventListener('pageshow', function () { unloading = false; }); noteHidden(); } catch (e) { consoleErr('[failure-reporter] visibility watch failed', e); }
-  function recentlyHidden() { try { return document.visibilityState === 'hidden' || (lastHiddenAt && Date.now() - lastHiddenAt < 15000); } catch (e) { return false; } }
+  function recentlyHidden() { try { return document.visibilityState === 'hidden' || (lastHiddenAt && Date.now() - lastHiddenAt < 15000); } catch (e) { return false; } } // silent-ok: visibility probe failed, treated as not recently hidden
 
   function consoleErr() { try { console.error.apply(console, arguments); } catch (e) { /* console unavailable: nothing else exists to tell */ } }
   function clip(s, n) { s = (s == null ? '' : String(s)).replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
