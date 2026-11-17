@@ -22022,12 +22022,15 @@ function activeRows(rows) { return rows.filter(r => String(r.Active||'').toUpper
 
 async function buildDigest(env) {
   const today = etTodayISO();
+  const req = {};   // one report per `where` per digest run (soft-failure helpers)
+  const warnings = [];
+  const readTab = async tab => {
+    const r = await fetchTabSoft(env, tab, { where: 'digest:read:' + tab, req, severity: 'P1' });
+    if (r.error) warnings.push('Could not read ' + tab + ': ' + r.error);
+    return r.rows;
+  };
   const [wos0, bills, props0, vendors, tenants0] = await Promise.all([
-    fetchTab(env,'Work_Orders').catch(()=>[]),
-    fetchTab(env,'Vendor_Bills').catch(()=>[]),
-    fetchTab(env,'Properties').catch(()=>[]),
-    fetchTab(env,'Vendors').catch(()=>[]),
-    fetchTab(env,'Tenants').catch(()=>[]),
+    readTab('Work_Orders'), readTab('Vendor_Bills'), readTab('Properties'), readTab('Vendors'), readTab('Tenants'),
   ]);
   const wos = demoHide(wos0), props = demoHide(props0), tenants = demoHide(tenants0);   // demo work orders/properties never reach Brett's digest
   const open = wos.filter(w => OPEN_WO_STATUSES.includes(w.Status));
