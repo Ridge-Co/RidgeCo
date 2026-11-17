@@ -1020,7 +1020,8 @@ function updatePostingLine(id){
   const prop = allProperties.find(p => String(p.ID) === propSel.value);
   const unit = unitSel && unitSel.value ? allUnits.find(u => String(u.ID) === unitSel.value) : null;
   const wo = woId ? allWOs.find(w => String(w.ID) === woId) : null;
-  let line = '<b>Posting to:</b> ' + esc(prop ? (prop.Address||('Property '+prop.ID)) : '');
+  const ccRef = !!(rowSuggestions[id] && rowSuggestions[id].category === 'customer_paid');
+  let line = (ccRef ? '<b>Attaching (reference only, not billed) to:</b> ' : '<b>Posting to:</b> ') + esc(prop ? (prop.Address||('Property '+prop.ID)) : '');
   if (unit) line += ' ' + esc(unit.Unit_Label || ('Unit '+unit.ID));
   line += wo ? (' — WO ' + esc(wo.ID)) : ' — <span class="warn">no work order selected yet</span>';
   el.innerHTML = line;
