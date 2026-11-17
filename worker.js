@@ -19079,11 +19079,22 @@ async function failRollupRun(env, opts) {
 
 // ── endpoints ───────────────────────────────────────────────────────────────────────────────────────────────────
 // GET /failures/open[?all=1] - for the Needs Attention screen, the header badge and build sessions (read-only token reaches it too).
+// Nov 17 2026 (Needs Attention F-1792537353924-mans): this page polls every 60s and each poll read the Failures tab AND Config, so it was the Hub's top
+// Sheets-read spender (54 reads/hour from 30 requests) and tripped the read meter. The parsed rows are now kept for 20s and the alerts flag for 5 min,
+// per Worker instance (plain data only, never a promise, so it cannot hit the cross-request promise rule). Marking a failure clears it at once.
+let __failOpenCache = null, __failAlertsCache = null;
+const FAIL_OPEN_CACHE_MS = 20000, FAIL_ALERTS_CACHE_MS = 300000;
+function failOpenCacheClear() { __failOpenCache = null; __failAlertsCache = null; }
 async function failOpenList(env, url) {
-  let vals;
-  try { vals = (await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}`)).values || []; }
-  catch (e) { if (isMissingTabError(e)) vals = []; else return json({ ok: false, error: 'could not read the failure ledger: ' + String((e && e.message) || e).slice(0, 200) }, 503); }
-  const all = failRowsToObjects(vals.slice(1), FAIL_LEDGER_COLS, 2).filter(r => r.ID);
+  let all;
+  if (__failOpenCache && Date.now() - __failOpenCache.at < FAIL_OPEN_CACHE_MS) all = __failOpenCache.all;
+  else {
+    let vals;
+    try { vals = (await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}`)).values || []; }
+    catch (e) { if (isMissingTabError(e)) vals = []; else return json({ ok: false, error: 'could not read the failure ledger: ' + String((e && e.message) || e).slice(0, 200) }, 503); }
+    all = failRowsToObjects(vals.slice(1), FAIL_LEDGER_COLS, 2).filter(r => r.ID);
+    __failOpenCache = { at: Date.now(), all };
+  }
   const showAll = url && url.searchParams.get('all') === '1';
   const rows = all.filter(r => showAll || FAIL_OPEN.indexOf(r.Status) >= 0).sort((a, b) => failSevRank(a.Severity) - failSevRank(b.Severity) || (a.Last_Seen < b.Last_Seen ? 1 : -1));
   const open = all.filter(r => FAIL_OPEN.indexOf(r.Status) >= 0);
