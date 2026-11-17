@@ -37946,7 +37946,7 @@ async function qbSendInvoice(env, body) {
           try {
             const cg = await qbApi(env, `customer/${encodeURIComponent(ownerQbId)}?minorversion=73`, 'GET', null, token);
             billEmail = (cg && cg.Customer && cg.Customer.PrimaryEmailAddr && cg.Customer.PrimaryEmailAddr.Address) || '';
-          } catch (e) { /* best-effort — the invoice still posts, just without a saved send-to */ }
+          } catch (e) { await softFail(env, 'qbSendInvoice:sendTo', e, { severity: 'P1', ref: String(ir.ID || ''), source: 'qbo', context: 'the invoice posted but the customer contact could not be read from QuickBooks, so no send-to was saved' }); }
         }
       }
       // Only attach a well-formed address within QuickBooks' 100-char limit. A malformed or
