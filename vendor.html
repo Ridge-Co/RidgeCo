@@ -4385,6 +4385,26 @@ function t(key) {
   return ES[key] !== undefined ? ES[key] : esT(key);   // Nov 16 2026: strings not in ES fall back to the shared vendor-i18n.js dictionary instead of staying English
 }
 
+// Login-screen language (Nov 16 2026). Before sign-in the page does not know the vendor, so it uses the saved choice, else the device language;
+// the EN / ES buttons change it. After sign-in the vendor's profile language takes over (see onLoginSuccess).
+var LANG_PREF_KEY = 'rc_vendor_lang';
+function _savedLang() { try { return localStorage.getItem(LANG_PREF_KEY); } catch (e) { return null; } }
+function _saveLang(l) { try { localStorage.setItem(LANG_PREF_KEY, l); } catch (e) { console.error('language choice not stored', e); } }
+function setLoginLang(l) { _saveLang(l); location.reload(); }
+(function initLoginLang() {
+  var pref = _savedLang();
+  var l = (pref === 'es' || pref === 'en') ? pref : (/^es\b/i.test(navigator.language || '') ? 'es' : 'en');
+  LANG = l;
+  var box = document.getElementById('loginLangToggle');
+  if (box) {
+    box.innerHTML = ['en', 'es'].map(function(c) {
+      var on = (c === l);
+      return '<button type="button" onclick="setLoginLang(\'' + c + '\')" aria-pressed="' + on + '" style="min-height:44px;min-width:88px;padding:0 14px;border-radius:8px;font-family:var(--font);font-size:13px;font-weight:bold;cursor:pointer;border:2px solid var(--accent);background:' + (on ? 'var(--accent)' : '#fff') + ';color:' + (on ? '#fff' : 'var(--accent)') + '">' + (c === 'en' ? 'English' : 'Español') + '</button>';
+    }).join('');
+  }
+  if (l === 'es') applyTranslations();
+})();
+
 function applyTranslations() {
   if (LANG !== 'es') return;
   document.querySelectorAll('[data-i18n]').forEach(function(el) {
