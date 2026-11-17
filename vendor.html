@@ -3286,7 +3286,7 @@ function submitVendorSched(modalId) {
     <!-- INVOICE DESCRIPTION — this is what the owner reads on their invoice -->
     <div style="margin-bottom:14px">
       <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">WHAT DID YOU DO? <span style="text-transform:none;font-weight:normal">— the owner will see this</span></label>
-      <textarea id="bill-invdesc" placeholder="Describe what was done in as much detail as possible" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px;border-radius:6px;min-height:60px;resize:vertical"></textarea>
+      <textarea id="bill-invdesc" oninput="JobOrder.refreshBillPanel()" placeholder="Describe what was done in as much detail as possible" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px;border-radius:6px;min-height:60px;resize:vertical"></textarea>
     </div>
 
     <!-- NOTES -->
