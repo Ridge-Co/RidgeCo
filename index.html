@@ -2562,6 +2562,35 @@ function renderDashboard() {
   el.innerHTML = active.length ? active.map(woCard).join('') : '<div class="loading">No active work orders</div>';
 }
 
+// ── Severity triage (queue #142 Phase 1). Only shows when the server stamped a Triage_Tier; nothing appears while Config Triage_Enabled is off.
+var TRI_ORDER = {Emergency:0, Urgent:1, Routine:2, Low:3};
+var TRI_STYLE = {Emergency:'background:#fdecea;border:1px solid var(--danger);color:var(--danger)', Urgent:'background:#fdf2e2;border:1px solid var(--warn);color:var(--warn)', Routine:'background:var(--surface2);border:1px solid var(--border);color:var(--muted)', Low:'background:var(--surface2);border:1px solid var(--border);color:var(--muted)'};
+function triRank(w){ var r = TRI_ORDER[w && w.Triage_Tier]; return r === undefined ? 2 : r; }
+function triAnyStamped(){ return safeArray(state.workorders).some(function(x){ return !!x.Triage_Tier; }); }
+function triChipHTML(w){
+  if (w.Triage_Tier) return ' <span class="badge" title="'+esc(w.Triage_Summary||'')+'" style="'+(TRI_STYLE[w.Triage_Tier]||'')+';margin-left:4px">'+esc(String(w.Triage_Tier).toUpperCase())+'</span>';
+  var open = WOStatus.sets.OPEN_WORK.includes(w.Status), young = w.Created_Date && (Date.now()-new Date(w.Created_Date)) < 3*86400000;
+  if (open && young && triAnyStamped()) return ' <span class="badge" title="Triage did not run for this one. Check it by hand." style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);margin-left:4px">NOT TRIAGED</span>';
+  return '';
+}
+function triageDetailHTML(wo){
+  if (!wo.Triage_Tier) return '';
+  var due = wo.Triage_Due_At ? new Date(wo.Triage_Due_At).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
+  return '<div id="tri-box" style="margin-bottom:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface2);font-size:13px;line-height:1.5">' +
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span class="badge" style="'+(TRI_STYLE[wo.Triage_Tier]||'')+'">'+esc(String(wo.Triage_Tier).toUpperCase())+'</span>' +
+    (due ? '<span style="color:var(--muted);font-size:13px">Respond by '+esc(due)+'</span>' : '') +
+    '<select aria-label="Change tier" onchange="triageSetTier(\''+wo.ID+'\',this.value)" style="margin-left:auto;min-height:44px;font-size:16px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);padding:0 8px">' +
+    '<option value="">Change tier</option>' + ['Emergency','Urgent','Routine','Low'].map(function(t){ return '<option value="'+t+'">'+t+'</option>'; }).join('') + '</select></div>' +
+    '<div style="color:var(--muted);font-size:13px;margin-top:6px">'+esc(wo.Triage_Summary||'')+(wo.Triage_Set_By==='admin' ? ' (set by hand)' : '')+'</div></div>';
+}
+function triageSetTier(woId, tier){
+  if (!tier) return;
+  api('POST','/wo/triage-set',{wo_id:woId, tier:tier}, 30000).then(function(res){
+    if (res && res.success) { toast('Tier set to '+tier+(res.priority_raised?' (priority raised to urgent)':''),'success'); loadAll().then(function(){ openWODetail(woId); }); }
+    else toast('Tier not saved: '+((res && (res.error||res.message))||'try again'),'error');
+  }).catch(function(e){ toast('Tier not saved: '+((e && e.message)||'try again'),'error'); });
+}
+
 function woCard(w) {
   var prop = safeArray(state.properties).find(function(p){return p.ID===w.Property_ID;});
   var vendor = safeArray(state.vendors).find(function(v){return v.ID===w.Vendor_ID;});
