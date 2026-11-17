@@ -4325,6 +4325,7 @@ async function receiptReconScan(env, body) {
     } catch (e) {
       if (aiCreditIsPausedError(e)) { pausedMid = true; break; }   // credit ran out mid-scan: stop, no attempt counted, nothing retried
       errs.push((f.name || f.id) + ': ' + (e.message || 'err'));
+      errorFiles.push({ id: f.id, name: f.name || f.id, error: String((e && e.message) || 'err').slice(0, 200), attempts: ((failures[f.id] && failures[f.id].attempts) || 0) + 1 });
       if (receiptReconIsConfigError(e && e.message)) { configError = String(e.message).slice(0, 200); break; }
       const prior = failures[f.id];
       failures[f.id] = { name: f.name || f.id, error: String(e && e.message || 'err').slice(0, 200), attempts: (prior ? prior.attempts : 0) + 1, last_tried: new Date().toISOString() };
