@@ -7,6 +7,8 @@
 //   2. a comment-only catch                catch (e) { /* ignore */ }
 //   3. a log-only catch                    catch (e) { console.error('x', e); }
 //   4. a swallowing promise .catch         .catch(() => {})  .catch(() => null)  .catch(function () {})  .catch(() => [])
+//   5. a return-default catch (Nov 17)     catch (e) { return null; }   catch { return []; }   catch (e) { return false; }   catch { return; }
+//      (a comment before the return does not make it visible: the caller still cannot tell "no data" from "the read failed")
 // A handler that is genuinely benign is allowed when its line carries   // silent-ok: <a reason of 3 or more words>
 // (a shorter reason is itself a finding).
 //
@@ -29,6 +31,7 @@ const PATTERNS = [
   ['comment-only catch', /catch\s*(?:\([^)]*\))?\s*\{\s*(?:\/\*[\s\S]*?\*\/\s*|\/\/[^\n]*\n\s*)+\}/g],
   ['log-only catch', /catch\s*(?:\([^)]*\))?\s*\{\s*console\.(?:log|warn|error|info|debug)\((?:[^()]|\([^()]*\))*\)\s*;?\s*\}/g],
   ['swallowing .catch', /\.catch\(\s*(?:\(\s*\w*\s*\)|\w+)\s*=>\s*(?:\{\s*\}|null|undefined|false|true|''|""|\[\]|\(\s*\{\s*\}\s*\)|\{\s*return\s*(?:null|undefined|false|\[\]|\{\})?\s*;?\s*\})\s*\)/g],
+  ['return-default catch', /catch\s*(?:\([^)]*\))?\s*\{\s*(?:(?:\/\*[\s\S]*?\*\/|\/\/[^\n]*)\s*)*return(?:\s+(?:null|undefined|false|true|0|''|""|\[\]|\{\}))?\s*;?\s*(?:\/\/[^\n]*)?\s*\}/g],
   ['swallowing .catch', /\.catch\(\s*function\s*\w*\s*\([^)]*\)\s*\{\s*\}\s*\)/g],
 ];
 const SILENT_OK = /\/\/\s*silent-ok:\s*(.*)$/;

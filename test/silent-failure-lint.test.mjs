@@ -29,6 +29,18 @@ t('.catch that reports is NOT flagged', n("p.catch(e => window.hubReportFailure(
 t('silent-ok with a real reason exempts it', n('try { localStorage.x = 1; } catch (e) {}   // silent-ok: storage blocked in private mode') === 0);
 { const r = scan('try { a(); } catch (e) {}   // silent-ok: fine');
   t('silent-ok with a short reason does not exempt and is reported', r.findings.length === 1 && r.badReasons.length === 1, r); }
+// return-default catches (Nov 17 2026): the caller cannot tell "no data" from "the read failed"
+t('catch { return null } is flagged', n('try { a(); } catch (e) { return null; }') === 1);
+t('bare catch { return []; } is flagged', n('try { a(); } catch { return []; }') === 1);
+t('catch { return false } is flagged', n('try { a(); } catch (e) { return false; }') === 1);
+t('catch { return; } is flagged', n('try { a(); } catch (e) { return; }') === 1);
+t("catch { return ''; } and { return {}; } are flagged", n("try { a(); } catch (e) { return ''; }") === 1 && n('try { a(); } catch (e) { return {}; }') === 1);
+t('a comment before the return does not hide it', n('try { a(); } catch (e) {\n  // ignore\n  return null;\n}') === 1);
+t('return-default with a real silent-ok reason is exempt', n('try { JSON.parse(x); } catch (e) { return null; }   // silent-ok: probe of user text') === 0);
+t('return-default with a short silent-ok reason is not exempt', scan('try { a(); } catch (e) { return null; }   // silent-ok: fine').findings.length === 1);
+t('a catch that reports then returns null is NOT flagged', n("try { a(); } catch (e) { softNote(env, 'x', e); return null; }") === 0);
+t('a catch that returns an error object is NOT flagged', n("try { a(); } catch (e) { return { ok: false, error: String(e) }; }") === 0);
+t('a catch that returns a computed value is NOT flagged', n('try { a(); } catch (e) { return fallbackFor(e); }') === 0);
 t('two handlers on two lines count two', n('try{a()}catch(e){}\ntry{b()}catch(e){}') === 2);
 
 // 2. ratchet on a throwaway folder -----------------------------------------------------------------------------------
