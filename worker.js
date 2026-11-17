@@ -19847,6 +19847,17 @@ async function safeJson(request, opts) {
     return { ok: false, body: {}, error };
   }
 }
+// Reads the result of sendSMS / smsGatedSend / gmailSendEmail and returns a short error text when the send really failed, '' otherwise.
+// A text that was skipped on purpose (Twilio off, quiet hours, region, duplicate, gate) or only staged is NOT a failure. Twilio answers a refused text with
+// plain JSON (no `sid`) instead of throwing, so a bare `try { await sendSMS() } catch {}` never sees it.
+function sendFailure(r) {
+  if (!r || typeof r !== 'object') return '';
+  if (r.skipped || r.staged || r.held_for_quiet_hours || r.sid || r.sent === true || r.ok === true || r.delivered === true) return '';
+  if (r.error) return String(r.error).slice(0, 200);
+  if (r.sent === false && r.error_code) return 'send failed (code ' + r.error_code + ')';
+  if (r.message || r.code) return String(r.message || ('code ' + r.code)).slice(0, 200);
+  return '';
+}
 // ═══ SOFT-FAILURE-HELPERS-END
 async function failSetConfig(env, key, value) {
   const r = await setConfigKey(env, { key, value });
