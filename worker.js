@@ -12932,11 +12932,10 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   const allowIds = String(config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
   if (!allowIds.includes(String(vendorId))) return; // soft launch — not enabled for this vendor yet
 
-  const [vendors, wos, properties] = await Promise.all([
-    fetchTab(env, 'Vendors').catch(() => []),
-    fetchTab(env, 'Work_Orders').catch(() => []),
-    fetchTab(env, 'Properties').catch(() => []),
-  ]);
+  // Phase 2: a failed read used to look like "no such vendor" and the vendor silently got no confirmation. Now it is reported (P1) and the behaviour is unchanged (no email goes out on empty data).
+  const req = {};
+  const rd = async tab => (await fetchTabSoft(env, tab, { where: 'vendorInvoiceConfirm:read:' + tab, req, severity: 'P1' })).rows;
+  const [vendors, wos, properties] = await Promise.all([rd('Vendors'), rd('Work_Orders'), rd('Properties')]);
   const vendor = vendors.find(v => String(v.ID) === String(vendorId));
   if (!vendor) return;
 
