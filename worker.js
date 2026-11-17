@@ -10984,7 +10984,7 @@ async function woSplit(env, body) {
       const msg = `Hi ${tenant.First_Name}, work order ${originalId} (${woJobLabel(originalFresh)}) was split into ${createdWoIds.length > 1 ? 'work orders' : 'work order'} ${idList}. We're continuing to track your job across these. Ref: ${originalId}.`;
       await smsGatedSend(env, { wo_id: originalId, message_type: 'tenant_wo_split', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
     }
-  } catch (e) { /* non-fatal — split already succeeded */ }
+  } catch (e) { await softFail(env, 'woSplit:tenantTexts', e, { severity: 'P0', ref: String(originalId), source: 'send', context: 'the split worked but the tenant text loop stopped; later tenants may not have been told' }); }   // the split itself already succeeded, so this stays non-fatal
 
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_split', Skill_Or_Endpoint: '/wo/split', Success: 'TRUE', Notes: `original=${originalId} new=${createdWoIds.join(',')}` }); } catch (_) {} // silent-ok: telemetry is best effort, a logging miss must not fail the request
 
