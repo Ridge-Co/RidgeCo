@@ -681,6 +681,7 @@ function loadDashboard() {
     // Submit form property dropdown
     buildSubmitDD(ownerProps);
     renderWOs();
+    oaLoad(true);
   }).catch(function(e) {
     console.error('[loadDashboard]', e);
     ['statOpen','statUrgent','statProps'].forEach(function(id){ var s = document.getElementById(id); if (s) s.textContent = '—'; });
