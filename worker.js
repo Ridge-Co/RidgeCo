@@ -26913,6 +26913,7 @@ async function sendReceiptsToQBEmail(env, opts) {
   // don't correspond to any real transaction on the account being reconciled.
   const onlyIds = (opts && Array.isArray(opts.ids) && opts.ids.length) ? new Set(opts.ids.map(String)) : null;
   const pending = all.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Email_Sent || '').toUpperCase() !== 'TRUE' && String(r.Payment_Source || 'company_card') !== 'vendor_reimburse'
+    && String(r.Non_Billable || '').toUpperCase() !== 'TRUE'   // customer-card references were never a Ridge Co purchase
     && (!onlyIds || onlyIds.has(String(r.ID))));
   const batch = pending.slice(0, limit);
   if (!batch.length) return json({ ok: true, sent: 0, remaining: 0, note: 'nothing pending' });
