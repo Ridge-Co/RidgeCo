@@ -5464,6 +5464,7 @@ async function receiptReconSearch(env, url) {
     return {
       id: r.ID, amount: r.Amount, store: r.Store, description: r.Description, date: r.Date,
       category: r.Category, active: String(r.Active || '').toUpperCase() !== 'FALSE',
+      receipt_number: r.Receipt_Number || '', non_billing: receiptIsNonBilling(r),
       wo_id: r.WO_ID || '', wo_description: wo ? (wo.Description || '') : '',
       property_id: r.Property_ID || '', property_address: prop ? (prop.Address || '') : '',
       qb_email_sent: String(r.QB_Email_Sent || '').toUpperCase() === 'TRUE',
