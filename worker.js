@@ -40333,7 +40333,7 @@ async function trashWeek(env, url) {
       skipped: !!skip, skip_reason: (skip && skip.Reason) || '',
     };
   });
-  return json({ week, properties: out });
+  return json({ week, properties: out, warnings });
 }
 
 // GET /trash/unbilled — what needs Brett's attention. Powers the push nudge.
