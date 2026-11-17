@@ -16555,8 +16555,122 @@ async function setWishlistStatus(env, body) {
 
 // ── SMS ──────────────────────────────────────────────────────
 
+// ── INCOMING-TEXT SIGNATURE CHECK (Nov 16 2026, access fix 3 of 3) ──────────────────────────────────────────────────────
+// What was wrong: /sms-inbound is public (Twilio has to reach it) and never checked that a request really came from Twilio.
+// Anyone who knew a vendor's phone number could POST "From=<that number>&Body=NO" and decline / unassign that vendor's newest
+// assigned job (or "YES" to accept it), with a text to Brett saying the vendor did it.
+// The check: Twilio signs every webhook. The signature is base64( HMAC-SHA1( key = the account's primary Auth Token,
+// message = the full request URL + every POST parameter name and value, sorted by name, no separators ) ) and arrives in the
+// X-Twilio-Signature header (twilio.com/docs/usage/security, "Validating requests are coming from Twilio"; checked Nov 16 2026
+// against the worked example on that page, which is a test vector in test/sms-inbound-signature.test.mjs).
+// The key is the Worker secret TWILIO_AUTH (the name wrangler.toml and CREDENTIALS_MAP already list). It must hold the primary
+// AUTH TOKEN: the API key pair the Hub SENDS with (TWILIO_API_SID / TWILIO_API_KEY) cannot check a signature.
+// The switch: Config SMS_INBOUND_SIGNATURE_MODE.
+//   - missing / anything else = LOG ONLY (the default): nothing is refused. A request that fails the check is handled exactly
+//     as before and one low-severity (P2) row goes to the failure ledger saying what WOULD have been refused and why.
+//   - 'enforce': a request that fails the check gets HTTP 403 and is not processed (same P2 row, worded "refused").
+//     With 'enforce' on and NO TWILIO_AUTH secret, every incoming text is refused and the row is P1: a check that is switched on
+//     and cannot run must not quietly let everything through.
+// A correctly signed request never reads the switch and is never logged. Ledger rows are rate limited (smsSigReport) so a flood
+// of junk cannot fill the sheet: at most SMS_SIG_REPORT_MAX rows per SMS_SIG_REPORT_WINDOW_MS per Worker instance, the rest
+// are counted and the count rides on the next row. No phone number, message text or secret is ever written to a row.
+const SMS_SIG_MODE_KEY = 'SMS_INBOUND_SIGNATURE_MODE';
+const SMS_SIG_WHERE = 'inbound_text_signature';
+const SMS_SIG_REPORT_MAX = 3, SMS_SIG_REPORT_WINDOW_MS = 10 * 60000;
+const SMS_SIG_MODE_TTL_MS = 60000;   // the switch is re-read at most once a minute per Worker instance, so junk requests cannot burn the Sheets read quota
+const _smsSigWin = { start: 0, n: 0, suppressed: 0 };
+const _smsSigMode = { at: 0, mode: '' };
+// PURE. The exact string Twilio signs. `pairs` = [[name, value], ...] as decoded from the form body.
+// Names sort case-sensitively (plain code-unit order, the "Unix-style" order Twilio documents). A name sent more than once
+// contributes each distinct value once, sorted (what Twilio's own libraries do; Twilio's page does not cover that case).
+function twilioSignatureBase(url, pairs) {
+  const byName = new Map();
+  for (const pair of (pairs || [])) {
+    const k = String(pair[0]);
+    if (!byName.has(k)) byName.set(k, []);
+    byName.get(k).push(String(pair[1] == null ? '' : pair[1]));
+  }
+  let out = String(url);
+  for (const k of [...byName.keys()].sort()) for (const v of [...new Set(byName.get(k))].sort()) out += k + v;
+  return out;
+}
+async function twilioSignatureCompute(authToken, url, pairs) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(String(authToken)), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+  return bytesToB64(await crypto.subtle.sign('HMAC', key, enc.encode(twilioSignatureBase(url, pairs))));   // 20 raw bytes -> standard base64 (the existing byte encoder)
+}
+// PURE. Compares two strings without stopping at the first different character.
+function smsSigSame(a, b) {
+  a = String(a == null ? '' : a); b = String(b == null ? '' : b);
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i % (b.length || 1));
+  return diff === 0 && a.length > 0;
+}
+// { ok:true } or { ok:false, reason:'no_secret' | 'no_header' | 'mismatch' }.
+async function twilioSignatureCheck(env, url, header, pairs) {
+  const token = String((env && env.TWILIO_AUTH) || '').trim();
+  if (!token) return { ok: false, reason: 'no_secret' };
+  const sig = String(header || '').trim();
+  if (!sig) return { ok: false, reason: 'no_header' };
+  return smsSigSame(await twilioSignatureCompute(token, url, pairs), sig) ? { ok: true } : { ok: false, reason: 'mismatch' };
+}
+// 'enforce' | 'log'. Throws when the Config tab cannot be read and there is no recent answer in memory.
+async function smsSigReadMode(env, nowMs) {
+  if (_smsSigMode.mode && nowMs - _smsSigMode.at < SMS_SIG_MODE_TTL_MS) return _smsSigMode.mode;
+  const data = await sheetsRequest(env, 'GET', `/values/Config`);
+  const row = ((data && data.values) || []).find(r => r && r[0] === SMS_SIG_MODE_KEY);
+  _smsSigMode.mode = String((row && row[1]) || '').trim().toLowerCase() === 'enforce' ? 'enforce' : 'log';
+  _smsSigMode.at = nowMs;
+  return _smsSigMode.mode;
+}
+// Rate-limited failure-ledger row. Returns true when a row was written, false when it was only counted.
+async function smsSigReport(env, nowMs, severity, message, context) {
+  if (nowMs - _smsSigWin.start > SMS_SIG_REPORT_WINDOW_MS) { _smsSigWin.start = nowMs; _smsSigWin.n = 0; }
+  if (++_smsSigWin.n > SMS_SIG_REPORT_MAX) { _smsSigWin.suppressed++; console.error('[sms-inbound] signature report not filed (rate limit): ' + message); return false; }
+  const ctx = Object.assign({}, context || {});
+  if (_smsSigWin.suppressed) { ctx.not_filed_since_last_row = _smsSigWin.suppressed; _smsSigWin.suppressed = 0; }
+  const r = await reportFailure(env, { system: 'hub', source: 'sms-inbound', where: SMS_SIG_WHERE, ref: '/sms-inbound', severity, message, context: ctx });
+  if (!r || !r.ok) console.error('[sms-inbound] signature report could not be saved: ' + message);
+  return !!(r && r.ok);
+}
+const SMS_SIG_REASON_TEXT = {
+  no_secret: 'the Worker secret TWILIO_AUTH (the Twilio account Auth Token) is not set, so the signature cannot be checked',
+  no_header: 'the request has no X-Twilio-Signature header (it did not come from Twilio)',
+  mismatch: 'the X-Twilio-Signature does not match (not from Twilio, altered on the way, or TWILIO_AUTH holds the wrong value)',
+};
+// Returns a Response when this incoming text must be refused, otherwise null (carry on). Never throws.
+async function smsInboundSignatureGate(env, request, params) {
+  const nowMs = Date.now();
+  let chk;
+  try { chk = await twilioSignatureCheck(env, request.url, request.headers.get('X-Twilio-Signature'), [...params.entries()]); }
+  catch (e) { chk = { ok: false, reason: 'mismatch', error: String((e && e.message) || e).slice(0, 160) }; }
+  if (chk.ok) return null;
+  const why = SMS_SIG_REASON_TEXT[chk.reason] || chk.reason;
+  const ctx = { reason: chk.reason, from_last4: String(params.get('From') || '').replace(/\D/g, '').slice(-4), ip: String(request.headers.get('CF-Connecting-IP') || '').slice(0, 45) };
+  if (chk.error) ctx.error = chk.error;
+  let mode;
+  try { mode = await smsSigReadMode(env, nowMs); }
+  catch (e) {
+    // The switch cannot be read (Google Sheets is down). The rest of this handler needs Sheets too, so the text could not be handled anyway.
+    await smsSigReport(env, nowMs, 'P1', `Incoming text NOT handled: it failed the Twilio signature check and the switch (Config ${SMS_SIG_MODE_KEY}) could not be read.`, Object.assign({ config_error: String((e && e.message) || e).slice(0, 160) }, ctx));
+    return new Response('Service unavailable', { status: 503, headers: { 'Content-Type': 'text/plain' } });
+  }
+  ctx.mode = mode;
+  if (mode === 'enforce') {
+    if (chk.reason === 'no_secret') await smsSigReport(env, nowMs, 'P1', `Every incoming text is being REFUSED: Config ${SMS_SIG_MODE_KEY} is "enforce" but ${why}. Add the secret, or set the switch back to "log".`, ctx);
+    else await smsSigReport(env, nowMs, 'P2', `Incoming text REFUSED: ${why}.`, ctx);
+    return new Response('Forbidden', { status: 403, headers: { 'Content-Type': 'text/plain' } });
+  }
+  await smsSigReport(env, nowMs, 'P2', chk.reason === 'no_secret'
+    ? `Incoming text NOT CHECKED (log-only mode, nothing refused): ${why}.`
+    : `Incoming text WOULD HAVE BEEN REFUSED (log-only mode, it was handled as before): ${why}.`, ctx);
+  return null;
+}
+
 async function handleInboundSMS(env, request) {
-  const params=new URLSearchParams(await request.text()), from=params.get('From')||'', body=(params.get('Body')||'').trim().toUpperCase();
+  const params=new URLSearchParams(await request.text());
+  { const _sigDenied = await smsInboundSignatureGate(env, request, params); if (_sigDenied) return _sigDenied; }   // Nov 16 2026: Twilio signature check (log-only until Config SMS_INBOUND_SIGNATURE_MODE = enforce)
+  const from=params.get('From')||'', body=(params.get('Body')||'').trim().toUpperCase();
   const vendors=await fetchTab(env,'Vendors'); const vendor=vendors.find(v=>v.Phone&&normalizePhone(v.Phone)===normalizePhone(from));
   if(!vendor) return twilioResponse('Sorry, we could not find your vendor record. Please contact your coordinator.');
   const workorders=await fetchTab(env,'Work_Orders');
