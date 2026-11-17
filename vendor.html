@@ -3561,6 +3561,7 @@ function _openBillModalReal(woId, vendorName) {
   }
 
   document.getElementById('modal-vendor-bill').style.display = 'flex';
+  if (window.JobOrder) JobOrder.refreshBillPanel();
 }
 
 function closeBillModal() {
