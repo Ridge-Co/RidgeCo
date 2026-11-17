@@ -4646,7 +4646,7 @@ async function receiptReconConfirm(env, body) {
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source, allow_negative: (noWo && isRefundRow),
   });
-  const addJson = await addResp.json().catch(() => ({}));
+  const addJson = await addResp.json().catch(async (e) => { await softFail(env, 'receiptReconConfirm:addAnswer', e, { severity: 'P1', ref: String(row.ID || ''), source: 'parse', context: 'the receipt add answer was unreadable, so it may have saved even though this shows as failed' }); return {}; });
   let invoiceLink = null;
   if (addJson && addJson.success && !addJson.duplicate && wo_id && addJson.id) {
     // A signed scope proposal's WO is billed through its payment milestones — folding this
