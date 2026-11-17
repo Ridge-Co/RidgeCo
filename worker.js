@@ -15777,7 +15777,7 @@ async function createTurnoverWOs(env, body) {
     Turnover_Release_Date: releaseDate,
   });
 
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_start', Skill_Or_Endpoint: '/turnover', Success: 'TRUE', Notes: `unit=${unitId} group=${groupId} source=${body.source || 'manual'}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'turnover_start', Skill_Or_Endpoint: '/turnover', Success: 'TRUE', Notes: `unit=${unitId} group=${groupId} source=${body.source || 'manual'}` }); } catch (_) {} // silent-ok: telemetry is best effort, a logging miss must not fail the request
 
   return json({ success: true, group_id: groupId, wo_ids: woIds, release_date: releaseDate || null });
 }
