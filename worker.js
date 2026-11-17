@@ -6746,7 +6746,11 @@ async function scopeProposalSend(env, body) {
     // A resend puts the card back to "waiting" (queue #138): the owner's earlier decline/question is cleared; the history stays in Ops_Telemetry.
     const _clearResp = String(s.Owner_Response || '') ? { Owner_Response: '', Owner_Response_At: '', Owner_Response_By: '', Owner_Response_Text: '', Owner_Response_Alerted: '' } : {};
     await updateRow(env, 'Scopes', id, { Sent_Date: new Date().toISOString(), Sent_To: email, Send_Count: nextCount, ..._clearResp });
-  } catch (_) { /* the email already sent successfully; a failure to stamp the Scopes row shouldn't be reported as a send failure */ }
+  } catch (e) {
+    // the email already went out, so this is not reported as a send failure; but without Sent_Date the double-send guard cannot see it, so the page is told.
+    warnings.push('The estimate email went out, but the "sent" date could not be saved on the Scope. Check before sending it again.');
+    await softFail(env, 'scopeProposalSend:stamp', e, { severity: 'P1', ref: String(id), source: 'write', context: 'estimate email sent; Scopes.Sent_Date not saved, so the 90-second double-send guard will not catch a second tap' });
+  }
 
   // Owner heads-up text (Oct 14 2026): on the FIRST send only (a resend would just nag), unless sms_again:true.
   // Email already went; the text is held/skipped/blocked on its own rules and its outcome is always reported.
