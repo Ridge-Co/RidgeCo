@@ -3487,17 +3487,124 @@ function _rcNorm(s){ return String(s==null?'':s).toLowerCase().replace(/['‘’
 // PURE — resolve the property a receipt's PO/handwritten note points to, by token overlap on the
 // street address. A matched house-number is weighted double (it disambiguates same-street units).
 // Returns null below a confidence floor so an unmatched receipt is flagged, never mis-filed.
-function matchReceiptProperty(po, properties) {
-  const n = _rcNorm(po); if (!n) return null;
-  const nt = n.split(' ');
-  let best = null, bestScore = 0;
+// Nov 17 2026 (RECEIPT_RECONCILER_ACCURACY_BUILD_BRIEF 4a): inactive properties are never returned, and on a
+// score tie the property that really has units / work orders wins (then the lowest ID) instead of whichever row
+// came first. Root cause of the 928 N Calvert St twin (inactive ID 2 with no units beat active ID 11).
+function _rcPropActive(p) { return String(p && p.Active != null ? p.Active : '').toUpperCase() !== 'FALSE'; }
+// PURE — top 3 {property, score} for ALL the receipt's address-bearing text (PO, handwritten note, ship-to, job name).
+// Each text is scored on its own and the best score counts, so the PO keeps its old weight.
+function matchReceiptCandidates(texts, properties, units, workorders) {
+  const list = (Array.isArray(texts) ? texts : [texts]).map(_rcNorm).filter(Boolean);
+  if (!list.length) return [];
+  const kids = {};
+  for (const u of (units || [])) if (u && u.Property_ID != null && String(u.Property_ID) !== '') kids[String(u.Property_ID)] = true;
+  for (const w of (workorders || [])) if (w && w.Property_ID != null && String(w.Property_ID) !== '') kids[String(w.Property_ID)] = true;
+  const useKids = !!((units && units.length) || (workorders && workorders.length));
+  const out = [];
   for (const p of (properties || [])) {
+    if (!_rcPropActive(p)) continue;
     const a = _rcNorm(p.Address); if (!a) continue;
     const at = new Set(a.split(' '));
-    let sc = 0; for (const t of nt) { if (t.length > 1 && at.has(t)) sc += /^\d+$/.test(t) ? 2 : 1; }
-    if (sc > bestScore) { bestScore = sc; best = p; }
+    let best = 0;
+    for (const n of list) { let sc = 0; for (const t of n.split(' ')) { if (t.length > 1 && at.has(t)) sc += /^\d+$/.test(t) ? 2 : 1; } if (sc > best) best = sc; }
+    if (best >= 2) out.push({ property: p, score: best, kids: kids[String(p.ID)] ? 1 : 0 });
   }
-  return bestScore >= 2 ? { property: best, score: bestScore } : null;
+  out.sort((x, y) => (y.score - x.score) || (useKids ? (y.kids - x.kids) : 0) || ((Number(x.property.ID) || 0) - (Number(y.property.ID) || 0)));
+  return out.slice(0, 3).map(o => ({ property: o.property, score: o.score }));
+}
+function matchReceiptProperty(po, properties, units, workorders) {
+  const c = matchReceiptCandidates([po], properties, units, workorders);
+  return c.length ? c[0] : null;
+}
+
+// PURE — unit label -> comparison key ("Apt 2R" / "unit 2r" / "#2R" all become "2r"; Bsmt = basement).
+function _rcUnitKey(s) {
+  let k = _rcNorm(s).replace(/^(apartment|apt|unit|suite|ste|no|number)\s+/, '');
+  if (k === 'bsmt') k = 'basement';
+  return k;
+}
+// PURE — which unit of an already-resolved property do the receipt's texts point to? Returns
+// { id, label, source } or null. Sources: marker (apt/unit/ste N), hash (#N), word (basement, carriage house),
+// after_address (a bare token right after the street address). Never guesses: no hit means null.
+function receiptUnitHint(texts, property, units) {
+  if (!property) return null;
+  const mine = (units || []).filter(u => u && String(u.Property_ID) === String(property.ID) && String(u.Active != null ? u.Active : '').toUpperCase() !== 'FALSE');
+  if (!mine.length) return null;
+  const keyed = mine.map(u => ({ u, k: _rcUnitKey(u.Unit_Label || u.Label || u.Unit || u.Name || '') })).filter(x => x.k);
+  const blob = (Array.isArray(texts) ? texts : [texts]).map(t => String(t == null ? '' : t)).join(' | ').toLowerCase();
+  const cands = [];
+  for (const m of blob.matchAll(/\b(?:apt|apartment|unit|ste|suite)\.?\s*#?\s*([a-z0-9]{1,4})\b/g)) cands.push({ tok: _rcUnitKey(m[1]), source: 'marker' });
+  for (const m of blob.matchAll(/#\s*([a-z0-9]{1,4})\b/g)) cands.push({ tok: _rcUnitKey(m[1]), source: 'hash' });
+  if (/\b(?:bsmt|basement)\b/.test(blob)) cands.push({ tok: 'basement', source: 'word' });
+  if (/\bcarriage\s*house\b/.test(blob)) cands.push({ tok: 'carriage house', source: 'word' });
+  const addr = new Set(_rcNorm(property.Address).split(' '));
+  for (const text of String(blob).split('|')) {
+    const toks = _rcNorm(text).split(' ');
+    let last = -1; toks.forEach((t, i) => { if (addr.has(t) && t.length > 1) last = i; });
+    if (last >= 0 && toks[last + 1]) cands.push({ tok: _rcUnitKey(toks[last + 1]), source: 'after_address' });
+  }
+  for (const c of cands) {
+    const hit = keyed.find(x => x.k === c.tok);
+    if (hit) return { id: String(hit.u.ID), label: String(hit.u.Unit_Label || hit.u.Label || hit.u.Unit || hit.u.Name || ''), source: c.source };
+  }
+  return null;
+}
+
+// PURE — read a work order reference out of the receipt text. "WO-1220" / "WO 1220" / "work order 1220" is explicit and
+// beats any address match. A bare 4-digit number that is BOTH an existing work order number AND the house number of an
+// active property is ambiguous ("po 1220" = WO-1220 or 1220 Anywhere St): both candidates come back, nothing is picked.
+// Each candidate says whether the WO was open on the receipt date, which is a hint for the person, never a decision.
+function _rcWoNum(id) { return String(id == null ? '' : id).replace(/\D/g, ''); }
+function _rcWoOpenOn(w, date) {
+  const d = Date.parse(String(date || '') + 'T00:00:00Z'); if (isNaN(d)) return null;
+  const made = Date.parse(String(w.Created_Date || w.Created || '').slice(0, 10) + 'T00:00:00Z');
+  const done = Date.parse(String(w.Completed_Date || w.Completed_At || '').slice(0, 10) + 'T00:00:00Z');
+  if (!isNaN(made) && d < made) return false;
+  if (!isNaN(done) && d > done) return false;
+  return true;
+}
+function receiptWORef(texts, properties, workorders, receiptDate) {
+  const blob = (Array.isArray(texts) ? texts : [texts]).map(t => String(t == null ? '' : t)).join(' | ');
+  const wos = workorders || [];
+  const byNum = n => wos.find(w => _rcWoNum(w.ID) === n);
+  const ex = blob.match(/\b(?:wo|work\s*order)\s*[#:\-]?\s*(\d{3,5})\b/i);
+  if (ex) {
+    const w = byNum(ex[1]);
+    return w ? { confidence: 'explicit', wo: w, candidates: [] } : { confidence: 'explicit_unknown', number: ex[1], candidates: [] };
+  }
+  const nums = Array.from(new Set(blob.match(/\b\d{4}\b/g) || []));
+  const cands = []; let ambiguous = false; let bare = null;
+  for (const t of nums) {
+    const n = Number(t); if (n < 1000 || n > 9999) continue;
+    const w = byNum(t);
+    const props = (properties || []).filter(p => { if (!_rcPropActive(p)) return false; const m = String(p.Address || '').trim().match(/^(\d+)/); return !!m && m[1] === t; });
+    if (w && props.length) {
+      ambiguous = true;
+      cands.push({ type: 'wo', wo_id: String(w.ID), property_id: String(w.Property_ID || ''), unit_id: String(w.Unit_ID || ''), status: w.Status, open_on_receipt_date: _rcWoOpenOn(w, receiptDate) });
+      for (const p of props) cands.push({ type: 'property', property_id: String(p.ID), address: String(p.Address || '') });
+    } else if (w && !bare) { bare = w; }
+  }
+  if (ambiguous) return { confidence: 'ambiguous', candidates: cands };
+  if (bare) return { confidence: 'bare', wo: bare, candidates: [] };
+  return null;
+}
+
+// PURE — everything the receipt text says about WHERE it belongs: ranked property guesses, a unit, a WO reference.
+// Computed BEFORE the company / customer-card early returns so a business-expense card still carries the candidates.
+function receiptPropertyHint(texts, properties, units, workorders, receiptDate) {
+  const ref = receiptWORef(texts, properties, workorders, receiptDate);
+  let cands = matchReceiptCandidates(texts, properties, units, workorders);
+  let property = cands.length ? cands[0].property : null;
+  let unit = null, wo = null;
+  const ambiguous = !!(ref && ref.confidence === 'ambiguous');
+  if (ref && ref.wo && (ref.confidence === 'explicit' || ref.confidence === 'bare')) {
+    wo = ref.wo;
+    const wp = (properties || []).find(p => String(p.ID) === String(ref.wo.Property_ID));
+    if (wp && _rcPropActive(wp) && ref.confidence === 'explicit') { property = wp; if (!cands.some(c => String(c.property.ID) === String(wp.ID))) cands = [{ property: wp, score: 99 }].concat(cands).slice(0, 3); }
+    if (ref.wo.Unit_ID) { const u = (units || []).find(x => String(x.ID) === String(ref.wo.Unit_ID)); if (u && ref.confidence === 'explicit') unit = { id: String(u.ID), label: String(u.Unit_Label || u.Label || u.Unit || u.Name || ''), source: 'wo' }; }
+  }
+  if (!unit && property && !ambiguous) unit = receiptUnitHint(texts, property, units);
+  return { property: ambiguous ? null : property, candidates: cands, unit, wo_ref: ref, po_ambiguous: ambiguous };
 }
 
 const RECEIPT_OPEN_STATUSES = WOStatus.sets.ACTIVE;
@@ -3506,19 +3613,115 @@ const RECEIPT_STOP = new Set(['the','and','for','with','apt','ste','unit','stree
 // PURE — rank a property's work orders by keyword overlap between the receipt (items + PO) and each
 // WO's description/trade. Only OPEN work orders are returned (a receipt can only be billed onto work
 // that hasn't been invoiced yet); each carries its status so the caller can flag Invoiced/Paid.
-function rankReceiptWOs(receipt, wos) {
+// Nov 17 2026 (brief 4a / Q9): when opts.receiptDate is given, work orders that CLOSED (Complete..Paid, never
+// Cancelled/Declined) within 30 days of the receipt date are returned too, tagged closed_recent, ranked below every
+// open one. A closed WO with no completed date is left out (it cannot be shown to be recent).
+const RECEIPT_CLOSED_WINDOW_DAYS = 30;
+function rankReceiptWOs(receipt, wos, opts) {
   // Rank on the ITEM keywords only — NOT the PO/address. The property is already resolved, so
   // letting address tokens ("3014","calvert") score would wrongly favor whichever WO's description
   // repeats the address over the WO that actually matches the materials (caught in live testing).
   const blob = _rcNorm(Array.isArray(receipt.items) ? receipt.items.join(' ') : (receipt.items||''));
   const kw = Array.from(new Set(blob.split(' ').filter(w => w.length >= 3 && !RECEIPT_STOP.has(w))));
+  const rd = Date.parse(String((opts && opts.receiptDate) || '').slice(0, 10) + 'T00:00:00Z');
+  const closedRecent = w => {
+    if (isNaN(rd) || RECEIPT_OPEN_STATUSES.includes(w.Status) || !WOStatus.sets.COMPLETE_OR_LATER.includes(w.Status)) return false;
+    const done = Date.parse(String(w.Completed_Date || w.Completed_At || '').slice(0, 10) + 'T00:00:00Z');
+    return !isNaN(done) && Math.abs(rd - done) / 86400000 <= RECEIPT_CLOSED_WINDOW_DAYS;
+  };
   return (wos || []).map(w => {
     const desc = _rcNorm((w.Description||'') + ' ' + (w.Trade||''));
     let score = 0; for (const k of kw) if (desc.indexOf(k) >= 0) score++;
+    const open = RECEIPT_OPEN_STATUSES.includes(w.Status);
     return { id: String(w.ID), status: w.Status, trade: w.Trade||'', unit: String(w.Unit_ID||''),
              desc: String(w.Description||'').replace(/\s+/g,' ').slice(0, 70), score,
-             open: RECEIPT_OPEN_STATUSES.includes(w.Status) };
-  }).filter(w => w.open).sort((a,b) => b.score - a.score || String(a.id).localeCompare(String(b.id)));
+             open, closed_recent: !open && closedRecent(w) };
+  }).filter(w => w.open || w.closed_recent).sort((a,b) => (b.open - a.open) || b.score - a.score || String(a.id).localeCompare(String(b.id)));
+}
+
+// PURE — card status for one receipt: 'mine' | 'customer' | 'unknown' | 'not_read' (fewer than 4 digits were read).
+// A last-4 on neither list is UNKNOWN, never guessed (brief 4b). Customer wins if a number is on both lists.
+function receiptCardStatus(card, myCards, custCards) {
+  const c = String(card == null ? '' : card).replace(/\D/g, '');
+  if (c.length < 4) return 'not_read';
+  const l4 = c.slice(-4);
+  if ((custCards || []).includes(l4)) return 'customer';
+  if ((myCards || []).includes(l4)) return 'mine';
+  return 'unknown';
+}
+// PURE — a card number is stored only as exactly four digits. Returns the 4 digits, or '' when the input is anything else.
+function receiptCardLast4Strict(v) { const s = String(v == null ? '' : v).trim(); return /^\d{4}$/.test(s) ? s : ''; }
+
+// PURE — vendor-invoice name list (brief 4d). Returns the list entry that matched (normalized contains-match on whole
+// words), or null. These vendors send INVOICES, which belong in Who To Pay, never in the receipt queue.
+const RECEIPT_VENDOR_INVOICE_NAMES_DEFAULT = ['alex busey', 'k&c cleaning', 'kayla', 'regina saville'];
+function receiptIsVendorInvoice(vendor, names) {
+  const v = ' ' + _rcNorm(vendor) + ' '; if (v.trim() === '') return null;
+  for (const n of (names || [])) { const k = _rcNorm(n); if (k && v.indexOf(' ' + k + ' ') >= 0) return n; }
+  return null;
+}
+
+// PURE — duplicate signals (brief 4c). A candidate {total, date, store, invoice} is compared with Receipts AND with every
+// Receipt_Recon_Queue row except itself (any status, pending included). A signal fires when:
+//   (a) same amount to the cent AND the dates are within 3 days AND the stores match after noise words are dropped, or
+//   (b) the same non-empty vendor receipt/invoice number AND the same amount.
+// Flags only: the caller never skips or deletes on a signal. Refunds (zero or negative) are never compared.
+function _rcStoreKey(s) {
+  const n = _rcNorm(s);
+  const k = n.replace(/\b(?:the|inc|llc|co|corp|stores?|number|no)\b/g, ' ').replace(/\b\d+\b/g, ' ').replace(/\s+/g, ' ').trim();
+  return k || n;
+}
+function _rcInvKey(s) { const k = String(s == null ? '' : s).toLowerCase().replace(/[^a-z0-9]/g, ''); return k.length >= 4 ? k : ''; }
+function receiptDupSignals(cand, receipts, queueRows, opts) {
+  opts = opts || {};
+  const amt = (Number(cand && cand.total) || 0).toFixed(2);
+  if (!(Number(amt) > 0)) return [];
+  const date = Date.parse(String((cand && cand.date) || '').slice(0, 10) + 'T00:00:00Z');
+  const st = _rcStoreKey(cand && cand.store), inv = _rcInvKey(cand && cand.invoice);
+  const near = d => { const t = Date.parse(String(d || '').slice(0, 10) + 'T00:00:00Z'); return !isNaN(date) && !isNaN(t) && Math.abs(date - t) / 86400000 <= 3; };
+  const out = [];
+  const consider = (kind, id, status, a, d, store, invoice, extra) => {
+    if ((Number(a) || 0).toFixed(2) !== amt) return;
+    const byInv = !!inv && _rcInvKey(invoice) === inv;
+    const byFuzzy = near(d) && !!st && _rcStoreKey(store) === st;
+    if (!byInv && !byFuzzy) return;
+    const label = kind === 'receipt' ? `receipt #${id}${extra.wo_id ? ' (WO ' + extra.wo_id + ')' : ''}` : `queue entry #${id} (${String(status || 'pending').replace(/_/g, ' ')})`;
+    out.push(Object.assign({ type: kind === 'receipt' ? 'receipts' : (status && status !== 'pending' ? 'queue_dispositioned' : 'other_queue_row'),
+      by: byInv ? 'invoice_number' : 'amount_date_store', date: d, amount: a, store, status: status || '',
+      reason: `Possible duplicate of ${label}: $${(Number(a) || 0).toFixed(2)} at ${store || 'that store'} on ${d || 'an unknown date'}${byInv ? ' (same invoice/receipt number)' : ''}.` }, extra));
+  };
+  for (const r of (receipts || [])) { if (r && r.Active !== 'FALSE') consider('receipt', r.ID, '', r.Amount, r.Date, r.Store, '', { receipt_id: r.ID, wo_id: r.WO_ID || '' }); }
+  for (const r of (queueRows || [])) {
+    if (!r || String(r.Active || '').toUpperCase() === 'FALSE') continue;
+    if (opts.selfQueueId != null && String(r.ID) === String(opts.selfQueueId)) continue;
+    consider('queue', r.ID, r.Status || 'pending', r.Total, r.Receipt_Date, r.Vendor, r.Invoice_Number, { queue_id: r.ID });
+  }
+  return out;
+}
+
+// PURE — "Always" rules (brief 4e). Rules: [{ID, Match_Vendor, Min_Amount, Max_Amount, Action: business|property, Property_ID,
+// Unit_ID, Description, Auto, Active}]. The first ACTIVE rule whose vendor words match and whose amount range holds wins.
+// `auto` is true only when the rule is Auto=TRUE and none of the safety guards trips (customer card, refund, a duplicate
+// flag, receipt before the cutoff, a vendor invoice). A blocked rule still comes back, so the card can pre-select it.
+function receiptRuleDecision(row, rules) {
+  const v = ' ' + _rcNorm(row && row.vendor) + ' ';
+  const amt = Number(row && row.total) || 0;
+  for (const r of (rules || [])) {
+    if (!r || String(r.Active == null ? 'TRUE' : r.Active).toUpperCase() === 'FALSE') continue;
+    const k = _rcNorm(r.Match_Vendor); if (!k || v.indexOf(' ' + k + ' ') < 0) continue;
+    const lo = r.Min_Amount === '' || r.Min_Amount == null ? null : Number(r.Min_Amount);
+    const hi = r.Max_Amount === '' || r.Max_Amount == null ? null : Number(r.Max_Amount);
+    if ((lo != null && isFinite(lo) && amt < lo) || (hi != null && isFinite(hi) && amt > hi)) continue;
+    const blocked = [];
+    if (row.card_status === 'customer' || row.category === 'customer_paid') blocked.push('customer_card');
+    if (row.category === 'refund' || amt <= 0) blocked.push('refund');
+    if (row.duplicate) blocked.push('duplicate_flag');
+    if (row.too_old) blocked.push('before_cutoff');
+    if (row.category === 'vendor_invoice') blocked.push('vendor_invoice');
+    const auto = String(r.Auto || '').toUpperCase() === 'TRUE' && !blocked.length;
+    return { rule: r, auto, blocked };
+  }
+  return null;
 }
 
 // PURE — a receipt is a DUPLICATE if the same WO already carries an active receipt with the same
@@ -3631,7 +3834,11 @@ function qbInvoiceCandidatesByDate(invoices, date, windowDays) {
 // already-fetched tabs, decides category/action. Factored out of receiptSuggest() so the SAME
 // logic drives both the interactive POST /receipt/suggest endpoint and the bulk cron scan
 // (receiptReconScan) below — one source of truth, and fully unit-testable with no live Sheets.
-function receiptSuggestCore(input, properties, workorders, receipts, custCards) {
+// Nov 17 2026 (brief 4a-4d): optional 6th argument ctx = { units, myCards, vendorInvoiceNames }. Without it the function
+// behaves as before (no card-status flags, no vendor-invoice exclusion); with it a business-expense or customer-card
+// result still carries `property_hint` so the card can offer property / unit / WO pickers.
+function receiptSuggestCore(input, properties, workorders, receipts, custCards, ctx) {
+  ctx = ctx || {};
   const po = String(input.po || '').trim();
   let total = Number(input.total) || 0;
   const date = String(input.date || '').trim();
@@ -3655,26 +3862,54 @@ function receiptSuggestCore(input, properties, workorders, receipts, custCards) 
       po, total, store, date, items,
     };
   }
-  if (/\bbmore\b/i.test(po) || /\bbmore\b/i.test(String(input.customer_name||''))) return { ok: true, category: 'company', action: 'exclude', reason: 'PO "bmore" = company expense, not customer-billable.', po, total };
-  if (card && cc.includes(card)) return { ok: true, category: 'customer_paid', action: 'exclude', reason: `Paid on a customer card (…${card}).`, po, total };
+  // Vendor invoices (Alex Busey, K&C Cleaning...) are invoices, not receipts: out of the queue, restorable (brief 4d).
+  const vInv = receiptIsVendorInvoice(store, ctx.vendorInvoiceNames);
+  if (vInv) return { ok: true, category: 'vendor_invoice', action: 'exclude', reason: 'Vendor invoice (' + vInv + '): belongs in Who To Pay, not receipts.', po, total, store, date, vendor_match: vInv };
 
-  const m = matchReceiptProperty(po, properties);
-  if (!m) return { ok: true, category: 'billable', action: 'need_property', reason: 'Could not resolve a property from the PO — assign manually.', po, total, store, date };
+  // Everything the text says about where this belongs, computed BEFORE the early returns below (brief 4a).
+  const texts = [po, input.handwritten_note, input.ship_to_address, input.job_name].filter(t => String(t || '').trim());
+  const hint = receiptPropertyHint(texts, properties, ctx.units, workorders, date);
+  const slimHint = {
+    property: hint.property ? { id: String(hint.property.ID), address: hint.property.Address } : null,
+    candidates: hint.candidates.map(c => ({ id: String(c.property.ID), address: c.property.Address, score: c.score })),
+    unit: hint.unit, wo_ref: hint.wo_ref ? { confidence: hint.wo_ref.confidence, wo_id: hint.wo_ref.wo ? String(hint.wo_ref.wo.ID) : (hint.wo_ref.number ? 'WO-' + hint.wo_ref.number : ''), candidates: hint.wo_ref.candidates || [] } : null,
+  };
+  const cflags = [];
+  let card_status;
+  if (ctx.myCards !== undefined) {
+    card_status = receiptCardStatus(card, ctx.myCards, cc);
+    if (card_status === 'unknown') cflags.push('card_unknown');
+    if (card_status === 'not_read') cflags.push('card_not_read');
+  }
+  if (hint.po_ambiguous) cflags.push('po_ambiguous');
+  const isBmore = /\bbmore\b/i.test(po) || /\bbmore\b/i.test(String(input.customer_name||''));
+  if (isBmore) return { ok: true, category: 'company', action: 'exclude', reason: 'PO "bmore" = company expense, not customer-billable.', po, total, store, date, property_hint: slimHint, card_status, flags: cflags.concat(card && cc.includes(card) ? ['card_conflict'] : []) };
+  if (card && cc.includes(card)) return { ok: true, category: 'customer_paid', action: 'exclude', reason: `Paid on a customer card (…${card}).`, po, total, store, date, property_hint: slimHint, card_status: card_status || 'customer', flags: cflags };
+
+  // An ambiguous bare number ("po 1220": WO-1220 or 1220 Anywhere St) is never picked silently.
+  if (hint.po_ambiguous) return { ok: true, category: 'billable', action: 'need_property', reason: 'The PO number could be a work order or a house number: pick one.', po, total, store, date, property_hint: slimHint, card_status, flags: cflags };
+
+  const m = hint.property ? { property: hint.property, score: (hint.candidates[0] && hint.candidates[0].score) || 0 } : null;
+  if (!m) return { ok: true, category: 'billable', action: 'need_property', reason: 'Could not resolve a property from the PO — assign manually.', po, total, store, date, property_hint: slimHint, card_status, flags: cflags };
   const pid = String(m.property.ID);
   const propWos = (workorders || []).filter(w => String(w.Property_ID) === pid);
-  const ranked = rankReceiptWOs({ items, po }, propWos);
-  const top = ranked[0] || null;
-  const flags = [];
+  const ranked = rankReceiptWOs({ items, po }, propWos, { receiptDate: date });
+  const openRanked = ranked.filter(w => w.open);
+  const explicit = hint.wo_ref && hint.wo_ref.wo && hint.wo_ref.confidence === 'explicit' ? ranked.find(w => w.id === String(hint.wo_ref.wo.ID)) : null;
+  const top = explicit || openRanked[0] || null;
+  const flags = cflags.slice();
   if (top && receiptIsDuplicate(receipts, top.id, total, date, store)) flags.push('duplicate_on_wo');
   if (top && WOStatus.sets.INVOICED_OR_PAYMENT.includes(top.status)) flags.push('wo_already_invoiced');
-  if (!ranked.length) flags.push('no_open_wo');
+  if (!openRanked.length) flags.push('no_open_wo');
   return {
     ok: true, category: 'billable',
     action: flags.includes('duplicate_on_wo') ? 'skip_duplicate' : (top ? 'suggest' : 'need_wo'),
     po, total, store, date,
     property: { id: pid, address: m.property.Address, match_score: m.score },
+    unit: hint.unit,
     suggested_wo: top ? { id: top.id, status: top.status, trade: top.trade, desc: top.desc, keyword_score: top.score } : null,
-    alternates: ranked.slice(1, 4),
+    alternates: ranked.filter(w => !top || w.id !== top.id).slice(0, 4),
+    property_hint: slimHint, card_status,
     flags,
   };
 }
