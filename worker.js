@@ -5079,16 +5079,21 @@ async function voidConfirmedReceiptForQueueRow(env, row, noteTag) {
   await ensureColumns(env, 'Receipt_Recon_Queue', ['Confirmed_Receipt_ID', 'Manual_Refund']);
   const original = await findReceiptForQueueRow(env, row);
   if (!original) return { error: 'Could not find the original Receipts row for this confirmation — nothing was changed. Check the Receipts tab directly.', status: 404 };
-  if (String(original.QB_Email_Sent || '').toUpperCase() === 'TRUE') {
-    return { error: `This receipt was already emailed to QuickBooks on ${String(original.QB_Email_Sent_Date || '').slice(0, 10)} — fix it in QuickBooks directly rather than here (${noteTag === 'undone' ? 'undoing' : 'reversing'} it here would leave QuickBooks out of sync).`, status: 409 };
+  // Nov 17 2026 (Brett): a receipt already emailed to QuickBooks can be reversed. The Hub side is voided exactly as before; QuickBooks has no delete-by-API here, so the
+  // caller gets qb_delete_needed (what to delete by hand). QB_Email_Sent history is kept, QB_Reversed_Date records it, and the voided row never blocks a resend
+  // because a corrected re-confirm writes a NEW Receipts row. Only a receipt claimed by a sender right now is refused (its email may be in flight).
+  if (qbBatchStatus(original) === 'sending') {
+    return { error: 'That receipt is being emailed to QuickBooks right now (or a send was interrupted). Open "Waiting to send to QuickBooks", release it or mark it sent, then try again.', status: 409 };
   }
-  await updateRow(env, 'Receipts', original.ID, {
+  const wasSent = String(original.QB_Email_Sent || '').toUpperCase() === 'TRUE';
+  if (wasSent) await ensureColumns(env, 'Receipts', QB_BATCH_COLS);
+  await updateRow(env, 'Receipts', original.ID, Object.assign({
     Active: 'FALSE',
-    Description: (original.Description || '') + ` [${noteTag} ${new Date().toISOString().slice(0, 10)} — pulled back into Receipt Reconciler for reversal]`,
-  });
+    Description: (original.Description || '') + ` [${noteTag} ${new Date().toISOString().slice(0, 10)} — pulled back into Receipt Reconciler for reversal` + (wasSent ? '; it was already emailed to QuickBooks, delete that entry by hand' : '') + ']',
+  }, wasSent ? { QB_Reversed_Date: new Date().toISOString(), QB_Delete_Confirmed: 'FALSE' } : {}));
   const invoiceUnlink = await removeReceiptFromInvoiceReview(env, { receipt_id: original.ID, amount: Number(original.Amount || row.Confirmed_Amount || 0) });
   const attachmentVoid = await voidAttachmentForReceipt(env, original.ID);
-  return { voidedId: original.ID, invoiceUnlink, attachmentVoid };
+  return { voidedId: original.ID, invoiceUnlink, attachmentVoid, qbDeleteNeeded: wasSent ? qbDeleteNeeded(original, row.ID) : null };
 }
 
 // POST /receipt-recon/reassign { id, wo_id?, property_id, amount?, description?, store?, date? }
