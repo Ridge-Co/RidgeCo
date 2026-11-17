@@ -15591,7 +15591,7 @@ async function addWONote(env, body) {
         const noteAddr = noteWOProp ? noteWOProp.Address : wo.Property_ID;
         await sendSMS(env, config.admin_phone, `💬 ${body.author||'A tenant'} left a note on ${body.wo_id} (${noteAddr}): "${noteText}"`);
       }
-    } catch (e) { /* non-fatal — note already saved */ }
+    } catch (e) { await softFail(env, 'addWONote:adminText', e, { severity: 'P1', ref: String(body.wo_id), source: 'send', context: 'a tenant note was saved but the text to Brett about it did not go out' }); }   // the note itself is already saved, so this stays non-fatal
   }
 
   if (body.notify_owner_status_note === true) {
