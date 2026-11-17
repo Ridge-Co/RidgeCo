@@ -416,11 +416,12 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
 
 // ───────────────────────── cron wrapper: an unexpected throw is logged + alerted, never propagated ─────────────────────────
 {
-  const log = { tel: [], alerts: [] };
-  const mk = (runImpl, telFails, alertFails) => new Function('runDoorWatchdogPass', 'logTelemetry', 'alertAdminOnFailure', 'DOOR_WD_JOB',
+  const log = { tel: [], alerts: [], fails: [] };
+  const mk = (runImpl, telFails, alertFails) => new Function('runDoorWatchdogPass', 'logTelemetry', 'alertAdminOnFailure', 'DOOR_WD_JOB', 'softFail',
     'return (' + src.slice(src.indexOf('async function doorWatchdogCron('), src.indexOf('// GET /watchdog/door-system - read-only')).trim() + ');')(runImpl,
     async (env, rec) => { if (telFails) throw new Error('tel down'); log.tel.push(rec); },
-    async (env, job, msg) => { if (alertFails) throw new Error('alert down'); log.alerts.push([job, msg]); }, 'door_watchdog');
+    async (env, job, msg) => { if (alertFails) throw new Error('alert down'); log.alerts.push([job, msg]); }, 'door_watchdog',
+    async (env, where, err, opts) => { log.fails.push({ where, severity: opts && opts.severity }); return { ok: false }; });   // Phase 2: the wrapper now reports its own secondary failures
   const restore = logsOff();
   let threw = false;
   try { await mk(async () => { throw new Error('kaboom'); }, false, false)({}); } catch (e) { threw = true; }
