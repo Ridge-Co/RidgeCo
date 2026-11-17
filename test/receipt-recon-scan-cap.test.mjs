@@ -35,6 +35,7 @@ function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
   const queue = [];
   const files = Array.from({ length: nFiles }, (_, k) => ({ id: 'f' + k, name: 'r' + k + '.pdf', mimeType: 'application/pdf', webViewLink: '' }));
   let downloads = 0, cur = null;
+  const reports = [];
   const deps = {
     fetchConfig: async () => cfg,
     getAccessToken: async () => 'tok',
@@ -54,22 +55,28 @@ function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
     addRow: async (env, tab, row) => { queue.push(row); return { json: async () => ({ success: true, id: String(queue.length) }) }; },
     setConfigKey: async (env, { key, value }) => { cfg[key] = value; },
     json: (o) => o,
+    // Nov 17 2026 (PR #583): the scan files errored files in the Hub failure ledger. Fake ledger records every report.
+    reportFailure: async (env, f) => { reports.push(f); },
+    failTrim: new Function(extractSync('failTrim') + '; return failTrim;')(),   // the REAL trimmer
     ...helpers,
     RECEIPT_RECON_QUEUE_HEADERS: [], RECEIPT_RECON_FOLDER_ID_DEFAULT: 'FOLDER',
   };
   const names = Object.keys(deps);
   const fn = new Function(...names, aiCreditGuardPrelude() + `return (${extractFn('receiptReconScan')});`)(...names.map(n => deps[n]));
-  return { scan: (b) => fn({}, b), queue, get downloads() { return downloads; } };
+  return { scan: (b) => fn({}, b), queue, reports, get downloads() { return downloads; } };
 }
 
 {
   const w = world(23);
   const r1 = await w.scan({});
   ok(r1.scanned === 8 && r1.remaining === 15, `Hub tap 1: 8 scanned, 15 remaining (got ${r1.scanned}/${r1.remaining})`);
+  ok(r1.more_waiting === 15 && Array.isArray(r1.error_files) && r1.error_files.length === 0 && Array.isArray(r1.stuck_files) && r1.stuck_files.length === 0, 'tap 1: more_waiting mirrors remaining (15); error_files and stuck_files are empty arrays');
   const r2 = await w.scan({});
   ok(r2.scanned === 8 && r2.remaining === 7, 'Hub tap 2: next 8, 7 remaining');
   const r3 = await w.scan({});
   ok(r3.scanned === 7 && r3.remaining === 0, 'Hub tap 3: last 7, 0 remaining');
+  ok(r2.more_waiting === 7 && r3.more_waiting === 0, 'more_waiting follows remaining on later taps (7, then 0)');
+  ok(w.reports.length === 0, 'a clean scan files nothing in the failure ledger');
   const r4 = await w.scan({});
   ok(r4.scanned === 0 && r4.remaining === 0, 'tap 4: nothing new');
   ok(w.queue.length === 23 && new Set(w.queue.map(q => q.Source_File_ID)).size === 23, 'all 23 queued exactly once');
@@ -96,11 +103,17 @@ function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
   const w = world(3, cfg);
   let r = await w.scan({});
   ok(r.scanned === 2 && r.errors.length === 1 && r.stuck.length === 0, 'bad file: attempt 1 errors, others still scanned');
+  ok(r.error_files.length === 1 && r.error_files[0].id === 'f0' && r.error_files[0].name === 'r0.pdf' && r.error_files[0].attempts === 1 && /Could not process image/.test(r.error_files[0].error), 'error_files names the failed file with its Drive id, attempt number and reason');
+  ok(r.stuck_files.length === 0 && r.more_waiting === 0, 'attempt 1: stuck_files empty, more_waiting 0');
+  ok(w.reports.length === 1 && w.reports[0].severity === 'P2' && w.reports[0].where === 'receipt_recon_scan_files' && /r0\.pdf/.test(w.reports[0].message), 'first failure is filed to the ledger at P2 and names the file');
   r = await w.scan({}); r = await w.scan({});
   ok(r.stuck.length === 1 && r.stuck[0] === 'r0.pdf', 'after 3 failed attempts it is reported as stuck');
+  ok(r.stuck_files.length === 1 && r.stuck_files[0].id === 'f0' && r.stuck_files[0].name === 'r0.pdf' && r.stuck_files[0].attempts === 3, 'stuck_files carries id, name and attempts');
+  ok(w.reports.length === 3 && w.reports[2].severity === 'P1', 'the third failure (file now stuck) is filed at P1');
   const before = w.downloads;
   r = await w.scan({});
   ok(w.downloads === before && r.scanned === 0 && r.errors === undefined && r.stuck.length === 1, '4th scan does not touch it again (no wasted OCR call)');
+  ok(w.reports.length === 3, '4th scan files no new ledger report (nothing errored)');
   ok(JSON.parse(cfg.receipt_recon_failures).f0.attempts === 3, 'failure count kept in Config');
 }
 {
