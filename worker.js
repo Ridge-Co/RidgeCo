@@ -6128,7 +6128,7 @@ async function woPushToScope(env, body) {
   }
 
   const finalItems = existingItems.concat(mappedItems);
-  let srcs = []; try { srcs = JSON.parse((targetScope && targetScope.Source_Refs) || '[]'); } catch (_) {}
+  let srcs = []; try { srcs = JSON.parse((targetScope && targetScope.Source_Refs) || '[]'); } catch (e) { await softFail(env, 'woPushToScope:sourceRefs', e, { severity: 'P2', ref: String(scopeId), source: 'parse', context: 'the Scope history of pushed estimates was unreadable and restarts from this push' }); }
   srcs.push({ type: 'estimate', estimate_id: estimate.ID, version: estimate.Version, wo_id: woId, ts: new Date().toISOString() });
   try {
     await updateRow(env, 'Scopes', scopeId, {
