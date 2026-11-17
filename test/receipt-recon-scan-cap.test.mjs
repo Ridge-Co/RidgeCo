@@ -103,11 +103,17 @@ function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
   const w = world(3, cfg);
   let r = await w.scan({});
   ok(r.scanned === 2 && r.errors.length === 1 && r.stuck.length === 0, 'bad file: attempt 1 errors, others still scanned');
+  ok(r.error_files.length === 1 && r.error_files[0].id === 'f0' && r.error_files[0].name === 'r0.pdf' && r.error_files[0].attempts === 1 && /Could not process image/.test(r.error_files[0].error), 'error_files names the failed file with its Drive id, attempt number and reason');
+  ok(r.stuck_files.length === 0 && r.more_waiting === 0, 'attempt 1: stuck_files empty, more_waiting 0');
+  ok(w.reports.length === 1 && w.reports[0].severity === 'P2' && w.reports[0].where === 'receipt_recon_scan_files' && /r0\.pdf/.test(w.reports[0].message), 'first failure is filed to the ledger at P2 and names the file');
   r = await w.scan({}); r = await w.scan({});
   ok(r.stuck.length === 1 && r.stuck[0] === 'r0.pdf', 'after 3 failed attempts it is reported as stuck');
+  ok(r.stuck_files.length === 1 && r.stuck_files[0].id === 'f0' && r.stuck_files[0].name === 'r0.pdf' && r.stuck_files[0].attempts === 3, 'stuck_files carries id, name and attempts');
+  ok(w.reports.length === 3 && w.reports[2].severity === 'P1', 'the third failure (file now stuck) is filed at P1');
   const before = w.downloads;
   r = await w.scan({});
   ok(w.downloads === before && r.scanned === 0 && r.errors === undefined && r.stuck.length === 1, '4th scan does not touch it again (no wasted OCR call)');
+  ok(w.reports.length === 3, '4th scan files no new ledger report (nothing errored)');
   ok(JSON.parse(cfg.receipt_recon_failures).f0.attempts === 3, 'failure count kept in Config');
 }
 {
