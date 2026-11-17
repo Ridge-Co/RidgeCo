@@ -1,0 +1,42 @@
+# Skill scan (Nov 16 2026). Runs scripts/skill-scan.sh on every pull request that touches .claude/skills:
+# NVIDIA SkillSpector (Apache-2.0), static mode only (no model calls, no keys), pinned to one commit.
+# Fails the check only for findings NOT already reviewed in .github/skillspector-baseline.yaml.
+# The script also proves the scanner still catches a bad sample before it trusts a pass, so a broken scanner cannot go quiet.
+# pull_request trigger ONLY. No timer and no cron, ever (CLAUDE.md "NO CRON ANYWHERE"). Read-only: nothing here can write to the repo.
+name: Skill scan
+on:
+  pull_request:
+    branches: [main, staging]
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.claude/skills/**'
+      - '.github/skillspector-baseline.yaml'
+      - 'scripts/skill-scan.sh'
+      - '.github/workflows/skill-scan.yml'
+concurrency:
+  group: skill-scan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  skill-scan:
+    name: Skill scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install SkillSpector (pinned commit)
+        run: pip install "git+https://github.com/NVIDIA/SkillSpector.git@a09091e0ebf6c96ff327457529d7b0d372125884"
+      - name: Scan the skills
+        run: bash scripts/skill-scan.sh
+      - name: Keep the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-scan-report
+          path: skill-scan-out/
+          if-no-files-found: ignore
+          retention-days: 14

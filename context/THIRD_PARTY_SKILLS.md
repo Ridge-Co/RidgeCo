@@ -77,5 +77,6 @@ No file tried to send data anywhere by itself, read credentials, or tell the ses
 5. Bring over only what is wanted, by hand, into the existing trimmed files. Keep the "From ... at <commit>" line at the top of each adapted file current.
 6. Update the commit in the table above and the lists of what was cut. For the detector, change `DETECTOR_VERSION` in `scripts/ui-check.mjs` and the version in `.github/workflows/ui-check.yml` together, re-read `cli/bin/cli.js`, then re-record the baseline (`node scripts/ui-check.mjs --all --update-baseline`) in the same PR and say in the PR which counts moved.
 7. Run `node test/ui-check.test.mjs` and the full suite. Open a PR; Brett merges.
+8. Every PR that touches `.claude/skills` is also scanned automatically by NVIDIA SkillSpector (`scripts/skill-scan.sh`, workflow "Skill scan", static mode, pinned commit). A new finding fails the check; read it, and only add it to `.github/skillspector-baseline.yaml` once it is understood. The scan points to where to read; it never replaces reading the skill.
 
 Never run `npx impeccable install`, `npx skills add`, a repo's `install.sh` / `setup`, or a plugin installer in this repo: they write hooks and unreviewed files.
