@@ -4696,17 +4696,9 @@ async function receiptReconConfirm(env, body) {
       Notes: addJson.duplicate ? 'Auto-skipped — an identical receipt already exists on that WO.' : '',
     });
   }
-  // Expense receipts go to QuickBooks' receipts inbox right away rather than waiting for the
-  // 7am sweep (which only takes 8 a day) — Brett is clearing a backlog and wants each one done
-  // when he taps it. Work-order receipts keep going through the normal daily sweep.
-  let qbEmail = null;
-  if (noWo && addJson && addJson.success && !addJson.duplicate && addJson.id) {
-    try {
-      const r = await sendReceiptsToQBEmail(env, { ids: [String(addJson.id)], limit: 1 });
-      const j = await r.json().catch(() => ({}));
-      qbEmail = { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
-    } catch (e) { qbEmail = { sent: false, error: String(e && e.message || e) }; }
-  }
+  // Nov 17 2026 (Brett): NOTHING is emailed to QuickBooks at confirm any more. The receipt waits in the daily batch (blank/'ready' in QB_Batch_Status) and
+  // can be held or reversed from "Waiting to send to QuickBooks" before it goes. qb_email says so, so the page never reports a send that did not happen.
+  const qbEmail = (addJson && addJson.success && !addJson.duplicate && addJson.id) ? qbBatchQueuedNote() : null;
   return json({ ok: true, wo_id, property_id, receipt_number: String(row.Invoice_Number || '').trim(), ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
 }
 
