@@ -4897,7 +4897,7 @@ async function receiptReconRefundCandidates(env, body) {
   const row = rows.find(r => String(r.ID) === String(id));
   if (!row) return json({ error: 'queue row not found' }, 404);
   let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) { await softFail(env, 'receiptReconRefundCandidates:suggestion', e, { severity: 'P2', ref: String(id), source: 'parse', context: 'the saved scanner suggestion on this refund is unreadable' }); }
-  let items = []; try { items = JSON.parse(row.Items || '[]'); } catch (e) {}
+  let items = []; try { items = JSON.parse(row.Items || '[]'); } catch (e) { await softFail(env, 'receiptReconRefundCandidates:items', e, { severity: 'P2', ref: String(id), source: 'parse', context: 'the saved item list on this refund is unreadable, so matching candidates may be incomplete' }); }
   const receipts = await fetchTab(env, 'Receipts');
   const candidates = receiptRefundFindMatches({ store: row.Vendor, amount: row.Total, date: row.Receipt_Date, items }, receipts);
   return json({ ok: true, id, refund: { store: row.Vendor || '', amount: row.Total || '', date: row.Receipt_Date || '', items }, candidates });
