@@ -2198,6 +2198,8 @@ function submitStatus(woId, idx) {
     showActionMsg(idx, 'Select a status first.', 'warn');
     return;
   }
+  // Nov 17 2026 (Brett): On Hold needs a reason from the list and the day the vendor expects to be back.
+  if (status === 'On Hold' && window.JobOrder) { JobOrder.openHold(woId, idx); return; }
   // Checklist gate: can't mark Complete until every item is checked or has a reason.
   if (status === 'Complete') {
     var g = checklistGate(idx);
