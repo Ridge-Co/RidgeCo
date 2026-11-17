@@ -8249,6 +8249,141 @@ function rosterOwnerId(callerRole, callerSessionId, body, url) {
   return String((body && body.owner_id) || (url && url.searchParams && url.searchParams.get('owner_id')) || '');
 }
 
+// ── OWNER APPROVALS (Nov 17 2026, queue #138 Phase 1 of 4) ───────────────────────────────────────────────────────
+// The owner portal's "Approvals" tab: every estimate (scope proposal) Brett has sent this owner, still waiting on them or answered in the
+// last 90 days, with a one-tap way to open the existing sign page, plus Decline and Ask a question. Nothing here sends anything to a vendor or
+// a tenant; a decline or a question is saved first (and read back), and only then is Brett texted. The whole feature is behind Config
+// owner_approvals_enabled (blank = OFF): off, GET answers {enabled:false} and POST answers 404 not_available, and the emailed sign link keeps
+// working exactly as before. Owner identity is the SESSION's (rosterOwnerId), never the body's. No sums across jobs anywhere (Brett: owners
+// never see spend totals); the only amount is each proposal's own customer price, the same one its sign page shows.
+const OWNER_APPROVAL_RESPONSE_COLS = ['Owner_Response', 'Owner_Response_At', 'Owner_Response_By', 'Owner_Response_Text'];
+const OWNER_APPROVAL_WINDOW_DAYS = 90;
+const OWNER_APPROVAL_DOUBLE_TAP_MS = 2 * 60 * 1000;
+function ownerApprovalsEnabled(cfg) { return String((cfg && cfg.owner_approvals_enabled) || '').trim().toUpperCase() === 'TRUE'; }
+// PURE. The customer price of one proposal from its stored Proposal_Items_JSON: the SAME arithmetic scopeProposalView uses for `subtotal`
+// (selected option of every non-optional item). null when there is nothing to total (the card then says "Open to see price").
+function ownerApprovalTotal(itemsJson) {
+  let items = []; try { items = JSON.parse(itemsJson || '[]'); } catch (_) { return null; }
+  if (!Array.isArray(items) || !items.length) return null;
+  let sum = 0;
+  for (const it of items) {
+    if (it && it.optional) continue;
+    const variants = (it && it.variants) || [];
+    const sel = variants.find(v => v.key === it.selected_key) || variants[0];
+    sum += sel ? (+sel.price || 0) : 0;
+  }
+  return +sum.toFixed(2);
+}
+// PURE. The cards one owner sees. `scopes` = Scopes rows, `props`/`units` = Properties/Units rows, `sigs` = Scope_Signatures rows.
+// A proposal shows once it has been SENT (Sent_Date) and carries its customer items. State: approved (an active signature exists),
+// declined / question (the owner's saved response, only while no signature exists), else waiting. Answered cards older than 90 days drop off.
+function ownerApprovalCards(scopes, props, units, sigs, ownerId, nowMs) {
+  const mine = new Set((props || []).filter(p => String(p.Owner_ID || '') === String(ownerId) && String(p.Active || '').toUpperCase() !== 'FALSE').map(p => String(p.ID)));
+  const cutoff = nowMs - OWNER_APPROVAL_WINDOW_DAYS * 86400000;
+  const out = [];
+  for (const s of (scopes || [])) {
+    if (!s || !mine.has(String(s.Property_ID || ''))) continue;
+    if (String(s.Active || '').toUpperCase() === 'FALSE') continue;
+    if (!String(s.Sent_Date || '').trim() || !String(s.Proposal_Items_JSON || '').trim()) continue;
+    const sig = (sigs || []).find(r => String(r.Scope_ID) === String(s.ID) && String(r.Active || '').toUpperCase() !== 'FALSE');
+    const resp = String(s.Owner_Response || '');
+    let state = 'waiting', answeredAt = '';
+    if (sig) { state = 'approved'; answeredAt = sig.Signed_TS || sig.Signed_Date || ''; }
+    else if (resp === 'declined') { state = 'declined'; answeredAt = s.Owner_Response_At || ''; }
+    if (state !== 'waiting') { const t = Date.parse(answeredAt); if (t && t < cutoff) continue; }
+    const prop = (props || []).find(p => String(p.ID) === String(s.Property_ID)) || {};
+    const unit = s.Unit_ID ? ((units || []).find(u => String(u.ID) === String(s.Unit_ID)) || null) : null;
+    out.push({
+      scope_id: String(s.ID), title: String(s.Title || ''),
+      property: String(prop.Address || ('Property ' + s.Property_ID)), unit: unit && unit.Unit_Label ? String(unit.Unit_Label) : '',
+      total: ownerApprovalTotal(s.Proposal_Items_JSON),
+      state, question_asked: state === 'waiting' && resp === 'question',
+      sent_at: String(s.Sent_Date || ''), opened_at: String(s.Page_First_Viewed || ''), answered_at: answeredAt,
+      response_text: state === 'declined' ? String(s.Owner_Response_Text || '') : '',
+    });
+  }
+  out.sort((a, b) => (a.state === 'waiting' ? 0 : 1) - (b.state === 'waiting' ? 0 : 1) || String(b.sent_at).localeCompare(String(a.sent_at)));
+  return out;
+}
+// GET /owner/approvals  (owner session, or admin ?owner_id= to look on an owner's behalf)
+async function ownerApprovals(env, callerRole, callerSessionId, url) {
+  const ownerId = rosterOwnerId(callerRole, callerSessionId, null, url);
+  if (!ownerId) return json({ error: 'owner_id required' }, 400);
+  const cfg = await fetchConfig(env);
+  if (!ownerApprovalsEnabled(cfg)) return json({ ok: true, enabled: false, message: 'not available', cards: [] });
+  await scopesTab(env); await scopeSigTab(env);
+  const [scopes, props, units, sigs] = await fetchTabs(env, ['Scopes', 'Properties', 'Units', 'Scope_Signatures']);
+  const cards = ownerApprovalCards(scopes, props, units, sigs, ownerId, Date.now());
+  for (const c of cards) {
+    if (c.state !== 'waiting') continue;
+    const row = scopes.find(s => String(s.ID) === c.scope_id);
+    // the same link the emailed proposal carries (same token shape and revision as scopeProposalLinkToken, no second read)
+    const tok = await makeSessionToken({ scope: 'scope-proposal', id: c.scope_id, rev: String((row && row.Link_Rev) || '0') }, env.WORKER_SECRET, SCOPE_PROPOSAL_LINK_TTL);
+    c.link = `${PORTAL_BASE}/scope-proposal.html?t=${encodeURIComponent(tok)}`;
+  }
+  return json({ ok: true, enabled: true, cards, waiting: cards.filter(c => c.state === 'waiting').length });
+}
+// PURE. One plain-ASCII, single-piece text for Brett.
+function ownerApprovalAlertText(action, addr, title, text) {
+  const clean = (v, n) => String(v || '').replace(/[^\x20-\x7E]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, n);
+  const head = action === 'decline' ? 'Owner DECLINED estimate' : 'Owner has a QUESTION on estimate';
+  let msg = `Ridge Co: ${head} - ${clean(addr, 38)}, ${clean(title, 28)}. "${clean(text, 50)}" Open the Hub.`;
+  if (msg.length > 160) msg = msg.slice(0, 157) + '...';
+  return msg;
+}
+// POST /owner/approval/respond {scope_id, action:'decline'|'question', text, name}
+async function ownerApprovalRespond(env, callerRole, callerSessionId, body) {
+  const ownerId = rosterOwnerId(callerRole, callerSessionId, body, null);
+  if (!ownerId) return json({ error: 'owner_id required' }, 400);
+  const cfg = await fetchConfig(env);
+  if (!ownerApprovalsEnabled(cfg)) return json({ error: 'not_available' }, 404);
+  const b = body || {};
+  const scopeId = String(b.scope_id || '').trim();
+  const action = String(b.action || '').trim();
+  const text = String(b.text || '').trim().slice(0, 500);
+  const name = String(b.name || '').trim().slice(0, 120);
+  if (!scopeId || (action !== 'decline' && action !== 'question')) return json({ error: 'scope_id and action (decline or question) required' }, 400);
+  if (text.length < 2) return json({ error: action === 'decline' ? 'Please tell us why (a few words).' : 'Please type your question.' }, 400);
+  if (name.length < 2) return json({ error: 'Please type your name.' }, 400);
+  await scopesTab(env); await scopeSigTab(env);
+  const [scopes, props, units, sigs] = await fetchTabs(env, ['Scopes', 'Properties', 'Units', 'Scope_Signatures']);
+  const s = scopes.find(r => String(r.ID) === scopeId);
+  const prop = s ? props.find(p => String(p.ID) === String(s.Property_ID)) : null;
+  const deny = async (status, error, why) => {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_denied', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `owner=${ownerId} scope=${scopeId.slice(0, 40)} ${why}`.slice(0, 480) }); } catch (e) { console.error('owner_approval_denied telemetry failed:', schedErrText(e)); }
+    return json({ error }, status);
+  };
+  if (!s || !prop || String(prop.Owner_ID || '') !== String(ownerId) || String(s.Active || '').toUpperCase() === 'FALSE' || !String(s.Sent_Date || '').trim()) return await deny(403, 'Forbidden', 'not this owner\'s sent proposal');
+  if (sigs.some(r => String(r.Scope_ID) === scopeId && String(r.Active || '').toUpperCase() !== 'FALSE')) return json({ error: 'already_signed', message: 'This estimate is already approved, so it can no longer be declined.' }, 409);
+  const wanted = action === 'decline' ? 'declined' : 'question';
+  // double-tap guard: the same answer within 2 minutes returns the first result and does nothing else (no second text)
+  const prevAt = Date.parse(s.Owner_Response_At || '');
+  if (String(s.Owner_Response || '') === wanted && String(s.Owner_Response_Text || '') === text && prevAt && Date.now() - prevAt >= 0 && Date.now() - prevAt < OWNER_APPROVAL_DOUBLE_TAP_MS) {
+    return json({ ok: true, saved: true, duplicate: true, state: wanted === 'declined' ? 'declined' : 'waiting' });
+  }
+  const nowIso = new Date(Date.now()).toISOString();   // the same clock the double-tap guard above reads
+  try {
+    await ensureColumns(env, 'Scopes', OWNER_APPROVAL_RESPONSE_COLS);
+    await updateRowVerified(env, 'Scopes', scopeId, { Owner_Response: wanted, Owner_Response_At: nowIso, Owner_Response_By: name, Owner_Response_Text: text });
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_save_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `owner=${ownerId} scope=${scopeId} ${schedErrText(e)}`.slice(0, 480) }); } catch (te) { console.error('owner_approval_save_failed telemetry failed:', schedErrText(te)); }
+    return json({ error: 'Not saved, try again.', saved: false }, 500);   // no text is sent for an answer that was not saved
+  }
+  // history row (the owner's answer, who typed it, when)
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_' + wanted, Skill_Or_Endpoint: '/owner/approval/respond', Success: 'TRUE', Notes: `owner=${ownerId} scope=${scopeId} by=${name}`.slice(0, 480) }); } catch (e) { console.error('owner_approval history telemetry failed:', schedErrText(e)); }
+  // Now, and only now, tell Brett. The saved response is the flag the Hub shows; it does not depend on this text.
+  let alert;
+  try {
+    const admin = await getAdminSmsRecipient(env);
+    const unit = s.Unit_ID ? (units.find(u => String(u.ID) === String(s.Unit_ID)) || null) : null;
+    const r = await smsGatedSend(env, { wo_id: s.WO_ID || '', message_type: action === 'decline' ? 'admin_proposal_declined' : 'admin_proposal_question', recipient_type: 'admin', admin, message_body: ownerApprovalAlertText(action, fuAddress(prop, unit), s.Title, text) });
+    const sent = !!(r && (r.sent || r.held_for_quiet_hours || ((env.__STAGING__ ?? false) && r.send_ok)));
+    alert = sent ? { sent: true, held: !!(r && r.held_for_quiet_hours) } : { sent: false, reason: (r && !r.send_ok) ? `blocked: ${r.gate_snapshot}` : 'the text did not go through' };
+  } catch (e) { alert = { sent: false, reason: schedErrText(e).slice(0, 200) }; }
+  if (!alert.sent) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_alert_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `scope=${scopeId} ${alert.reason}`.slice(0, 480) }); } catch (e) { console.error('owner_approval_alert_failed telemetry failed:', schedErrText(e)); } }
+  return json({ ok: true, saved: true, state: wanted === 'declined' ? 'declined' : 'waiting', alerted: !!alert.sent });
+}
+
 // GET /owner/tenant-roster - what the manual form and the CSV check need. No PINs, no SMS/consent state (owners are not shown those rules).
 async function ownerRosterList(env, callerRole, callerSessionId, url) {
   const ownerId = rosterOwnerId(callerRole, callerSessionId, null, url);
