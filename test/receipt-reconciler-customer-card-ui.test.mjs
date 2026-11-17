@@ -16,6 +16,7 @@ const pending = [
   q({ ID: '2', Vendor: "Lowe's", Invoice_Number: '99431', suggestion: { category: 'customer_paid', action: 'exclude', manual_customer_card: true, flags: [] } }),
   q({ ID: '3', Invoice_Number: '', PO_Reference: 'PO 5512', suggestion: { category: 'billable', action: 'need_property', flags: [] } }),
   q({ ID: '4', Invoice_Number: '', PO_Reference: '', suggestion: { category: 'billable', action: 'need_property', flags: [] } }),
+  q({ ID: '179', Vendor: "Lowe's", Total: '6.33', Receipt_Date: '2026-10-05', PO_Reference: '8616 tower bridge way', Invoice_Number: '36109', suggestion: { category: 'billable', action: 'need_property', flags: [] } }),
 ];
 const calls = []; let attachResponse = { ok: true, success: true };
 const mock = (u, method) => {
