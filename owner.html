@@ -199,6 +199,32 @@ body{font-size:15px}
 label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font-size:13px}
 @media (hover:hover){.filter-row select,.filter-row input,.inline-edit input{font-size:13px !important}}
 </style>
+<style id="oa-approvals">
+/* Approvals tab (queue #138 Phase 1). DESIGN.md: tokens, 13/15/17px, 8px radius, 44px targets, 16px inputs. */
+.oa-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px}
+.oa-title{font-size:17px;font-weight:700;line-height:1.2;margin-bottom:4px}
+.oa-sub{font-size:15px;color:var(--muted);margin-bottom:8px}
+.oa-price{font-size:17px;font-weight:700;margin-bottom:4px}
+.oa-meta{font-size:13px;color:var(--muted);margin-bottom:12px}
+.oa-actions{display:flex;flex-wrap:wrap;gap:8px}
+.oa-actions .btn,.oa-actions a.btn{min-height:44px;display:inline-flex;align-items:center;justify-content:center;text-decoration:none;font-size:15px;letter-spacing:normal;padding:8px 16px}
+.oa-main{flex:1 1 100%}
+.oa-box{margin-top:12px;border-top:1px solid var(--border);padding-top:12px}
+.oa-box label{display:block;font-size:13px;font-weight:600;margin-bottom:4px}
+.oa-box input,.oa-box textarea{font-size:16px;width:100%;margin-bottom:12px;padding:8px 12px}
+.oa-chip{display:inline-block;font-size:13px;font-weight:600;padding:4px 8px;border-radius:var(--radius);margin-bottom:8px}
+.oa-chip.ok{background:#eaf6ee;color:var(--accent2)}
+.oa-chip.no{background:#fdecea;color:var(--danger)}
+.oa-chip.q{background:#e8f0fb;color:var(--accent)}
+.oa-badge{display:inline-block;min-width:20px;padding:0 6px;margin-left:6px;border-radius:999px;background:var(--danger);color:#fff;font-size:13px;font-weight:700;line-height:20px;text-align:center}
+.oa-answered summary{font-size:15px;font-weight:600;min-height:44px;display:flex;align-items:center;cursor:pointer}
+.oa-answered summary::before{content:'\25B8';margin-right:8px}
+.oa-answered[open] summary::before{content:'\25BE'}
+.oa-wrap{max-width:720px;margin:0 auto;padding:0 16px}
+@media (max-width:420px){.oa-wrap{padding:0 12px}}
+@media (min-width:700px){.oa-main{flex:0 0 auto}}
+@media (max-width:700px){.tabs.oa-five{flex-wrap:wrap}.tabs.oa-five .tab{flex:1 1 30%}}
+</style>
 <link rel="manifest" href="manifest-owner.webmanifest"><script src="push-client.js" defer></script></head>
 <body>
 
@@ -245,6 +271,7 @@ label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font
       <div class="tab" id="tabSubmit" onclick="switchTab('submit')">SUBMIT REQUEST</div>
       <div class="tab" id="tabNotify" onclick="switchTab('notify')">NOTIFICATIONS</div>
       <div class="tab" id="tabTenants" onclick="switchTab('tenants')">TENANTS</div>
+      <div class="tab" id="tabApprovals" style="display:none" onclick="switchTab('approvals')"><span id="oaTabLabel">APPROVALS</span><span class="oa-badge" id="oaBadge" style="display:none"></span></div>
     </div>
 
     <!-- WORK ORDERS TAB -->
@@ -335,6 +362,9 @@ label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font
     </div>
   </div>
 </div>
+
+    <!-- APPROVALS TAB (queue #138 Phase 1): shown only when Config owner_approvals_enabled is TRUE -->
+    <div id="panelApprovals" style="display:none"></div>
 
     <!-- TENANTS TAB (Oct 14 2026): tenant importer/updater - the panel itself lives in tenant-roster.js, shared with the admin page -->
     <div id="panelTenants" style="display:none"></div>
@@ -651,6 +681,7 @@ function loadDashboard() {
     // Submit form property dropdown
     buildSubmitDD(ownerProps);
     renderWOs();
+    oaLoad(true);
   }).catch(function(e) {
     console.error('[loadDashboard]', e);
     ['statOpen','statUrgent','statProps'].forEach(function(id){ var s = document.getElementById(id); if (s) s.textContent = '—'; });
@@ -673,12 +704,136 @@ function switchTab(tab) {
   document.getElementById('tabSubmit').className = 'tab' + (tab==='submit'?' active':'');
   document.getElementById('tabNotify').className = 'tab' + (tab==='notify'?' active':'');
   document.getElementById('tabTenants').className = 'tab' + (tab==='tenants'?' active':'');
+  document.getElementById('tabApprovals').className = 'tab' + (tab==='approvals'?' active':'');
   document.getElementById('panelWOs').style.display = tab==='wos' ? '' : 'none';
   document.getElementById('panelSubmit').style.display = tab==='submit' ? '' : 'none';
   document.getElementById('panelNotify').style.display = tab==='notify' ? '' : 'none';
   document.getElementById('panelTenants').style.display = tab==='tenants' ? '' : 'none';
+  document.getElementById('panelApprovals').style.display = tab==='approvals' ? '' : 'none';
   if (tab==='notify') loadNotifyPrefs();
   if (tab==='tenants') openTenantsTab();
+  if (tab==='approvals') oaLoad(false);
+}
+
+// ── Approvals tab (queue #138 Phase 1 of 4) ──────────────────────────────────────────────
+// Every estimate Ridge Co sent this owner that is still waiting, plus the last 90 days of answered ones. "Review & approve" opens the
+// existing sign page; Decline and Ask a question save a short note for Ridge Co. A failed load shows an error with Try again, never "nothing waiting".
+// All words go through OA_STR so Spanish can be switched on later (OA_LANG stays 'en' until then; Phase 4).
+var OA_LANG = 'en';
+var OA_STR = {
+  en: { tab:'APPROVALS', loading:'Loading…', empty:'Nothing is waiting on you.', err:"We couldn't load your approvals: ", retry:'Try again',
+        review:'Review & approve', decline:'Decline', ask:'Ask a question', sent:'Sent', seen:'seen', notSeen:'not opened yet', openToSee:'Open to see price',
+        answered:'Answered', approved:'Approved', declined:'Declined', asked:'Question sent', nameL:'Your name', declL:'Why are you declining?', qL:'Your question',
+        send:'Send', cancel:'Cancel', saving:'Saving…', saved:'Thank you. Ridge Co has been told.', notSaved:'Not saved, try again.', needText:'Please type a few words.', needName:'Please type your name.', today:'today', ago:' ago', d:' day', ds:' days', hr:' hr', onFile:'You asked: ' },
+  es: { tab:'APROBACIONES', loading:'Cargando…', empty:'No hay nada pendiente.', err:'No pudimos cargar sus aprobaciones: ', retry:'Reintentar',
+        review:'Revisar y aprobar', decline:'Rechazar', ask:'Hacer una pregunta', sent:'Enviado', seen:'visto', notSeen:'aun no abierto', openToSee:'Abra para ver el precio',
+        answered:'Respondidas', approved:'Aprobado', declined:'Rechazado', asked:'Pregunta enviada', nameL:'Su nombre', declL:'Por que lo rechaza?', qL:'Su pregunta',
+        send:'Enviar', cancel:'Cancelar', saving:'Guardando…', saved:'Gracias. Ridge Co fue avisado.', notSaved:'No se guardo, intente de nuevo.', needText:'Escriba unas palabras.', needName:'Escriba su nombre.', today:'hoy', ago:' atras', d:' dia', ds:' dias', hr:' h', onFile:'Usted pregunto: ' }
+};
+function oaT(k) { return (OA_STR[OA_LANG] && OA_STR[OA_LANG][k]) || OA_STR.en[k] || k; }
+var oaState = { cards: [], loaded: false, error: '', note: {}, name: '' };
+function oaShowTab(show, waiting) {
+  var tab = document.getElementById('tabApprovals'), badge = document.getElementById('oaBadge');
+  if (!tab) return;
+  if (tab.parentNode) tab.parentNode.classList.toggle('oa-five', !!show);   // five tabs wrap to two rows on a phone
+  tab.style.display = show ? '' : 'none';
+  document.getElementById('oaTabLabel').textContent = oaT('tab');
+  if (badge) { badge.textContent = waiting > 0 ? String(waiting) : ''; badge.style.display = waiting > 0 ? '' : 'none'; }
+}
+function oaWhen(iso) {
+  var t = Date.parse(iso || ''); if (!t) return '';
+  var h = (Date.now() - t) / 3600000;
+  if (h < 1) return oaT('today');
+  if (h < 24) return Math.floor(h) + oaT('hr') + oaT('ago');
+  var d = Math.floor(h / 24); return d + (d === 1 ? oaT('d') : oaT('ds')) + oaT('ago');
+}
+function oaDay(iso) { var t = new Date(iso || ''); if (isNaN(t.getTime())) return ''; return t.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }); }
+function oaMoney(n) { return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+// probe=true: called once after the dashboard loads, only to decide whether the tab shows and what its count is. A probe that FAILS still shows the tab (so the owner can retry there).
+function oaLoad(probe) {
+  var el = document.getElementById('panelApprovals');
+  if (!probe && el) el.innerHTML = '<div class="spinner-msg" role="status">' + oaT('loading') + '</div>';
+  return api('GET', '/owner/approvals?owner_id=' + encodeURIComponent(session.owner_id), null).then(function (r) {
+    if (!r || r.ok !== true) { var er = new Error((r && (r.error || r.message)) || 'The server sent back something unexpected'); er.http_status = r && r.http_status; throw er; }
+    if (r.enabled === false) { oaShowTab(false, 0); oaState.loaded = false; return; }
+    oaState.cards = r.cards || []; oaState.loaded = true; oaState.error = '';
+    oaShowTab(true, r.waiting || 0);
+    if (!probe) oaRender();
+  }).catch(function (e) {
+    console.error('[oaLoad]', e);
+    oaState.error = (e && e.name === 'AbortError') ? 'the connection timed out' : ((e && e.message) || 'connection error');
+    oaShowTab(true, 0);
+    if (!probe) oaRender();
+  });
+}
+function oaCardHtml(c) {
+  var unit = c.unit ? ' ' + esc(c.unit) : '';
+  var price = (c.total === null || c.total === undefined) ? oaT('openToSee') : oaMoney(c.total);
+  var h = '<div class="oa-card" id="oa-' + esc(c.scope_id) + '">';
+  if (c.state === 'approved') h += '<span class="oa-chip ok">' + oaT('approved') + ' · ' + esc(oaDay(c.answered_at)) + '</span>';
+  else if (c.state === 'declined') h += '<span class="oa-chip no">' + oaT('declined') + ' · ' + esc(oaDay(c.answered_at)) + '</span>';
+  else if (c.question_asked) h += '<span class="oa-chip q">' + oaT('asked') + '</span>';
+  h += '<div class="oa-title">' + esc(c.title || 'Estimate') + '</div>';
+  h += '<div class="oa-sub">' + esc(c.property) + unit + '</div>';
+  h += '<div class="oa-price">' + esc(price) + '</div>';
+  var meta = oaT('sent') + ' ' + esc(oaWhen(c.sent_at));
+  if (c.state === 'waiting') meta += ' · ' + (c.opened_at ? oaT('seen') : oaT('notSeen'));
+  h += '<div class="oa-meta">' + meta + '</div>';
+  if (c.state === 'declined' && c.response_text) h += '<div class="oa-meta">' + esc(c.response_text) + '</div>';
+  if (c.state === 'waiting') {
+    h += '<div class="oa-actions"><a class="btn oa-main" href="' + esc(c.link || '#') + '" target="_blank" rel="noopener">' + oaT('review') + '</a>' +
+         '<button type="button" class="btn btn-muted" onclick="oaOpenBox(\'' + esc(c.scope_id) + '\',\'decline\')">' + oaT('decline') + '</button>' +
+         '<button type="button" class="btn btn-muted" onclick="oaOpenBox(\'' + esc(c.scope_id) + '\',\'question\')">' + oaT('ask') + '</button></div>';
+    h += '<div id="oa-box-' + esc(c.scope_id) + '"></div>';
+  }
+  return h + '</div>';
+}
+function oaRender() {
+  var el = document.getElementById('panelApprovals'); if (!el) return;
+  if (oaState.error) {
+    el.innerHTML = '<div class="msg error" style="padding:16px;text-align:center;font-size:15px" role="alert">' + esc(oaT('err') + oaState.error) + '.' +
+      '<div style="margin-top:12px"><button type="button" class="btn" style="min-height:44px;font-size:15px" onclick="oaLoad(false)">' + oaT('retry') + '</button></div></div>';
+    return;
+  }
+  var waiting = oaState.cards.filter(function (c) { return c.state === 'waiting'; });
+  var done = oaState.cards.filter(function (c) { return c.state !== 'waiting'; });
+  var h = '<div class="oa-wrap">';
+  h += waiting.length ? waiting.map(oaCardHtml).join('') : '<div class="empty" style="font-size:15px">' + oaT('empty') + '</div>';
+  if (done.length) h += '<details class="oa-answered"><summary>' + oaT('answered') + ' (' + done.length + ')</summary>' + done.map(oaCardHtml).join('') + '</details>';
+  el.innerHTML = h + '</div>';
+}
+function oaOpenBox(id, action) {
+  var box = document.getElementById('oa-box-' + id); if (!box) return;
+  var label = action === 'decline' ? oaT('declL') : oaT('qL');
+  box.innerHTML = '<div class="oa-box"><label for="oa-name-' + esc(id) + '">' + oaT('nameL') + '</label>' +
+    '<input type="text" id="oa-name-' + esc(id) + '" autocomplete="name" maxlength="120" value="' + esc(oaState.name) + '">' +
+    '<label for="oa-text-' + esc(id) + '">' + label + '</label>' +
+    '<textarea id="oa-text-' + esc(id) + '" rows="3" maxlength="500"></textarea>' +
+    '<div class="oa-actions"><button type="button" class="btn" id="oa-send-' + esc(id) + '" onclick="oaSubmit(\'' + esc(id) + '\',\'' + action + '\')">' + oaT('send') + '</button>' +
+    '<button type="button" class="btn btn-muted" onclick="document.getElementById(\'oa-box-' + esc(id) + '\').innerHTML=\'\'">' + oaT('cancel') + '</button></div>' +
+    '<div id="oa-msg-' + esc(id) + '" role="status"></div></div>';
+  var t = document.getElementById('oa-text-' + id); if (t) t.focus();
+}
+function oaSubmit(id, action) {
+  var nameEl = document.getElementById('oa-name-' + id), textEl = document.getElementById('oa-text-' + id);
+  var btn = document.getElementById('oa-send-' + id), msg = document.getElementById('oa-msg-' + id);
+  if (!nameEl || !textEl || !btn || btn.disabled) return;
+  var name = nameEl.value.trim(), text = textEl.value.trim();
+  if (name.length < 2) { msg.innerHTML = '<div class="msg error">' + oaT('needName') + '</div>'; return; }
+  if (text.length < 2) { msg.innerHTML = '<div class="msg error">' + oaT('needText') + '</div>'; return; }
+  oaState.name = name;
+  btn.disabled = true; msg.innerHTML = '<div class="msg info">' + oaT('saving') + '</div>';   // first tap disables the button; a failure restores it
+  api('POST', '/owner/approval/respond', { scope_id: id, action: action, text: text, name: name }).then(function (r) {
+    if (!r || r.ok !== true || r.saved !== true) { var er = new Error((r && (r.message || r.error)) || oaT('notSaved')); er.http_status = r && r.http_status; throw er; }
+    return oaLoad(false).then(function () {
+      var again = document.getElementById('panelApprovals'); if (again) again.insertAdjacentHTML('afterbegin', '<div class="msg success" style="font-size:15px" role="status">' + oaT('saved') + '</div>');
+    });
+  }).catch(function (e) {
+    console.error('[oaSubmit]', e);
+    btn.disabled = false;
+    var m = (e && e.http_status === 409) ? (e.message || oaT('notSaved')) : oaT('notSaved');
+    msg.innerHTML = '<div class="msg error" role="alert">' + esc(m) + '</div>';
+  });
 }
 
 var tenantRosterPanel = null;
