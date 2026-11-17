@@ -3168,6 +3168,9 @@ function submitVendorSched(modalId) {
       <button onclick="closeBillModal()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">✕</button>
     </div>
 
+    <!-- Nov 17 2026: bold red list of what is still needed to get paid (vendor-job-order.js fills it) -->
+    <div id="bill-needs-panel"></div>
+
     <!-- Billing type toggle -->
     <div style="display:flex;gap:4px;background:var(--surface2);border-radius:6px;padding:3px;margin-bottom:16px">
       <div id="bill-tab-hourly" onclick="setBillType('hourly', true)" style="flex:1;text-align:center;padding:8px;border-radius:4px;cursor:pointer;font-size:12px;background:var(--accent);color:#fff;font-family:var(--font)">⏱ By the Hour</div>
