@@ -171,6 +171,7 @@
     <button class="btn secondary" onclick="loadQueue()">↻ Refresh</button>
     <span id="conn-status" style="font-size:11px;color:var(--muted)"></span>
   </div>
+  <div id="scan-errors" style="display:none;margin-top:8px;font-size:12px"></div>
 </div>
 
 <!-- Statement importer Phase 1 (Sep 24 2026, STATEMENT_RECEIPT_RECONCILIATION_BUILD_BRIEF_v1.0).
@@ -270,19 +271,55 @@ function renderTabs(){
 }
 function setStatus(s){ curStatus = s; clearBulkSelection(); renderTabs(); loadQueue(); }
 
+// Nov 17 2026: one tap now keeps scanning until the folder is empty. The Worker still takes at most 8 new files per call (each file costs
+// several Cloudflare subrequests; a bigger batch blew the per-call limit on Sep 22), so the LOOP lives here, not in one long Worker call.
+// It stops when nothing is waiting, when the AI credit is paused, on a Worker config error, when a batch makes no progress, or after SCAN_MAX_ROUNDS.
+const SCAN_MAX_ROUNDS = 15;
+let scanBusy = false;
+function renderScanErrors(errFiles, stuckFiles){
+  const box = document.getElementById('scan-errors');
+  const byId = {};
+  (errFiles||[]).forEach(x => { byId[x.id] = Object.assign({ state:'errored this scan' }, x); });
+  (stuckFiles||[]).forEach(x => { byId[x.id] = Object.assign({}, byId[x.id]||{}, x, { state:'stuck - skipped after 3 tries' }); });
+  const rows = Object.keys(byId).map(k => byId[k]);
+  if (!rows.length){ box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.style.display = 'block';
+  box.innerHTML = '<div style="font-weight:800;color:#c0242b;margin-bottom:4px">Scan errors ('+rows.length+') — also listed in Needs Attention</div>' +
+    rows.map(x => '<div style="padding:4px 0;border-top:1px solid #eee"><b>'+esc(x.name||x.id)+'</b> <span style="color:var(--muted)">('+esc(x.state)+(x.attempts?', try '+esc(x.attempts):'')+')</span>' +
+      '<div>'+esc(x.error||'')+'</div>' +
+      '<a href="https://drive.google.com/file/d/'+encodeURIComponent(x.id)+'/view" target="_blank" rel="noopener">Open file in Drive</a></div>').join('');
+}
 async function scanNow(){
+  if (scanBusy) return;
+  scanBusy = true;
   const status = document.getElementById('conn-status');
-  status.textContent = 'Scanning Drive folder…';
+  let total = 0, skippedCut = 0, round = 0, last = null, stopWhy = '';
   try {
-    const res = await post('/receipt-recon/scan', {});
-    if (res.ok === false) throw new Error(res.error||'scan failed');
-    const msg = '✅ scanned '+res.scanned+' new file(s)'+((res.errors&&res.errors.length)?' — '+res.errors.length+' error(s)':'')+(res.remaining?' — '+res.remaining+' more waiting in the folder, tap Scan again':'')+(res.skipped_before_cutoff?' — '+res.skipped_before_cutoff+' dated before '+esc(res.cutoff||'')+' went straight to Skipped':'')+((res.stuck&&res.stuck.length)?' — skipping '+res.stuck.length+' unreadable file(s): '+res.stuck.join(', '):'');
-    status.textContent = msg;
+    while (round < SCAN_MAX_ROUNDS){
+      round++;
+      status.textContent = 'Scanning Drive folder… batch '+round+(last&&last.remaining?' ('+last.remaining+' more waiting, '+total+' scanned so far)':'');
+      const res = await post('/receipt-recon/scan', {});
+      if (res.ok === false) throw new Error(res.error||'scan failed');
+      last = res;
+      total += res.scanned||0; skippedCut += res.skipped_before_cutoff||0;
+      renderScanErrors(res.error_files, res.stuck_files);
+      if (res.paused || /^paused/i.test(res.reason||'')){ stopWhy = 'paused: '+(res.message||res.reason||'AI credit'); break; }
+      if (res.config_error){ stopWhy = 'stopped: '+res.config_error; break; }
+      if (!res.remaining) break;
+      if (!res.scanned && !(res.error_files&&res.error_files.length)){ stopWhy = 'stopped: a batch made no progress'; break; }
+    }
+    if (!stopWhy && last && last.remaining) stopWhy = last.remaining+' more waiting - tap Scan again';
+    const errN = last && last.error_files ? last.error_files.length : 0;
+    const msg = (stopWhy ? '⚠️ ' : '✅ ')+'scanned '+total+' new file(s) in '+round+' batch(es)'+(errN?' — '+errN+' file error(s), named below':'')+(stopWhy?' — '+esc(stopWhy):'')+(skippedCut?' — '+skippedCut+' dated before '+esc((last&&last.cutoff)||'')+' went straight to Skipped':'')+((last&&last.stuck&&last.stuck.length)?' — skipping '+last.stuck.length+' unreadable file(s): '+last.stuck.map(esc).join(', '):'');
+    status.innerHTML = msg;
     // loadQueue() rewrites this same line with "✅ N pending" — put the scan result back in front
-    // of it, or the "tap Scan again" / unreadable-file notes vanish the instant the list reloads.
+    // of it, or the notes vanish the instant the list reloads.
     await loadQueue();
-    status.textContent = msg + ' · ' + status.textContent.replace(/^✅\s*/, '');
-  } catch(e){ status.textContent = '❌ '+e.message; }
+    status.innerHTML = msg + ' · ' + esc(status.textContent.replace(/^✅\s*/, ''));
+  } catch(e){
+    status.textContent = '❌ '+e.message+(total?' (scanned '+total+' before it stopped)':'');
+    if (window.hubReportFailure) window.hubReportFailure('scanNow', e);
+  } finally { scanBusy = false; }
 }
 
 // ── Statement importer (Phase 1, Sep 24 2026) ───────────────────────────────────────────────────

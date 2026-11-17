@@ -518,7 +518,7 @@ const _hubWorkerCore = {
           // Fully inert unless env.HUB_PROD_WRITE_TOKEN is set, so deploying this has zero effect
           // until the secret is set on both production maintenance-hub AND the gh-broker Worker
           // (Brett only — no session can set a Cloudflare secret).
-          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage', '/portal-access/backfill', '/admin/fi-premier-repair', '/admin/fi-originals-bridge', '/admin/backfill-premier-wo', '/failure/update', '/ops-queue-stage', '/ops-queue/risk-check'];
+          const HUB_PROD_WRITE_PATHS = ['/admin/backfill-scope-wo-vendor', '/admin/ensure-receipts-payment-source', '/admin/gemini-context-update', '/admin/set-alert-flags', '/agent-write', '/admin/backfill-receipt-attachments', '/admin/backfill-approval-stage', '/portal-access/backfill', '/admin/fi-premier-repair', '/admin/fi-originals-bridge', '/admin/backfill-premier-wo', '/failure/update', '/ops-queue-stage', '/ops-queue/risk-check', '/receipt-recon/scan'];
           const _prodWriteOk = !!env.HUB_PROD_WRITE_TOKEN && _tok === env.HUB_PROD_WRITE_TOKEN && request.method === 'POST' && HUB_PROD_WRITE_PATHS.includes(path);
           // Narrow QUICKBOOKS-QUERY-ONLY token (Sep 23 2026) — separate from HUB_PROD_WRITE_TOKEN
           // above on purpose: HUB_PROD_WRITE_TOKEN's own allow-list is explicitly barred from ever
@@ -4245,6 +4245,7 @@ async function receiptReconScan(env, body) {
   const [properties, workorders, receipts] = await fetchTabs(env, ['Properties', 'Work_Orders', 'Receipts']);
   let n = 0; const errs = []; let failuresChanged = false; let skippedOld = 0; let flaggedRescan = 0; let configError = ''; let pausedMid = false;
   let vendorInvoiceSkipped = 0, autoHandled = 0, autoFailed = 0;
+  const errorFiles = [];   // Nov 17 2026: each file that errored THIS scan, by name + Drive id + reason (the page used to show only a count)
   const cutoff = receiptReconCutoff(cfg);
   for (const f of newFiles) {
     try {
@@ -4324,6 +4325,7 @@ async function receiptReconScan(env, body) {
     } catch (e) {
       if (aiCreditIsPausedError(e)) { pausedMid = true; break; }   // credit ran out mid-scan: stop, no attempt counted, nothing retried
       errs.push((f.name || f.id) + ': ' + (e.message || 'err'));
+      errorFiles.push({ id: f.id, name: f.name || f.id, error: String((e && e.message) || 'err').slice(0, 200), attempts: ((failures[f.id] && failures[f.id].attempts) || 0) + 1 });
       if (receiptReconIsConfigError(e && e.message)) { configError = String(e.message).slice(0, 200); break; }
       const prior = failures[f.id];
       failures[f.id] = { name: f.name || f.id, error: String(e && e.message || 'err').slice(0, 200), attempts: (prior ? prior.attempts : 0) + 1, last_tried: new Date().toISOString() };
@@ -4332,8 +4334,15 @@ async function receiptReconScan(env, body) {
   }
   if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) { errs.push('could not save the attempt tracker: ' + schedErrText(e)); console.error('receiptReconScan: tracker write failed:', schedErrText(e)); } }
   const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
+  const stuckFiles = Object.keys(failures).filter(id => failures[id].attempts >= 3).map(id => ({ id, name: failures[id].name, error: failures[id].error, attempts: failures[id].attempts }));
+  // Nov 17 2026 (no-silent-failures): an errored file is named in Needs Attention, not just counted on the page. reportFailure never throws.
+  // P1 when a file is now stuck (3 failed tries, it is skipped from here on); P2 for a first or second failure that the next scan will retry.
+  if (errorFiles.length) {
+    await reportFailure(env, { system: 'hub', source: 'receipt', where: 'receipt_recon_scan_files', ref: '', severity: stuckFiles.length ? 'P1' : 'P2',
+      message: failTrim(errorFiles.length + ' file(s) errored in the Receipt Reconciler scan: ' + errorFiles.slice(0, 5).map(x => x.name + ' (' + x.id + '): ' + x.error).join('; ') + (errorFiles.length > 5 ? ' (+' + (errorFiles.length - 5) + ' more)' : ''), 280) });
+  }
   if (pausedMid) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: n, auto_handled: autoHandled, remaining: allNew.length - n, errors: errs, stuck: stuckNow, reason: 'paused: AI credit - the scan stopped when Anthropic credit ran out; remaining receipts wait in Drive' });
-  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, vendor_invoice_skipped: vendorInvoiceSkipped, auto_handled: autoHandled, auto_failed: autoFailed, list_errors: listErrors, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow, config_error: configError || undefined });
+  return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, vendor_invoice_skipped: vendorInvoiceSkipped, auto_handled: autoHandled, auto_failed: autoFailed, list_errors: listErrors, cutoff, remaining: allNew.length - newFiles.length, more_waiting: allNew.length - newFiles.length, errors: errs, error_files: errorFiles, stuck: stuckNow, stuck_files: stuckFiles, config_error: configError || undefined });
 }
 // Most rule auto-confirms one scan will run (each costs several subrequests); the rest stay pending with the rule pre-selected.
 const RECEIPT_AUTO_MAX_PER_SCAN = 4;
