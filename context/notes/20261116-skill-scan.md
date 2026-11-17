@@ -22,3 +22,21 @@ Gap: every third-party skill is read in full by hand (see PR #552 / `context/THI
 - Workflow files changed on main make `Sync staging to main` fail loudly until a session commits them to staging (see BRANCH_POLICY). PR #552 adds one too; do both at once.
 - Review a finding, then add it to the baseline with the command printed in the failure message. A skill whose text changes may need its baseline entries refreshed (fingerprints follow the text).
 - SkillSpector looks up known-bug data (OSV.dev) over the network; it has no telemetry of its own on its README page.
+
+## Pre-build gate
+Run AFTER the build (Nov 17 2026, at Brett's request; this PR was opened before the gate was enforced on every build), against the actual diff. Shapes: `job` `external` (plus the standing parameters). Open items below did not shape the build and are not done yet.
+- D11 Secrets / access: Y. No secrets or keys; `permissions: contents: read`; scanner pinned to one commit.
+- C2 No cron: Y. `pull_request` only.
+- C3 Nothing fails silently: mostly Y (a self-test proves the scanner still flags a bad sample; no scanner = exit 2). N, small: the scan's own output goes to /dev/null, so a scanner crash mid-scan is reported as "found something new". Loud but misleading. Companion (not done): keep stderr in the report and say "scanner error" for exit codes that are not findings.
+- C5 Fail-closed on purpose: Y. A broken scanner blocks (exit 2); no skills folder passes with a visible notice.
+- C8 Branch / PR / merge: Y, BUILD_VERSION untouched. N: no staging twin, and the new workflow file needs the staging sync step (see "Things to know").
+- C9 GATED: no (CI config only; no money, PII, auth or schema).
+- C11 Safe start: Y. Runs only on PRs that touch skills.
+- C13 Manual steps for Brett: merge; then the staging workflow-file sync per BRANCH_POLICY.
+- C15 Cost: no AI calls; free GitHub Actions minutes on a public repo.
+- B27 Where else: N. `context/THIRD_PARTY_SKILLS.md` does not yet say new skills are scanned on every PR. Companion (not done): one line there.
+- B31 Settings: the pinned commit is deliberately a constant (changing it means re-vetting).
+- D10 Scheduled job: N/A (CI, not a Hub job).
+
+## Late requests
+None yet.
