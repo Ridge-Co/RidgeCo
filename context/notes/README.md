@@ -5,10 +5,11 @@ therefore always conflicted on those two files, and a session had to re-cut its 
 does not touch the two big files. A new file can never conflict with anyone else's.
 
 ## Rules
-1. **A PR adds `context/notes/YYYYMMDD-<branch-slug>.md` and does NOT edit `CURRENT.md` or `FEATURE_LOG.md`.** (The big files stay as the
-   history up to Oct 21 2026; a later tidy-up PR may fold notes into them. Nobody else should.)
-2. **"Load context first" includes this folder:** read `CURRENT.md`, then every file in `context/notes/` (newest first). Notes are the
-   newest status; where a note and `CURRENT.md` disagree, the note wins.
+1. **A PR adds `context/notes/YYYYMMDD-<branch-slug>.md` and does NOT edit `CURRENT.md` or `FEATURE_LOG.md`.** (FEATURE_LOG.md stays as the history up to Oct 21 2026;
+   the old CURRENT.md log was frozen on branch `archive/current-md-history` on Nov 17 2026 and CURRENT.md is now a short index. Nobody else should edit either.)
+2. **"Load context first" includes this folder:** read `CURRENT.md` (a short index since Nov 17 2026), then the recent notes here (newest
+   first, about the last two weeks) and grep older ones for your topic. Notes are the newest status; where a note and the archived
+   history (branch `archive/current-md-history`, `context/CURRENT.md`) disagree, the note wins.
 3. A note is edited only by the PR that created it (so it stays conflict-free). To change status later (merged, verified, superseded),
    do it in a NEW PR's note that says "supersedes note X" or by editing the old note in that later PR; never both at once.
 4. `scripts/doc_audit.py` counts each note as one documentation entry, so the nightly "undocumented commit" audit still works.
