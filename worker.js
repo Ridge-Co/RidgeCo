@@ -4703,7 +4703,7 @@ async function receiptReconConfirm(env, body) {
       qbEmail = { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
     } catch (e) { qbEmail = { sent: false, error: String(e && e.message || e) }; }
   }
-  return json({ ok: true, wo_id, property_id, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
+  return json({ ok: true, wo_id, property_id, receipt_number: String(row.Invoice_Number || '').trim(), ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
 }
 
 // POST /receipt/attach-only { id, wo_id, property_id?, amount?, description?, store?, date? } —
