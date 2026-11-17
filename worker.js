@@ -8750,7 +8750,7 @@ async function woTriageSet(env, body) {
   if (raise) fields.Priority = 'urgent';
   await ensureColumns(env, 'Work_Orders', TRIAGE_COLS);
   await updateRowVerified(env, 'Work_Orders', woId, fields);
-  try { await logWOAudit(env, woId, 'admin', 'admin', 'Triage_Tier', String(wo.Triage_Tier || ''), tier, 'Tier set by hand' + (reason ? ': ' + reason : '') + (raise ? ' (Priority raised to urgent)' : '')); } catch (e) { console.error('triage-set audit failed:', schedErrText(e)); }
+  try { await logWOAudit(env, woId, 'admin', 'admin', 'Triage_Tier', String(wo.Triage_Tier || ''), tier, 'Tier set by hand' + (reason ? ': ' + reason : '') + (raise ? ' (Priority raised to urgent)' : '')); } catch (e) { try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'wo_triage_audit', ref: 'WO ' + woId, severity: 'P2', message: 'Tier set by hand on ' + woId + ' but the audit row did not save: ' + schedErrText(e) }); } catch (_) { console.error('triage-set audit failed:', schedErrText(e)); } }
   return json({ success: true, tier, priority_raised: raise });
 }
 // POST /wo/triage-preview {text, trade} (ADMIN ONLY): shows what the rules would say. Writes nothing.
