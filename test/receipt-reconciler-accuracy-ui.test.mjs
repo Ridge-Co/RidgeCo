@@ -55,7 +55,7 @@ for (const vp of [{ n: '412', w: 412, h: 915, mobile: true }, { n: '1366', w: 13
   ok(await page.locator('#rc1 button:has-text("customer\'s card")').count() >= 1, 'every pending row has the customer-card button');
   const woOpts = await page.locator('#rc1-wo optgroup').evaluateAll(gs => gs.map(g => g.label + ':' + [...g.querySelectorAll('option')].map(o => o.value).join(',')));
   if (process.env.DEBUG_WO) console.log(JSON.stringify(woOpts));
-  ok(woOpts.some(g => /last 30 days:.*1002/.test(g)) && !woOpts.some(g => /1003/.test(g)), 'work order closed 10 days ago is offered; one closed 90 days ago is not (until "show older")');
+  ok(woOpts.some(g => /last year:.*1002/.test(g)) && !woOpts.some(g => /1003/.test(g)), 'work order closed 10 days ago is offered; one closed 400 days ago is not (until "show older")');
   // business card: pickers behind the toggle
   ok(await page.locator('#rc2-billbox').isHidden(), 'business card hides the work-order pickers at first');
   await page.locator('#rc2-bill').check();
