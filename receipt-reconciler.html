@@ -1959,8 +1959,132 @@ async function confirmDuplicateFromEvidence(id, idx, btn){
 }
 
 
+// ═══ QB-BATCH-UI-BEGIN (Nov 17 2026) — "Waiting to send to QuickBooks" + "Delete this in QuickBooks by hand" ═══════════════════════════════════
+// Self-contained on purpose (own container #qb-batch-section, own functions, all prefixed qbb): the receipt-picker branch edits other parts of this page.
+// Nothing here is emailed from the page: it lists what the daily job will send, lets Brett hold / reverse a receipt, send the batch now, and tick off
+// the QuickBooks entries he still has to delete by hand after reversing a receipt that had already been sent.
+let qbbState = null, qbbOpen = false, qbbBusy = false, qbbStatusHtml = '';
+function qbbHoursText(ns){
+  if (!ns) return 'send time unknown';
+  if (!ns.hours_until) return 'goes out at the next scheduler check (daily send is due)';
+  return 'goes out in about ' + ns.hours_until + ' h (daily at ' + esc(ns.at) + ' ET)';
+}
+function qbbDeleteBoxHtml(d){
+  const id = esc(d.receipt_id);
+  return '<div class="qbb-del" id="qbb-del-'+id+'" style="border:2px solid #b42318;background:#fdecea;border-radius:6px;padding:10px;margin:8px 0">'
+    + '<div style="font-weight:bold;color:#b42318;margin-bottom:4px">Delete this in QuickBooks by hand</div>'
+    + '<div style="font-size:12px">Vendor: <b>'+esc(d.vendor)+'</b> · Amount: <b>$'+esc(money(d.amount))+'</b> · Receipt date: <b>'+esc(d.receipt_date)+'</b><br>'
+    + 'Hub receipt #'+esc(d.hub_receipt_number)+' · Email subject sent: <i>'+esc(d.email_subject)+'</i><br>Emailed to QuickBooks on '+esc(String(d.qb_email_sent_date||'').slice(0,10))+'</div>'
+    + '<label style="display:block;margin-top:8px;font-size:12px;cursor:pointer"><input type="checkbox" onchange="qbbDeleteDone(\''+id+'\', this)"> I deleted it in QuickBooks</label></div>';
+}
+function qbbShowDeleteNeeded(d){
+  if (!d) return;
+  let box = document.getElementById('qbb-delete-toast');
+  if (!box) { box = document.createElement('div'); box.id = 'qbb-delete-toast'; box.style.cssText = 'position:fixed;left:8px;right:8px;bottom:8px;z-index:60;max-width:560px;margin:auto'; document.body.appendChild(box); }
+  box.innerHTML = qbbDeleteBoxHtml(d) + '<div style="text-align:right"><button class="btn small secondary" onclick="this.parentNode.parentNode.innerHTML=\'\';qbbLoad()">Close (it stays in the list below until ticked)</button></div>';
+  qbbLoad();
+}
+async function qbbDeleteDone(receiptId, cb){
+  cb.disabled = true;
+  try {
+    const res = await post('/receipts/qb-batch/delete-done', { receipt_id: receiptId, done: cb.checked });
+    if (res.error) throw new Error(res.error);
+    toast('<span class="ok">Recorded: deleted in QuickBooks (receipt #'+esc(receiptId)+').</span>');
+    await qbbLoad();
+  } catch(e){ cb.checked = !cb.checked; toast('<span class="err">Could not save the tick: '+esc(e.message)+'</span>'); }
+  cb.disabled = false;
+}
+async function qbbLoad(){
+  const el = document.getElementById('qb-batch-section'); if (!el) return;
+  try {
+    const d = await get('/receipts/qb-batch');
+    if (d.error || d.ok === false) throw new Error(d.error || 'failed');
+    qbbState = d; qbbRender();
+  } catch(e){ el.innerHTML = '<div class="section"><div class="err">❌ Could not load the QuickBooks batch list: '+esc(e.message)+'</div></div>'; }
+}
+function qbbRender(){
+  const el = document.getElementById('qb-batch-section'); if (!el || !qbbState) return;
+  const d = qbbState, c = d.counts || {};
+  const waiting = (c.ready||0) + (c.held||0) + (c.failed||0) + (c.sending||0);
+  const cleanup = d.cleanup || [];
+  const badge = '<span class="pill '+((c.failed||c.sending)?'danger':'suggest')+'" id="qbb-count">'+waiting+'</span>';
+  let h = '<div class="section"><details id="qbb-details"'+(qbbOpen || cleanup.length ? ' open' : '')+' ontoggle="qbbOpen=this.open">'
+    + '<summary style="cursor:pointer;font-weight:bold">Waiting to send to QuickBooks '+badge
+    + (cleanup.length ? ' <span class="pill danger">'+cleanup.length+' to delete in QuickBooks</span>' : '')+'</summary>';
+  h += '<div style="font-size:12px;color:var(--muted);margin:6px 0">'+esc(qbbHoursText(d.next_send))+'. '+(c.held?esc(c.held+' on hold (not sent until you release them). '):'')+'</div>';
+  if (d.schedule_note) h += '<div class="warn" style="font-size:12px;margin:4px 0">⚠ '+esc(d.schedule_note)+'</div>';
+  if (cleanup.length) {
+    h += '<div style="margin:8px 0"><b>Still to delete in QuickBooks (tick when done)</b>'+cleanup.map(qbbDeleteBoxHtml).join('')+'</div>';
+  }
+  if (!(d.items||[]).length) h += '<div class="empty">Nothing is waiting.</div>';
+  h += (d.items||[]).map(it => {
+    const rid = esc(it.receipt_id);
+    const where = it.wo_id ? ('WO '+esc(it.wo_id)+(it.wo_description?' — '+esc(it.wo_description):'')) : (it.property_address ? esc(it.property_address) : 'Ridge Co expense (no job)');
+    const st = it.status === 'held' ? '<span class="pill warn">On hold</span>' : it.status === 'failed' ? '<span class="pill danger">Send failed</span>' : it.status === 'sending' ? '<span class="pill danger">'+(it.stuck?'Stuck sending':'Sending…')+'</span>' : '<span class="pill suggest">Ready</span>';
+    let btns = '';
+    if (it.status === 'ready') btns += '<button class="btn small secondary" onclick="qbbAct(\''+rid+'\',\'hold\',this)">Hold</button>';
+    if (it.status === 'held' || it.status === 'failed' || it.stuck) btns += '<button class="btn small secondary" onclick="qbbAct(\''+rid+'\',\'release\',this)">'+(it.status==='held'?'Release':'Retry')+'</button>';
+    if (it.stuck) btns += '<button class="btn small secondary" onclick="qbbAct(\''+rid+'\',\'mark_sent\',this)">It did go out</button>';
+    if (it.can_reverse) btns += '<button class="btn small warnbtn" onclick="qbbReverse(\''+esc(it.queue_id)+'\',\''+rid+'\',this)">Reverse</button>';
+    return '<div class="rc-prow" id="qbb-'+rid+'" style="display:block;padding:8px 0;border-top:1px solid var(--border)">'
+      + '<div><b>'+esc(it.store||'(vendor unknown)')+'</b> $'+esc(money(it.amount))+' · '+esc(it.date)+' · receipt #'+esc(it.receipt_number||'—')+' '+st+'</div>'
+      + '<div style="font-size:12px;color:var(--muted)">'+where+' · Hub row '+rid+'</div>'
+      + (it.error ? '<div class="err" style="font-size:12px">'+esc(it.error)+'</div>' : '')
+      + '<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">'+btns+'</div></div>';
+  }).join('');
+  h += '<div style="margin-top:10px"><button class="btn small" id="qbb-sendnow" onclick="qbbSendNow(this)"'+((c.ready||c.failed)?'':' disabled')+'>Send batch now</button> <span id="qbb-status" class="rc-status" style="margin-left:6px">'+qbbStatusHtml+'</span></div>';
+  h += '</details></div>';
+  el.innerHTML = h;
+}
+async function qbbAct(receiptId, action, btn){
+  if (btn) btn.disabled = true;
+  try {
+    const res = await post('/receipts/qb-batch/action', { receipt_id: receiptId, action });
+    if (res.error) throw new Error(res.error);
+    await qbbLoad();
+  } catch(e){ toast('<span class="err">❌ '+esc(e.message)+'</span>'); if (btn) btn.disabled = false; }
+}
+// Reverse = the same server path as "Undo confirmation" (back to Pending, invoice amount and image reversed). Never sent yet, so there is nothing to delete in QuickBooks.
+async function qbbReverse(queueId, receiptId, btn){
+  if (!armed(btn, 'Tap again to reverse')) return;   // back to Pending, will not be sent to QuickBooks
+  if (btn) btn.disabled = true;
+  try {
+    const res = await post('/receipt-recon/undo', { id: queueId });
+    if (res.error) throw new Error(res.error);
+    toast('<span class="ok">↩ Reversed — back in Pending.</span>');
+    if (res.qb_delete_needed) qbbShowDeleteNeeded(res.qb_delete_needed);
+    await qbbLoad(); await loadQueue();
+  } catch(e){ toast('<span class="err">❌ '+esc(e.message)+'</span>'); if (btn) btn.disabled = false; }
+}
+// "Send batch now": the Worker sends a few per call (Cloudflare limit), so this loops until nothing remains, nothing more can be sent, or an error shows.
+async function qbbSendNow(btn){
+  if (qbbBusy) return;
+  if (!armed(btn, 'Tap again to send now')) return;   // sends everything ready now instead of waiting for the daily send; held receipts stay held
+  qbbBusy = true; if (btn) btn.disabled = true;
+  const st = () => document.getElementById('qbb-status');
+  let sent = 0, failed = [], rounds = 0, stalled = 0;
+  try {
+    for (;;) {
+      rounds++; qbbStatusHtml = '<span class="info">Sending… '+sent+' sent so far</span>'; if (st()) st().innerHTML = qbbStatusHtml;
+      const res = await post('/receipts/qb-batch/send-now', {});
+      if (res.error || res.ok === false) throw new Error(res.error || 'the send failed');
+      sent += res.sent || 0; failed = failed.concat(res.failed || []);
+      if (!res.remaining) break;
+      if (!(res.sent > 0)) { if (++stalled >= 2) break; } else stalled = 0;
+      if (rounds >= 60) break;
+    }
+    qbbStatusHtml = failed.length
+      ? '<span class="err">❌ '+sent+' sent, '+failed.length+' failed: '+esc(failed.slice(0,3).map(f => '#'+f.id+' '+f.error).join(' | '))+'</span>'
+      : '<span class="ok">✓ '+sent+' sent to QuickBooks.</span>';
+  } catch(e){ qbbStatusHtml = '<span class="err">❌ '+esc(e.message)+' ('+sent+' sent before it stopped)</span>'; }
+  qbbBusy = false;
+  await qbbLoad();
+}
+// ═══ QB-BATCH-UI-END ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
 renderTabs();
 loadQueue();
+qbbLoad();
 </script>
 </body>
 </html>
