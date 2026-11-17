@@ -5456,7 +5456,7 @@ async function receiptReconSearch(env, url) {
     if (dateParam && String(r.Date || '').slice(0, 10) !== dateParam) return false;
     if (!qRaw) return true;
     if (hasAmount && Math.abs(Number(r.Amount) - qAmount) < 0.01) return true;
-    const blob = _rcNorm([r.Store, r.Description, r.WO_ID, r.Property_ID].filter(Boolean).join(' '));
+    const blob = _rcNorm([r.Store, r.Description, r.WO_ID, r.Property_ID, r.Receipt_Number].filter(Boolean).join(' '));
     return !!(qNorm && blob.indexOf(qNorm) >= 0);
   }).map(r => {
     const prop = r.Property_ID ? propById.get(String(r.Property_ID)) : null;
