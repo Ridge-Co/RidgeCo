@@ -1576,9 +1576,11 @@ async function attachNonBillingRow(id, btn, reason){
   const description = document.getElementById(idAttr+'-desc').value.trim();
   statusEl.innerHTML = '<span class="info">'+(fixed ? 'Recording the job cost, not billing…' : 'Attaching as a reference, not billing…')+'</span>';
   try {
-    const res = await post('/receipt/attach-only', { id, wo_id, amount, store, date, description, customer_card: true });
+    const res = await post('/receipt/attach-only', { id, wo_id, amount, store, date, description, non_billing_reason: reason, customer_card: !fixed });
     if (res.error) throw new Error(res.error);
-    statusEl.innerHTML = '<span class="ok">✓ Attached to '+esc(wo_id)+' as a reference — not billed, nothing added to the invoice.</span>';
+    const qbBad = fixed && res.qb_email && !res.qb_email.sent;
+    if (qbBad) toast('<span class="err">Job cost saved on WO '+esc(wo_id)+' and not billed, but it was NOT sent to QuickBooks: '+esc(res.qb_email.error || 'unknown reason')+' (the daily sweep will retry).</span>');
+    statusEl.innerHTML = fixed ? '<span class="ok">✓ Fixed-price job cost recorded on '+esc(wo_id)+' — not billed, nothing added to the invoice.</span>' : '<span class="ok">✓ Attached to '+esc(wo_id)+' as a reference — not billed, nothing added to the invoice.</span>';
     finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
