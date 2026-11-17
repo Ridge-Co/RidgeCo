@@ -15123,7 +15123,7 @@ async function addEstimateVersion(env, body) {
   const _estByAdmin = /^(admin|hub|brett)$/i.test(String(body.created_by || ''));
   let overMaxReason = '', overMaxReasonEn = '', overMax = false;
   if (!_estByAdmin) {
-    let _mwo = null; try { _mwo = findWO(await fetchTab(env, 'Work_Orders'), woId); } catch (_) {}
+    let _mwo = null; try { _mwo = findWO(await fetchTab(env, 'Work_Orders'), woId); } catch (e) { await softFail(env, 'addEstimateVersion:maxPriceRead', e, { severity: 'P1', ref: String(woId), source: 'read', context: 'the job max price could not be read, so this estimate was accepted without the over-max check' }); }
     const _mxRaw = parseFloat(String((_mwo && _mwo.Max_Price) == null ? '' : _mwo.Max_Price).replace(/[$,\s]/g, ''));   // inline (not maxPriceNum) so this function stays self-contained for tests that run it alone
     const _mx = Number.isFinite(_mxRaw) && _mxRaw > 0 ? _mxRaw : 0;
     if (_mx && subtotal > _mx + 0.004) {
