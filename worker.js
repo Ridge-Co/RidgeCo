@@ -38444,7 +38444,7 @@ async function qbSendCombinedInvoice(env, ctx) {
           const hits = (dupR && dupR.QueryResponse && dupR.QueryResponse.Invoice) || [];
           const others = hits.filter(x => String(x.Id) !== String(invoiceId));
           if (others.length) warnings.push(`Invoice number ${invoiceDocNumber} is already used by invoice ${others.map(o => o.Id).join(', ')}.`);
-        } catch (e) {}
+        } catch (e) { await softFail(env, 'qbSendCombinedInvoice:dupNumberCheck', e, { severity: 'P2', ref: String(leadIr.ID || ''), source: 'qbo', context: 'the invoice-number duplicate check could not run' }); }
       }
     }
 
