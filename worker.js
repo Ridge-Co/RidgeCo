@@ -4334,6 +4334,13 @@ async function receiptReconScan(env, body) {
   }
   if (failuresChanged) { try { await setConfigKey(env, { key: 'receipt_recon_failures', value: JSON.stringify(failures) }); } catch (e) { errs.push('could not save the attempt tracker: ' + schedErrText(e)); console.error('receiptReconScan: tracker write failed:', schedErrText(e)); } }
   const stuckNow = Object.values(failures).filter(x => x.attempts >= 3).map(x => x.name);
+  const stuckFiles = Object.keys(failures).filter(id => failures[id].attempts >= 3).map(id => ({ id, name: failures[id].name, error: failures[id].error, attempts: failures[id].attempts }));
+  // Nov 17 2026 (no-silent-failures): an errored file is named in Needs Attention, not just counted on the page. reportFailure never throws.
+  // P1 when a file is now stuck (3 failed tries, it is skipped from here on); P2 for a first or second failure that the next scan will retry.
+  if (errorFiles.length) {
+    await reportFailure(env, { system: 'hub', source: 'receipt', where: 'receipt_recon_scan_files', ref: '', severity: stuckFiles.length ? 'P1' : 'P2',
+      message: failTrim(errorFiles.length + ' file(s) errored in the Receipt Reconciler scan: ' + errorFiles.slice(0, 5).map(x => x.name + ' (' + x.id + '): ' + x.error).join('; ') + (errorFiles.length > 5 ? ' (+' + (errorFiles.length - 5) + ' more)' : ''), 280) });
+  }
   if (pausedMid) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: n, auto_handled: autoHandled, remaining: allNew.length - n, errors: errs, stuck: stuckNow, reason: 'paused: AI credit - the scan stopped when Anthropic credit ran out; remaining receipts wait in Drive' });
   return json({ ok: true, folder_id: folder, scanned: n, skipped_before_cutoff: skippedOld, flagged_rescan: flaggedRescan, vendor_invoice_skipped: vendorInvoiceSkipped, auto_handled: autoHandled, auto_failed: autoFailed, list_errors: listErrors, cutoff, remaining: allNew.length - newFiles.length, errors: errs, stuck: stuckNow, config_error: configError || undefined });
 }
