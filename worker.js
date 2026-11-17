@@ -1204,7 +1204,10 @@ const _hubWorkerCore = {
         if (path === '/receipt-recon/unskip')     return await receiptReconUnskip(env, body);
         if (path === '/receipt-recon/skip-before-cutoff') return await receiptReconSkipBeforeCutoff(env, body);
         if (path === '/receipt-recon/purge-duplicates')  return await purgeConfirmedDuplicateReceipts(env);
-        if (path === '/receipts/send-to-qb-email') return await sendReceiptsToQBEmail(env, body);
+        if (path === '/receipts/send-to-qb-email') return await sendReceiptsToQBEmail(env, Object.assign({}, body, { release: true, manual: true }));   // explicit tap/backfill = a real send; everything else only queues (Nov 17 2026)
+        if (path === '/receipts/qb-batch/send-now') return await sendReceiptsToQBEmail(env, { limit: body && body.limit, ids: body && body.ids, release: true, manual: true });   // "Send batch now" (the page calls it until remaining is 0)
+        if (path === '/receipts/qb-batch/action') return await qbBatchAction(env, body);
+        if (path === '/receipts/qb-batch/delete-done') return await qbBatchDeleteDone(env, body);
         if (path === '/receipt-recon/backfill-items-summary') return await backfillItemsSummary(env, body);
         if (path === '/trash/property/add')       return await trashAddProperty(env, body);
         if (path === '/trash/property/update')    return await updateRow(env, 'Trash_Properties', body.id, body.fields);
