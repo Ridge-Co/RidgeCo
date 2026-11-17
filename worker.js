@@ -6763,9 +6763,9 @@ async function scopeProposalSend(env, body) {
     await ensureTab(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
     await ensureColumns(env, PROPOSAL_SEND_LOG_TAB, PROPOSAL_SEND_LOG_COLS);
     await addRow(env, PROPOSAL_SEND_LOG_TAB, { Timestamp: new Date().toISOString(), Scope_ID: String(id), Owner_ID: owner.ID, Owner_Name: ownerName, Email: email, Address: addr, Link: url, Result: 'sent', SMS_Result: sms.status + (sms.note ? ' - ' + sms.note : '') });
-  } catch (_) { /* audit log best-effort; the send already happened */ }
+  } catch (e) { await softFail(env, 'scopeProposalSend:sendLog', e, { severity: 'P2', ref: String(id), source: 'write', context: 'the send happened; its Proposal_Send_Log row was not saved' }); }   // the send already happened, so the response still says success
 
-  return json({ success: true, sent_to: email, sent_at: new Date().toISOString(), url, sms });
+  return json({ success: true, sent_to: email, sent_at: new Date().toISOString(), url, sms, warnings });
 }
 
 // PUBLIC (link-token gated): the customer-safe payload scope-proposal.html renders. Serves the
