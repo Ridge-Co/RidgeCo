@@ -19804,11 +19804,13 @@ async function softFlush(env, req) {
   return items.length;
 }
 // Wraps fetchTab: { rows, error }. On failure rows is [] and the failure is reported once. No extra Sheets read.
-// opts: { where, req, severity (default P2; use P1 when a decision or a send is made on these rows), readOpts }
+// opts: { where, req, severity (default P2; use P1 when a decision or a send is made on these rows), readOpts, optional }
+// optional:true = this tab may legitimately not exist yet (created on first use): a missing tab is an empty list, not a failure. Any other error is still reported.
 async function fetchTabSoft(env, tab, opts) {
   opts = opts || {};
   try { return { rows: await fetchTab(env, tab, opts.readOpts), error: null }; }
   catch (e) {
+    if (opts.optional && typeof isMissingTabError === 'function' && isMissingTabError(e)) return { rows: [], error: null };
     const r = await softFail(env, opts.where || ('read:' + tab), e, { req: opts.req, severity: opts.severity || 'P2', ref: tab, source: 'read' });
     return { rows: [], error: r.error };
   }
