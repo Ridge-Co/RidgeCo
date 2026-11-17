@@ -14011,6 +14011,13 @@ async function approveInvoiceReview(env, body) {
     catch (e) { return json({ error: 'Could not confirm whether this job is billed through a signed proposal, so its receipts were not billed — try again.' }, 503); }
     if (covered) return json({ error: `This job is billed through signed proposal Scope #${covered.scope_id} (its payment milestones already include materials) — its receipts can't be invoiced again here. Reload and untick them.`, scope_covered: covered }, 409);
   }
+  // Nov 17 2026 backstop: a reference-only receipt (customer-card attach, attach-only) must never be billed to the customer, even from a stale page.
+  if (_ownIds.length) {
+    let _nb = [];
+    try { _nb = await nonBillingReceiptIdsAmong(env, _ownIds); }
+    catch (e) { return json({ error: 'Could not confirm which receipts are billable (the Receipts tab could not be read), so none were billed — try again.' }, 503); }
+    if (_nb.length) return json({ error: `Receipt(s) ${_nb.join(', ')} are reference-only (customer card or attached image) and can't be billed to the customer. Untick them and approve again.`, code: 'receipt_not_billable', receipt_ids: _nb }, 409);
+  }
   const today = new Date().toISOString().split('T')[0];
   // Padded pricing (Oct 19 2026): the invoice builder folds the instant-pay pad into its cost basis and tells us the amount; we re-derive it from
   // the fee schedule and refuse a mismatch loudly, so the pad on the bill always equals the pad the customer's price was built on.
