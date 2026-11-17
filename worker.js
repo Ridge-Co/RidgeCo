@@ -5147,7 +5147,7 @@ async function receiptReconReassign(env, body) {
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: original.Payment_Source,
   });
-  const addJson = await addResp.json().catch(() => ({}));
+  const addJson = await addResp.json().catch(async (e) => { await softFail(env, 'receiptReconReassign:addAnswer', e, { severity: 'P1', ref: String(row.ID || ''), source: 'parse', context: 'the receipt add answer was unreadable, so it may have saved even though this shows as failed' }); return {}; });
 
   let invoiceLink = null;
   if (addJson && addJson.success && !addJson.duplicate && wo_id && addJson.id) {
