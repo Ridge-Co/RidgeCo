@@ -9440,7 +9440,7 @@ async function createWorkOrder(env, body) {
   // (parsed inline, not via maxPriceNum, so this function stays self-contained for the tests that run it on its own)
   const _mpRaw = parseFloat(String(body.max_price == null ? '' : body.max_price).replace(/[$,\s]/g, ''));
   const _maxPrice = Number.isFinite(_mpRaw) && _mpRaw > 0 ? Math.round(_mpRaw * 100) / 100 : 0;
-  if (_maxPrice) { try { await ensureColumns(env, 'Work_Orders', ['Max_Price']); } catch(_){} }
+  if (_maxPrice) { try { await ensureColumns(env, 'Work_Orders', ['Max_Price']); } catch(_){} } // silent-ok: ensureColumns reports its own failure to the ledger
   const data = await sheetsRequest(env, 'GET', `/values/Work_Orders`);
   const rows = data.values || [];
   if (!rows.length) throw new Error('Work_Orders tab has no headers');
