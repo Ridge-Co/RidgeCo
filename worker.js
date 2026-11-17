@@ -15148,7 +15148,7 @@ async function addEstimateVersion(env, body) {
   const changeReason = nextVersion === 1 ? 'Initial estimate' : (body.change_reason||'Revised');
   let storedLineItems = body.line_items, changeReasonEn = '';
   try {
-    const vendorRow = body.vendor_id ? (await fetchTab(env, 'Vendors').catch(() => [])).find(v => String(v.ID) === String(body.vendor_id)) : null;
+    const vendorRow = body.vendor_id ? (await fetchTab(env, 'Vendors').catch(() => [])).find(v => String(v.ID) === String(body.vendor_id)) : null;   // silent-ok: a vendor row that cannot be read only turns off forced Spanish handling
     const en = await estimateEnglishFields(env, body.line_items, nextVersion === 1 ? '' : changeReason, { force: vendorWantsSpanish(vendorRow) });
     if (en.ok) { storedLineItems = en.line_items; changeReasonEn = en.change_reason_en; }
   } catch (_) {}
