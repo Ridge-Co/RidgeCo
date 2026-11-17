@@ -1368,8 +1368,8 @@ function rowCard(r){
   }
 
   // Brett, Sep 22 2026: one tap to record a receipt as an EXPENSE (no work order, no customer
-  // invoice) against Ridge Co or 1864 Kerns School Rd — it goes straight to QuickBooks' receipts
-  // inbox for the expense record. Offered on every pending receipt, including ones the scanner
+  // invoice) against Ridge Co or 1864 Kerns School Rd — it waits in the daily QuickBooks batch
+  // (receipts inbox) for the expense record. Offered on every pending receipt, including ones the scanner
   // matched to a job address, so nothing is forced onto a work order unless Brett picks one.
   // For a refund (Part 3), this is the "no match / partial — post as expense" path: same button,
   // same endpoint, but the amount field above is negative so it posts as money back.
