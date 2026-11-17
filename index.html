@@ -166,6 +166,7 @@ window.addEventListener('pageshow', function(e){
   .badge-declined { background: #fdecea; color: var(--danger); }
   .badge-cancelled { background: #f3f5f8; color: var(--muted); border: 1px solid var(--border); }
   .priority-urgent { border-left: 3px solid var(--danger); }
+  .wo-card.tri-emergency { border-left: 4px solid var(--danger); }
   .priority-normal { border-left: 3px solid var(--border); }
   .priority-low { border-left: 3px solid var(--muted); }
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -415,6 +416,7 @@ window.addEventListener('pageshow', function(e){
           <option value="date-desc">Newest First</option>
           <option value="date-asc">Oldest First</option>
           <option value="priority">Priority</option>
+          <option value="triage">Emergency first</option>
           <option value="status">Status</option>
           <option value="address">Address A-Z</option>
         </select>
@@ -2555,10 +2557,39 @@ function renderDashboard() {
   document.getElementById('stat-invoiced').textContent = wos.filter(function(w){return w.Status==='Invoiced';}).length;
   document.getElementById('stat-props').textContent = state.properties.length;
   var active = wos.filter(function(w){return !closed.includes(w.Status);})
-    .sort(function(a,b){return ({urgent:0,normal:1,low:2}[a.Priority]||1)-({urgent:0,normal:1,low:2}[b.Priority]||1);})
+    .sort(function(a,b){var t=triRank(a)-triRank(b); if(t!==0) return t; return ({urgent:0,normal:1,low:2}[a.Priority]||1)-({urgent:0,normal:1,low:2}[b.Priority]||1);})
     .slice(0,15);
   var el = document.getElementById('dashboard-wo-list');
   el.innerHTML = active.length ? active.map(woCard).join('') : '<div class="loading">No active work orders</div>';
+}
+
+// ── Severity triage (queue #142 Phase 1). Only shows when the server stamped a Triage_Tier; nothing appears while Config Triage_Enabled is off.
+var TRI_ORDER = {Emergency:0, Urgent:1, Routine:2, Low:3};
+var TRI_STYLE = {Emergency:'background:#fdecea;border:1px solid var(--danger);color:var(--danger)', Urgent:'background:#fdf2e2;border:1px solid var(--warn);color:var(--warn)', Routine:'background:var(--surface2);border:1px solid var(--border);color:var(--muted)', Low:'background:var(--surface2);border:1px solid var(--border);color:var(--muted)'};
+function triRank(w){ var r = TRI_ORDER[w && w.Triage_Tier]; return r === undefined ? 2 : r; }
+function triAnyStamped(){ return safeArray(state.workorders).some(function(x){ return !!x.Triage_Tier; }); }
+function triChipHTML(w){
+  if (w.Triage_Tier) return ' <span class="badge" title="'+esc(w.Triage_Summary||'')+'" style="'+(TRI_STYLE[w.Triage_Tier]||'')+';margin-left:4px">'+esc(String(w.Triage_Tier).toUpperCase())+'</span>';
+  var open = WOStatus.sets.OPEN_WORK.includes(w.Status), young = w.Created_Date && (Date.now()-new Date(w.Created_Date)) < 3*86400000;
+  if (open && young && triAnyStamped()) return ' <span class="badge" title="Triage did not run for this one. Check it by hand." style="background:var(--surface2);border:1px solid var(--border);color:var(--muted);margin-left:4px">NOT TRIAGED</span>';
+  return '';
+}
+function triageDetailHTML(wo){
+  if (!wo.Triage_Tier) return '';
+  var due = wo.Triage_Due_At ? new Date(wo.Triage_Due_At).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
+  return '<div id="tri-box" style="margin-bottom:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface2);font-size:13px;line-height:1.5">' +
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span class="badge" style="'+(TRI_STYLE[wo.Triage_Tier]||'')+'">'+esc(String(wo.Triage_Tier).toUpperCase())+'</span>' +
+    (due ? '<span style="color:var(--muted);font-size:13px">Respond by '+esc(due)+'</span>' : '') +
+    '<select aria-label="Change tier" onchange="triageSetTier(\''+wo.ID+'\',this.value)" style="margin-left:auto;min-height:44px;font-size:16px;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);padding:0 8px">' +
+    '<option value="">Change tier</option>' + ['Emergency','Urgent','Routine','Low'].map(function(t){ return '<option value="'+t+'">'+t+'</option>'; }).join('') + '</select></div>' +
+    '<div style="color:var(--muted);font-size:13px;margin-top:6px">'+esc(wo.Triage_Summary||'')+(wo.Triage_Set_By==='admin' ? ' (set by hand)' : '')+'</div></div>';
+}
+function triageSetTier(woId, tier){
+  if (!tier) return;
+  api('POST','/wo/triage-set',{wo_id:woId, tier:tier}, 30000).then(function(res){
+    if (res && res.success) { toast('Tier set to '+tier+(res.priority_raised?' (priority raised to urgent)':''),'success'); loadAll().then(function(){ openWODetail(woId); }); }
+    else toast('Tier not saved: '+((res && (res.error||res.message))||'try again'),'error');
+  }).catch(function(e){ toast('Tier not saved: '+((e && e.message)||'try again'),'error'); });
 }
 
 function woCard(w) {
@@ -2575,7 +2606,7 @@ function woCard(w) {
     if (daysOpen >= 14) agingBadge = '<span class="badge" style="background:#fdecea;border:1px solid var(--danger);color:var(--danger);margin-left:4px">'+daysOpen+'d OVERDUE</span>';
     else if (daysOpen >= 7) agingBadge = '<span class="badge" style="background:#fdf2e2;border:1px solid var(--warn);color:var(--warn);margin-left:4px">'+daysOpen+'d AGING</span>';
   }
-  return '<div class="wo-card priority-'+(w.Priority||'normal')+'" data-woid="'+w.ID+'" onclick="woCk(this)">' +
+  return '<div class="wo-card priority-'+(w.Priority||'normal')+(w.Triage_Tier==='Emergency'?' tri-emergency':'')+'" data-woid="'+w.ID+'" onclick="woCk(this)">' +
     (_bulkWOMode ? '<input type="checkbox" class="wo-bulk-check" data-woid="'+w.ID+'"' +
     ' onclick="event.stopPropagation();var n=document.querySelectorAll(\'.wo-bulk-check:checked\').length;document.getElementById(\'bulk-count\').textContent=n+\' selected\';updateBulkCombineBtn();updateBulkVoidBtn()" style="width:auto;flex:none;cursor:pointer" />' : '') +
     '<div class="wo-id">'+w.ID+(w.Voided==='TRUE'?' <span style="background:#eee;border:1px solid #999;color:#666;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">VOIDED — '+esc(w.Void_Reason||'')+'</span>':'')+(w.Priority==='urgent'?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">URGENT</span>':'')+(w.Priority==='high'?' <span style="background:#fdf2e2;color:#fdba74;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">HIGH</span>':'')+(daysOpen>14?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">'+daysOpen+'d</span>':(daysOpen>7?' <span style="color:var(--warn);font-size:9px;margin-left:4px">'+daysOpen+'d</span>':''))+'</div>' +
@@ -2584,6 +2615,7 @@ function woCard(w) {
     '<div class="wo-right"><span class="badge '+sc+'">'+(w.Status||'New')+'</span>' +
     stageBadgeHTML(w) +
     agingBadge +
+    triChipHTML(w) +
     awExtraBadgeHTML(w) +
     fuBadgeHTML(w.ID) +
     (vendor?'<span style="font-size:11px;color:var(--muted)">'+vendor.Name+'</span>':'')+'</div></div>';
@@ -2749,6 +2781,7 @@ function renderWOPage() {
   wos.sort(function(a,b){
     if (sort==='date-asc') return new Date(a.Created_Date)-new Date(b.Created_Date);
     if (sort==='priority') { var d=(PRI[(a.Priority||'normal').toLowerCase()]??2)-(PRI[(b.Priority||'normal').toLowerCase()]??2); return d!==0?d:new Date(b.Created_Date)-new Date(a.Created_Date); }
+    if (sort==='triage') { var tr=triRank(a)-triRank(b); if (tr!==0) return tr; var pd=(PRI[(a.Priority||'normal').toLowerCase()]??2)-(PRI[(b.Priority||'normal').toLowerCase()]??2); return pd!==0?pd:new Date(b.Created_Date)-new Date(a.Created_Date); }
     if (sort==='status') return (STA[a.Status]??99)-(STA[b.Status]??99);
     if (sort==='address') { var pa=state.properties.find(function(p){return p.ID===a.Property_ID;}); var pb=state.properties.find(function(p){return p.ID===b.Property_ID;}); return (pa?.Address||'').localeCompare(pb?.Address||''); }
     return new Date(b.Created_Date)-new Date(a.Created_Date);
@@ -2871,7 +2904,7 @@ function openWODetail(woId) {
     _stStatuses.map(function(s){ return '<option value="'+s+'"'+(s===wo.Status?' selected':'')+'>→ '+s+'</option>'; }).join('') +
     '</select>' +
     '</div>';
-  document.getElementById('detail-body').innerHTML = stickyBar + '<div id="fu-card" style="margin-bottom:6px"></div>' + propHtml +
+  document.getElementById('detail-body').innerHTML = stickyBar + '<div id="fu-card" style="margin-bottom:6px"></div>' + triageDetailHTML(wo) + propHtml +
     '<div style="margin-bottom:14px">' +
     '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">DESCRIPTION</div>' +
     '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word" class="wo-detail-desc">' +

@@ -902,6 +902,7 @@ const _hubWorkerCore = {
             const _allowed = await resolveTenantSubmitAccess(env, body.property_id, body.unit_id);
             if (!_allowed) return json({ error: 'Work order submission is currently turned off for your unit. Please contact your property manager.', tenant_wo_disabled: true }, 403);
           }
+          body.__triage = TRIAGE_INTAKE_TYPES.includes(String(body.type || 'manual'));   // set here, never trusted from the client
           return await callWithFailureAlert(env, 'wo_create', '/workorder', () => createWorkOrder(env, body));
         }
         if (path === '/intake/email')             return await intakeEmail(env, body);
@@ -1013,6 +1014,8 @@ const _hubWorkerCore = {
         if (path === '/wo/combine')               return await woCombine(env, body);
         if (path === '/wo/split')                 return await woSplit(env, body);
         if (path === '/wo/duplicate')             return await woDuplicate(env, body);
+        if (path === '/wo/triage-set')            return await woTriageSet(env, body);       // queue #142, admin only (in no ROLE_SCOPES list)
+        if (path === '/wo/triage-preview')        return await woTriagePreview(env, body);   // queue #142, admin only, writes nothing
         if (path === '/wo/bid-group/unlink')      return await woBidGroupUnlink(env, body);
         if (path === '/wo/bid-group/cancel')      return await woBidGroupCancel(env, body);
         if (path === '/turnover/start')           return await startTurnoverManual(env, body);
@@ -8732,6 +8735,175 @@ function claimWOSignature(sig) {
   return true;
 }
 
+// ── SEVERITY TRIAGE (Nov 17 2026, queue #142 Phase 1 of 3: keyword rules, stamp, sort; no alert text, no AI) ─────────────
+// Every NEW request that comes in through intake (tenant portal, owner portal, Buildium email, the Hub's New Work Order form) gets a tier:
+// Emergency / Urgent / Routine / Low, a target response time, and the words that caused it, so Emergencies rise to the top of the Hub.
+// Rules, in order of importance:
+//  - Config Triage_Enabled blank = OFF: nothing is read, written or shown. Triage never changes Status, vendor or schedule.
+//  - It never LOWERS a Priority a person picked. An Emergency raises Priority to urgent (audit-logged, with the matched words).
+//  - Internal work orders (scope, add-on, recurring, turnover, delivery, split, duplicate) are never triaged: only createWorkOrder callers that set
+//    body.__triage (the /workorder route for tenant / owner / email / manual types, and the Buildium email intake) reach it.
+//  - FAIL OPEN and LOUD: a triage problem never fails or delays creating the work order; it is logged as a failed Ops_Telemetry row + a failure-ledger
+//    row and the work order simply shows "Not triaged" in the Hub. A tier set by hand (/wo/triage-set) is never overwritten.
+//  - Triage_* fields never leave the server for tenants, vendors or owners (enrichWO strips them).
+const TRIAGE_TIERS = ['Emergency', 'Urgent', 'Routine', 'Low'];
+const TRIAGE_SLA_DEFAULT = { Emergency: 1, Urgent: 4, Routine: 120, Low: 240 };   // hours; editable in Config Triage_SLA_Hours (JSON)
+const TRIAGE_COLS = ['Triage_Tier', 'Triage_Emergency', 'Triage_Trade', 'Triage_Summary', 'Triage_Source', 'Triage_Matched', 'Triage_Due_At', 'Triage_At', 'Triage_Set_By'];
+const TRIAGE_INTAKE_TYPES = ['tenant', 'owner', 'email', 'manual'];
+// [label, pattern] on text that has been lower-cased with accents removed (so "inundación" is matched as "inundacion").
+const TRIAGE_BUILTIN = {
+  emergency: [
+    ['flooding', /\b(flood(ed|ing|s)?|inundacion|inundado|inundando)\b/],
+    ['burst pipe', /\b(burst|bursting|broken)\s+(water\s+)?pipe|\bpipe\s+(has\s+|just\s+)?(burst|bursted|broke)|\btuberia\s+(rota|reventada)|reviento\s+(una\s+|la\s+)?tuberia/],
+    ['water pouring', /\bwater\s+(is\s+)?(pouring|gushing|spraying|shooting)|\bpouring\s+(out\s+)?water|water\s+(is\s+)?coming\s+(in\s+)?(through|from)\s+(the\s+)?(ceiling|roof|light|walls?)|se\s+sale\s+el\s+agua|agua\s+cayendo\s+del\s+techo/],
+    ['gas smell', /\bgas\s+(smell|odor|odour|leak|leaking)|\b(smell|smells|smelled|smelling)\s+(of\s+|like\s+)?(natural\s+)?gas\b|\bleaking\s+gas|olor\s+a\s+gas|fuga\s+de\s+gas|huele\s+a\s+gas/],
+    ['smoke', /\b(smoke|humo)\b/],
+    ['fire', /\b(on\s+fire|caught\s+fire|fire|fuego|incendio)\b(?!\s*(place|wood|door|extinguisher|alarm|code|escape|inspection|marshal|department|drill|sprinkler|panel|safety|resistant))/],
+    ['sparks', /\b(sparks?|sparking|sparked|chispas?|chispeando)\b/],
+    ['burning smell', /\bburning\s+(smell|odor|odour|plastic|rubber)|\bsmell(s|ed|ing)?\s+(like\s+|of\s+)?(burn(ing|t)|smoke)\b|\bsmells?\s+burnt|olor\s+a\s+(quemado|humo)/],
+    ['carbon monoxide', /\bcarbon\s+monoxide\b|\bco\s+(alarm|detector|reading)\b|monoxido\s+de\s+carbono/],
+    ['sewage backup', /\bsewage\b|\bsewer\s+(back|backup|backing|backed|overflow)|\braw\s+sewage|aguas?\s+negras?/],
+  ],
+  urgent: [
+    ['no hot water', /\bno\s+hot\s+water|without\s+hot\s+water|hot\s+water\s+(is\s+)?(not\s+working|out|gone|isn'?t\s+working|stopped)|water\s+heater\s+(is\s+)?(not\s+working|out|broken|dead|leaking)|sin\s+agua\s+caliente/],
+    ['alarm sounding', /\b(smoke|fire|co)\s+(detector|alarm)s?.{0,25}(going\s+off|goes\s+off|blaring|won'?t\s+stop|keeps\s+going\s+off)/],
+    ['fridge not cooling', /\b(fridge|refrigerator|refrigerador|freezer|nevera)\b.{0,40}(not\s+(cool|cold|working|freez|holding)|isn'?t\s+(cool|cold|working)|warm|stopped|died|dead|broke|no\s+enfria|no\s+funciona)/],
+    ['leak', /\b(leak(s|ed|ing|y)?|goteo|gotera|fuga|gotea)\b/],
+    ['no power', /\b(no|lost|without)\s+(power|electricity|electric)\b|\bpower\s+(is\s+)?(out|off|gone)\b|sin\s+luz|sin\s+electricidad/],
+    ['outlets or breaker', /\b(outlets?|plugs?|breaker)\b.{0,30}(not\s+working|dead|no\s+power|keeps?\s+(tripping|popping))/],
+    ['door or lock will not secure', /\b(door|lock|deadbolt|latch)\b.{0,40}(won'?t|will\s+not|can'?t|cannot|doesn'?t|does\s+not)\s+(lock|latch|close|secure|shut)|\bbroken\s+(lock|deadbolt|latch)|\block\s+(is\s+)?broken|\bdoor\s+(is\s+)?(broken|off\s+(its\s+)?hinges)|cerradura\s+rota|puerta\s+no\s+cierra|no\s+cierra\s+la\s+puerta/],
+  ],
+  low: [
+    ['cosmetic', /\b(paint(ing)?|repaint|touch[- ]?up|squeak(y|ing|s)?|rattl(e|es|ing)|loose\s+(knob|handle|pull|towel\s+bar|screw|cabinet\s+(door|knob|handle))|caulk(ing)?|cosmetic|scuff(s|ed)?|scratch(es|ed)?|pintura|pintar|rechina)\b/],
+  ],
+};
+const TRIAGE_NEGATION = /\bno\s+longer\b|\bnot\s+(\w+\s+)?anymore\b|\b(stopped|ceased)\s+(leaking|flooding|dripping|smoking|sparking|pouring|smelling|overflowing)\b|\bused\s+to\s+(leak|flood|smell)|\bfixed\s+itself\b|\b(not|isn'?t|wasn'?t)\s+(an?\s+|really\s+an?\s+)?emergenc|\bnot\s+urgent\b|\bya\s+no\b|\bno\s+es\s+(una\s+)?emergencia\b/;
+const TRIAGE_NO_HEAT = /\b(no|without|lost|losing)\s+(any\s+)?heat\b|\bheat(er|ing)?\s+(is\s+|has\s+|are\s+)?(not\s+working|isn'?t\s+working|out|broken|stopped|off|died|dead|went\s+out)|\bfurnace\s+(is\s+)?(not\s+working|out|broken|dead|died|won'?t\s+(start|turn|come))|\bboiler\s+(is\s+)?(not\s+working|out|broken|dead)|sin\s+calefaccion|no\s+hay\s+calefaccion|no\s+tenemos\s+calefaccion|calefaccion\s+no\s+funciona/;
+const TRIAGE_COLD_WORDS = /\bfreez(e|es|ing)|below\s+(zero|freezing)|\bsub[- ]?zero|\bsnow|\bice\b|congel|helada/;
+const TRIAGE_LOCKED_OUT = /\blocked\s+out|lock(ed)?\s+(myself|ourselves|us|him|her|them)\s+out|\bcan'?t\s+get\s+(in|into)\b|me\s+quede\s+afuera|encerrad/;
+const TRIAGE_VULNERABLE = /\b(child|children|kid|kids|baby|babies|toddler|infant|newborn|elderly|senior|grandma|grandmother|grandpa|grandfather|disabled|wheelchair|nino|nina|bebe|anciano|anciana|abuela|abuelo)\b/;
+const TRIAGE_HEAT_WAVE = /heat\s*wave|extreme\s+heat|sweltering|\b(9\d|10\d)\s*(degrees|°)|ola\s+de\s+calor|\b(elderly|baby|infant|newborn)\b/;
+const TRIAGE_NO_AC = /\b(no|without)\s+(a\/?c|ac|air\s*conditioning|cooling|cool\s+air)\b|\b(a\/?c|air\s*conditioner|air\s*conditioning)\s+(is\s+)?(not\s+working|out|broken|dead|died|won'?t)|sin\s+aire\s+acondicionado/;
+const TRIAGE_TOILET = /\btoilet\b.{0,40}(not\s+flush|won'?t\s+flush|will\s+not\s+flush|clog|overflow|backed|stuck|not\s+working|no\s+flush)|\bno\s+working\s+toilet|\binodoro\s+(tapado|no\s+funciona)/;
+const TRIAGE_ONLY_TOILET = /\b(only|sole|single)\s+(working\s+)?(toilet|bathroom)|\bone\s+(toilet|bathroom)\b|unico\s+(bano|inodoro)/;
+const TRIAGE_TRADE_WORDS = [
+  ['HVAC', /\b(heat|heater|heating|furnace|boiler|a\/?c|air\s*cond\w*|thermostat|calefaccion|aire\s+acondicionado)\b/],
+  ['Electrical', /\b(spark\w*|outlets?|plugs?|power|breaker|electric\w*|wiring|luz|chispa\w*)\b/],
+  ['Appliance', /\b(fridge|refrigerator|refrigerador|freezer|nevera|stove|oven|dishwasher|washer|dryer|microwave)\b/],
+  ['Plumbing', /\b(leak\w*|flood\w*|pipe|toilet|faucet|sink|drain|sewage|sewer|water|gas|tuberia|inodoro|agua|fuga)\b/],
+  ['Painting', /\b(paint\w*|pintura|pintar|touch[- ]?up)\b/],
+  ['Carpentry', /\b(door|cabinet|knob|handle|hinge|squeak\w*|rattl\w*|caulk\w*|puerta)\b/],
+];
+// PURE. text = what the person wrote, trade = the trade on the request (may be ''), now = Date, override = result of triageParseKeywords (or null).
+// Returns { tier, emergency, matched[], suggested_trade }. matched says WHY (shown to Brett); it never contains the tenant's own sentence.
+function triageByRules(text, trade, now, override) {
+  const raw = String(text || '');
+  let t = raw.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, ' ').replace(/[\u0000-\u001f]+/g, ' ');
+  // A chirping / low-battery detector is a nuisance, not smoke: take those phrases out before looking for "smoke" or "co alarm".
+  t = t.replace(/\b(smoke|fire|co|carbon\s+monoxide)\s+(detector|alarm|alert)s?\s+(is\s+|are\s+)?(just\s+)?(chirping|beeping|low\s+battery|needs?\s+(a\s+)?(new\s+)?batter(y|ies)|battery)/g, ' detector-nuisance ');
+  const lists = {
+    emergency: (override && override.emergency) || TRIAGE_BUILTIN.emergency,
+    urgent: (override && override.urgent) || TRIAGE_BUILTIN.urgent,
+    low: (override && override.low) || TRIAGE_BUILTIN.low,
+  };
+  const hit = (list) => list.filter(([, re]) => re.test(t)).map(([label]) => label);
+  const em = hit(lists.emergency), ur = hit(lists.urgent), lo = hit(lists.low);
+  const month = (now instanceof Date ? now : new Date()).getMonth();   // 0 = Jan
+  if (TRIAGE_NO_HEAT.test(t)) { if ([10, 11, 0, 1, 2].includes(month) || TRIAGE_COLD_WORDS.test(t)) em.push('no heat in cold weather'); else ur.push('no heat'); }
+  if (TRIAGE_LOCKED_OUT.test(t) && TRIAGE_VULNERABLE.test(t)) em.push('locked out with a child or older adult');
+  if (TRIAGE_NO_AC.test(t) && TRIAGE_HEAT_WAVE.test(t)) ur.push('no A/C in a heat wave');
+  if (TRIAGE_TOILET.test(t) && TRIAGE_ONLY_TOILET.test(t)) ur.push('only toilet not flushing');
+  let tier = em.length ? 'Emergency' : ur.length ? 'Urgent' : lo.length ? 'Low' : 'Routine';
+  const matched = em.length ? em : ur.length ? ur : lo;
+  // "no longer leaking", "not an emergency": one step down (never below Routine).
+  if (TRIAGE_NEGATION.test(t) && (tier === 'Emergency' || tier === 'Urgent')) { tier = tier === 'Emergency' ? 'Urgent' : 'Routine'; matched.push('(wording says it eased: lowered one step)'); }
+  let suggested = String(trade || '').trim();
+  if (!suggested) { const g = TRIAGE_TRADE_WORDS.find(([, re]) => re.test(t)); suggested = g ? g[0] : ''; }
+  return { tier, emergency: tier === 'Emergency', matched, suggested_trade: suggested };
+}
+// PURE. Config Triage_Keywords = JSON like {"Emergency":["gas smell","flood"],"Urgent":["no hot water"],"Low":["paint"]}. A tier that is listed
+// REPLACES that tier's built-in word list (the special rules - no heat, locked out, A/C, toilet - stay on). Bad JSON returns { error }.
+function triageParseKeywords(s) {
+  const str = String(s || '').trim(); if (!str) return null;
+  let j; try { j = JSON.parse(str); } catch (e) { return { error: 'Triage_Keywords is not valid JSON: ' + String(e.message || e).slice(0, 80) }; }
+  if (!j || typeof j !== 'object' || Array.isArray(j)) return { error: 'Triage_Keywords must be a JSON object like {"Emergency":["flood"]}' };
+  const out = {};
+  for (const [tier, key] of [['Emergency', 'emergency'], ['Urgent', 'urgent'], ['Low', 'low']]) {
+    const words = j[tier]; if (words === undefined) continue;
+    if (!Array.isArray(words)) return { error: 'Triage_Keywords.' + tier + ' must be a list of words' };
+    out[key] = words.map(w => String(w || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')).filter(Boolean)
+      .map(w => [w, new RegExp('\\b' + w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b')]);
+  }
+  return out;
+}
+function triageCfgGet(cfg, key) { return String((cfg && (cfg[key] !== undefined ? cfg[key] : cfg[key.toLowerCase()])) || '').trim(); }
+function triageEnabled(cfg) { return triageCfgGet(cfg, 'Triage_Enabled').toUpperCase() === 'TRUE'; }
+function triageSla(cfg) {
+  const out = { ...TRIAGE_SLA_DEFAULT }; const s = triageCfgGet(cfg, 'Triage_SLA_Hours'); if (!s) return out;
+  try { const j = JSON.parse(s); for (const k of TRIAGE_TIERS) { const v = parseFloat(j && j[k]); if (isFinite(v) && v > 0) out[k] = v; } } catch (_) { /* a bad value keeps the defaults; triageWorkOrder reports it */ }
+  return out;
+}
+// Stamps one NEW work order. Called only from createWorkOrder when body.__triage is set; the caller wraps it so a failure here never fails the work order.
+async function triageWorkOrder(env, woId, wo, source) {
+  const cfg = await fetchConfig(env);
+  if (!triageEnabled(cfg)) return { skipped: 'off' };
+  const kw = triageParseKeywords(triageCfgGet(cfg, 'Triage_Keywords'));
+  if (kw && kw.error) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage_config_bad', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'FALSE', Notes: kw.error.slice(0, 300) }); } catch (te) { console.error('triage_config_bad telemetry failed:', schedErrText(te)); } }
+  const sla = triageSla(cfg);
+  const nowMs = Date.now();
+  const r = triageByRules(wo.description, wo.trade, new Date(nowMs), (kw && !kw.error) ? kw : null);
+  const priority = String(wo.priority || 'normal').toLowerCase();
+  const raise = r.emergency && priority !== 'urgent';
+  const fields = {
+    Triage_Tier: r.tier, Triage_Emergency: r.emergency ? 'TRUE' : 'FALSE', Triage_Trade: r.suggested_trade,
+    Triage_Summary: r.tier + (r.matched.length ? ': ' + r.matched.join(', ') : ': no urgent or cosmetic words found'),
+    Triage_Source: source || 'rules', Triage_Matched: r.matched.join('; '),
+    Triage_Due_At: new Date(nowMs + sla[r.tier] * 3600000).toISOString(), Triage_At: new Date(nowMs).toISOString(), Triage_Set_By: 'rules',
+  };
+  if (raise) fields.Priority = 'urgent';   // never lowered; only an Emergency raises it
+  await ensureColumns(env, 'Work_Orders', TRIAGE_COLS);
+  await updateRowVerified(env, 'Work_Orders', woId, fields);   // writes, re-reads, and throws if the row did not keep it
+  if (raise) { try { await logWOAudit(env, woId, 'triage', 'system', 'Priority', priority, 'urgent', 'Raised by triage (matched: ' + r.matched.join(', ') + ')'); } catch (e) { try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'wo_triage_audit', ref: 'WO ' + woId, severity: 'P2', message: 'Triage raised Priority to urgent on ' + woId + ' but the audit row did not save: ' + schedErrText(e) }); } catch (_) { console.error('triage audit failed:', schedErrText(e)); } } }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'TRUE', Notes: `wo=${woId} tier=${r.tier} source=${fields.Triage_Source} matched=${r.matched.length}${raise ? ' priority_raised' : ''}`.slice(0, 300) }); } catch (te) { console.error('triage telemetry failed:', schedErrText(te)); }
+  return { tier: r.tier, raised: raise, matched: r.matched };
+}
+// What createWorkOrder calls: fail-open, and every failure is visible (failed telemetry row + failure ledger + "Not triaged" in the Hub).
+async function triageIntakeSafe(env, woId, wo) {
+  try { return await triageWorkOrder(env, woId, wo, 'rules'); }
+  catch (e) {
+    const why = schedErrText(e).slice(0, 300);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'FALSE', Notes: `wo=${woId} could not triage: ${why}`.slice(0, 480) }); } catch (te) { console.error('triage failure telemetry failed:', schedErrText(te)); }
+    try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'wo_triage', ref: 'WO ' + woId, severity: 'P2', message: 'Work order ' + woId + ' was created but could not be triaged: ' + why }); } catch (re) { console.error('triage reportFailure failed:', schedErrText(re)); }
+    return { failed: why };
+  }
+}
+// POST /wo/triage-set {wo_id, tier, reason} (ADMIN ONLY: in no ROLE_SCOPES list). Brett's correction; a manual tier is never overwritten by rules.
+async function woTriageSet(env, body) {
+  const woId = String((body && body.wo_id) || '').trim(), tier = String((body && body.tier) || '').trim(), reason = String((body && body.reason) || '').trim().slice(0, 160);
+  if (!woId) return json({ error: 'wo_id required' }, 400);
+  if (!TRIAGE_TIERS.includes(tier)) return json({ error: 'tier must be one of ' + TRIAGE_TIERS.join(', ') }, 400);
+  const wo = findWO(await fetchTab(env, 'Work_Orders'), woId);
+  if (!wo) return json({ error: 'Work order not found' }, 404);
+  const cfg = await fetchConfig(env), sla = triageSla(cfg);
+  const base = Date.parse(wo.Created_Date || '') || Date.now();
+  const nowIso = new Date(Date.now()).toISOString();
+  const fields = { Triage_Tier: tier, Triage_Emergency: tier === 'Emergency' ? 'TRUE' : 'FALSE', Triage_Source: 'manual', Triage_Set_By: 'admin', Triage_At: nowIso,
+    Triage_Due_At: new Date(base + sla[tier] * 3600000).toISOString(), Triage_Summary: 'Set by hand: ' + tier + (reason ? ' (' + reason + ')' : '') };
+  const raise = tier === 'Emergency' && String(wo.Priority || 'normal').toLowerCase() !== 'urgent';
+  if (raise) fields.Priority = 'urgent';
+  await ensureColumns(env, 'Work_Orders', TRIAGE_COLS);
+  await updateRowVerified(env, 'Work_Orders', woId, fields);
+  try { await logWOAudit(env, woId, 'admin', 'admin', 'Triage_Tier', String(wo.Triage_Tier || ''), tier, 'Tier set by hand' + (reason ? ': ' + reason : '') + (raise ? ' (Priority raised to urgent)' : '')); } catch (e) { try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'wo_triage_audit', ref: 'WO ' + woId, severity: 'P2', message: 'Tier set by hand on ' + woId + ' but the audit row did not save: ' + schedErrText(e) }); } catch (_) { console.error('triage-set audit failed:', schedErrText(e)); } }
+  return json({ success: true, tier, priority_raised: raise });
+}
+// POST /wo/triage-preview {text, trade} (ADMIN ONLY): shows what the rules would say. Writes nothing.
+async function woTriagePreview(env, body) {
+  const cfg = await fetchConfig(env), kw = triageParseKeywords(triageCfgGet(cfg, 'Triage_Keywords'));
+  const r = triageByRules(body && body.text, body && body.trade, new Date(), (kw && !kw.error) ? kw : null);
+  return json({ success: true, ...r, due_in_hours: triageSla(cfg)[r.tier], enabled: triageEnabled(cfg), keywords_error: kw && kw.error ? kw.error : '' });
+}
+// ── END SEVERITY TRIAGE ──────────────────────────────────────────────────────────────────────────────────────────────────
+
 async function createWorkOrder(env, body) {
   const _t0 = Date.now();
   // Same property/unit/tenant, same trade/description, seconds apart = a double-tap on
@@ -8880,6 +9052,7 @@ async function createWorkOrder(env, body) {
       await queueNotification(env, woId, 'tenant_received', tenant.Phone, msg, sendAfter, { message_type: 'tenant_job_received', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
     }
   } catch (e) { /* non-fatal */ }
+  if (body.__triage === true) await triageIntakeSafe(env, woId, { description: body.description, trade: body.trade, priority: body.priority });   // queue #142: fail-open, never throws
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_create', Skill_Or_Endpoint:'/workorder', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${body.trade||''} type=${body.type||'manual'}` }); } catch(_){}
   return json({ success: true, id: woId });
 }
@@ -9201,7 +9374,7 @@ async function intakeEmail(env, body, retryRow) {
         property_id: a.property.ID, unit_id: a.unit_id || '', tenant_id: a.tenant_id || '', type: 'manual', trade: '', priority: 'normal',
         description: (p.title + (p.description ? ' - ' + p.description : '')).slice(0, 1500),
         owner_wo_ref: refTag, wo_contact_name: c0.name || '', wo_contact_phone: c0.phones && c0.phones[0] ? normalizePhone(c0.phones[0]) : '',
-        tenant_notify_created: false, tenant_notify_updates: false, created_by: 'buildium-email', notes,
+        tenant_notify_created: false, tenant_notify_updates: false, created_by: 'buildium-email', notes, __triage: true,
       };
       const cr = await createWorkOrder(env, woBody);
       const cj = await cr.json();
@@ -11851,6 +12024,7 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
   // Owners see WHO is on the job (name+trade) but not a direct line to the vendor — keeps
   // the vendor relationship mediated through Brett rather than owners going around him.
   if (opts.ownerView)  { delete base.Invoice_ID; base.Display_Status = base.Status === 'Pending Invoice' ? 'Complete' : base.Status; base.vendor_phone = ''; }
+  if (opts.tenantView || opts.ownerView || opts.vendorView || opts.sharedView || opts.viewingVendorId) { for (const k of Object.keys(base)) if (k.startsWith('Triage_')) delete base[k]; }   // queue #142: triage is Brett's, never tenant / owner / vendor facing
   return base;
 }
 
