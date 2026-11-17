@@ -13277,7 +13277,7 @@ async function addVendorBill(env, body) {
     try {
       const created = await res.clone().json();
       if (created && created.id) await linkTimeEntriesToBill(env, timeIds, String(created.id), body.WO_ID || body.wo_id);
-    } catch (e) { /* the bill is saved; the link is not worth losing it over */ }
+    } catch (e) { await softFail(env, 'addVendorBill:linkHours', e, { severity: 'P1', ref: String(body.WO_ID || body.wo_id || ''), source: 'write', context: 'the bill saved but its hours were not marked spent, so they may be billed again' }); }   // the bill itself is saved, so it is not failed
   }
   // Automation: entering a bill moves the WO to Complete (if still pre-complete).
   try {
