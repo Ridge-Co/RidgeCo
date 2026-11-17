@@ -33350,6 +33350,9 @@ async function ensureColumns(env, tab, columns) {
       // (typeof: other tests slice this function out of module scope without the helper; they keep the old row.)
       const _busy = typeof sheetsQuotaBusyError === 'function' && sheetsQuotaBusyError(e);
       try { await logTelemetry(env, { Source: 'worker', Job_Type: _busy ? 'sheets_quota_busy' : 'ensure_columns_failed', Skill_Or_Endpoint: _busy ? 'ensure_columns/' + tab : tab, Success: 'FALSE', Notes: `columns=${(columns || []).join(',')} err=${String((e && e.message) || e)}` }); } catch (le) { console.error('ensureColumns: could not log the failure to Ops_Telemetry (the original error is still thrown):', tab, le && le.message); }
+      // Nov 17 2026 (silent-failure burn-down phase 6): a real failure (not the calm quota-busy one) also goes to the failure ledger, once per tab per isolate,
+      // so the ~70 call sites that swallow this throw are no longer silent. reportFailure writes through ensureTab, never back through here.
+      if (!_busy && typeof softFail === 'function') await softFail(env, 'ensureColumns:' + tab, e, { req: __ensureColsReq, severity: 'P1', ref: tab, source: 'write', context: 'columns=' + (columns || []).join(',') });
     }
     throw e;
   }
