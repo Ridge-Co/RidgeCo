@@ -27704,7 +27704,7 @@ async function ownerOnboardSubmit(env, body, clientIP) {
     if (cfg.admin_phone) {
       await sendSMS(env, cfg.admin_phone, `🆕 ${(c.owner.business_name || (c.owner.first + ' ' + c.owner.last)).trim()} finished owner onboarding: ${c.properties.length} propert${c.properties.length === 1 ? 'y' : 'ies'}.${needsReview ? ' ⚠ ' + warnings.length + ' item(s) need your review (Hub → Owners → Onboarding).' : ''}`);
     }
-  } catch (e) { /* notification is best-effort */ }
+  } catch (e) { await softFail(env, 'ownerOnboardSubmit:adminText', e, { severity: 'P1', ref: 'owner_onboarding', source: 'send', context: 'an owner finished onboarding but the text to Brett did not go out' }); }   // the submission itself is saved, so this stays non-fatal
 
   return json({ success: true, first_name: c.owner.first, properties: c.properties.length });
 }
