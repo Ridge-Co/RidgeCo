@@ -14311,7 +14311,8 @@ async function sendTemplatedSms(env, o) {
     if (o.kind === 'admin') opts.admin = await getAdminSmsRecipient(env); else if (o.kind === 'owner') opts.owner = o.owner; else opts.vendor = o.vendor;
     return await smsGatedSend(env, opts);
   } catch (e) {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_sms_failed', Skill_Or_Endpoint: o.type, Success: 'FALSE', Notes: 'wo=' + (o.wo_id || '') + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) {}
+    await softFail(env, 'sendTemplatedSms:' + o.type, e, { severity: 'P0', ref: String(o.wo_id || ''), source: 'send', context: 'recipient=' + o.kind });   // Phase 2: the failed text now reaches the failure ledger, not only a telemetry row
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_sms_failed', Skill_Or_Endpoint: o.type, Success: 'FALSE', Notes: 'wo=' + (o.wo_id || '') + ' err=' + String((e && e.message) || e).slice(0, 200) }); } catch (_) { /* silent-ok: telemetry is best effort, the failed text is already in the failure ledger */ }
     return { sent: false, error: String((e && e.message) || e) };
   }
 }
