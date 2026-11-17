@@ -16881,7 +16881,12 @@ async function queueNotification(env, woId, type, phone, message, sendAfter, ctx
       Message_Type:ctx.message_type||'',Recipient_Type:ctx.recipient_type||'',Recipient_ID:ctx.recipient_id||'',Property_ID:ctx.property_id||''};
     const newRow=headers.map(h=>rowObj[h]??'');
     await sheetsRequest(env,'POST',`/values/${NOTIF_QUEUE_TAB}:append?valueInputOption=RAW`,{values:[newRow]});
-  } catch(e){/* non-fatal */}
+    return { queued: true };
+  } catch(e){
+    // Phase 2: a text held for later that cannot be queued is a text that is never sent. Still non-fatal for the caller (the job it belongs to is already saved), but no longer silent.
+    await softFail(env, 'queueNotification:' + type, e, { severity: 'P0', ref: String(woId || ''), source: 'send', context: 'the ' + (ctx.message_type || type) + ' text to a ' + (ctx.recipient_type || 'recipient') + ' could not be queued and will not be sent' });
+    return { queued: false, error: String((e && e.message) || e).slice(0, 200) };
+  }
 }
 
 let __pendingNotifAt = 0; // last time GET /notifications/pending actually ran (per isolate)
