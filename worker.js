@@ -4763,7 +4763,8 @@ async function receiptAttachOnly(env, body) {
     wo_id, property_id, amount, description, store, date,
     added_by: customerCard ? 'Receipt Reconciler (customer card, reference only)' : fixedPrice ? 'Receipt Reconciler (fixed-price job cost, not billed)' : 'Receipt Reconciler (attach only)', added_by_id: 'receipt-recon-attach-only', role: 'hub',
     category: 'attached_only',
-    ...(customerCard ? { category: 'customer_paid', non_billable: true } : {}),   // customer-card reference: existing customer_paid category + explicit Non_Billable flag
+    ...(customerCard ? { category: 'customer_paid', non_billable: true, non_billable_reason: 'customer_card' } : {}),
+    ...(fixedPrice ? { category: 'company', non_billable: true, non_billable_reason: 'fixed_price' } : {}),   // customer-card reference: existing customer_paid category + explicit Non_Billable flag
     receipt_number: row.Invoice_Number || '',
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source,
