@@ -30388,12 +30388,10 @@ async function health(env, url) {
   // above. Confirms the 4 Cloudflare secrets actually landed and are non-empty, without
   // proving the refresh token is still valid (that needs a real send — see /gmail/test).
   out.gmail = { client_id_set: false, client_secret_set: false, refresh_token_set: false, sender_set: false };
-  try {
-    out.gmail.client_id_set = !!(env && env.GMAIL_CLIENT_ID);
-    out.gmail.client_secret_set = !!(env && env.GMAIL_CLIENT_SECRET);
-    out.gmail.refresh_token_set = !!(env && env.GMAIL_REFRESH_TOKEN);
-    out.gmail.sender_set = !!(env && env.GMAIL_SENDER);
-  } catch (_) {}
+  out.gmail.client_id_set = !!(env && env.GMAIL_CLIENT_ID);
+  out.gmail.client_secret_set = !!(env && env.GMAIL_CLIENT_SECRET);
+  out.gmail.refresh_token_set = !!(env && env.GMAIL_REFRESH_TOKEN);
+  out.gmail.sender_set = !!(env && env.GMAIL_SENDER);
   // "Reconnect Gmail" (Sep 22 2026): whether a sign-in-flow token is stored in Config, and when —
   // presence/date only, never the value. The live no-send check is ADMIN-only: GET /gmail/token-check.
   try {
