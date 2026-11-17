@@ -40562,8 +40562,8 @@ async function ensureInspTabs(env) {
 // ── Customers (a "customer" here is a whole inspection line — the new PM rental
 // customer, or a synthetic AMSCRE row for Phase 3's routing) ──────────────────
 async function inspCustomersList(env) {
-  let rows = [];
-  try { rows = await fetchTab(env, 'Insp_Customers'); } catch (e) {}
+  // Bare-array response (the page depends on it): a failed read is reported to the ledger, no shape change. The Insp tabs are created on first add, so a missing tab is just empty.
+  const rows = (await fetchTabSoft(env, 'Insp_Customers', { where: 'insp:read:Insp_Customers', severity: 'P2', optional: true })).rows;
   return json(rows.filter(r => r.Active !== 'FALSE'));
 }
 async function inspCustomerAdd(env, body) {
