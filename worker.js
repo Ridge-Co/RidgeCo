@@ -4745,10 +4745,22 @@ async function receiptAttachOnly(env, body) {
   const description = body.description || row.PO_Reference || row.Vendor || '';
   const store = body.store || row.Vendor || '';
   const date = body.date || row.Receipt_Date || '';
+  // Nov 17 2026 (Brett): a receipt paid on a CUSTOMER's card still gets a work order picked so the customer can see it on that job, but it is
+  // a reference only. customer_card:true is accepted only for a row that really is marked customer-card (Manual_Customer_Card, or the scanner's
+  // customer_paid category), and writes Category 'customer_paid' + Non_Billable 'TRUE'. Nothing else changes: still addReceipt only, never
+  // the invoice-review fold or the QuickBooks receipt email (the QB sweep also skips Non_Billable rows). Every billing path ignores the row via receiptIsNonBilling.
+  const customerCard = body.customer_card === true || String(body.customer_card).toUpperCase() === 'TRUE';
+  if (customerCard) {
+    let _sug = null; try { _sug = JSON.parse(row.Suggestion || 'null'); } catch (e) {} // silent-ok: an unreadable Suggestion just means no scanner category, and the 409 below tells the user
+    const isCcRow = String(row.Manual_Customer_Card || '').toUpperCase() === 'TRUE' || !!(_sug && _sug.category === 'customer_paid');
+    if (!isCcRow) return json({ error: 'This receipt is not marked as paid on a customer\'s card, so it cannot be attached as a customer-card reference.', code: 'not_customer_card' }, 409);
+  }
   const addResp = await addReceipt(env, {
     wo_id, property_id, amount, description, store, date,
-    added_by: 'Receipt Reconciler (attach only)', added_by_id: 'receipt-recon-attach-only', role: 'hub',
+    added_by: customerCard ? 'Receipt Reconciler (customer card, reference only)' : 'Receipt Reconciler (attach only)', added_by_id: 'receipt-recon-attach-only', role: 'hub',
     category: 'attached_only',
+    ...(customerCard ? { category: 'customer_paid', non_billable: true } : {}),   // customer-card reference: existing customer_paid category + explicit Non_Billable flag
+    receipt_number: row.Invoice_Number || '',
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source,
   });
@@ -4756,10 +4768,12 @@ async function receiptAttachOnly(env, body) {
   if (addJson && addJson.success) {
     await updateRow(env, 'Receipt_Recon_Queue', id, {
       Status: 'attached_only', Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
-      Notes: addJson.duplicate ? 'Image already attached to that WO — not re-attached.' : 'Image attached only — not billed, no invoice line added.',
+      Confirmed_Receipt_ID: addJson.duplicate ? '' : String(addJson.id || ''),
+      Notes: addJson.duplicate ? 'Image already attached to that WO — not re-attached.'
+        : (customerCard ? 'Customer-card receipt attached to WO ' + wo_id + ' as a reference — not billed, not expensed, no invoice line added.' : 'Image attached only — not billed, no invoice line added.'),
     });
   }
-  return json({ ok: true, wo_id, property_id, attached_only: true, ...addJson });
+  return json({ ok: true, wo_id, property_id, attached_only: true, customer_card: customerCard, receipt_number: String(row.Invoice_Number || '').trim(), ...addJson });
 }
 
 // Receipt-date cutoff (Brett, Sep 22 2026: "exclude items that go back to 2025 and 2023").
