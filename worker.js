@@ -16993,7 +16993,7 @@ async function createVendorNudgeClock(env, woId, vendorId) {
       Nudge_Count: '0', First_Nudge_At: firstNudge.toISOString(), Next_Nudge_At: firstNudge.toISOString(),
       Last_Activity_At: now.toISOString(), Satisfied_Date: '', Created_Date: now.toISOString(), Active: 'TRUE',
     });
-  } catch (e) { /* non-fatal — assignment itself already succeeded */ }
+  } catch (e) { await softFail(env, 'createVendorNudgeClock', e, { severity: 'P1', ref: String(woId), source: 'write', context: 'the vendor was assigned but the status-update reminder clock was not started, so he will not be nudged' }); }   // the assignment itself already succeeded, so this stays non-fatal
 }
 
 // Called from updateStatus/scheduleWO when updated_by_role==='vendor' — real vendor activity
