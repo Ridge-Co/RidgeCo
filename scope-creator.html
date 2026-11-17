@@ -1455,7 +1455,7 @@ function readStatusLines(s){
 async function refreshReadStatus(){
   var s=state.current; if(!s) return;
   try{ var f=await get('/scope?id='+encodeURIComponent(s.ID));
-    ['Email_First_Opened','Email_Last_Opened','Email_Open_Count','Page_First_Viewed','Page_Last_Viewed','Page_View_Count','Owner_SMS_Status','Owner_SMS_Time'].forEach(function(k){ s[k]=f[k]; });
+    ['Email_First_Opened','Email_Last_Opened','Email_Open_Count','Page_First_Viewed','Page_Last_Viewed','Page_View_Count','Owner_SMS_Status','Owner_SMS_Time','Owner_Response','Owner_Response_At','Owner_Response_By','Owner_Response_Text'].forEach(function(k){ s[k]=f[k]; });
     renderSendStatus(); }catch(e){ setStatus('send-status','⚠ Could not refresh read status: '+e.message,'err'); }
 }
 function renderSendStatus(){
