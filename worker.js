@@ -11931,7 +11931,7 @@ async function assignVendor(env, body, internal) {
   // Vendor nudge clock (Sep 14 2026) — starts on every successful assignment, notify or
   // silent, since it tracks actual work progress rather than whether a text went out.
   await createVendorNudgeClock(env, body.wo_id, body.vendor_id);
-  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent} vendor_email=${vendorEmailDetail.status} notify=${notify}` }); } catch (e) { console.error('wo_assign telemetry failed', e && e.message); }
+  try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_assign', Skill_Or_Endpoint:'/assign', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${wo.Trade||''} vendor_sms=${vendorSMSSent} tenant_sms=${tenantSMSSent} vendor_email=${vendorEmailDetail.status} notify=${notify}` }); } catch (e) { /* silent-ok: telemetry is best effort, the assignment result is returned to the caller */ console.error('wo_assign telemetry failed', e && e.message); }
   return json({ success: true, vendor_sms: vendorSMSSent, tenant_sms: tenantSMSSent, notified: notify, vendor_sms_detail: vendorSmsDetail, vendor_email_detail: vendorEmailDetail });
 }
 
