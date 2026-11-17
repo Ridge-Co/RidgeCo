@@ -11559,7 +11559,8 @@ function loadHubReceiptTracking(woId, detailBody) {
 }
 
 function renderHubReceipts(woId, receipts, holder) {
-  var total = receipts.reduce(function(s,r){ return s + (parseFloat(r.Amount)||0); }, 0);
+  // Reference-only receipts (customer card / attached image) are shown but never counted in the materials total.
+  var total = receipts.reduce(function(s,r){ return s + (r.Non_Billing === 'TRUE' ? 0 : (parseFloat(r.Amount)||0)); }, 0);
   var today = new Date().toISOString().split('T')[0];
 
   var rows = receipts.map(function(r) {
