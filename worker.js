@@ -26979,17 +26979,27 @@ async function sendReceiptsToQBEmail(env, opts) {
     fetchTab(env, 'Properties').catch(() => []), fetchTab(env, 'Work_Orders').catch(() => []),
   ]);
 
-  let sent = 0, sentNoFile = 0; const failed = [];
+  let sent = 0, sentNoFile = 0, blocked = 0; const failed = [], warnings = [];
   for (const r of batch) {
+    const subject = qbBatchSubject(r);
+    // 1. CLAIM. Written (and checked) BEFORE the email. If this cannot be saved the receipt is NOT emailed: better one waiting receipt than a double send.
+    try { await qbBatchWrite(env, r.ID, { QB_Batch_Status: 'sending', QB_Batch_Sent_Date: new Date().toISOString(), QB_Email_Subject: subject, QB_Batch_Error: '' }); }
+    catch (e) {
+      const msg = 'could not mark it as sending, so it was NOT emailed: ' + String(e && e.message || e);
+      failed.push({ id: r.ID, error: msg });
+      await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.claim', ref: String(r.ID), err: e, message: 'Receipt ' + r.ID + ' ' + msg, severity: 'P1' });
+      continue;
+    }
+    // 2. SEND.
+    let attachment = null, attachErr = null, emailRes = null;
     try {
       const src = _recoverReceiptSourceFile(r, queueRows);
-      let attachment = null;
       if (src.id) {
         try {
           const tok = await getAccessToken(env);
           const dl = await driveDownload(tok, src.id);
           attachment = { filename: `receipt_${r.ID}`, mimeType: dl.mime || 'application/octet-stream', base64Data: bytesToB64(dl.bytes) };
-        } catch (e) { /* fall through — send without an attachment rather than failing the row */ }
+        } catch (e) { attachErr = e; }   // the email still goes (nothing may fall out of reconciliation); the missing image is reported below, not hidden
       }
       const wo = r.WO_ID ? workorders.find(w => String(w.ID) === String(r.WO_ID)) : null;
       const prop = r.Property_ID ? properties.find(p => String(p.ID) === String(r.Property_ID)) : null;
@@ -27002,17 +27012,41 @@ async function sendReceiptsToQBEmail(env, opts) {
         `<p>${context}</p>`,
         `<p style="color:#888;font-size:11px">Ridge Co Hub Receipts row #${_escHtml(r.ID)}${src.url ? ' · <a href="' + _escHtml(src.url) + '">original scan</a>' : ' · no scanned image on file for this entry'}</p>`,
       ].join('\n');
-      await gmailSendEmailWithAttachment(env, {
-        to: qbEmail, subject: `Receipt — ${r.Store || 'Unknown vendor'} — $${r.Amount || ''}`, html, attachment,
-      });
-      await updateRow(env, 'Receipts', r.ID, { QB_Email_Sent: 'TRUE', QB_Email_Sent_Date: new Date().toISOString() });
-      sent++; if (!attachment) sentNoFile++;
+      emailRes = await gmailSendEmailWithAttachment(env, { to: qbEmail, subject, html, attachment });
     } catch (e) {
-      failed.push({ id: r.ID, error: String(e && e.message || e) });
+      // Nothing was sent. Put the row in 'failed' (visible on the review list, retried by the next day's batch) rather than leaving it claimed.
+      const msg = String(e && e.message || e);
+      failed.push({ id: r.ID, error: msg });
+      await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.send', ref: String(r.ID), err: e, message: 'Receipt ' + r.ID + ' could not be emailed to QuickBooks: ' + msg, severity: 'P1' });
+      try { await qbBatchWrite(env, r.ID, { QB_Batch_Status: 'failed', QB_Batch_Error: msg.slice(0, 300) }); }
+      catch (e2) { await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.mark_failed', ref: String(r.ID), err: e2, message: 'Receipt ' + r.ID + ' failed to send AND the failed flag could not be saved (it stays "sending" and will not be re-sent by itself)', severity: 'P1' }); }
+      await new Promise(res => setTimeout(res, 400));
+      continue;
+    }
+    if (emailRes && emailRes.demo_blocked) {
+      // Demo-safety guard refused the send: not emailed, so it must NOT be marked sent. Back to ready.
+      blocked++;
+      try { await qbBatchWrite(env, r.ID, { QB_Batch_Status: 'ready', QB_Batch_Error: String(emailRes.reason || 'email blocked by the demo guard').slice(0, 300) }); }
+      catch (e2) { failed.push({ id: r.ID, error: 'blocked by the demo guard and could not be put back to ready: ' + String(e2 && e2.message || e2) }); }
+      continue;
+    }
+    // 3. RECORD. The email is gone. If this write fails the row stays 'sending' (never re-sent by itself) and the failure is loud.
+    try {
+      const nowIso = new Date().toISOString();
+      await qbBatchWrite(env, r.ID, { QB_Email_Sent: 'TRUE', QB_Email_Sent_Date: nowIso, QB_Batch_Status: 'sent', QB_Batch_Sent_Date: nowIso, QB_Batch_Error: '' });
+    } catch (e) {
+      const msg = 'was emailed to QuickBooks but the sent flag could not be saved (it stays "sending" so it is NOT re-sent; check the Receipts row): ' + String(e && e.message || e);
+      failed.push({ id: r.ID, error: msg, emailed: true });
+      await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.record_sent', ref: String(r.ID), err: e, message: 'Receipt ' + r.ID + ' ' + msg, severity: 'P1' });
+    }
+    sent++; if (!attachment) sentNoFile++;
+    if (attachErr) {
+      warnings.push({ id: r.ID, warning: 'emailed without the receipt image (Drive download failed: ' + String(attachErr && attachErr.message || attachErr).slice(0, 160) + ')' });
+      await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.attachment', ref: String(r.ID), err: attachErr, message: 'Receipt ' + r.ID + ' went to QuickBooks without its image', severity: 'P2' });
     }
     await new Promise(res => setTimeout(res, 400)); // pace Gmail/Drive calls, matches existing convention
   }
-  return json({ ok: true, sent, sent_without_attachment: sentNoFile, failed, remaining: pending.length - batch.length + failed.length });
+  return json({ ok: true, sent, sent_without_attachment: sentNoFile, blocked, failed, warnings, remaining: pending.length - batch.length, held: heldN, stuck: stuckN });
 }
 
 function bytesToB64(buf) {
