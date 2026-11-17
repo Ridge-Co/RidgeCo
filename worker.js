@@ -5999,7 +5999,7 @@ async function woPushToScope(env, body) {
   const apply = !!body && (body.apply === true || String(body.apply).toUpperCase() === 'TRUE');
 
   await scopesTab(env);
-  try { await ensureColumns(env, 'Work_Orders', ['Scope_ID']); } catch (_) {}
+  try { await ensureColumns(env, 'Work_Orders', ['Scope_ID']); } catch (_) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, woId);
   if (!wo) return json({ error: `No work order ${woId} found` }, 404);
