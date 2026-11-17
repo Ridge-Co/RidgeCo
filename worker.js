@@ -12965,7 +12965,7 @@ async function sendVendorInvoiceConfirmationEmail(env, billRow) {
   const address = prop ? (prop.Address || '') : '';
   const isEs = vendor.Language === 'es';
   let description = wo.Description || '';
-  if (isEs && description) { try { const t = await translateText(env, description, 'English', 'Spanish'); if (t) description = t; } catch (e) {} }
+  if (isEs && description) { try { const t = await translateText(env, description, 'English', 'Spanish'); if (t) description = t; } catch (e) { await softFail(env, 'vendorInvoiceConfirm:translate', e, { req, severity: 'P2', ref: String(woId), source: 'translate', context: 'the Spanish email went out with the job description in English' }); } }
 
   const holidayMap = parseHolidayMap(config.US_HOLIDAYS);
   const submissionDate = String(billRow.Submitted_At || new Date().toISOString()).split('T')[0];
