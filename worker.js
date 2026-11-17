@@ -26898,43 +26898,83 @@ function _recoverReceiptSourceFile(receiptRow, queueRows) {
   return hit ? { id: hit.Source_File_ID, url: hit.Source_File_URL || '' } : { id: '', url: '' };
 }
 
-// POST /receipts/send-to-qb-email {limit?} — Brett, Sep 2026: every receipt that runs through
+// ═══ QB-BATCH-BEGIN (Nov 17 2026, Brett: "receipt emails to QuickBooks go out in a batch, once a day, not the moment I tap confirm") ═══════════════
+// ONE sender: sendReceiptsToQBEmail below, called only by the daily job (schedRunDailyReceiptsPost) and by the explicit "Send batch now" /
+// /receipts/send-to-qb-email tap (both pass release:true). Confirm, attach, reassign and every other path just leave the Receipts row waiting.
+// A Receipts row's batch state lives in QB_Batch_Status: blank or 'ready' = waits for the next batch; 'held' = skipped until released;
+// 'sending' = claimed by a sender (written BEFORE the email, so a crash between the email and the flag can never send it twice);
+// 'failed' = the last send attempt failed (shown on screen, retried by the next day's batch or a manual send); 'sent' = emailed.
+// QB_Email_Sent stays the long-standing "emailed" flag and is never cleared. A receipt reversed after it was sent keeps its sent history and gets
+// QB_Reversed_Date; the Receipts row is voided (Active FALSE) so a corrected re-confirm writes a NEW row that sends normally.
+const QB_BATCH_COLS = ['QB_Batch_Status', 'QB_Batch_Sent_Date', 'QB_Reversed_Date', 'QB_Email_Subject', 'QB_Batch_Error', 'QB_Delete_Confirmed', 'QB_Delete_Confirmed_Date'];
+const QB_BATCH_MAX_PER_CALL = 8;       // Cloudflare subrequest budget: ~6-8 subrequests per receipt (claim write, Drive, Gmail, final write) + a few reads. Bigger backlogs page across scheduler slices.
+const QB_BATCH_DEFAULT_PER_CALL = 5;
+// PURE. 'sent' | 'held' | 'sending' | 'failed' | 'ready' (blank counts as ready: every row written before this build was already waiting for the daily sweep).
+function qbBatchStatus(r) {
+  if (!r) return 'ready';
+  if (String(r.QB_Email_Sent || '').toUpperCase() === 'TRUE') return 'sent';
+  const s = String(r.QB_Batch_Status || '').trim().toLowerCase();
+  return (s === 'held' || s === 'sending' || s === 'failed') ? s : 'ready';
+}
+// PURE. A live Receipts row that is going (or could go) to QuickBooks and has not been emailed yet.
+function qbBatchWaiting(r) {
+  if (!r || String(r.Active || '').toUpperCase() === 'FALSE') return false;
+  if (String(r.Payment_Source || 'company_card') === 'vendor_reimburse') return false;   // never a Ridge Co card purchase: nothing to reconcile against a statement
+  if (String(r.Non_Billable || '').toUpperCase() === 'TRUE' && String(r.Non_Billable_Reason || '') !== 'fixed_price') return false;   // customer-card references were never our purchase; a fixed-price job cost IS ours
+  return qbBatchStatus(r) !== 'sent';
+}
+// PURE. Is this waiting row due in a batch run? ready: yes. failed: only on a later day than the failed attempt (or on a manual send), so one bad row cannot loop within a day.
+// held and sending are never auto-sent: held = Brett said wait; sending = a sender claimed it and did not finish (a person decides: release or mark sent).
+function qbBatchSendable(r, o) {
+  if (!qbBatchWaiting(r)) return false;
+  const st = qbBatchStatus(r);
+  if (st === 'ready') return true;
+  if (st === 'failed') return !!(o && o.manual) || String(r.QB_Batch_Sent_Date || '').slice(0, 10) < String((o && o.today) || new Date().toISOString().slice(0, 10));
+  return false;
+}
+function qbBatchSubject(r) { return `Receipt — ${r.Store || 'Unknown vendor'} — $${r.Amount || ''}`; }
+// updateRow does not throw on a missing row / missing column (it returns a JSON error), so a marker write is only believed when it says success.
+async function qbBatchWrite(env, id, fields) {
+  const res = await updateRow(env, 'Receipts', id, fields);
+  const j = (res && typeof res.json === 'function') ? await res.json().catch(() => null) : null;
+  if (!j || j.success !== true || j.message === 'No matching fields') throw new Error('Receipts row ' + id + ' was not updated (' + ((j && (j.error || j.message)) || 'no answer') + ')');
+}
+
+// POST /receipts/send-to-qb-email {limit?, ids?} — Brett, Sep 2026: every receipt that runs through
 // the Reconciler is Brett's own money out (an "internal expense" — the vendor-fronted-materials
 // case is a different animal, handled entirely through Vendor_Bills and never touches this tab),
 // so every row here needs to reach QuickBooks' own receipts-capture inbox for bank/credit-card
-// reconciliation — regardless of whether it's also tied to a work order/customer invoice. This
-// applies going forward (called from the daily cron below) AND retroactively: running this once
-// against the full Receipts tab is the backfill for everything already reconciled to a WO before
-// this existed. Bounded per call (default 8, max 10 — Cloudflare's per-invocation subrequest
-// budget; a batch of 25 hit "Too many subrequests" live around #16-21) — call it again (or let
-// the cron do it) to keep working through a large backlog; already-sent rows are skipped so
-// repeat calls are always safe.
+// reconciliation — regardless of whether it's also tied to a work order/customer invoice.
+// Nov 17 2026: this is now the ONE sender and it runs as a daily BATCH (see QB-BATCH above). Without release:true it sends NOTHING and says so
+// (callers that still ask for an immediate send of one id, such as a fixed-price attach, just leave the row in the batch).
+// Paging: at most QB_BATCH_MAX_PER_CALL per call (Cloudflare's per-invocation subrequest budget: a batch of 25 hit "Too many subrequests"
+// live around #16-21 on Sep 10 2026); the response says how many remain and the daily job returns partial:true so the scheduler resumes it
+// on the next tick. Nothing is dropped: the rest simply wait for the next slice, and failures are reported (failure ledger + response).
 async function sendReceiptsToQBEmail(env, opts) {
-  // Discovered live (Sep 10 2026): a batch of 25 blew through Cloudflare's per-invocation
-  // subrequest budget partway through (driveDownload + gmail send + updateRow's own
-  // read-then-write is ~3-4 subrequests per receipt, on top of 5 for the initial tab reads) —
-  // requests started failing with "Too many subrequests" around #16-21. Capped conservatively
-  // here instead of guessing at the account's actual plan/limit; a larger backlog just takes
-  // more calls (the daily cron, or Brett/Claude calling this again — already-sent rows are
-  // always skipped so repeat calls are safe and cheap).
-  const limit = Math.max(1, Math.min(10, parseInt(opts && opts.limit) || 8));
+  opts = opts || {};
+  if (opts.release !== true) {
+    return json({ ok: true, sent: 0, queued: true, note: 'Receipts are not emailed to QuickBooks one at a time any more. This one waits in the daily batch (Receipt Reconciler > Waiting to send to QuickBooks).' });
+  }
+  const limit = Math.max(1, Math.min(QB_BATCH_MAX_PER_CALL, parseInt(opts.limit) || QB_BATCH_DEFAULT_PER_CALL));
   const cfg = await fetchConfig(env).catch(() => ({}));
   const qbEmail = (cfg.qb_receipts_email || env.QB_RECEIPTS_EMAIL || '').trim();
   if (!qbEmail) return json({ ok: false, error: 'qb_receipts_email is not set — add it as a Config/Settings key (or QB_RECEIPTS_EMAIL secret) first: the email address QuickBooks gave you for forwarding receipts.' }, 400);
 
-  try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date']); } catch (e) {}
+  // The batch columns MUST exist before anything is claimed: the 'sending' marker is the double-send guard, and a write to a missing column is silently dropped (rule 174).
+  try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date', 'Payment_Source'].concat(QB_BATCH_COLS)); }
+  catch (e) { return json({ ok: false, error: 'Could not prepare the Receipts columns, so nothing was emailed to QuickBooks: ' + String(e && e.message || e) }, 500); }
 
   let all = []; try { all = await fetchTab(env, 'Receipts'); } catch (e) { return json({ ok: false, error: 'Could not read Receipts: ' + (e.message || e) }, 500); }
-  // vendor_reimburse rows never touched a Ridge Co card — nothing to reconcile against a bank/CC
-  // statement, and sending them would just clutter QuickBooks' receipts inbox with entries that
-  // don't correspond to any real transaction on the account being reconciled.
-  const onlyIds = (opts && Array.isArray(opts.ids) && opts.ids.length) ? new Set(opts.ids.map(String)) : null;
-  const pending = all.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Email_Sent || '').toUpperCase() !== 'TRUE' && String(r.Payment_Source || 'company_card') !== 'vendor_reimburse'
-    && (!onlyIds || onlyIds.has(String(r.ID))));
+  const onlyIds = (opts.ids && Array.isArray(opts.ids) && opts.ids.length) ? new Set(opts.ids.map(String)) : null;
+  const today = new Date().toISOString().slice(0, 10);
+  const waiting = all.filter(r => qbBatchWaiting(r));
+  const heldN = waiting.filter(r => qbBatchStatus(r) === 'held').length;
+  const stuckN = waiting.filter(r => qbBatchStatus(r) === 'sending').length;
+  const pending = waiting.filter(r => qbBatchSendable(r, { manual: opts.manual === true, today }) && (!onlyIds || onlyIds.has(String(r.ID))));
   const batch = pending.slice(0, limit);
-  if (!batch.length) return json({ ok: true, sent: 0, remaining: 0, note: 'nothing pending' });
+  if (!batch.length) return json({ ok: true, sent: 0, remaining: 0, held: heldN, stuck: stuckN, failed: [], note: 'nothing pending' });
 
-  let queueRows = []; try { queueRows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) {}
+  let queueRows = []; try { queueRows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.read_queue', ref: '', err: e, severity: 'P2' }); }
   const [properties, workorders] = await Promise.all([
     fetchTab(env, 'Properties').catch(() => []), fetchTab(env, 'Work_Orders').catch(() => []),
   ]);
