@@ -242,6 +242,8 @@ const COVERED_GET = ['/owner-workorders', '/owner-properties', '/wo-audit', '/at
   t('owner billing: only the owner\'s own billing fields, nothing internal', b.status === 200 && !b.text.includes(LEAK) && Object.keys(b.json).every(k => /^(owner_id|name|company|billing_(name|address|city|state|zip|phone|email)|qbo_customer_id)$/.test(k)), b);
   const ro = await call('GET', '/owner/tenant-roster', OWN1);
   t('owner tenant roster: no PIN and nothing internal', ro.status === 200 && !ro.text.includes(LEAK) && Object.keys(ro.json).sort().join() === 'max_rows,owner_id,properties,tenants', ro);
+  const ap = await call('GET', '/owner/approvals', OWN1);   // queue #138: switch OFF here (blank Config), so it answers the empty shape; the ON shape is covered by owner-approvals.test.mjs
+  t('owner approvals (switch off): nothing internal', ap.status === 200 && !ap.text.includes(LEAK), ap);
   const d = await call('GET', '/demo/test-status', OWN1);
   t('demo test status (not a demo owner): refused, nothing internal', d.status >= 400 && !d.text.includes(LEAK), d);
   for (const p of ['/push/vapid-key', '/push/devices']) { const r = await call('GET', p, OWN1); t(`${p}: nothing internal`, !r.text.includes(LEAK), r); }
