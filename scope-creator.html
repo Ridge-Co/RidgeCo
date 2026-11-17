@@ -1438,6 +1438,13 @@ function smsStatusLine(s){
   var m={sent:'✅ Owner texted',held:'⏳ Text held — goes out at 8:00am unless they open the estimate first',skipped_seen:'⏭ Text skipped — they had already opened the estimate',blocked:'⚠ Text blocked by SMS settings (see Messaging)',failed:'⚠ Text failed',no_phone:'⚠ No owner phone on file, no text'};
   return '<div style="margin-top:4px;">'+esc(m[st]||('Text: '+st))+(s.Owner_SMS_Time?' · '+esc(new Date(s.Owner_SMS_Time).toLocaleString()):'')+'</div>';
 }
+// queue #138: what the owner answered from the owner portal's Approvals tab (declined / asked a question). A resend clears it on the server.
+function ownerResponseLine(s){
+  var r=(s.Owner_Response||'').trim(); if(!r) return '';
+  var who=esc(s.Owner_Response_By||'the owner'), when=s.Owner_Response_At?esc(new Date(s.Owner_Response_At).toLocaleString()):'';
+  var head=r==='declined'?'⛔ Owner <b>declined</b> this estimate':'❓ Owner <b>asked a question</b>';
+  return '<div style="margin-top:4px;color:var(--danger,#b42318);">'+head+' ('+who+(when?', '+when:'')+'): '+esc(s.Owner_Response_Text||'')+' <span class="sub">Revise the estimate and tap Send again to put it back in front of them.</span></div>';
+}
 function readStatusLines(s){
   var pv=parseInt(s.Page_View_Count||'0',10)||0, eo=parseInt(s.Email_Open_Count||'0',10)||0, h='';
   if(pv) h+='<div style="margin-top:4px;">👀 Opened the estimate page <b>'+esc(new Date(s.Page_First_Viewed).toLocaleString())+'</b> · viewed '+pv+'x (last '+esc(new Date(s.Page_Last_Viewed).toLocaleString())+')</div>';
