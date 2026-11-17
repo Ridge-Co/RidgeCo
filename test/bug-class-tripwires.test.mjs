@@ -28,5 +28,6 @@ ratchet('unguarded header-column indexOf', /=\s*\w+\.indexOf\('[^']+'\)\s*;/g, 1
 // Baseline 15 -> 16 (Nov 5 2026, web push): pushB64uEnc base64url-encodes raw key/signature BYTES (String.fromCharCode of a Uint8Array, always Latin-1) - never user text. test/web-push.test.mjs round-trips it against an independent decoder.
 ratchet('btoa()', /\bbtoa\(/g, 16, 'btoa throws on non-Latin-1 text (gh-broker bug class). Use a UTF-8-safe encoder for text.');
 // Baseline 1 -> 2 (Oct 20 2026): ReadMeterStore /put (internal Durable Object endpoint, only called by the Worker itself, wrapped in the class's outer try/catch). test/read-meter-rollup.test.mjs requires unreadable input to return an error, not be swallowed.
-ratchet('bare await request.json()', /await\s+request\.json\(\)(?!\s*\))/g, 2, 'Empty POST bodies must not 500 (rule 167). Wrap in try/catch.');
+// 3 = the 2 measured Nov 2026 + safeJson() in worker.js (Phase 0 of the silent-failure burn-down, Nov 17 2026): the ONE try-wrapped read that every new body read should use instead.
+ratchet('bare await request.json()', /await\s+request\.json\(\)(?!\s*\))/g, 3, 'Empty POST bodies must not 500 (rule 167). Wrap in try/catch, or use safeJson().');
 console.log(`bug-class-tripwires: ${n}/${n} passing`);

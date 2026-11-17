@@ -19744,6 +19744,94 @@ async function reportFailure(env, f) {
     return { ok: false, error: String((e && e.message) || e).slice(0, 200) };
   }
 }
+// ═══ SOFT-FAILURE-HELPERS-BEGIN (Phase 0 of the silent-failure burn-down, Nov 17 2026; handover in brett332/data claude/) ═══
+// Call-site helpers that turn a swallowed error into a reported one. They enforce:
+//  - NEVER throw. A failing report must not break the request it reports on.
+//  - Report at most ONCE per request per `where`. Pass the same `req` object ({} is fine) to every helper in one request; no req = no dedupe.
+//  - No extra Sheets read. fetchTabSoft wraps fetchTab; it adds nothing to the quota.
+//  - softNote and parseJsonCell only QUEUE their report (sync). A Worker handler must `await softFlush(env, req)` before it returns, or those reports are lost.
+//  - Behaviour does not change: the caller still gets the fallback value. These add visibility; a screen shows it only if the caller returns a `warnings` field.
+function softSeenOnce(req, where) {
+  if (!req || typeof req !== 'object') return true;
+  const seen = req.__softSeen || (req.__softSeen = new Set());
+  if (seen.has(where)) return false;
+  seen.add(where); return true;
+}
+function softItem(where, err, opts) {
+  opts = opts || {};
+  const message = String((err && err.message) || err || 'unknown error').slice(0, 300);
+  return { system: opts.system || 'hub', source: opts.source || 'worker', where, ref: opts.ref || '', message, severity: opts.severity || 'P2', context: opts.context || '' };
+}
+// Writes one report now. reportFailure never throws; this guard is the last line.
+async function softReport(env, item) {
+  try { return await reportFailure(env, item); }
+  catch (e) { return { ok: false, error: String((e && e.message) || e).slice(0, 200) }; }
+}
+// Async: reports now (once per request per where). Returns { ok:false, error, reported }.
+async function softFail(env, where, err, opts) {
+  const item = softItem(where, err, opts);
+  const first = softSeenOnce(opts && opts.req, where);
+  if (first) await softReport(env, item);
+  return { ok: false, error: item.message, reported: first };
+}
+// Sync: queues a non-exception problem ("config key missing"). Sent by softFlush, or now when there is no req.
+function softNote(env, where, message, opts) {
+  const item = softItem(where, message, Object.assign({ severity: 'P2' }, opts || {}));
+  const req = opts && opts.req;
+  const first = softSeenOnce(req, where);
+  if (first) { if (req) (req.__softPending || (req.__softPending = [])).push(item); else void softReport(env, item); }
+  return { ok: false, note: item.message, reported: first };
+}
+// Sends every queued report for this request. Call before the response returns.
+async function softFlush(env, req) {
+  const items = (req && req.__softPending) || [];
+  if (req) req.__softPending = [];
+  for (const it of items) await softReport(env, it);
+  return items.length;
+}
+// Wraps fetchTab: { rows, error }. On failure rows is [] and the failure is reported once. No extra Sheets read.
+// opts: { where, req, severity (default P2; use P1 when a decision or a send is made on these rows), readOpts }
+async function fetchTabSoft(env, tab, opts) {
+  opts = opts || {};
+  try { return { rows: await fetchTab(env, tab, opts.readOpts), error: null }; }
+  catch (e) {
+    const r = await softFail(env, opts.where || ('read:' + tab), e, { req: opts.req, severity: opts.severity || 'P2', ref: tab, source: 'read' });
+    return { rows: [], error: r.error };
+  }
+}
+// Parses a JSON cell. Blank cell = fallback, silently (it was never filled in). Non-blank corrupt cell = fallback + one queued report.
+// opts: { env, where, ref, req, severity }
+function parseJsonCell(cell, fallback, opts) {
+  opts = opts || {};
+  if (cell === undefined || cell === null || String(cell).trim() === '') return fallback;
+  try { return JSON.parse(cell); }
+  catch (e) {
+    softNote(opts.env, opts.where || ('json:' + (opts.ref || 'cell')), 'Stored data could not be read for ' + (opts.ref || 'a cell') + ' (' + String((e && e.message) || e).slice(0, 120) + '); the default was used.', { req: opts.req, severity: opts.severity || 'P2', ref: opts.ref || '', source: 'parse' });
+    return fallback;
+  }
+}
+// Runs a best-effort write: { ok:true, value, error:null } or { ok:false, value:undefined, error } with the failure reported.
+// opts: { where, ref, req, severity (default P1) }
+async function tryWrite(env, fn, opts) {
+  opts = opts || {};
+  try { return { ok: true, value: await fn(), error: null }; }
+  catch (e) {
+    const r = await softFail(env, opts.where || 'write', e, { req: opts.req, severity: opts.severity || 'P1', ref: opts.ref || '', source: 'write' });
+    return { ok: false, value: undefined, error: r.error };
+  }
+}
+// request.json() that never throws: { ok, body, error }. An empty or bad body gives body {} and ok:false.
+// With opts.env and opts.where, a bad body is also reported (once per request).
+async function safeJson(request, opts) {
+  opts = opts || {};
+  try { return { ok: true, body: await request.json(), error: null }; }
+  catch (e) {
+    const error = String((e && e.message) || e).slice(0, 200);
+    if (opts.env && opts.where) await softFail(opts.env, opts.where, 'Request body was not valid JSON: ' + error, { req: opts.req, severity: opts.severity || 'P2', source: 'request' });
+    return { ok: false, body: {}, error };
+  }
+}
+// ═══ SOFT-FAILURE-HELPERS-END
 async function failSetConfig(env, key, value) {
   const r = await setConfigKey(env, { key, value });
   if (r && typeof r.status === 'number' && r.status >= 400) throw new Error(`Config ${key} not saved (HTTP ${r.status})`);
