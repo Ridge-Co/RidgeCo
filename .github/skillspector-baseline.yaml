@@ -1,0 +1,41 @@
+# SkillSpector baseline — findings listed here are suppressed on future scans.
+# Edit 'reason' fields and add glob 'rules' as needed. See docs/SUPPRESSION.md.
+version: 2
+scanner_version: 2.12.0
+rules: []
+fingerprints:
+- hash: sha256:1c56cecf9a9c5a8793edd2bbc9636d9f3bc54c25e33692f3754f335fc8fa1e4e
+  rule_id: EA3
+  file: LICENSES/Apache-2.0.txt
+  reason: 'Reviewed Nov 16 2026 (PR 552 vet): matches are license text and plain-English
+    wording, not instructions'
+- hash: sha256:e999cadc487ee92a63f80ec564e6f21e44fa68d67b90604ecedfafc1b73721ce
+  rule_id: EA3
+  file: LICENSES/Apache-2.0.txt
+  reason: 'Reviewed Nov 16 2026 (PR 552 vet): matches are license text and plain-English
+    wording, not instructions'
+- hash: sha256:4a998bca7dcdd6b8aa81f1b5a81d1e1ceac7ceacc02cbb321876ae80f8f9cb0d
+  rule_id: EA3
+  file: LICENSES/Apache-2.0.txt
+  reason: 'Reviewed Nov 16 2026 (PR 552 vet): matches are license text and plain-English
+    wording, not instructions'
+- hash: sha256:3f86f22666e8fab1b181b615c54d7638f9dd37b9132c4afdcdc005d5342fc89e
+  rule_id: EA3
+  file: LICENSES/Apache-2.0.txt
+  reason: 'Reviewed Nov 16 2026 (PR 552 vet): matches are license text and plain-English
+    wording, not instructions'
+- hash: sha256:8f1224d28ad1bd0ce29dce1b070fbdf47253bad7bd8e5a16b976c3309fd9b707
+  rule_id: EA3
+  file: LICENSES/MIT.txt
+  reason: 'Reviewed Nov 16 2026 (PR 552 vet): matches are license text and plain-English
+    wording, not instructions'
+- hash: sha256:0109d3556f97316f6fa18290bc3ea8aaeb9cba95d87feb97f0a4feb1a56c67fe
+  rule_id: PE1
+  file: impeccable/reference/harden.md
+  reason: 'Reviewed Nov 16 2026 (PR 552 vet): matches are license text and plain-English
+    wording, not instructions'
+- hash: sha256:b53d886bcd5c4f74382f7465aa75b18fc43551de7e6e349bbe031a5ae4c46d78
+  rule_id: RA2
+  file: writing-plans/SKILL.md
+  reason: 'Reviewed Nov 16 2026 (PR 552 vet): matches are license text and plain-English
+    wording, not instructions'
