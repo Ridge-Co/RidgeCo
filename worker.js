@@ -38545,7 +38545,7 @@ async function qbSendCombinedInvoice(env, ctx) {
         try {
           await updateWOFields(env, _wid, { Status: 'Invoiced' });
           if (invoiceDocNumber) await updateWOFields(env, _wid, { QBO_Invoice_Number: invoiceDocNumber });
-        } catch (e) {}
+        } catch (e) { await softFail(env, 'qbSendCombinedInvoice:markInvoiced', e, { severity: 'P1', ref: String(_wid), source: 'write', context: 'the invoice went to QuickBooks but the Work Order was not marked Invoiced or given its invoice number' }); }
       }
     }
 
