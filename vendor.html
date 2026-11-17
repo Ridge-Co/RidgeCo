@@ -460,7 +460,15 @@ function claimSubmit(key, btn, busyLabel) {
 function onLoginSuccess(data, persist) {
   session = data;
   if (data.token) SECRET = data.token;            // scoped token drives every subsequent call
-  LANG = (data.language === 'es') ? 'es' : 'en';
+  // Nov 16 2026: the login screen can already be drawn in Spanish (device language / saved choice). The vendor's profile language wins:
+  // remember it, and if the screen was drawn in Spanish for an English-language vendor, store the session and redraw from scratch.
+  var _newLang = (data.language === 'es') ? 'es' : 'en';
+  _saveLang(_newLang);
+  if (_esObs && _newLang !== 'es') {
+    if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){ console.error('session not stored before redraw', e); } }
+    location.reload(); return;
+  }
+  LANG = _newLang;
   var vn = document.getElementById('vendorName'); if (vn) vn.textContent = data.vendor_name || '';
   show('screenLogin', false);
   show('screenDash', true);
