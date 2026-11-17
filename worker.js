@@ -19804,11 +19804,13 @@ async function softFlush(env, req) {
   return items.length;
 }
 // Wraps fetchTab: { rows, error }. On failure rows is [] and the failure is reported once. No extra Sheets read.
-// opts: { where, req, severity (default P2; use P1 when a decision or a send is made on these rows), readOpts }
+// opts: { where, req, severity (default P2; use P1 when a decision or a send is made on these rows), readOpts, optional }
+// optional:true = this tab may legitimately not exist yet (created on first use): a missing tab is an empty list, not a failure. Any other error is still reported.
 async function fetchTabSoft(env, tab, opts) {
   opts = opts || {};
   try { return { rows: await fetchTab(env, tab, opts.readOpts), error: null }; }
   catch (e) {
+    if (opts.optional && typeof isMissingTabError === 'function' && isMissingTabError(e)) return { rows: [], error: null };
     const r = await softFail(env, opts.where || ('read:' + tab), e, { req: opts.req, severity: opts.severity || 'P2', ref: tab, source: 'read' });
     return { rows: [], error: r.error };
   }
@@ -38554,11 +38556,9 @@ async function ensureDeliveryTab(env) {
 // plus today's date (ET) so the page can bucket Today / Upcoming / Needs-a-date / Done.
 async function deliveriesList(env, url) {
   await ensureDeliveryTab(env);
-  let dels = [], props = [], units = [], tenants = [];
-  try { dels    = await fetchTab(env, 'Deliveries'); } catch (e) {}
-  try { props   = await fetchTab(env, 'Properties'); } catch (e) {}
-  try { units   = await fetchTab(env, 'Units'); } catch (e) {}
-  try { tenants = await fetchTab(env, 'Tenants'); } catch (e) {}
+  const req = {}, warnings = [];
+  const rd = async tab => { const r = await fetchTabSoft(env, tab, { where: 'deliveries:read:' + tab, req, severity: 'P2' }); if (r.error) warnings.push('Could not read ' + tab + ': ' + r.error); return r.rows; };
+  const dels = await rd('Deliveries'), props = await rd('Properties'), units = await rd('Units'), tenants = await rd('Tenants');
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
   const out = dels.filter(d => d.Active !== 'FALSE').map(d => {
     const p = props.find(x => String(x.ID) === String(d.Property_ID));
@@ -38580,7 +38580,7 @@ async function deliveriesList(env, url) {
     };
   });
   out.sort((a, b) => String(a.expected_date || '9999').localeCompare(String(b.expected_date || '9999')));
-  return json({ today, count: out.length, deliveries: out });
+  return json({ today, count: out.length, deliveries: out, warnings });
 }
 
 // POST /delivery/add — create a delivery. If no WO is linked and we know the property,
@@ -40214,8 +40214,8 @@ async function trashUnmarkSkipped(env, body) {
 }
 
 async function trashListProperties(env) {
-  let rows = [];
-  try { rows = await fetchTab(env, 'Trash_Properties'); } catch (e) {}
+  // The page needs a bare array here, so a failed read is reported to the ledger (no shape change). Trash tabs are created on first use, so a missing tab is just empty.
+  const rows = (await fetchTabSoft(env, 'Trash_Properties', { where: 'trash:read:Trash_Properties', severity: 'P2', optional: true })).rows;
   const out = rows.filter(r => r.Active !== 'FALSE').map(r => ({
     id: r.ID, label: r.Label,
     customer_id: r.QBO_Customer_ID || '', customer_name: r.Customer_Name || '',
@@ -40311,10 +40311,9 @@ async function trashLogVisit(env, body) {
 async function trashWeek(env, url) {
   const week = trashWeekKey((url && url.searchParams.get('week')) || null);
   const pid  = (url && url.searchParams.get('property_id')) || '';
-  let props = [], visits = [], skips = [];
-  try { props  = await fetchTab(env, 'Trash_Properties'); } catch (e) {}
-  try { visits = await fetchTab(env, 'Trash_Visits'); } catch (e) {}
-  try { skips  = await fetchTab(env, 'Trash_Skips'); } catch (e) {}
+  const req = {}, warnings = [];
+  const rd = async tab => { const r = await fetchTabSoft(env, tab, { where: 'trash:read:' + tab, req, severity: 'P2', optional: true }); if (r.error) warnings.push('Could not read ' + tab + ': ' + r.error); return r.rows; };
+  let props = await rd('Trash_Properties'); const visits = await rd('Trash_Visits'), skips = await rd('Trash_Skips');
   props = props.filter(p => p.Active !== 'FALSE' && (!pid || p.ID === pid));
   const out = props.map(p => {
     const vs = visits.filter(v => v.Active !== 'FALSE' && v.Property_ID === p.ID && v.Week_Key === week);
@@ -40334,7 +40333,7 @@ async function trashWeek(env, url) {
       skipped: !!skip, skip_reason: (skip && skip.Reason) || '',
     };
   });
-  return json({ week, properties: out });
+  return json({ week, properties: out, warnings });
 }
 
 // GET /trash/unbilled — what needs Brett's attention. Powers the push nudge.
@@ -40346,10 +40345,10 @@ async function trashUnbilled(env, url) {
   const thisWeek = trashWeekKey(today.toISOString().slice(0,10));
   const prevD = new Date(thisWeek + 'T12:00:00Z'); prevD.setUTCDate(prevD.getUTCDate() - 7);
   const prevWeek = prevD.toISOString().slice(0,10);
-  let props = [], visits = [], skips = [];
-  try { props  = await fetchTab(env, 'Trash_Properties'); } catch (e) {}
-  try { visits = await fetchTab(env, 'Trash_Visits'); } catch (e) {}
-  try { skips  = await fetchTab(env, 'Trash_Skips'); } catch (e) {}
+  // This powers the push nudge: an unreadable tab must not look like "nothing needs attention", so it is reported (P1) and returned as a warning.
+  const req = {}, warnings = [];
+  const rd = async tab => { const r = await fetchTabSoft(env, tab, { where: 'trash:read:' + tab, req, severity: 'P1', optional: true }); if (r.error) warnings.push('Could not read ' + tab + ': ' + r.error); return r.rows; };
+  let props = await rd('Trash_Properties'); const visits = await rd('Trash_Visits'), skips = await rd('Trash_Skips');
   props = props.filter(p => p.Active !== 'FALSE');
   const items = [];
   for (const week of [prevWeek, thisWeek]) {
@@ -40369,7 +40368,7 @@ async function trashUnbilled(env, url) {
       }
     }
   }
-  return json({ generated_at: new Date().toISOString(), this_week: thisWeek, prev_week: prevWeek, count: items.length, items });
+  return json({ generated_at: new Date().toISOString(), this_week: thisWeek, prev_week: prevWeek, count: items.length, items, warnings });
 }
 
 // POST /trash/invoice { property_id, week?, preview_only? } — assemble + send the
@@ -40563,8 +40562,8 @@ async function ensureInspTabs(env) {
 // ── Customers (a "customer" here is a whole inspection line — the new PM rental
 // customer, or a synthetic AMSCRE row for Phase 3's routing) ──────────────────
 async function inspCustomersList(env) {
-  let rows = [];
-  try { rows = await fetchTab(env, 'Insp_Customers'); } catch (e) {}
+  // Bare-array response (the page depends on it): a failed read is reported to the ledger, no shape change. The Insp tabs are created on first add, so a missing tab is just empty.
+  const rows = (await fetchTabSoft(env, 'Insp_Customers', { where: 'insp:read:Insp_Customers', severity: 'P2', optional: true })).rows;
   return json(rows.filter(r => r.Active !== 'FALSE'));
 }
 async function inspCustomerAdd(env, body) {
@@ -40581,8 +40580,7 @@ async function inspCustomerAdd(env, body) {
 // ── Properties ───────────────────────────────────────────────
 async function inspPropertiesList(env, url) {
   const cid = (url && url.searchParams.get('customer_id')) || '';
-  let rows = [];
-  try { rows = await fetchTab(env, 'Insp_Properties'); } catch (e) {}
+  let rows = (await fetchTabSoft(env, 'Insp_Properties', { where: 'insp:read:Insp_Properties', severity: 'P2', optional: true })).rows;
   rows = rows.filter(r => r.Active !== 'FALSE' && (!cid || r.Customer_ID === cid));
   return json(rows);
 }
@@ -40602,8 +40600,7 @@ async function inspPropertyAdd(env, body) {
 // exactly one synthetic unit) ───────────────────────────────────────────────────
 async function inspUnitsList(env, url) {
   const pid = (url && url.searchParams.get('property_id')) || '';
-  let rows = [];
-  try { rows = await fetchTab(env, 'Insp_Units'); } catch (e) {}
+  let rows = (await fetchTabSoft(env, 'Insp_Units', { where: 'insp:read:Insp_Units', severity: 'P2', optional: true })).rows;
   rows = rows.filter(r => r.Active !== 'FALSE' && (!pid || r.Property_ID === pid));
   return json(rows);
 }
@@ -40621,12 +40618,13 @@ async function inspUnitAdd(env, body) {
 // One combined read — the admin screen always needs both together (same reasoning
 // as hubBootstrap batching several tabs into one call).
 async function inspAvailabilityGet(env) {
-  let rules = [], blackouts = [];
-  try { rules = await fetchTab(env, 'Insp_Availability_Rules'); } catch (e) {}
-  try { blackouts = await fetchTab(env, 'Insp_Blackouts'); } catch (e) {}
+  const req = {}, warnings = [];
+  const rd = async tab => { const r = await fetchTabSoft(env, tab, { where: 'insp:read:' + tab, req, severity: 'P2', optional: true }); if (r.error) warnings.push('Could not read ' + tab + ': ' + r.error); return r.rows; };
+  const rules = await rd('Insp_Availability_Rules'), blackouts = await rd('Insp_Blackouts');
   return json({
     rules: rules.filter(r => r.Active !== 'FALSE'),
     blackouts: blackouts.filter(r => r.Active !== 'FALSE'),
+    warnings,
   });
 }
 async function inspAvailabilityAdd(env, body) {
