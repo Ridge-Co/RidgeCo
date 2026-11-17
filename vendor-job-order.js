@@ -135,7 +135,8 @@ var JobOrder = (function () {
   // The bold red box at the top of the bill window. Calling it with no argument just redraws it.
   function refreshBillPanel() {
     var el = document.getElementById('bill-needs-panel');
-    if (!el || !window._billWOId) return;
+    var m = document.getElementById('modal-vendor-bill');
+    if (!el || !window._billWOId || !m || m.style.display === 'none') return;   // only while the bill window is open
     if (_after[window._billWOId] === undefined) loadAfter(window._billWOId).then(function () { refreshBillPanel(); });
     var list = billMissing();
     el.innerHTML = list.length ? needsHtml(list)
