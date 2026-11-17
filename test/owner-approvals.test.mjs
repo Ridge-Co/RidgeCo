@@ -164,6 +164,14 @@ let link1 = '';
   t('after a decline the card is in the answered group with the reason, and the waiting count is 0', c.state === 'declined' && c.response_text === 'Too expensive for now' && !c.link && g2.json.waiting === 0, g2.json);
   const hist = telem().filter(x => /^owner_approval_(declined|question)$/.test(x.job) && x.ok === 'TRUE');
   t('the history keeps both answers (telemetry rows)', hist.length === 2, hist);
+  t('a delivered text is marked on the row (Owner_Response_Alerted)', !!scopeRow('S1').Owner_Response_Alerted, scopeRow('S1'));
+  // gate D2 (Nov 17 2026): saved but never texted (read-back quota-blocked, owner told "try again"). The same answer again sends the text once, then is a plain duplicate.
+  const atBefore = scopeRow('S1').Owner_Response_At;
+  { const rows = store.tabs.get('Scopes'); const ci = rows[0].indexOf('Owner_Response_Alerted'); rows.find((x, i) => i > 0 && x[0] === 'S1')[ci] = ''; }
+  const d3 = await call('POST', '/owner/approval/respond', OWN1, { scope_id: 'S1', action: 'decline', text: 'Too expensive for now', name: 'Olly Owner' });
+  t('saved-but-not-texted retry: Brett is texted now, the answer is not re-saved, and the row is marked', d3.status === 200 && d3.json.alerted === true && twilioCalls.length === 3 && scopeRow('S1').Owner_Response_At === atBefore && !!scopeRow('S1').Owner_Response_Alerted, { d3: d3.json, n: twilioCalls.length });
+  const d4 = await call('POST', '/owner/approval/respond', OWN1, { scope_id: 'S1', action: 'decline', text: 'Too expensive for now', name: 'Olly Owner' });
+  t('after that, a further tap is a plain duplicate with no text', d4.json.duplicate === true && twilioCalls.length === 3, { d4: d4.json, n: twilioCalls.length });
 }
 {
   const before = twilioCalls.length;
