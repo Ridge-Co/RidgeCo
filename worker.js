@@ -652,7 +652,7 @@ const _hubWorkerCore = {
         if (path === '/owner-onboard/info')     return await ownerOnboardInfo(env, url);
         if (path === '/owner-onboard/invites')  return await ownerOnboardInvites(env);
         if (path === '/vendor-by-pin')          return await vendorByPin(env, url);
-        if (path === '/owner-properties')       return await ownerProperties(env, url);
+        if (path === '/owner-properties')       return await ownerProperties(env, url, callerRole);
         if (path === '/owner/tenant-roster')    return await ownerRosterList(env, callerRole, callerSessionId, url);   // owner session (own id) or admin ?owner_id=
         if (path === '/vendor-workorders')      return await vendorWorkorders(env, url, callerRole, callerSessionId);
         if (path === '/tenant-workorders')      return await tenantWorkorders(env, url, callerRole, callerSessionId);
@@ -2865,6 +2865,8 @@ async function getAttachments(env, url, callerRole, callerSessionId) {
   }
   let visible = rows.filter(a => woAllowed(a.WO_ID));
   if (callerRole === 'tenant') visible = visible.filter(a => !ATTACHMENT_COST_DOC_TYPES.includes(String(a.File_Type || '').toLowerCase()));
+  // Owner allow-list (Nov 16 2026): photos and receipts only, and only the named columns. Vendor bill / invoice file rows never reach an owner.
+  if (callerRole === 'owner') visible = visible.filter(a => OWNER_ATTACHMENT_TYPES.includes(String(a.File_Type || 'photo').toLowerCase())).map(a => ownerPick(a, OWNER_ATTACHMENT_FIELDS));
   return json(visible);
 }
 
@@ -11461,7 +11463,61 @@ async function ownerWorkorders(env, url, callerRole, callerSessionId) {
   // and master key info stays vendor-only regardless.
   const enriched = wos.map(wo => enrichWO(wo, properties, units, tenants, keys, { omitLockbox: true, omitTenantPhone: true, ownerView: true, vendors }));
   enriched.sort((a, b) => new Date(b.Created_Date) - new Date(a.Created_Date));
-  return json(enriched);
+  // Owner allow-list (Nov 16 2026): an OWNER SESSION gets only the named fields (ownerPick), never the whole Work_Orders row.
+  return json(callerRole === 'owner' ? enriched.map(w => ownerPick(w, OWNER_WO_VIEW_FIELDS)) : enriched);
+}
+
+// ── OWNER READ ALLOW-LIST (Nov 16 2026, access fix 1 of 3) ─────────────────────────────────────────────────────
+// What was wrong: /owner-workorders sent an owner session the WHOLE Work_Orders row (enrichWO spreads `...wo`), so every column
+// went to the owner's browser even though owner.html shows only a few: Admin_Notes, Vendor_Admin_Notes, Entry_Notes, Hold_Reason,
+// Estimate_Revised, Addon_Amount / Addon_Items_JSON (the vendor's own prices), Deposit_* (vendor deposits), Customer_Charge,
+// QBO_Bill_Number, Invoice_Status, bid-group ids, the property's access notes and any column added later. /wo-audit sent every
+// history row, including the full text of messages to the vendor and to Brett ("Revised estimate ... from <vendor>: $1,300.00")
+// and edits to internal note fields. /owner-properties sent whole Properties / Units rows (lock codes, QuickBooks ids) and
+// /attachments listed vendor bill / invoice file rows.
+// The rule now: an OWNER SESSION response is built from the lists below. A field that is not named here does not leave the
+// server, so a new sheet column is hidden from owners until someone adds it here on purpose. The admin secret and internal
+// tokens (callerRole null) are unchanged. test/owner-allowlist.test.mjs fails if any owner route returns a field outside these.
+const OWNER_WO_VIEW_FIELDS = ['ID', 'Property_ID', 'Unit_ID', 'Type', 'Trade', 'Description', 'Priority', 'Status', 'Display_Status',
+  'Scheduled_Date', 'Scheduled_Window', 'Completed_Date', 'Created_Date', 'Created_By', 'Notes', 'Owner_WO_Ref', 'Managed_By',
+  'Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates',
+  'property_address', 'property_city', 'unit_label', 'tenant_name', 'vendor_name', 'vendor_trade'];
+const OWNER_PROPERTY_FIELDS = ['ID', 'Address', 'City', 'Market', 'Type', 'Unit_Count', 'Active'];
+const OWNER_UNIT_FIELDS = ['ID', 'Property_ID', 'Unit_Label', 'Active'];
+const OWNER_ATTACHMENT_FIELDS = ['WO_ID', 'File_Name', 'File_Type', 'Drive_File_ID', 'Drive_URL', 'Mime_Type', 'Created_Date', 'Active'];
+// Photos and receipts only (Brett, Sep 16 2026: owners may see receipts, never vendor invoices / bills). Any other type stays on the server.
+const OWNER_ATTACHMENT_TYPES = ['before', 'after', 'report', 'receipt', 'other', 'photo'];
+const OWNER_AUDIT_ROW_FIELDS = ['ID', 'WO_ID', 'Timestamp', 'Changed_By', 'Changed_By_Role', 'Field', 'Old_Value', 'New_Value', 'Notes'];
+const OWNER_AUDIT_MESSAGE_FIELDS = ['Channel', 'Recipient_Type', 'Message_Type', 'Outcome'];
+// History lines an owner may see: changes to the fields the owner page shows. Everything else (internal notes, prices, bills,
+// QuickBooks, bid groups, checklist, voids, any field added later) is left out.
+const OWNER_AUDIT_FIELDS = ['Status', 'Priority', 'Scheduled', 'Scheduled_Date', 'Scheduled_Window', 'Completed_Date', 'Trade', 'Description', 'Notes',
+  'Owner_WO_Ref', 'Managed_By', 'Tenant_Visible', 'Tenant_Notify_Created', 'Tenant_Notify_Updates'];
+// PURE. A new object holding only the allowed keys that exist on `row`.
+function ownerPick(row, allowed) {
+  const out = {};
+  if (!row || typeof row !== 'object') return out;
+  for (const k of allowed) if (Object.prototype.hasOwnProperty.call(row, k)) out[k] = row[k];
+  return out;
+}
+// PURE. The history rows an owner session may see, each cut down to the allowed columns.
+//   - a message row (a text / email the Hub sent) only when it went TO THE OWNER, and without its body;
+//   - a field-change row only when the field is one the owner page shows.
+function ownerAuditView(rows) {
+  const out = [];
+  for (const a of (rows || [])) {
+    if (!a) continue;
+    const field = String(a.Field || '');
+    const isMessage = !!String(a.Channel || '').trim() || field === 'SMS' || field === 'Email';
+    if (isMessage) {
+      if (String(a.Recipient_Type || '').toLowerCase() !== 'owner') continue;
+      out.push(ownerPick(a, OWNER_AUDIT_ROW_FIELDS.filter(k => k !== 'Old_Value' && k !== 'New_Value' && k !== 'Notes').concat(OWNER_AUDIT_MESSAGE_FIELDS)));
+      continue;
+    }
+    if (!OWNER_AUDIT_FIELDS.includes(field)) continue;
+    out.push(ownerPick(a, OWNER_AUDIT_ROW_FIELDS));
+  }
+  return out;
 }
 
 function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], masterKeyHolders=[]) {
@@ -11604,11 +11660,14 @@ async function saveBuildingInfo(env, body) {
   return json({ success: true, results });
 }
 
-async function ownerProperties(env, url) {
-  const ownerId = url.searchParams.get('owner_id');
+async function ownerProperties(env, url, callerRole) {
+  const ownerId = url.searchParams.get('owner_id');   // for an owner session the router has already forced this to the session's own id
   if (!ownerId) return json({ error: 'Missing owner_id' }, 400);
   const [properties, units] = await fetchTabs(env, ['Properties','Units']);
-  return json(properties.filter(p => p.Owner_ID === ownerId && p.Active !== 'FALSE').map(p => ({ ...p, units: units.filter(u => u.Property_ID === p.ID) })));
+  const mine = properties.filter(p => p.Owner_ID === ownerId && p.Active !== 'FALSE');
+  // Owner allow-list (Nov 16 2026): an owner session gets the address fields the page uses, never the whole row (lock codes, QuickBooks ids, access notes).
+  if (callerRole === 'owner') return json(mine.map(p => ({ ...ownerPick(p, OWNER_PROPERTY_FIELDS), units: units.filter(u => u.Property_ID === p.ID).map(u => ownerPick(u, OWNER_UNIT_FIELDS)) })));
+  return json(mine.map(p => ({ ...p, units: units.filter(u => u.Property_ID === p.ID) })));
 }
 
 async function saveCacheEntry(env, body) {
@@ -14459,8 +14518,14 @@ async function getWOAudit(env, url, callerRole) {
       const _mpLine = /\s*(Max price|Precio máximo): \$[\d,]+(\.\d+)? —[^\n]*/g;
       rows = rows.filter(a => a.Field !== 'Max_Price').map(a => (a.Message_Body || a.Original_Body) ? { ...a, Message_Body: String(a.Message_Body || '').replace(_mpLine, ''), Original_Body: String(a.Original_Body || '').replace(_mpLine, '') } : a);
     }
+    // Owner allow-list (Nov 16 2026): only history lines about fields the owner page shows, cut to the named columns (ownerAuditView).
+    if (callerRole === 'owner') rows = ownerAuditView(rows);
     return json(rows);
-  } catch(e) { return json([]); }
+  } catch (e) {
+    // Nov 16 2026: this used to answer [] (a failed read looked exactly like "no history"). Now it is recorded and the caller is told.
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_audit_read_failed', Skill_Or_Endpoint: '/wo-audit', Success: 'FALSE', Notes: `wo=${String(woId).slice(0, 40)} role=${callerRole || 'none'} ${String((e && e.message) || e)}`.slice(0, 480) });
+    return json({ error: 'Could not load the history for this work order. Please try again.' }, 500);
+  }
 }
 
 async function translateToEnglish(env, text) {
