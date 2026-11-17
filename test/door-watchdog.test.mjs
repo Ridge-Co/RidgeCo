@@ -430,6 +430,7 @@ const logsOff = () => { const orig = console.error; console.error = () => {}; re
   threw = false;
   try { await mk(async () => { throw new Error('kaboom2'); }, true, true)({}); } catch (e) { threw = true; }
   t('even telemetry + alert failing cannot break the scheduler job', threw === false);
+  t('Phase 2: a telemetry write and an alert that both fail are REPORTED (P1 telemetry, P0 alert), not just console-logged', log.fails.length === 2 && log.fails.some(f => f.where === 'doorWatchdog:telemetry' && f.severity === 'P1') && log.fails.some(f => f.where === 'doorWatchdog:alert' && f.severity === 'P0'));
   const okRes = await mk(async () => ({ ok: true, errors: [] }), false, false)({});
   restore();
   t('normal pass result passed through', okRes.ok === true);
