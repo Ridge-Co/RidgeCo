@@ -16782,10 +16782,13 @@ function applyBulkStatus() {
   // WO in this batch (e.g. "waiting on a parts delivery"), not a per-WO prompt in a bulk flow.
   var holdReason = '';
   if (status === 'On Hold') {
-    holdReason = prompt('Reason for putting these '+ids.length+' work order'+(ids.length>1?'s':'')+' on hold:');
-    if (holdReason === null) return;
-    holdReason = holdReason.trim();
-    if (!holdReason) { toast('A reason is required to put work orders on hold','error'); return; }
+    // Nov 17 2026: same picker as a single hold; the picker is the confirmation, so no second confirm().
+    hubHoldDialog(ids.length, function(text) {
+      runBulkWOUpdate(ids, function(id){
+        return api('POST','/status',{ wo_id:id, status:status, updated_by:'Admin', updated_by_role:'admin', hold_reason:text });
+      }, document.getElementById('bulk-apply-btn'), 'Updated');
+    });
+    return;
   }
   if (!confirm('Change '+ids.length+' work order'+(ids.length>1?'s':'')+" to '"+status+"'?")) return;
   runBulkWOUpdate(ids, function(id){
