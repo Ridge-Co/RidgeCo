@@ -40214,8 +40214,8 @@ async function trashUnmarkSkipped(env, body) {
 }
 
 async function trashListProperties(env) {
-  let rows = [];
-  try { rows = await fetchTab(env, 'Trash_Properties'); } catch (e) {}
+  // The page needs a bare array here, so a failed read is reported to the ledger (no shape change). Trash tabs are created on first use, so a missing tab is just empty.
+  const rows = (await fetchTabSoft(env, 'Trash_Properties', { where: 'trash:read:Trash_Properties', severity: 'P2', optional: true })).rows;
   const out = rows.filter(r => r.Active !== 'FALSE').map(r => ({
     id: r.ID, label: r.Label,
     customer_id: r.QBO_Customer_ID || '', customer_name: r.Customer_Name || '',
