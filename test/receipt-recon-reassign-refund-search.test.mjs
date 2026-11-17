@@ -29,8 +29,11 @@ ok(/if \(path === '\/receipt-recon\/search'\)\s+return await receiptReconSearch\
   const body = grab('receiptReconReassign');
   ok(/property_id required/.test(body), 'reassign requires property_id');
   ok(/row\.Status !== 'confirmed'/.test(body), 'reassign only accepts an already-confirmed queue row');
-  ok(/QB_Email_Sent \|\| ''\)\.toUpperCase\(\) === 'TRUE'/.test(body), 'reassign checks the original Receipts row\'s QB_Email_Sent flag');
-  ok(/already emailed to QuickBooks/.test(body), 'reassign refuses with a clear message once the original was already sent to QuickBooks');
+  // Nov 17 2026 (Brett): the old rule (refuse once the original was emailed to QuickBooks) is RELAXED. An already-sent receipt can be reassigned: the old row is voided,
+  // QB_Reversed_Date is written and the answer carries qb_delete_needed. Only a receipt claimed by a sender right now ('sending') is refused. Behaviour: test/qb-batch-and-reverse.test.mjs.
+  ok(/QB_Email_Sent \|\| ''\)\.toUpperCase\(\) === 'TRUE'/.test(body), 'reassign still reads the original Receipts row\'s QB_Email_Sent flag (to know a QuickBooks clean-up is needed)');
+  ok(!/fix it in QuickBooks directly rather than here/.test(body), 'reassign no longer refuses an already-emailed receipt');
+  ok(/qbBatchStatus\(original\) === 'sending'/.test(body) && /qb_delete_needed: qbDeleteNeededFor/.test(body) && /QB_Reversed_Date/.test(body), 'reassign refuses only a receipt being sent right now, records QB_Reversed_Date and returns qb_delete_needed');
   ok(/Active: 'FALSE'/.test(body), 'reassign soft-deletes (never hard-deletes) the original Receipts row');
   ok(/addReceipt\(env,/.test(body), 'reassign posts the new receipt through the same addReceipt() every other entry path uses');
   ok(/wo_id \? 'billable' : 'company'/.test(body), 'reassign computes category the same way the rest of the pipeline does (billable with a WO, company without)');
