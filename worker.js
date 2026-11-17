@@ -28020,7 +28020,7 @@ async function woShareSend(env, body){
 async function woShareRevoke(env, body){
   const woId = String((body && (body.wo_id||body.wo))||'').trim();
   if(!woId) return json({ error:'wo_id required' }, 400);
-  try { await ensureColumns(env, 'Work_Orders', ['Share_Rev']); } catch(e){}
+  try { await ensureColumns(env, 'Work_Orders', ['Share_Rev']); } catch(e){} // silent-ok: ensureColumns reports its own failure to the ledger
   const wos = await fetchTab(env, 'Work_Orders');
   const wo = findWO(wos, woId);
   if(!wo) return json({ error:'WO not found' }, 404);
