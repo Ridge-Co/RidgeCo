@@ -70,10 +70,13 @@ function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
   const w = world(23);
   const r1 = await w.scan({});
   ok(r1.scanned === 8 && r1.remaining === 15, `Hub tap 1: 8 scanned, 15 remaining (got ${r1.scanned}/${r1.remaining})`);
+  ok(r1.more_waiting === 15 && Array.isArray(r1.error_files) && r1.error_files.length === 0 && Array.isArray(r1.stuck_files) && r1.stuck_files.length === 0, 'tap 1: more_waiting mirrors remaining (15); error_files and stuck_files are empty arrays');
   const r2 = await w.scan({});
   ok(r2.scanned === 8 && r2.remaining === 7, 'Hub tap 2: next 8, 7 remaining');
   const r3 = await w.scan({});
   ok(r3.scanned === 7 && r3.remaining === 0, 'Hub tap 3: last 7, 0 remaining');
+  ok(r2.more_waiting === 7 && r3.more_waiting === 0, 'more_waiting follows remaining on later taps (7, then 0)');
+  ok(w.reports.length === 0, 'a clean scan files nothing in the failure ledger');
   const r4 = await w.scan({});
   ok(r4.scanned === 0 && r4.remaining === 0, 'tap 4: nothing new');
   ok(w.queue.length === 23 && new Set(w.queue.map(q => q.Source_File_ID)).size === 23, 'all 23 queued exactly once');
