@@ -29297,7 +29297,13 @@ async function fetchTabs(env, tabs, opts) {
           bp.then(clear, clear);
         }
       }
-      await bp;
+      try { await bp; }
+      catch (e0) {
+        // Nov 17 2026: same cross-request error as sheetsRequest's joiner (Nov 13), but on the shared batchGet path, which that
+        // fix did not cover (/hub-bootstrap and /vendor-workorders 500 on Nov 16). Do our own read instead of failing.
+        if (/promise was created by a request that has since ended|can never settle/i.test(String((e0 && e0.message) || ''))) await __readOwn();
+        else throw e0;
+      }
     }
     catch (e) {
       // Opt-in, read-only callers only: if EVERY tab we still need has a recent good copy,
