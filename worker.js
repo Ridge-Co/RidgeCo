@@ -4778,7 +4778,9 @@ async function receiptAttachOnly(env, body) {
         : (fixedPrice ? 'Fixed-price job cost recorded on WO ' + wo_id + ' — not billed to the customer, no invoice line added.' : customerCard ? 'Customer-card receipt attached to WO ' + wo_id + ' as a reference — not billed, not expensed, no invoice line added.' : 'Image attached only — not billed, no invoice line added.'),
     });
   }
-  return json({ ok: true, wo_id, property_id, attached_only: true, customer_card: customerCard, receipt_number: String(row.Invoice_Number || '').trim(), ...addJson });
+  // Fixed-price cost is OUR expense: send it to the QuickBooks receipts inbox now, like the no-WO expense path. A failure is returned and shown, never swallowed.
+  const qbEmail = (fixedPrice && addJson && addJson.success && !addJson.duplicate && addJson.id) ? await emailExpenseToQB(env, addJson.id) : null;
+  return json({ ok: true, wo_id, property_id, attached_only: true, customer_card: customerCard, fixed_price: fixedPrice, qb_email: qbEmail, receipt_number: String(row.Invoice_Number || '').trim(), ...addJson });
 }
 
 // Nov 17 2026: send ONE already-written Receipts row to the QuickBooks receipts inbox now (fixed-price job costs are our expense). Never throws:
