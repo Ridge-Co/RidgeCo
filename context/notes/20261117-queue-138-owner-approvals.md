@@ -17,7 +17,7 @@ N (companion actions not yet done):
 - B20 Voice: no mic button on the decline / question box (the phone keyboard mic works).
 - B27 Where else: the Hub tile "Waiting on owners (N)" and the Decline button on scope-proposal.html are not built (see CURRENT).
 - B31 Settings: the 90-day window and the 2-minute double-tap window are constants.
-- D2 Quota-blocked read-back: if the save lands but the read-back is quota-blocked, the owner sees "Not saved, try again"; a same-text retry within 2 minutes then returns "duplicate" and Brett is never texted (the Hub line in scope-creator still shows the answer). Fix: on a duplicate whose alert never went out, send the alert.
+- D2 Quota-blocked read-back: if the save lands but the read-back is quota-blocked, the owner sees "Not saved, try again"; a same-text retry within 2 minutes then returns "duplicate" and Brett is never texted (the Hub line in scope-creator still shows the answer). FIXED Nov 17: new column `Owner_Response_Alerted` is set once Brett's text goes out (and cleared by a resend); a same-answer retry within 2 minutes with no alert mark skips the save and sends the text; with the mark it is a plain duplicate. Test added (owner-approvals 41/41, full suite 356/356).
 - D9: staging cannot prove the owner sign-in or the text. First live use: Brett turns the Config key on and tries it as the demo owner.
 - C9 GATED: yes (owner-facing, new owner write endpoint, new Scopes columns). Brett merges.
 - C13 Manual steps for Brett: merge; set Config `owner_approvals_enabled` = TRUE when ready.
