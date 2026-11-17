@@ -6115,7 +6115,7 @@ async function woPushToScope(env, body) {
       WO_ID: woId, Vendor_ID: wo.Vendor_ID || '', Estimate_Number: '', Estimate_Amount: '', Estimate_Notes: '',
       Proposal_Text: '', Created_By: (body && body.created_by) || 'admin', Created_Date: now, Updated_Date: now, Notes: '', Active: 'TRUE',
     });
-    const createJson = await createResp.clone().json().catch(() => ({}));
+    const createJson = await createResp.clone().json().catch(() => ({}));   // silent-ok: an unreadable answer leaves no id, which the next line turns into a 500
     scopeId = createJson.id;
     if (!scopeId) return json({ error: 'Failed to create the new Scope for this WO', detail: createJson }, 500);
     try { await updateWOFields(env, woId, { Scope_ID: scopeId }); }
