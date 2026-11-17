@@ -2230,8 +2230,10 @@ function submitStatus(woId, idx) {
         }[status] || 'badge-status';
         badge.className = 'badge ' + statusClass;
       }
-      if (status === 'Complete' && currentTab === 'open') {
-        setTimeout(function(){ loadWorkOrders(); }, 1500);
+      if (status === 'Complete') {
+        // Nov 17 2026: gentle nudge - "Send your invoice now?" (Later reloads the list).
+        if (window.JobOrder) JobOrder.nudgeInvoice(woId);
+        else if (currentTab === 'open') setTimeout(function(){ loadWorkOrders(); }, 1500);
       }
     } else {
       showActionMsg(idx, esc((data && data.error) || 'Error saving status.'), 'error');
