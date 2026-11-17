@@ -32168,7 +32168,7 @@ async function qbRepairInvoice(env, body) {
     if (!updated) return json({ error: qbFault(r) || 'QuickBooks refused the update.' }, 500);
 
     if (String(ir.Repair_Flagged || '').toUpperCase() === 'TRUE') {
-      try { await updateRow(env, 'Invoice_Review', ir.ID, { Repair_Flagged: 'FALSE', Repair_Reason: '' }); } catch (e) { /* non-fatal — the repair itself already succeeded */ }
+      try { await updateRow(env, 'Invoice_Review', ir.ID, { Repair_Flagged: 'FALSE', Repair_Reason: '' }); } catch (e) { await softFail(env, 'qbRepairInvoice:clearFlag', e, { severity: 'P2', ref: String(ir.ID || ''), source: 'write', context: 'the invoice was repaired but the Repair_Flagged mark was not cleared' }); }
     }
 
     return json({ ok: true, applied: true, invoice_id: qbInvId, wo_id: ir.WO_ID,
