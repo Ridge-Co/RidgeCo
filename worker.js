@@ -15138,7 +15138,7 @@ async function addEstimateVersion(env, body) {
       try {
         const _mv2 = body.vendor_id ? (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(body.vendor_id)) : null;
         if (vendorWantsSpanish(_mv2)) { const _tr = await translateText(env, overMaxReason, 'Spanish', 'English'); if (_tr) overMaxReasonEn = String(_tr); }
-      } catch (_) {}
+      } catch (e) { await softFail(env, 'addEstimateVersion:overMaxTranslate', e, { severity: 'P2', ref: String(woId), source: 'translate', context: 'the over-max reason was saved without an English version' }); }
     }
   }
 
