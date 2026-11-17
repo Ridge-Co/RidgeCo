@@ -5125,9 +5125,11 @@ async function receiptReconReassign(env, body) {
   await ensureColumns(env, 'Receipt_Recon_Queue', ['Confirmed_Receipt_ID', 'Manual_Refund']);
   const original = await findReceiptForQueueRow(env, row);
   if (!original) return json({ error: 'Could not find the original Receipts row for this confirmation — nothing was changed. Check the Receipts tab directly.' }, 404);
-  if (String(original.QB_Email_Sent || '').toUpperCase() === 'TRUE') {
-    return json({ error: `This receipt was already emailed to QuickBooks on ${String(original.QB_Email_Sent_Date || '').slice(0, 10)} — fix it in QuickBooks directly rather than here (reassigning would double it up).` }, 409);
-  }
+  // Nov 17 2026: an already-emailed receipt CAN be reassigned now. The old row is voided and the response carries qb_delete_needed (the QuickBooks entry to delete by hand);
+  // the corrected row is a NEW Receipts row that goes out in the next batch. Only a receipt that is being sent this very moment is refused.
+  if (qbBatchStatus(original) === 'sending') return json({ error: 'That receipt is being emailed to QuickBooks right now (or a send was interrupted). Open "Waiting to send to QuickBooks", release or mark it sent, then try again.' }, 409);
+  const wasSentToQB = String(original.QB_Email_Sent || '').toUpperCase() === 'TRUE';
+  const qbDeleteNeededFor = wasSentToQB ? qbDeleteNeeded(original, id) : null;
 
   const amount = (body.amount !== undefined && body.amount !== null && body.amount !== '') ? body.amount : (row.Confirmed_Amount || row.Total);
   const description = body.description || row.Confirmed_Description || row.PO_Reference || row.Vendor || '';
