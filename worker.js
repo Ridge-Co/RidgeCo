@@ -40311,10 +40311,9 @@ async function trashLogVisit(env, body) {
 async function trashWeek(env, url) {
   const week = trashWeekKey((url && url.searchParams.get('week')) || null);
   const pid  = (url && url.searchParams.get('property_id')) || '';
-  let props = [], visits = [], skips = [];
-  try { props  = await fetchTab(env, 'Trash_Properties'); } catch (e) {}
-  try { visits = await fetchTab(env, 'Trash_Visits'); } catch (e) {}
-  try { skips  = await fetchTab(env, 'Trash_Skips'); } catch (e) {}
+  const req = {}, warnings = [];
+  const rd = async tab => { const r = await fetchTabSoft(env, tab, { where: 'trash:read:' + tab, req, severity: 'P2', optional: true }); if (r.error) warnings.push('Could not read ' + tab + ': ' + r.error); return r.rows; };
+  let props = await rd('Trash_Properties'); const visits = await rd('Trash_Visits'), skips = await rd('Trash_Skips');
   props = props.filter(p => p.Active !== 'FALSE' && (!pid || p.ID === pid));
   const out = props.map(p => {
     const vs = visits.filter(v => v.Active !== 'FALSE' && v.Property_ID === p.ID && v.Week_Key === week);
