@@ -15170,7 +15170,7 @@ async function addEstimateVersion(env, body) {
     } else {
       await setApprovalStage(env, { woId, stage: 'Estimated' });
     }
-  } catch (_) {}
+  } catch (e) { await softFail(env, 'addEstimateVersion:approvalStage', e, { severity: 'P1', ref: String(woId), source: 'write', context: 'the estimate saved but the Work Order approval stage was not updated' }); }
   // Text Brett about a vendor-posted estimate (not one he typed himself in the Hub). Best-effort.
   if (!/^(admin|hub|brett)$/i.test(String(body.created_by || ''))) {
     try {
