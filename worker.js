@@ -19536,8 +19536,14 @@ async function checkDeadManSwitch(env) {
   const msg = gapHrs !== null
     ? `🔴 RidgeCo Hub: no worker job has completed in ~${gapHrs}h — something may be stuck or down.`
     : `🔴 RidgeCo Hub: no worker activity recorded in the last 2 days — something may be stuck or down.`;
-  try { await sendSMS(env, cfg.admin_phone, msg); } catch (_) {}
-  try { await setConfigKey(env, { key, value: new Date().toISOString() }); } catch (_) {}
+  // Phase 2: if the text did not reach Brett, say so (P0) and do NOT stamp the 24h debounce, so the next sweep tries again.
+  let sendErr = '';
+  try { sendErr = sendFailure(await sendSMS(env, cfg.admin_phone, msg)); } catch (e) { sendErr = String((e && e.message) || e).slice(0, 200); }
+  if (sendErr) {
+    await softFail(env, 'checkDeadManSwitch:sms', 'The "no worker activity" text to Brett did not go out: ' + sendErr, { severity: 'P0', ref: 'dead_man_switch', source: 'send', context: 'last_activity=' + (lastActivityISO || 'none in 2d window') });
+    return { ok: true, tripped: true, alerted: false, error: sendErr, last_activity: lastActivityISO };
+  }
+  try { await setConfigKey(env, { key, value: new Date().toISOString() }); } catch (e) { await softFail(env, 'checkDeadManSwitch:debounce', e, { severity: 'P1', ref: key, source: 'write' }); }
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'dead_man_switch', Skill_Or_Endpoint: 'checkDeadManSwitch', Success: 'FALSE', Notes: `zero-activity gap; last_activity=${lastActivityISO || 'none in 2d window'}` }); } catch (_) {}
   return { ok: true, tripped: true, alerted: true, last_activity: lastActivityISO };
 }
