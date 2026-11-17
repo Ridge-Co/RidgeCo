@@ -160,7 +160,7 @@
         try {
           if (unloading || recentlyHidden() || navigator.onLine === false) return;
           realFetch(WORKER + '/version', { cache: 'no-store' }).then(function (r) {
-            if (r && r.status < 500) { try { console.warn('[failure-reporter] a request failed but the Hub answers; not reported:', where); } catch (w) { /* silent-ok: console may be unavailable in locked-down webviews */ } return; }
+            if (r && r.status < 500) { try { console.warn('[failure-reporter] a request failed but the Hub answers; not reported:', where); } catch (w) { /* silent-ok: console may be unavailable in locked-down webviews */ } return; } // silent-ok: console may be unavailable in locked-down webviews, debug note only
             if (report(where, msg + ' (Hub check: HTTP ' + (r && r.status) + ')', extra)) toast();
           }, function (probeErr) {
             if (unloading || recentlyHidden()) return;
