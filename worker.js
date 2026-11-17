@@ -37987,7 +37987,7 @@ async function qbSendInvoice(env, body) {
             if (others.length) {
               warnings.push(`Invoice number ${invoiceDocNumber} is already used by invoice ${others.map(o => o.Id).join(', ')}. QuickBooks' counter has fallen behind your manual invoices — set the next number in QuickBooks or you'll keep getting duplicates.`);
             }
-          } catch (e) { /* the invoice exists; the duplicate check is advisory */ }
+          } catch (e) { await softFail(env, 'qbSendInvoice:dupNumberCheck', e, { severity: 'P2', ref: String(ir.ID || ''), source: 'qbo', context: 'the invoice-number duplicate check could not run' }); }
         }
       }
     }
