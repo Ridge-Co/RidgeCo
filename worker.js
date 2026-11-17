@@ -15613,7 +15613,7 @@ async function ownerUpdateWO(env, body) {
   // grayed-out treatment).
   if ('Managed_By' in allowed) {
     if (!['RidgeCo','Owner'].includes(allowed.Managed_By)) return json({ error: "Managed_By must be 'RidgeCo' or 'Owner'" }, 400);
-    try { await ensureColumns(env, 'Work_Orders', ['Managed_By']); } catch (_) {}
+    try { await ensureColumns(env, 'Work_Orders', ['Managed_By']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   }
   const [workorders, properties] = await fetchTabs(env, ['Work_Orders','Properties']);
   const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
