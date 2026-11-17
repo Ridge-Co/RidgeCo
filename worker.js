@@ -41734,8 +41734,11 @@ async function inspAlert(env, kind, message) {
   __inspAlertAt[kind] = now;
   const cfg = await fetchConfig(env);
   const text = `Inspection booking problem (${kind}): ${message}`;
-  try { if (cfg.admin_phone) await sendSMS(env, cfg.admin_phone, text.slice(0, 300)); } catch (se) { console.error('insp alert: SMS failed:', se && se.message, '| original:', text); }
-  try { await gmailSendEmail(env, { to: cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject: 'Inspection booking problem: ' + kind, html: `<p>${String(text).replace(/</g, '&lt;')}</p>` }); } catch (ee) { console.error('insp alert: email failed:', ee && ee.message, '| original:', text); }
+  // Phase 2: each way of telling Brett is reported (P0) when it does not go out; the original problem text rides along so the ledger row is self-explanatory.
+  let smsErr = '';
+  try { if (cfg.admin_phone) smsErr = sendFailure(await sendSMS(env, cfg.admin_phone, text.slice(0, 300))); } catch (se) { smsErr = String((se && se.message) || se).slice(0, 200); }
+  if (smsErr) { console.error('insp alert: SMS failed:', smsErr, '| original:', text); await softFail(env, 'inspAlert:sms', 'The inspection booking alert text did not go out: ' + smsErr, { severity: 'P0', ref: kind, source: 'send', context: String(text).slice(0, 200) }); }
+  try { await gmailSendEmail(env, { to: cfg.INSP_NOTIFY_EMAIL || 'brett@bmoremanagement.com', subject: 'Inspection booking problem: ' + kind, html: `<p>${String(text).replace(/</g, '&lt;')}</p>` }); } catch (ee) { console.error('insp alert: email failed:', ee && ee.message, '| original:', text); await softFail(env, 'inspAlert:email', ee, { severity: 'P0', ref: kind, source: 'send', context: String(text).slice(0, 200) }); }
 }
 
 // Oct 20 2026: the background cleaning-coverage guard runs every ~14 min against a Sheets read quota (60/min) that the WHOLE Hub shares.
