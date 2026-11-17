@@ -19124,6 +19124,7 @@ async function failUpdate(env, body) {
   if (res && typeof res.totalUpdatedCells === 'number' && res.totalUpdatedCells < FAIL_LEDGER_COLS.length) return json({ ok: false, error: 'the change did not save' }, 500);
   const back = failRowsToObjects(((await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}!A${row._row}:${lastCol}${row._row}`)).values || []), FAIL_LEDGER_COLS, row._row)[0];
   if (!back || back.ID !== id || back.Status !== status) return json({ ok: false, error: 'the change did not save (read-back mismatch)' }, 500);
+  failOpenCacheClear();   // the page reloads right after a change and must see it, not a 20-second-old copy
   delete back._row;
   return json({ ok: true, failure: back });
 }
