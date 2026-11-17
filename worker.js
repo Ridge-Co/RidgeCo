@@ -30404,15 +30404,15 @@ async function health(env, url) {
   // twilio_enabled reflects the live Config kill switch, not the secrets — lets Brett confirm
   // from a plain curl whether sends are actually live without opening the Hub.
   out.twilio = { sid_set: false, api_key_sid_set: false, api_key_secret_set: false, from_set: false, twilio_enabled: false, test_mode: true };
+  out.twilio.sid_set = !!(env && env.TWILIO_SID);
+  out.twilio.api_key_sid_set = !!(env && env.TWILIO_API_SID);
+  out.twilio.api_key_secret_set = !!(env && env.TWILIO_API_KEY);
+  out.twilio.from_set = !!(env && env.TWILIO_FROM);
   try {
-    out.twilio.sid_set = !!(env && env.TWILIO_SID);
-    out.twilio.api_key_sid_set = !!(env && env.TWILIO_API_SID);
-    out.twilio.api_key_secret_set = !!(env && env.TWILIO_API_KEY);
-    out.twilio.from_set = !!(env && env.TWILIO_FROM);
     const cfg = await fetchConfig(env);
     out.twilio.twilio_enabled = String(cfg.TWILIO_ENABLED || '').toUpperCase() === 'TRUE';
     out.twilio.test_mode = String(cfg.TWILIO_TEST_MODE || '').toUpperCase() !== 'FALSE';
-  } catch (_) {}
+  } catch (e) { healthWarn('Twilio kill-switch unreadable, so the defaults shown may be wrong', e); }
   // Cron-sweep token presence (Sep 14 2026) — same never-expose-values pattern. LEGACY (Oct 12 2026): the GitHub
   // Actions sweep is gone; the Apps Script scheduler authenticates with Config `Scheduler_Token` instead (see
   // out.scheduler below). CRON_SWEEP_TOKEN now only guards the manual POST /cron/sweep.
