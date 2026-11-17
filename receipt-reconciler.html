@@ -1546,6 +1546,34 @@ async function attachOnlyRow(id, btn){
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
+// Nov 17 2026: attach a customer-card receipt to the picked work order as a reference. Same endpoint as "Attach image only"; customer_card:true makes
+// the Worker write a non-billing Receipts row (never an invoice line, never a QuickBooks expense). A failure is shown on the card, never swallowed.
+async function attachCustomerCardRow(id, btn){
+  if (btn) btn.disabled = true;
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  const woSel = document.getElementById(idAttr+'-wo');
+  const woManual = document.getElementById(idAttr+'-wo-manual');
+  const wo_id = (woManual && woManual.value.trim()) || (woSel ? woSel.value.trim() : '');
+  if (!wo_id){ statusEl.innerHTML = '<span class="err">Pick a work order (or type one) to attach this to, or Skip it.</span>'; if (btn) btn.disabled = false; return; }
+  if (!allWOs.some(w => String(w.ID) === wo_id)){
+    statusEl.innerHTML = '<span class="err">✗ No work order with ID "'+esc(wo_id)+'" exists — check the number.</span>';
+    if (btn) btn.disabled = false;
+    return;
+  }
+  const amount = document.getElementById(idAttr+'-amt').value.trim();
+  const store = document.getElementById(idAttr+'-store').value.trim();
+  const date = document.getElementById(idAttr+'-date').value.trim();
+  const description = document.getElementById(idAttr+'-desc').value.trim();
+  statusEl.innerHTML = '<span class="info">Attaching as a reference, not billing…</span>';
+  try {
+    const res = await post('/receipt/attach-only', { id, wo_id, amount, store, date, description, customer_card: true });
+    if (res.error) throw new Error(res.error);
+    statusEl.innerHTML = '<span class="ok">✓ Attached to '+esc(wo_id)+' as a reference — not billed, nothing added to the invoice.</span>';
+    finishCard(id);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
 // Part 3 (Sep 22 2026 brief) — READ-ONLY search for the original purchase a refund might be
 // reversing. Renders each candidate with enough to eyeball at a glance (store/date/amount, exact-
 // amount flag, description) and a per-candidate confirm button; picking one is the only thing
