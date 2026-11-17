@@ -14098,7 +14098,7 @@ async function approveInvoiceReview(env, body) {
       const back = (await fetchTab(env, 'Invoice_Review')).find(r => String(r.ID) === realId);
       if (!back || Math.abs((+back.Instant_Pad || 0) - padRes.pad) > 0.005) throw new Error('Instant_Pad read back as "' + (back ? back.Instant_Pad : 'no row') + '"');
     } catch (e) {
-      await logTelemetry(env, { Source: 'worker', Job_Type: 'approve_instant_pad_not_saved', Skill_Or_Endpoint: '/invoice-review/approve', Success: 'FALSE', Notes: ('ir=' + realId + ' wo=' + wo_id + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
+      await logTelemetry(env, { Source: 'worker', Job_Type: 'approve_instant_pad_not_saved', Skill_Or_Endpoint: '/invoice-review/approve', Success: 'FALSE', Notes: ('ir=' + realId + ' wo=' + wo_id + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => { /* silent-ok: the failure is returned to the page just below */ });
       return json({ success: false, id: realId, error: 'The invoice was approved, but its $' + padRes.pad.toFixed(2) + ' instant-pay pad did not save (' + String((e && e.message) || e).slice(0, 120) + '). Withdraw the approval and approve again before sending to QuickBooks.' }, 500);
     }
   }
