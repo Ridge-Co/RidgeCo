@@ -1180,7 +1180,7 @@ function bulkExpense(mode){
     if (!k) { toast('<span class="err">1864 Kerns School Rd isn\'t in the Properties list.</span>'); return; }
     property_id = String(k.ID); where = '1864 Kerns School Rd';
   }
-  if (!confirm('Post ' + ids.length + ' selected receipt(s) as a ' + where + ' expense straight to QuickBooks — no work order, no customer invoice? This really posts to QuickBooks, same as the single-tap expense button, ' + ids.length + ' time(s).')) return;
+  if (!confirm('Post ' + ids.length + ' selected receipt(s) as a ' + where + ' expense — no work order, no customer invoice? Each one waits in the daily QuickBooks batch (nothing is emailed right now; you can hold or reverse them under Waiting to send to QuickBooks).')) return;
   bulkAction('expense', { property_id });
 }
 
