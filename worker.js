@@ -22073,8 +22073,9 @@ async function buildDigest(env) {
   }
   // Tenant fix-checks (Oct 16 2026): answers waiting for Brett + checks nobody answered. An unreadable list is reported IN the digest, never skipped.
   const fuDigest = await fuDigestLines(env);
+  await softFlush(env, req);   // sends the queued corrupt-cell report before the digest returns
   return {
-    followups: fuDigest.lines, followupsError: fuDigest.error,
+    followups: fuDigest.lines, followupsError: fuDigest.error, warnings,
     today, stamp: etStamp(),
     overdue: overdue.map(label), dueToday: dueToday.map(label), onHold: onHold.map(label), urgent: urgent.map(label),
     pendingBills: pendingBills.map(b=>`Bill ${b.ID} · ${b.Vendor_Name||('V-'+(b.Vendor_ID||'?'))} · WO-${b.WO_ID||'?'} · $${(parseFloat(b.Total||b.Customer_Total||0)||0).toFixed(2)}`),
