@@ -6,6 +6,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BrettOS — Command Center</title>
+<script src="wo-status.js"></script>
+<script data-wo-status-guard>if (typeof WOStatus === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div style="background:#b42318;color:#fff;padding:12px;font:14px sans-serif;position:relative;z-index:99999">The status list (wo-status.js) did not load, so work orders will not show correctly. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
+<link rel="stylesheet" href="rc-ui.css?v=1" onerror="document.documentElement.setAttribute('data-rc-css-failed','1')">
+<script src="rc-ui.js?v=1"></script>
+<script data-rc-ui-guard>if (typeof RC === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div role="alert" style="background:#b42318;color:#fff;padding:12px 16px;font:600 15px sans-serif;position:relative;z-index:99999">A shared file (rc-ui.js) did not load, so this page cannot run. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
 <style>
   :root{
     --bg:#e9ebef;--card:#fff;--ink:#0e1621;--muted:#5b6672;--line:#d8dce2;
@@ -75,6 +80,17 @@
   .chkwrap input{width:22px;height:22px;flex:none}
   .sheet .r{display:flex;gap:8px}.sheet .r button{flex:1;border:none;border-radius:11px;padding:12px;font-weight:700}
   .cancel{background:#eef0f3;color:#42505e}.confirm{background:var(--red);color:#fff}.confirm:disabled{opacity:.4;cursor:not-allowed}
+</style>
+<style id="aging-card-css">
+/* Queue #181 aging card: shared parts (.rc-card, .rc-chip, .rc-btn) plus these few layout rules, written with rc-ui tokens only (no new color, size, radius or shadow). */
+#aging-slot{margin:10px 0}
+.aging-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--rc-s2)}
+.aging-chip{min-height:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:var(--rc-s2) var(--rc-s1)}
+.aging-chip b{font-size:var(--rc-fs-lg);line-height:1.2}
+.aging-row{display:block;min-height:44px;padding:var(--rc-s2) 0;border-top:1px solid var(--rc-border);color:var(--rc-text);text-decoration:none;font-size:var(--rc-fs-body);overflow-wrap:anywhere}
+.aging-row small{display:block;font-size:var(--rc-fs-sm);color:var(--rc-muted)}
+.aging-row:focus-visible{outline:2px solid var(--rc-accent);outline-offset:2px}
+.aging-more{display:none}
 </style>
 <style id="mobile-input-font">
 /* Ops_Build_Queue #96 (Oct 9 2026): inputs must be >=16px on touch screens or Android/iOS zoom the page on focus. Mouse/desktop density unchanged. */
@@ -485,6 +501,65 @@ function sampleMode(reason,opt,ar,tasks){
   render({wos,inv,bills,vendors,props,units,live:false,reason,opt,ar,tasks});
 }
 
+// ── Aging buckets + SLA targets (Ops_Build_Queue #181, Nov 16 2026). READ-ONLY: computed from the work orders this page already loaded; no new request, no write. ──
+// Population = WOStatus.sets.OPEN_WORK (the same "open work" the Hub's aging badge uses; it leaves out finished work that is only waiting on billing).
+// SLA_DAYS are PLACEHOLDER targets (days from Created_Date before a still-open job is "past target"). Brett confirms; changing them is this one line.
+const SLA_DAYS={urgent:1,high:3,normal:7,low:14};
+const AGING_BUCKETS=[{k:'b0_2',label:'0-2 days',kind:'p-normal'},{k:'b3_7',label:'3-7 days',kind:'p-low'},{k:'b8_14',label:'8-14 days',kind:'p-high'},{k:'b15p',label:'15+ days',kind:'p-urgent'}];
+// PURE. work = open work orders, nowMs = "now". Never drops a row silently: an unreadable Created_Date is counted in nodate, a blank/unknown priority is counted in nopri (and treated as normal).
+function agingModel(work,nowMs){
+  const b={b0_2:0,b3_7:0,b8_14:0,b15p:0}; let nodate=0,nopri=0; const past=[];
+  (work||[]).forEach(function(w){
+    if(!w) return;
+    const t=Date.parse(w.Created_Date);
+    if(isNaN(t)){nodate++;return;}
+    const age=Math.max(0,Math.floor((nowMs-t)/86400000));
+    if(age<=2)b.b0_2++;else if(age<=7)b.b3_7++;else if(age<=14)b.b8_14++;else b.b15p++;
+    let p=String(w.Priority||'').trim().toLowerCase();
+    if(!Object.prototype.hasOwnProperty.call(SLA_DAYS,p)){nopri++;p='normal';}
+    if(w.Status!=='On Hold'&&age>SLA_DAYS[p]) past.push({id:w.ID,pri:p,age:age,target:SLA_DAYS[p],over:age-SLA_DAYS[p],wo:w});   // On Hold is a deliberate pause, same reasoning as the stuck-work card
+  });
+  past.sort(function(x,y){return y.over-x.over||y.age-x.age;});
+  return {total:(work||[]).length,counted:(work||[]).length-nodate,b:b,nodate:nodate,nopri:nopri,past:past};
+}
+function agingCardHtml(m,addr){
+  const SHOWN=5;
+  const chips=AGING_BUCKETS.map(function(x){return '<div class="rc-chip rc-chip--'+x.kind+' aging-chip" data-bucket="'+x.k+'"><b>'+m.b[x.k]+'</b><span>'+x.label+'</span></div>';}).join('');
+  const row=function(p){
+    const w=p.wo;
+    return '<a class="aging-row" href="index.html?wo='+encodeURIComponent(p.id||'')+'" target="_blank" rel="noopener" data-past="'+h(p.id)+'">'
+      +'<b>'+h(p.id||'WO')+'</b> · '+h(w.Trade||w.Description||'work order')+' · '+RC.chip.priorityHtml(p.pri)
+      +'<small>'+h(addr(w))+' · '+p.age+' days old, target '+p.target+' · <span style="color:var(--rc-accent);font-weight:600">open →</span></small></a>';
+  };
+  let html='<h2 class="rc-card-title">Aging and targets <span class="rc-small rc-muted">· '+m.total+' open</span></h2>'
+    +'<p class="rc-small rc-muted">Work still to do, by days since it was created. Finished jobs that are only waiting on billing are not counted.</p>'
+    +'<div class="aging-grid" data-aging-chips>'+chips+'</div>';
+  if(m.nodate) html+='<p class="rc-small" data-nodate style="color:var(--rc-warn-text)">'+m.nodate+' work order'+(m.nodate===1?' has':'s have')+' no readable created date, so '+(m.nodate===1?'it is':'they are')+' not in the buckets above.</p>';
+  if(m.nopri) html+='<p class="rc-small rc-muted" data-nopri>'+m.nopri+' work order'+(m.nopri===1?' has':'s have')+' no priority; '+(m.nopri===1?'it is':'they are')+' checked against the normal target.</p>';
+  html+=m.past.length
+    ?'<p style="margin:0;font-size:var(--rc-fs-md);font-weight:700;color:var(--rc-danger)" data-pastcount>'+m.past.length+' past target</p>'
+      +m.past.slice(0,SHOWN).map(row).join('')
+      +(m.past.length>SHOWN?'<div class="aging-more" id="aging-more">'+m.past.slice(SHOWN).map(row).join('')+'</div>'
+        +'<button type="button" class="rc-btn rc-btn--secondary" id="aging-more-btn" onclick="document.getElementById(\'aging-more\').style.display=\'block\';this.style.display=\'none\'">Show '+(m.past.length-SHOWN)+' more</button>':'')
+    :'<p style="margin:0;font-size:var(--rc-fs-md);font-weight:700;color:var(--rc-success)" data-pastcount>0 past target</p><p class="rc-small rc-muted">Nothing open is over its target.</p>';
+  html+='<p class="rc-small rc-muted" data-sla-note>Targets are placeholders until Brett confirms them: urgent '+SLA_DAYS.urgent+' day, high '+SLA_DAYS.high+', normal '+SLA_DAYS.normal+', low '+SLA_DAYS.low+'. A job on hold is never counted as past target.</p>';
+  return html;
+}
+// Fills #aging-slot. Three states: empty (nothing open), error (with Retry, which reloads the Hub data), and the card. A bug here shows an error box, never a blank gap and never a broken page.
+function renderAging(d,addr){
+  const slot=document.getElementById('aging-slot'); if(!slot) return;
+  try{
+    const work=(d.wos||[]).filter(function(w){return WOStatus.sets.OPEN_WORK.includes(w.Status);});
+    if(!work.length){ RC.empty(slot,{title:'No open work to age',text:'Nothing is open right now, so there is nothing to measure against the targets.'}); return; }
+    const m=agingModel(work,Date.now());
+    slot.innerHTML='<section class="rc-card rc-card--raised rc-stack" id="aging-card" aria-label="Aging and targets">'+agingCardHtml(m,addr)+'</section>';
+  }catch(e){
+    try{ console.error('aging card failed:',e); }catch(_){}
+    try{ RC.error(slot,{title:'Could not work out aging',text:'The aging numbers failed to build ('+String((e&&e.message)||e).slice(0,120)+'). The rest of this page is fine.',onRetry:function(){return load();}}); }
+    catch(e2){ slot.innerHTML='<div class="card" style="border-color:#ecc3c3;background:var(--redbg)"><p class="note" style="color:var(--red);font-weight:700">⚠ Could not work out aging. Reload the page; if it stays, tell Brett.</p></div>'; }   // rc-ui itself did not load: still never a blank gap
+  }
+}
+
 function render(d){
   const idx=(arr,k)=>{const m={};(arr||[]).forEach(r=>m[r[k]]=r);return m};
   const P=idx(d.props,'ID'),U=idx(d.units,'ID'),V=idx(d.vendors,'ID');
@@ -537,6 +612,7 @@ function render(d){
       +'<p class="note">Ranked by who’s waiting on you, then priority, then how long it’s been sitting.</p></div>';
 
   html+=staleCard(d.stale);
+  html+='<div id="aging-slot"></div>';   // queue #181, filled by renderAging() below
   html+=optCard(d.opt);
   html+=tasksCard(d.tasks);
 
@@ -583,6 +659,7 @@ function render(d){
     +'<p class="note">These come from your backlog. Once the BrettOS sheet is wired (Phase 2) they’ll be live too.</p></div>';
 
   document.getElementById('body').innerHTML=html;
+  renderAging(d,addr);
 }
 
 function saveTok(){const v=document.getElementById('tok').value.trim();if(!v)return;TOKEN=v;try{localStorage.setItem(AUTH_KEY,v)}catch(e){}document.getElementById('body').innerHTML='<div class="spin">Connecting…</div>';load();}
