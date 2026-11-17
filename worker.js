@@ -36771,7 +36771,7 @@ async function qbSendStandaloneInvoice(env, body, ctx) {
   // One invoice/bill line per submitted line item, straight off the bill's own descriptions —
   // there is no WO description to fall back to for a standalone bill (§5).
   let receipts = [];
-  try { receipts = JSON.parse(billRow.Receipts_JSON || '[]'); } catch (e) {}
+  try { receipts = JSON.parse(billRow.Receipts_JSON || '[]'); } catch (e) { await softFail(env, 'qbSendStandaloneInvoice:receipts', e, { severity: 'P1', ref: String(billRow.ID || ''), source: 'parse', context: 'the bill receipts are unreadable, so the invoice was built without receipt lines or attachments' }); }
   const itemRef = { value: trade.item };
   const invLines = (Array.isArray(receipts) ? receipts : []).map(rc => {
     const amt = +(Number(rc && rc.amount) || 0).toFixed(2);
