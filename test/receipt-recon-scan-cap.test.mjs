@@ -35,6 +35,7 @@ function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
   const queue = [];
   const files = Array.from({ length: nFiles }, (_, k) => ({ id: 'f' + k, name: 'r' + k + '.pdf', mimeType: 'application/pdf', webViewLink: '' }));
   let downloads = 0, cur = null;
+  const reports = [];
   const deps = {
     fetchConfig: async () => cfg,
     getAccessToken: async () => 'tok',
