@@ -434,7 +434,8 @@ S.gh['/pulls/50'] = new Error('GitHub /pulls/50 → HTTP 403 (GitHub rate-limits
 r = await sync({}, { ignoreSuppliedPrs: true, tick: true, max: 12 });
 ok(r.body.ok === true && r.body.errors.length === 0 && r.body.rate_limited.length === 1 && S.ensureTab === 0, 'tick sync: a GitHub rate limit is reported as rate_limited and retried next tick (and the tick skips ensureTab)');
 r = await sync();
-ok(r.body.ok === false && r.body.errors.length === 1, 'daily sync: the same rate limit is still a loud error');
+ok(r.body.ok === true && r.body.errors.length === 0 && r.body.rate_limited.length === 1, 'daily sync: the same rate limit is no longer a loud error (Nov 17 2026: it filed a P0 every morning)');
+ok(S.fails.some(f => f.where === 'queue_sync_github_blocked' && f.severity === 'P2'), 'daily sync: GitHub refusing every lookup files one calm P2 row instead');
 S.gh['/pulls/50'] = new Error('GitHub /pulls/50 → HTTP 500');
 r = await sync({}, { ignoreSuppliedPrs: true, tick: true });
 ok(r.body.ok === false && r.body.errors.length === 1, 'tick sync: any other GitHub failure is still an error');

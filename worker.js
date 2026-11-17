@@ -19396,16 +19396,30 @@ async function failRollupRun(env, opts) {
 
 // ── endpoints ───────────────────────────────────────────────────────────────────────────────────────────────────
 // GET /failures/open[?all=1] - for the Needs Attention screen, the header badge and build sessions (read-only token reaches it too).
+// Nov 17 2026 (Needs Attention F-1792537353924-mans): this page polls every 60s and each poll read the Failures tab AND Config, so it was the Hub's top
+// Sheets-read spender (54 reads/hour from 30 requests) and tripped the read meter. The parsed rows are now kept for 20s and the alerts flag for 5 min,
+// per Worker instance (plain data only, never a promise, so it cannot hit the cross-request promise rule). Marking a failure clears it at once.
+let __failOpenCache = null, __failAlertsCache = null;
+const FAIL_OPEN_CACHE_MS = 20000, FAIL_ALERTS_CACHE_MS = 300000;
+function failOpenCacheClear() { __failOpenCache = null; __failAlertsCache = null; }
 async function failOpenList(env, url) {
-  let vals;
-  try { vals = (await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}`)).values || []; }
-  catch (e) { if (isMissingTabError(e)) vals = []; else return json({ ok: false, error: 'could not read the failure ledger: ' + String((e && e.message) || e).slice(0, 200) }, 503); }
-  const all = failRowsToObjects(vals.slice(1), FAIL_LEDGER_COLS, 2).filter(r => r.ID);
+  let all;
+  if (__failOpenCache && Date.now() - __failOpenCache.at < FAIL_OPEN_CACHE_MS) all = __failOpenCache.all;
+  else {
+    let vals;
+    try { vals = (await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}`)).values || []; }
+    catch (e) { if (isMissingTabError(e)) vals = []; else return json({ ok: false, error: 'could not read the failure ledger: ' + String((e && e.message) || e).slice(0, 200) }, 503); }
+    all = failRowsToObjects(vals.slice(1), FAIL_LEDGER_COLS, 2).filter(r => r.ID);
+    __failOpenCache = { at: Date.now(), all };
+  }
   const showAll = url && url.searchParams.get('all') === '1';
   const rows = all.filter(r => showAll || FAIL_OPEN.indexOf(r.Status) >= 0).sort((a, b) => failSevRank(a.Severity) - failSevRank(b.Severity) || (a.Last_Seen < b.Last_Seen ? 1 : -1));
   const open = all.filter(r => FAIL_OPEN.indexOf(r.Status) >= 0);
   let alertsOn = null;
-  try { const c = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values || []); alertsOn = String(c.failure_alert_enabled || '').toUpperCase() === 'TRUE'; } catch (e) { alertsOn = null; }
+  if (__failAlertsCache && Date.now() - __failAlertsCache.at < FAIL_ALERTS_CACHE_MS) alertsOn = __failAlertsCache.v;
+  else {
+    try { const c = configFromValues((await sheetsRequest(env, 'GET', '/values/Config')).values || []); alertsOn = String(c.failure_alert_enabled || '').toUpperCase() === 'TRUE'; __failAlertsCache = { at: Date.now(), v: alertsOn }; } catch (e) { alertsOn = null; }
+  }
   return json({ ok: true, as_of: new Date().toISOString(), alerts_on: alertsOn, counts: { open: open.length, P0: open.filter(r => r.Severity === 'P0').length, P1: open.filter(r => r.Severity === 'P1').length, P2: open.filter(r => r.Severity === 'P2').length, acknowledged: open.filter(r => r.Status === 'acknowledged').length }, failures: rows.map(r => { const o = Object.assign({}, r); delete o._row; return o; }) });
 }
 // POST /failure/update { id, status, notes?, fixed_in? } - admin only (not in any ROLE_SCOPES list).
@@ -19427,6 +19441,7 @@ async function failUpdate(env, body) {
   if (res && typeof res.totalUpdatedCells === 'number' && res.totalUpdatedCells < FAIL_LEDGER_COLS.length) return json({ ok: false, error: 'the change did not save' }, 500);
   const back = failRowsToObjects(((await sheetsRequest(env, 'GET', `/values/${FAIL_LEDGER_TAB}!A${row._row}:${lastCol}${row._row}`)).values || []), FAIL_LEDGER_COLS, row._row)[0];
   if (!back || back.ID !== id || back.Status !== status) return json({ ok: false, error: 'the change did not save (read-back mismatch)' }, 500);
+  failOpenCacheClear();   // the page reloads right after a change and must see it, not a 20-second-old copy
   delete back._row;
   return json({ ok: true, failure: back });
 }
@@ -20455,8 +20470,15 @@ async function smsDeliveryCheckPass(env, deps) {
     try {
       const r = await (deps.sendEmail || gmailSendEmail)(env, { to, subject: c.subject, html: c.html });
       emailed = !!(r && (r.sent || r.staged));
-      if (!emailed) fail('send_email', 'email send returned no confirmation');
-      else no_retry = true;                                 // a message went out - a retry must not send it twice
+      if (emailed) no_retry = true;                         // a message went out - a retry must not send it twice
+      else if (r && r.demo_blocked && ev.level !== 'alert') {
+        // Nov 17 2026 (Needs Attention F-1794744137851-q3be and F-1794744130410-ffrw): the demo safety guard held this CLEAN-day summary back (the
+        // admin address sat on a demo test slot that had used its 5 emails). That is the guard working, not a send failure, and the guard's own rule
+        // is "a demo block is never a P0". The check itself is fine, so the job stays green and the clean day is counted; the reason is a warning
+        // (shown in the job result) and the guard already logged demo_send_blocked. An ALERT email held back this way is still a failure below.
+        warnings.push('summary email held back by the demo safety guard: ' + String(r.reason || 'no reason given').slice(0, 160));
+      }
+      else fail('send_email', 'email send returned no confirmation' + (r && r.reason ? ': ' + String(r.reason).slice(0, 160) : ''));
     } catch (e) { fail('send_email', e); }
   }
   if (!errors.length) {
@@ -23463,6 +23485,7 @@ async function opsQueueSync(env, body, opts) {
   const _cap = (opts && opts.max) || 25;
   const inflight = _all.slice(0, _cap), _more = Math.max(0, _all.length - _cap);
   const changed = [], errors = [];
+  let ghTried = 0;   // GitHub lookups this pass tried (Nov 17 2026: lets the pass say "GitHub refused every one" instead of failing quietly or loudly every day)
   // GitHub rate-limits anonymous calls from Cloudflare's shared addresses, so the Proposals page can
   // look PRs up from Brett's own browser and pass them in as body.prs (same shape as GitHub's /pulls list).
   // The narrow OPS_QUEUE_TOKEN (carried by every fired build session) is NOT trusted to supply PR state — it can only trigger a
@@ -23476,12 +23499,13 @@ async function opsQueueSync(env, body, opts) {
       if (queueStageOf(r, _nowMs) === 'merged') { await queueDeployStep(env, r, _nowMs, changed, deployMissing, errors); continue; }
       let n = cleanPrNumber(r.PR_Number);
       if (!n) {
-        if (prList === null) prList = await ghPublicJson('/pulls?state=all&sort=created&direction=desc&per_page=60', env);
+        if (prList === null) { ghTried++; prList = await ghPublicJson('/pulls?state=all&sort=created&direction=desc&per_page=60', env); }
         const hit = matchPrToItem(prList, r.ID);
         if (hit) n = String(hit.number);
       }
       if (!n) continue; // no PR yet — page shows "building / no PR reported" (and "stalled" after 24h)
-      const pr = supplied.find(p => String(p.number) === n) || await ghPublicJson('/pulls/' + n, env);
+      let pr = supplied.find(p => String(p.number) === n);
+      if (!pr) { ghTried++; pr = await ghPublicJson('/pulls/' + n, env); }
       const next = prStateToBuildState(pr);
       const fields = {};
       if (String(r.PR_Number || '') !== n) fields.PR_Number = n;
@@ -23497,10 +23521,19 @@ async function opsQueueSync(env, body, opts) {
       if (queueStageOf(r, _nowMs) === 'merged') await queueDeployStep(env, r, _nowMs, changed, deployMissing, errors);
     } catch (e) {
       const _msg = String((e && e.message) || e);
-      // Tick mode (scheduler job queue_sync): GitHub rate-limiting the Hub's shared address is expected and is simply retried on the next
-      // tick, so it is returned as rate_limited instead of failing the job every 15 minutes. The daily run (hub_impr_daily) stays strict.
-      if (opts && opts.tick && /HTTP (403|429)/.test(_msg)) rateLimited.push({ id: r.ID, error: _msg }); else errors.push({ id: r.ID, error: _msg });
+      // GitHub rate-limiting the Hub's shared address is expected and is simply retried on the next tick, so it is returned as rate_limited
+      // instead of failing the job. Nov 17 2026 (Needs Attention F-1794918668628-m9oi): this used to apply to the 15-minute tick only, and the
+      // strict daily run (hub_impr_daily, 07:30 ET) filed a P0 every morning for the same refusal. Every mode now treats it the same, and the
+      // "GitHub refused every lookup" case below files ONE calm P2 so a permanently blocked sync can never go unseen.
+      if (/HTTP (403|429)/.test(_msg)) rateLimited.push({ id: r.ID, error: _msg }); else errors.push({ id: r.ID, error: _msg });
     }
+  }
+  if (rateLimited.length && ghTried > 0 && rateLimited.length >= ghTried && !changed.length) {
+    const rep = await reportFailure(env, { system: 'hub', source: 'worker', where: 'queue_sync_github_blocked', ref: 'queue_sync', severity: 'P2',
+      message: 'The queue sync could not read GitHub: it refused ' + rateLimited.length + ' of ' + ghTried + ' lookups (HTTP 403/429, GitHub rate-limits the Hub\'s shared address). Build progress on the Proposals page may be out of date. '
+        + (env && env.GITHUB_READ_TOKEN ? 'A GITHUB_READ_TOKEN is set but GitHub still refused it, so it may be expired or lack read access to the repo.'
+          : 'No GITHUB_READ_TOKEN is set. Fix: add a read-only GitHub token as the Worker secret GITHUB_READ_TOKEN in Cloudflare (never paste it into chat); until then the Proposals page syncs from your browser.') });
+    if (!rep || rep.ok !== true) errors.push({ id: '', error: 'could not file the GitHub-blocked failure row: ' + ((rep && rep.error) || (rep && rep.dropped ? 'rate-capped' : 'unknown')) });
   }
   return json({ ok: errors.length === 0, checked: inflight.length, changed, errors, remaining: _more, stuck, deploy_missing: deployMissing, rate_limited: rateLimited });
 }
@@ -29441,6 +29474,11 @@ function __cacheFresh(env, hit) {
   if (env && env.__CRON__) { const at = hit.at !== undefined ? hit.at : hit.exp - TAB_CACHE_MS; return (Date.now() - at) < CRON_CACHE_MS; }
   return hit.exp > Date.now();
 }
+// Cloudflare refuses to settle a promise in a request other than the one that created it. One place decides whether an error is that one,
+// so every shared-read joiner (single tab and batch) treats it the same way.
+function __isCrossRequestPromiseError(e) {
+  return /promise was created by a request that has since ended|can never settle/i.test(String((e && e.message) || ''));
+}
 function __tabCacheKey(path) {
   // Matches "/values/TabName" or "/values/TabName:append...", NEVER "/values/TabName!A1:Z9"
   // (a real range read) or "/values:batchGet"/"/values:batchUpdate" (handled by their own
@@ -29500,7 +29538,7 @@ async function sheetsRequest(env, method, path, body, readOpts, __isLeader) {
           // Nov 13 2026: Cloudflare refuses to settle a promise in a request other than the one that created it. A joiner whose
           // leader's request ended first gets "This promise was created by a request that has since ended" (that error is what
           // made /config, vendor lists and the QuickBooks token read fail). Do our own read instead of failing the joiner.
-          if (/promise was created by a request that has since ended|can never settle/i.test(String((e && e.message) || ''))) {
+          if (__isCrossRequestPromiseError(e)) {
             return await sheetsRequest(env, method, path, body, readOpts, true);
           }
           if (readOpts && readOpts.stale) {
@@ -29597,23 +29635,32 @@ async function fetchTabs(env, tabs, opts) {
       const bkey = missing.slice().sort().join('|');
       const shared = !(env && env.__CRON__);   // background (cron) batches are paced: never shared with people
       let bp = shared ? __batchInflight.get(bkey) : null;
+      const joined = !!bp;
       if (bp) __meterSaved(env, 'join');
+      const readBatch = async () => {
+        const d = await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
+        const ranges=d.valueRanges||[];
+        missing.forEach((t,i)=>{
+          const values=(ranges[i]&&ranges[i].values)||[];
+          const _t = Date.now(); __tabCache.set(t, { data: { values }, exp: _t+TAB_CACHE_MS, at: _t });
+        });
+      };
       if (!bp) {
-        bp = (async () => {
-          const d = await sheetsRequest(env,'GET',`/values:batchGet?${qs}`);
-          const ranges=d.valueRanges||[];
-          missing.forEach((t,i)=>{
-            const values=(ranges[i]&&ranges[i].values)||[];
-            const _t = Date.now(); __tabCache.set(t, { data: { values }, exp: _t+TAB_CACHE_MS, at: _t });
-          });
-        })();
+        bp = readBatch();
         if (shared) {
           __batchInflight.set(bkey, bp);
           const clear = () => { if (__batchInflight.get(bkey) === bp) __batchInflight.delete(bkey); };
           bp.then(clear, clear);
         }
       }
-      await bp;
+      try { await bp; }
+      catch (e) {
+        // Nov 17 2026 (Needs Attention F-1794619593801-52rc, -r8hm, -ljf6, -gvl8): PR #549 only taught the single-tab read (sheetsRequest) to
+        // survive this. A joiner of a shared BATCH read whose leader's request ended first got "This promise was created by a request that has
+        // since ended" thrown at it, which became a 500 on /hub-bootstrap, /vendor-workorders and the vendor/owner lists. Do our own read instead.
+        if (joined && __isCrossRequestPromiseError(e)) await readBatch();
+        else throw e;
+      }
     }
     catch (e) {
       // Opt-in, read-only callers only: if EVERY tab we still need has a recent good copy,

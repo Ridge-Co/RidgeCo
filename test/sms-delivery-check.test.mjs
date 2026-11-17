@@ -192,6 +192,25 @@ function harness(over) {
   t('staging stub counts as delivered (no real send on staging)', (await M.smsDeliveryCheckPass(env, h3.deps)).ok);
 }
 {
+  // Nov 17 2026 (F-1794744137851-q3be, F-1794744130410-ffrw): the demo safety guard holds back the CLEAN summary email. Exactly what gmailSendEmail returns then.
+  const blocked = { sent: false, skipped: true, demo_blocked: true, limit: true, reason: 'email not sent: test limit reached (5 emails for the owner test)' };
+  const h = harness({ sendEmail: async () => blocked });
+  const r = await M.smsDeliveryCheckPass(env, h.deps);
+  t('clean day + demo-guard block: job stays OK, no error row, clean day still counted', r.ok && !r.errors.length && r.detail.clean_days === 1 && h.writes.length === 1, r);
+  t('clean day + demo-guard block: the reason is surfaced as a warning, not swallowed', r.warnings.some(w => /demo safety guard/.test(w) && /test limit reached/.test(w)), r.warnings);
+  t('clean day + demo-guard block: heartbeat is a success row and says emailed=false', h.telem.length === 1 && h.telem[0].Success === 'TRUE' && /emailed=false/.test(h.telem[0].Notes), h.telem);
+  t('clean day + demo-guard block: nothing went out, so a retry is allowed', r.no_retry === false && r.detail.emailed === false);
+  // An ALERT email held back by the guard is NOT safe to treat as fine: Brett would never hear about carrier filtering.
+  const h2 = harness({ messages: [msg({ body: LINK, status: 'undelivered', error_code: 30007 })], sendEmail: async () => blocked });
+  const r2 = await M.smsDeliveryCheckPass(env, h2.deps);
+  t('ALERT + demo-guard block: still a failure (loud)', !r2.ok && r2.errors[0].step === 'send_email' && /test limit reached/.test(r2.errors[0].error), r2);
+  t('ALERT + demo-guard block: failure heartbeat row written', h2.telem.length === 1 && h2.telem[0].Success === 'FALSE', h2.telem);
+  // A non-demo "no confirmation" stays a failure and now carries the sender's reason.
+  const h3 = harness({ sendEmail: async () => ({ sent: false, reason: 'Gmail said no' }) });
+  const r3 = await M.smsDeliveryCheckPass(env, h3.deps);
+  t('non-demo no-confirmation: still a failure, reason included', !r3.ok && /no confirmation: Gmail said no/.test(r3.errors[0].error), r3);
+}
+{
   const h = harness({ setConfigKey: async () => { throw new Error('sheet write 500'); } });
   const r = await M.smsDeliveryCheckPass(env, h.deps);
   t('state write failure: email already sent so job is ok but WARNS', r.ok && r.warnings.some(w => /clean-day streak/.test(w) && /500/.test(w)) && r.no_retry === true, r);
