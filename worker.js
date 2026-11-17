@@ -23153,6 +23153,7 @@ async function opsQueueSync(env, body, opts) {
   const _cap = (opts && opts.max) || 25;
   const inflight = _all.slice(0, _cap), _more = Math.max(0, _all.length - _cap);
   const changed = [], errors = [];
+  let ghTried = 0;   // GitHub lookups this pass tried (Nov 17 2026: lets the pass say "GitHub refused every one" instead of failing quietly or loudly every day)
   // GitHub rate-limits anonymous calls from Cloudflare's shared addresses, so the Proposals page can
   // look PRs up from Brett's own browser and pass them in as body.prs (same shape as GitHub's /pulls list).
   // The narrow OPS_QUEUE_TOKEN (carried by every fired build session) is NOT trusted to supply PR state — it can only trigger a
