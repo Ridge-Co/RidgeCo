@@ -42545,12 +42545,17 @@ async function strSystemAlert(env, kind, message) {
     catch (te) { /* silent-ok: alert code must not report its own failure (it would loop); the full text goes to the Worker log */ console.error('str alert: quota-busy telemetry failed:', te && te.message, '| original:', kind, message); }
     return;
   }
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { console.error('str alert: telemetry failed:', te && te.message, '| original:', kind, message); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'str_cleaning', Skill_Or_Endpoint: 'str/' + kind, Success: 'FALSE', Notes: String(message).slice(0, 480) }); } catch (te) { /* silent-ok: alert code must not report its own telemetry failure (it would loop); Brett is still texted below */ console.error('str alert: telemetry failed:', te && te.message, '| original:', kind, message); }
   const now = Date.now();
   if (__strSysAt[kind] && now - __strSysAt[kind] < 30 * 60000) return;
   __strSysAt[kind] = now;
-  try { const cfg = await fetchConfig(env); await strSendBrett(env, cfg, 'Cleaning scheduler problem: ' + kind, ('Cleaning scheduler problem (' + kind + '): ' + message).slice(0, 300), [message], true); }
-  catch (e) { console.error('str alert: could not tell Brett:', e && e.message, '| original:', kind, message); }
+  // Phase 2 (typeof: this STR block is also run on its own in tests without the helpers). strSendBrett never throws on a failed text or email; it returns { ok, log }, which used to be dropped here.
+  try {
+    const cfg = await fetchConfig(env);
+    const sent = await strSendBrett(env, cfg, 'Cleaning scheduler problem: ' + kind, ('Cleaning scheduler problem (' + kind + '): ' + message).slice(0, 300), [message], true);
+    const bad = sent && Array.isArray(sent.log) ? sent.log.filter(x => /FAILED|no admin_phone/.test(String(x))) : [];
+    if (bad.length) { console.error('str alert: Brett may not have been told:', bad.join('; '), '| original:', kind, message); if (typeof softFail === 'function') await softFail(env, 'strSystemAlert:' + kind, 'The cleaning scheduler alert did not fully reach Brett: ' + bad.join('; '), { severity: 'P0', ref: kind, source: 'send', context: String(message).slice(0, 200) }); }
+  } catch (e) { console.error('str alert: could not tell Brett:', e && e.message, '| original:', kind, message); if (typeof softFail === 'function') await softFail(env, 'strSystemAlert:' + kind, e, { severity: 'P0', ref: kind, source: 'send', context: String(message).slice(0, 200) }); }
 }
 // SMS + email to Brett. smsOk=false skips the SMS only. Never throws; returns { ok, log }.
 async function strSendBrett(env, cfg, subject, smsText, htmlLines, smsOk) {
