@@ -22056,7 +22056,10 @@ async function buildDigest(env) {
         healthAlerts.push(`${jt}: ${Math.round(jm.success_rate * 100)}% success (${jm.fail}/${jm.count} failed) — last 24h`);
       }
     }
-  } catch (e) { /* non-fatal — health check must never break the digest */ }
+  } catch (e) {   // the digest still goes out, but the unreadable health data is reported and shown in it
+    await softFail(env, 'digest:health-alerts', e, { req, severity: 'P2' });
+    warnings.push('Could not check job success rates: ' + String((e && e.message) || e).slice(0, 120));
+  }
   // Receipts that failed intake 3x and were given up on (receiptScan fix, greenlit #17) —
   // surfaced here rather than silently retried forever with no way for Brett to find out.
   let stuckReceipts = [];
