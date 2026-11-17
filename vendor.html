@@ -4520,8 +4520,8 @@ function isVendorBusy(){
       if (pageEtagKnown === null){
         pageEtagKnown = tag;
         var last = null;
-        try { last = localStorage.getItem(PAGE_ETAG_KEY); } catch(e){}
-        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){}
+        try { last = localStorage.getItem(PAGE_ETAG_KEY); } catch(e){} // silent-ok: storage blocked or unavailable, falls back to the default
+        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){} // silent-ok: storage blocked or full, the value is just not remembered
         // Same pattern as the version check's own first-run branch: if the last ETag this
         // browser saw differs from what's live right now, THIS load itself was already stale.
         if (last && last !== tag) { isVendorBusy() ? banner() : reloadFresh(); }
