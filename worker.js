@@ -10252,7 +10252,8 @@ async function addonOwnerNotice(env, body) {
   const property = properties.find(p => String(p.ID) === String(child.Property_ID)) || null;
   const owner = property ? owners.find(o => String(o.ID) === String(property.Owner_ID)) : null;
   if (!owner) return json({ error: 'No owner found for this property' }, 400);
-  let lines = []; try { lines = JSON.parse((est && est.Line_Items) || '[]'); } catch (_) {}
+  let lines = [], linesUnreadable = false;
+  try { lines = JSON.parse((est && est.Line_Items) || '[]'); } catch (e) { linesUnreadable = true; await softFail(env, 'addonOwnerNotice:lineItems', e, { req, severity: 'P1', ref: childId, source: 'parse', context: 'the owner notice was built without the saved estimate lines' }); }
   const photos = addonPhotosByItem(attachments, childId);
   const items = addonParseItems(child);
   const itemTexts = items.map(it => {
