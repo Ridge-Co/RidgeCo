@@ -3392,6 +3392,8 @@ async function listReceipts(env, url) {
     const rows = await fetchTab(env, 'Receipts');
     let results = rows.filter(r => r.WO_ID === woId && r.Active !== 'FALSE');
     if (vendorId) results = results.filter(r => r.Role === 'vendor' && r.Added_By_ID === vendorId);
+    // Nov 17 2026: pages never re-derive "is this billable" themselves — Non_Billing is computed here by receiptIsNonBilling.
+    results = results.map(r => Object.assign({}, r, { Non_Billing: receiptIsNonBilling(r) ? 'TRUE' : 'FALSE' }));
     return json(results.sort((a,b) => new Date(a.Created_Date)-new Date(b.Created_Date)));
   } catch(e) { return json([]); }
 }
