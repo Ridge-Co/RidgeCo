@@ -13290,7 +13290,7 @@ async function addVendorBill(env, body) {
         await updateWOFields(env, woKey, { Status: 'Complete', Completed_Date: wo.Completed_Date || new Date().toISOString().split('T')[0] });
       }
     }
-  } catch(e) { /* non-fatal: bill is still saved */ }
+  } catch(e) { await softFail(env, 'addVendorBill:markComplete', e, { severity: 'P1', ref: String(body.WO_ID || body.wo_id || ''), source: 'write', context: 'the bill saved but the Work Order was not moved to Complete' }); }   // the bill itself is saved
   // B-20260916-1930-k7: vendor invoice confirmation email — best-effort, soft-launched via
   // Config.VENDOR_INVOICE_EMAIL_TEST_VENDOR_IDS. Never blocks or slows the bill itself.
   try { await autoMatchVendorToQbo(env, body.Vendor_ID || body.vendor_id, '/vendor-bill/add'); } catch (e) { /* never blocks the bill */ }
