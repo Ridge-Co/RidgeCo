@@ -1760,7 +1760,7 @@ function ruleSave(btn){ panelAction(btn, async () => {
 function ruleDeactivate(id, btn){ if (!armed(btn, 'Tap again to turn off')) return; panelAction(btn, async () => { const res = await post('/receipt-recon/rules/deactivate', { id }); if (res.error) throw new Error(res.error); }); }
 async function autoUndo(id, btn){
   if (!armed(btn, 'Tap again to undo')) return;
-  panelAction(btn, async () => { const res = await post('/receipt-recon/undo', { id }); if (res.error) throw new Error(res.error); toast('<span class="ok">↩ Undone — back in Pending.</span>'); });
+  panelAction(btn, async () => { const res = await post('/receipt-recon/undo', { id }); if (res.error) throw new Error(res.error); toast('<span class="ok">↩ Undone — back in Pending.</span>'); if (res.qb_delete_needed) qbbShowDeleteNeeded(res.qb_delete_needed); });
 }
 
 // Pending-row manual refund toggle. The card re-renders with different fields once the category
