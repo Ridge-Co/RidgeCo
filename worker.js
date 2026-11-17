@@ -3437,7 +3437,7 @@ async function addReceipt(env, body) {
   // which is exactly how Payment_Source went unnoticed for weeks. No swallow needed here
   // anymore; the shared function's own logging covers it.
   try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date', 'Payment_Source']); }
-  catch (e) { /* logged centrally by ensureColumns; the write below still proceeds with whatever columns exist */ }
+  catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
 
   const addResp = await addRow(env, 'Receipts', {
     WO_ID: wo_id || '', Property_ID: property_id || '', Amount: amt.toFixed(2), Description: description||'', Store: store||'',
