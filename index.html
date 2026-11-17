@@ -11570,6 +11570,7 @@ function renderHubReceipts(woId, receipts, holder) {
     var badge = src === 'vendor_reimburse'
       ? '<span style="background:#fff3cd;color:#8a6100;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px;white-space:nowrap">💵 REIMBURSE</span>'
       : '<span style="background:#e6f4ea;color:#1a7a3c;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px;white-space:nowrap">💳 CARD</span>';
+    if (r.Non_Billing === 'TRUE') badge = '<span style="background:#fff7ed;color:#7c2d12;font-weight:bold;font-size:9px;padding:1px 5px;border-radius:8px;white-space:nowrap">📎 REFERENCE ONLY - NOT BILLED</span>';
     return '<div style="display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid var(--border)20;font-size:11px;flex-wrap:wrap">' +
       '<span style="color:'+color+';font-weight:bold">'+label+'</span>' +
       '<div style="flex:1">' +
