@@ -1387,7 +1387,7 @@ function renderWOs(wos, opts) {
       'on hold': 'badge-onhold',
     }[(wo.Status || '').toLowerCase()] || 'badge-status';
 
-    var addrLine = wo.property_address + (wo.unit_label ? ' — Unit ' + wo.unit_label : '') + (wo.Room ? ' · ' + wo.Room : '');
+    var addrLine = wo.property_address + (wo.unit_label ? ' — ' + t('Unit') + ' ' + wo.unit_label : '') + (wo.Room ? ' · ' + wo.Room : '');
     var descShort = (wo.Description || '').substring(0, 80) + (wo.Description && wo.Description.length > 80 ? '…' : '');
 
     var gated = !!wo.access_gated;
