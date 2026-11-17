@@ -897,6 +897,38 @@ function woDateWindowWarning(receiptDate, wo){
   return null;
 }
 
+// Nov 17 2026 (Brett): closed/past work orders are offered by default for a whole YEAR, not 30 days. Change the number here only; the optgroup label follows it.
+const RECENT_CLOSED_DAYS = 365;
+function recentClosedLabel(){ return RECENT_CLOSED_DAYS === 365 ? 'Closed in the last year' : 'Closed in the last ' + RECENT_CLOSED_DAYS + ' days'; }
+// The date a closed WO is measured from: Completed_Date, else Completed_At, else Created_Date (the opened date) so a closed WO with a blank
+// Completed_Date (a cancelled or declined one, for example) never vanishes from the picker. Returns '' only when the WO has no usable date at all (then woClosedInWindow keeps it listed).
+function woClosedRefDate(w){
+  const keys = ['Completed_Date', 'Completed_At', 'Created_Date'];
+  for (let i = 0; i < keys.length; i++) { const v = String((w && w[keys[i]]) || '').slice(0, 10); if (ISO_DATE_RE.test(v)) return v; }
+  return '';
+}
+// True when a closed WO is within RECENT_CLOSED_DAYS of today OR of the receipt date (a receipt often lands just after the job closes).
+function woClosedInWindow(w, nowMs, receiptDate){
+  const DAY = 86400000, ref = woClosedRefDate(w);
+  if (!ref) return true;   // no usable date at all: we cannot show it is old, so it must not vanish
+  const t = Date.parse(ref + 'T00:00:00Z'); if (isNaN(t)) return true;
+  const rd = Date.parse(String(receiptDate || '').slice(0, 10) + 'T00:00:00Z');
+  return Math.abs(nowMs - t) <= RECENT_CLOSED_DAYS * DAY || (!isNaN(rd) && Math.abs(rd - t) <= RECENT_CLOSED_DAYS * DAY);
+}
+// Receipt # (the OCR'd Receipt_Recon_Queue.Invoice_Number: a Home Depot order number like WH37678511, a Lowe's 99431). Blank renders as nothing, never 'undefined'.
+function receiptNumberOf(r){ const v = r && r.Invoice_Number; return (v === undefined || v === null) ? '' : String(v).trim(); }
+function receiptNumChip(r){
+  const rn = receiptNumberOf(r);
+  return rn ? '<span class="rc-rn" data-rn="'+esc(rn)+'" title="Tap to copy" onclick="copyReceiptNumber(this)">Receipt # '+esc(rn)+'</span>' : '';
+}
+function copyReceiptNumber(el){
+  const rn = el.getAttribute('data-rn') || '';
+  const done = () => toast('Copied receipt # <b>'+esc(rn)+'</b>');
+  const fail = (why) => toast('<span class="err">Could not copy automatically ('+esc(why)+') - the number is selectable: '+esc(rn)+'</span>');
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(rn).then(done, e => fail(e && e.message || 'blocked'));
+  else fail('clipboard not available');
+}
+
 function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId, receiptDate){
   if (!propId) return '<option value="">— pick a property first —</option>';
   const atProp = allWOs.filter(w => String(w.Property_ID) === String(propId) && (!unitId || String(w.Unit_ID) === String(unitId)));
