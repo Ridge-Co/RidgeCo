@@ -5354,7 +5354,7 @@ async function receiptReconMarkRefundConfirmed(env, body) {
     Confirmed_WO_ID: '', Confirmed_Amount: '', Confirmed_Description: '', Confirmed_Receipt_ID: '',
     Notes: `Marked as a refund ${new Date().toISOString().slice(0, 10)} — was ${row.Status}.`,
   });
-  return json({ ok: true, id, voided_receipt_id: result.voidedId, invoice_unlink: result.invoiceUnlink, attachment_void: result.attachmentVoid });
+  return json({ ok: true, id, voided_receipt_id: result.voidedId, invoice_unlink: result.invoiceUnlink, attachment_void: result.attachmentVoid, qb_delete_needed: result.qbDeleteNeeded });
 }
 
 // POST /receipt-recon/undo { id } — Sep 28 2026, Brett: "need to make it reversible... need to be
