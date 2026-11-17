@@ -38109,7 +38109,7 @@ async function qbSendInvoice(env, body) {
         await updateWOFields(env, ir.WO_ID, { Status: 'Invoiced' });
         // The work order screen reads QBO_Invoice_Number and nothing ever wrote it.
         if (invoiceDocNumber) await updateWOFields(env, ir.WO_ID, { QBO_Invoice_Number: invoiceDocNumber });
-      } catch (e) {}
+      } catch (e) { await softFail(env, 'qbSendInvoice:markInvoiced', e, { severity: 'P1', ref: String(ir.WO_ID || ''), source: 'write', context: 'the invoice went to QuickBooks but the Work Order was not marked Invoiced or given its invoice number' }); }
     }
 
     // Signed proposal: mark its remaining payments billed (and the scope closed) so the progress-bill
