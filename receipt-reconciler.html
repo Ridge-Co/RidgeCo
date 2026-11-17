@@ -41,6 +41,8 @@
   .rc-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start;margin-bottom:8px;flex-wrap:wrap;}
   .rc-title{font-size:13px;font-weight:bold;line-height:1.35;}
   .rc-sub{font-size:11px;color:var(--muted);margin-top:2px;}
+  .rc-rn{display:inline-block;font-size:12px;font-weight:600;color:#1e3a8a;background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:0 7px;cursor:pointer;user-select:all;white-space:nowrap;}
+  .rc-cc-note{font-size:12px;color:#7c2d12;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:6px 8px;margin:6px 0;}
   .rc-meta{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:8px;}
   .rc-meta > div{font-size:12px;}
   .rc-meta .lbl{display:block;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:1px;}
@@ -583,7 +585,7 @@ function searchResultCard(r){
   const active = r.active ? '' : ' <span class="pill danger">Voided</span>';
   return '<div class="rcard">'
     + '<div class="rc-top"><div><div class="rc-title">'+esc(r.store||'(store unknown)')+' — $'+money(r.amount)+active+'</div>'
-    + '<div class="rc-sub">'+esc((r.date||'').slice(0,10))+' · '+where+' · '+esc(r.category||'')+(r.added_by?' · added by '+esc(r.added_by):'')+'</div></div>'
+    + '<div class="rc-sub">'+esc((r.date||'').slice(0,10))+' · '+where+' · '+esc(r.category||'')+(r.added_by?' · added by '+esc(r.added_by):'')+(r.receipt_number?' · '+receiptNumChip({ Invoice_Number: r.receipt_number }):'')+(r.non_billing?' · <span class="pill muted">reference only, not billed</span>':'')+'</div></div>'
     + '<div>'+qb+'</div></div>'
     + (r.description ? '<div class="rc-items">'+esc(r.description)+'</div>' : '')
     + (r.source_file_url ? '<div class="rc-foot"><a href="'+esc(r.source_file_url)+'" target="_blank">View receipt →</a><span></span></div>' : '')
@@ -895,6 +897,38 @@ function woDateWindowWarning(receiptDate, wo){
   return null;
 }
 
+// Nov 17 2026 (Brett): closed/past work orders are offered by default for a whole YEAR, not 30 days. Change the number here only; the optgroup label follows it.
+const RECENT_CLOSED_DAYS = 365;
+function recentClosedLabel(){ return RECENT_CLOSED_DAYS === 365 ? 'Closed in the last year' : 'Closed in the last ' + RECENT_CLOSED_DAYS + ' days'; }
+// The date a closed WO is measured from: Completed_Date, else Completed_At, else Created_Date (the opened date) so a closed WO with a blank
+// Completed_Date (a cancelled or declined one, for example) never vanishes from the picker. Returns '' only when the WO has no usable date at all (then woClosedInWindow keeps it listed).
+function woClosedRefDate(w){
+  const keys = ['Completed_Date', 'Completed_At', 'Created_Date'];
+  for (let i = 0; i < keys.length; i++) { const v = String((w && w[keys[i]]) || '').slice(0, 10); if (ISO_DATE_RE.test(v)) return v; }
+  return '';
+}
+// True when a closed WO is within RECENT_CLOSED_DAYS of today OR of the receipt date (a receipt often lands just after the job closes).
+function woClosedInWindow(w, nowMs, receiptDate){
+  const DAY = 86400000, ref = woClosedRefDate(w);
+  if (!ref) return true;   // no usable date at all: we cannot show it is old, so it must not vanish
+  const t = Date.parse(ref + 'T00:00:00Z'); if (isNaN(t)) return true;
+  const rd = Date.parse(String(receiptDate || '').slice(0, 10) + 'T00:00:00Z');
+  return Math.abs(nowMs - t) <= RECENT_CLOSED_DAYS * DAY || (!isNaN(rd) && Math.abs(rd - t) <= RECENT_CLOSED_DAYS * DAY);
+}
+// Receipt # (the OCR'd Receipt_Recon_Queue.Invoice_Number: a Home Depot order number like WH37678511, a Lowe's 99431). Blank renders as nothing, never 'undefined'.
+function receiptNumberOf(r){ const v = r && r.Invoice_Number; return (v === undefined || v === null) ? '' : String(v).trim(); }
+function receiptNumChip(r){
+  const rn = receiptNumberOf(r);
+  return rn ? '<span class="rc-rn" data-rn="'+esc(rn)+'" title="Tap to copy" onclick="copyReceiptNumber(this)">Receipt # '+esc(rn)+'</span>' : '';
+}
+function copyReceiptNumber(el){
+  const rn = el.getAttribute('data-rn') || '';
+  const done = () => toast('Copied receipt # <b>'+esc(rn)+'</b>');
+  const fail = (why) => toast('<span class="err">Could not copy automatically ('+esc(why)+') - the number is selectable: '+esc(rn)+'</span>');
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(rn).then(done, e => fail(e && e.message || 'blocked'));
+  else fail('clipboard not available');
+}
+
 function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId, receiptDate){
   if (!propId) return '<option value="">— pick a property first —</option>';
   const atProp = allWOs.filter(w => String(w.Property_ID) === String(propId) && (!unitId || String(w.Unit_ID) === String(unitId)));
@@ -927,12 +961,12 @@ function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId, receiptDate
   } else {
     html += '<optgroup label="Open at this property"><option value="" disabled>— none open —</option></optgroup>';
   }
-  // Closed work orders from the last 30 days (counted from today or from the receipt date) are always offered: a receipt often lands just after the job closes.
+  // Closed work orders from the last RECENT_CLOSED_DAYS (a year; counted from today or from the receipt date) are always offered; the checkbox shows all of them.
   if (!showClosed) {
-    const DAY = 86400000, now = Date.now(), rd = Date.parse(String(receiptDate || '').slice(0, 10) + 'T00:00:00Z');
-    const recent = closed.filter(w => { const t = Date.parse(String(w.Completed_Date || '').slice(0, 10) + 'T00:00:00Z'); return !isNaN(t) && (Math.abs(now - t) <= 30 * DAY || (!isNaN(rd) && Math.abs(rd - t) <= 30 * DAY)); })
+    const now = Date.now();
+    const recent = closed.filter(w => woClosedInWindow(w, now, receiptDate))
       .sort((a,b) => Number(b.ID)-Number(a.ID));
-    if (recent.length) html += '<optgroup label="Closed in the last 30 days">' + recent.map(w => opt(w, '')).join('') + '</optgroup>';
+    if (recent.length) html += '<optgroup label="'+recentClosedLabel()+'">' + recent.map(w => opt(w, '')).join('') + '</optgroup>';
   }
   if (showClosed) {
     const closedSorted = closed.slice().sort((a,b) => Number(b.ID)-Number(a.ID));
@@ -986,7 +1020,8 @@ function updatePostingLine(id){
   const prop = allProperties.find(p => String(p.ID) === propSel.value);
   const unit = unitSel && unitSel.value ? allUnits.find(u => String(u.ID) === unitSel.value) : null;
   const wo = woId ? allWOs.find(w => String(w.ID) === woId) : null;
-  let line = '<b>Posting to:</b> ' + esc(prop ? (prop.Address||('Property '+prop.ID)) : '');
+  const ccRef = !!(rowSuggestions[id] && rowSuggestions[id].category === 'customer_paid');
+  let line = (ccRef ? '<b>Attaching (reference only, not billed) to:</b> ' : '<b>Posting to:</b> ') + esc(prop ? (prop.Address||('Property '+prop.ID)) : '');
   if (unit) line += ' ' + esc(unit.Unit_Label || ('Unit '+unit.ID));
   line += wo ? (' — WO ' + esc(wo.ID)) : ' — <span class="warn">no work order selected yet</span>';
   el.innerHTML = line;
@@ -1031,7 +1066,8 @@ function updateWoDetail(id){
   const receiptDate = dateEl ? dateEl.value.trim() : '';
   const link = 'index.html?wo=' + encodeURIComponent(wo.ID);
   const dl = woDatesLabel(wo);
-  let html = '<a href="'+esc(link)+'" target="_blank" rel="noopener">Open WO '+esc(wo.ID)+' ↗</a>'
+  const rnChip = receiptNumChip(rowsById[id] || {});
+  let html = (rnChip ? rnChip + ' ' : '') + '<a href="'+esc(link)+'" target="_blank" rel="noopener">Open WO '+esc(wo.ID)+' ↗</a>'
     + ' · ' + (dl ? esc(dl.charAt(0).toUpperCase()+dl.slice(1)) : '<span class="warn">no opened/closed date on file for this WO</span>');
   const warn = woDateWindowWarning(receiptDate, wo);
   if (warn) html += '<div class="rc-wo-warn">'+esc(warn.message)+'</div>';
@@ -1270,7 +1306,7 @@ function rowCard(r){
   html += '<div class="rc-top"><div style="display:flex;gap:8px;align-items:flex-start">'
         + '<input type="checkbox" class="rc-check" data-id="'+esc(r.ID)+'" onchange="updateBulkBar()" title="Select for bulk action">'
         + '<div><div class="rc-title">'+esc(r.Vendor||'(vendor unknown)')+' — $'+money(r.Total)+'</div>'
-        + '<div class="rc-sub">'+esc(r.Receipt_Date||'')+(r.PO_Reference?' · '+esc(r.PO_Reference):'')+' · '+esc(entrySourceLabel(r))+'</div></div></div>'
+        + '<div class="rc-sub">'+esc(r.Receipt_Date||'')+(receiptNumberOf(r)?' · '+receiptNumChip(r):'')+(r.PO_Reference && String(r.PO_Reference).trim() !== receiptNumberOf(r)?' · '+esc(r.PO_Reference):'')+' · '+esc(entrySourceLabel(r))+'</div></div></div>'
         + '<div>'+categoryPill(sug.category, sug.action)+'</div></div>';
 
   if (r.items && r.items.length) html += '<div class="rc-items">Items: '+r.items.map(esc).join(', ')+'</div>';
@@ -1311,7 +1347,10 @@ function rowCard(r){
       ).filter(Boolean).join(', ')
     : (r.PO_Reference || '');
 
-  if (!excluded && !isCompany && !isRefund && isPendingLike) {
+  // Nov 17 2026 (Brett): a customer-card receipt (excluded = category customer_paid) still picks a work order. It is ATTACHED there as a reference
+  // for the customer and is never billed (see attachCustomerCardRow and the server's customer_card path).
+  if (excluded && isPendingLike) html += '<div class="rc-cc-note">💳 Paid on a customer\'s card. Pick the work order to attach this receipt to as a reference for the customer. It is <b>not</b> billed, not expensed, and adds nothing to the invoice.</div>';
+  if (!isCompany && !isRefund && isPendingLike) {
     html += '<div class="rc-fields">'
       + '<div><label>Property</label><select id="'+idAttr+'-prop" onchange="refreshUnitSelect(\''+r.ID+'\')">'+propertyOptions(propId)+'</select></div>'
       + '<div><label>Unit (optional — narrows the work-order list)</label><select id="'+idAttr+'-unit" onchange="refreshWoSelect(\''+r.ID+'\')">'+unitOptions(propId, '')+'</select></div>'
@@ -1384,6 +1423,7 @@ function rowCard(r){
   html += '<div class="rc-foot">' + fileLink + '<div class="actions">';
   if (isPendingLike) {
     if (!excluded && !isCompany && !isRefund) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm</button>';
+    if (excluded) html += '<button class="btn small" onclick="attachCustomerCardRow(\''+r.ID+'\', this)">📎 Attach to work order (reference only, not billed)</button>';
     if (isCompany) html += '<button class="btn small" id="'+idAttr+'-bizbtn" onclick="confirmBusinessExpense(\''+r.ID+'\', this)">✓ Confirm as business expense</button>'
       + '<button class="btn small" id="'+idAttr+'-billbtn" style="display:none" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm to this work order</button>';
     if (isDuplicateFlagged) html += '<button class="btn small warnbtn" onclick="confirmDuplicate(\''+r.ID+'\', this)">🖐 Confirm duplicate</button>';
@@ -1400,6 +1440,7 @@ function rowCard(r){
     if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', true, this)">🔄 Mark as refund</button>';
     if (isRefund && sug.manual_refund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', false, this)">↩ Not a refund</button>';
     if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="markCustomerCard(\''+r.ID+'\', true, this)">💳 This was on a customer\'s card</button>';
+    if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="attachFixedPriceRow(\''+r.ID+'\', this)">🏷️ Fixed-price job: cost only, don\'t bill</button>';
     if (sug.manual_customer_card) html += '<button class="btn secondary small" onclick="markCustomerCard(\''+r.ID+'\', false, this)">↩ Not a customer-card purchase</button>';
     html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\', this)">Skip</button>';
   } else {
@@ -1502,6 +1543,44 @@ async function attachOnlyRow(id, btn){
     const res = await post('/receipt/attach-only', { id, wo_id, amount, store, date, description });
     if (res.error) throw new Error(res.error);
     statusEl.innerHTML = '<span class="ok">✓ Image attached to '+esc(wo_id)+' — not billed, no invoice line added.</span>';
+    finishCard(id);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
+// Nov 17 2026: attach a customer-card receipt to the picked work order as a reference. Same endpoint as "Attach image only"; customer_card:true makes
+// the Worker write a non-billing Receipts row (never an invoice line, never a QuickBooks expense). A failure is shown on the card, never swallowed.
+async function attachCustomerCardRow(id, btn){ return attachNonBillingRow(id, btn, 'customer_card'); }
+// Nov 17 2026 (Brett): fixed-price job, we paid but the job price already covers it. Same non-billing path as customer-card; the cost is still ours (goes to QuickBooks).
+async function attachFixedPriceRow(id, btn){
+  const bill = document.getElementById('rc'+id+'-bill');   // a business-expense card keeps its pickers behind a toggle: open them first
+  if (bill && !bill.checked){ bill.checked = true; toggleBillCustomer(id); const st = document.getElementById('rc'+id+'-status'); if (st) st.innerHTML = '<span class="info">Pick the property and work order, then tap "Fixed-price job" again.</span>'; return; }
+  return attachNonBillingRow(id, btn, 'fixed_price');
+}
+async function attachNonBillingRow(id, btn, reason){
+  const fixed = reason === 'fixed_price';
+  if (btn) btn.disabled = true;
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  const woSel = document.getElementById(idAttr+'-wo');
+  const woManual = document.getElementById(idAttr+'-wo-manual');
+  const wo_id = (woManual && woManual.value.trim()) || (woSel ? woSel.value.trim() : '');
+  if (!wo_id){ statusEl.innerHTML = '<span class="err">Pick a work order (or type one) '+(fixed ? 'for this fixed-price job' : 'to attach this to, or Skip it')+'.</span>'; if (btn) btn.disabled = false; return; }
+  if (!allWOs.some(w => String(w.ID) === wo_id)){
+    statusEl.innerHTML = '<span class="err">✗ No work order with ID "'+esc(wo_id)+'" exists — check the number.</span>';
+    if (btn) btn.disabled = false;
+    return;
+  }
+  const amount = document.getElementById(idAttr+'-amt').value.trim();
+  const store = document.getElementById(idAttr+'-store').value.trim();
+  const date = document.getElementById(idAttr+'-date').value.trim();
+  const description = document.getElementById(idAttr+'-desc').value.trim();
+  statusEl.innerHTML = '<span class="info">'+(fixed ? 'Recording the job cost, not billing…' : 'Attaching as a reference, not billing…')+'</span>';
+  try {
+    const res = await post('/receipt/attach-only', { id, wo_id, amount, store, date, description, non_billing_reason: reason, customer_card: !fixed });
+    if (res.error) throw new Error(res.error);
+    const qbBad = fixed && res.qb_email && !res.qb_email.sent;
+    if (qbBad) toast('<span class="err">Job cost saved on WO '+esc(wo_id)+' and not billed, but it was NOT sent to QuickBooks: '+esc(res.qb_email.error || 'unknown reason')+' (the daily sweep will retry).</span>');
+    statusEl.innerHTML = fixed ? '<span class="ok">✓ Fixed-price job cost recorded on '+esc(wo_id)+' — not billed, nothing added to the invoice.</span>' : '<span class="ok">✓ Attached to '+esc(wo_id)+' as a reference — not billed, nothing added to the invoice.</span>';
     finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }

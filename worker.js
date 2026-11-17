@@ -3392,6 +3392,8 @@ async function listReceipts(env, url) {
     const rows = await fetchTab(env, 'Receipts');
     let results = rows.filter(r => r.WO_ID === woId && r.Active !== 'FALSE');
     if (vendorId) results = results.filter(r => r.Role === 'vendor' && r.Added_By_ID === vendorId);
+    // Nov 17 2026: pages never re-derive "is this billable" themselves — Non_Billing is computed here by receiptIsNonBilling.
+    results = results.map(r => Object.assign({}, r, { Non_Billing: receiptIsNonBilling(r) ? 'TRUE' : 'FALSE' }));
     return json(results.sort((a,b) => new Date(a.Created_Date)-new Date(b.Created_Date)));
   } catch(e) { return json([]); }
 }
@@ -3407,8 +3409,26 @@ async function listReceipts(env, url) {
 // otherwise. payment_source is 'company_card' (default) or 'vendor_reimburse' (the vendor
 // paid out of pocket and needs it added to what they're owed) — never silently inferred from
 // role, since Brett himself sometimes logs an entry on a vendor's behalf.
+// PURE — Nov 17 2026 (Brett: a customer-card receipt is attached to a work order as a reference for the customer, never billed).
+// True for a Receipts row that must NEVER reach customer billing: materials totals, markup, invoice picker/approval, scope actuals.
+// Non_Billable=TRUE is the explicit flag written by the customer-card attach; Category customer_paid / attached_only are the same
+// intent written by older paths ("image on file, deliberately never billed"), so every consumer treats them identically.
+function receiptIsNonBilling(rc) {
+  if (!rc) return false;
+  if (String(rc.Non_Billable || '').trim().toUpperCase() === 'TRUE') return true;
+  const c = String(rc.Category || '').trim().toLowerCase();
+  return c === 'customer_paid' || c === 'attached_only';
+}
+// Backstop for the invoice-approval endpoints: which of these receipt IDs are non-billing. Throws if the Receipts tab cannot be read
+// (the caller refuses the approval rather than guess). `rows` lets the bulk approval read the tab once.
+async function nonBillingReceiptIdsAmong(env, ids, rows) {
+  const want = new Set((ids || []).map(x => String(x)));
+  if (!want.size) return [];
+  const all = rows || await fetchTab(env, 'Receipts');
+  return all.filter(r => want.has(String(r.ID)) && receiptIsNonBilling(r)).map(r => String(r.ID));
+}
 async function addReceipt(env, body) {
-  const { wo_id, property_id, amount, description, store, date, added_by, added_by_id, role, category, source_file_id, source_file_url, payment_source, allow_negative } = body;
+  const { wo_id, property_id, amount, description, store, date, added_by, added_by_id, role, category, source_file_id, source_file_url, payment_source, allow_negative, non_billable, receipt_number, non_billable_reason } = body;
   if (!amount && amount !== 0) return json({ error: 'amount required' }, 400);
   const amt = parseFloat(amount);
   if (isNaN(amt) || amt === 0) return json({ error: 'amount must be non-zero' }, 400);
@@ -3436,13 +3456,14 @@ async function addReceipt(env, body) {
   // (see its own comment) — this used to swallow that same failure with zero trace anywhere,
   // which is exactly how Payment_Source went unnoticed for weeks. No swallow needed here
   // anymore; the shared function's own logging covers it.
-  try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date', 'Payment_Source']); }
-  catch (e) { /* logged centrally by ensureColumns; the write below still proceeds with whatever columns exist */ }
+  try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date', 'Payment_Source', 'Non_Billable', 'Non_Billable_Reason', 'Receipt_Number']); }
+  catch (e) { /* logged centrally by ensureColumns (rule 174 telemetry); the write below still proceeds with whatever columns exist. If Non_Billable could not be added, Category (customer_paid / attached_only) still marks the row non-billing via receiptIsNonBilling. */ }
 
   const addResp = await addRow(env, 'Receipts', {
     WO_ID: wo_id || '', Property_ID: property_id || '', Amount: amt.toFixed(2), Description: description||'', Store: store||'',
     Date: date||new Date().toISOString().split('T')[0], Added_By: added_by||'', Added_By_ID: String(added_by_id||''),
     Role: role||'hub', Category: category || (wo_id ? 'billable' : 'company'), Payment_Source: paymentSource,
+    Non_Billable: non_billable ? 'TRUE' : '', Non_Billable_Reason: non_billable ? String(non_billable_reason || '') : '', Receipt_Number: String(receipt_number || '').trim(),
     Source_File_ID: source_file_id || '', Source_File_URL: source_file_url || '',
     QB_Email_Sent: 'FALSE', QB_Email_Sent_Date: '',
     Created_Date: new Date().toISOString(), Active: 'TRUE',
@@ -4645,6 +4666,7 @@ async function receiptReconConfirm(env, body) {
     added_by: 'Receipt Reconciler', added_by_id: 'receipt-recon', role: 'hub', category,
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source, allow_negative: (noWo && isRefundRow),
+    receipt_number: row.Invoice_Number || '',   // Nov 17 2026: the OCR'd receipt/order number persists on the WO side (blank stays blank)
   });
   const addJson = await addResp.json().catch(() => ({}));
   let invoiceLink = null;
@@ -4681,7 +4703,7 @@ async function receiptReconConfirm(env, body) {
       qbEmail = { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
     } catch (e) { qbEmail = { sent: false, error: String(e && e.message || e) }; }
   }
-  return json({ ok: true, wo_id, property_id, ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
+  return json({ ok: true, wo_id, property_id, receipt_number: String(row.Invoice_Number || '').trim(), ...addJson, invoice_link: invoiceLink, qb_email: qbEmail });
 }
 
 // POST /receipt/attach-only { id, wo_id, property_id?, amount?, description?, store?, date? } —
@@ -4723,10 +4745,27 @@ async function receiptAttachOnly(env, body) {
   const description = body.description || row.PO_Reference || row.Vendor || '';
   const store = body.store || row.Vendor || '';
   const date = body.date || row.Receipt_Date || '';
+  // Nov 17 2026 (Brett): a receipt paid on a CUSTOMER's card still gets a work order picked so the customer can see it on that job, but it is
+  // a reference only. customer_card:true is accepted only for a row that really is marked customer-card (Manual_Customer_Card, or the scanner's
+  // customer_paid category), and writes Category 'customer_paid' + Non_Billable 'TRUE'. Nothing else changes: still addReceipt only, never
+  // the invoice-review fold or the QuickBooks receipt email (the QB sweep also skips Non_Billable rows). Every billing path ignores the row via receiptIsNonBilling.
+  // Nov 17 2026 (Brett, fixed-price jobs): non_billing_reason 'fixed_price' = a cost we paid on a job whose price already covers it. SAME non-billing flag
+  // (Non_Billable TRUE, never in the invoice / materials / markup), but it IS our expense: Category 'company' with the WO and property on it, and it goes to
+  // the QuickBooks receipts inbox like any expense. 'customer_card' (or the older customer_card:true) = the customer's money, never our expense.
+  const fixedPrice = String(body.non_billing_reason || '') === 'fixed_price';
+  const customerCard = !fixedPrice && (body.customer_card === true || String(body.customer_card).toUpperCase() === 'TRUE' || String(body.non_billing_reason || '') === 'customer_card');
+  if (customerCard) {
+    let _sug = null; try { _sug = JSON.parse(row.Suggestion || 'null'); } catch (e) {} // silent-ok: an unreadable Suggestion just means no scanner category, and the 409 below tells the user
+    const isCcRow = String(row.Manual_Customer_Card || '').toUpperCase() === 'TRUE' || !!(_sug && _sug.category === 'customer_paid');
+    if (!isCcRow) return json({ error: 'This receipt is not marked as paid on a customer\'s card, so it cannot be attached as a customer-card reference.', code: 'not_customer_card' }, 409);
+  }
   const addResp = await addReceipt(env, {
     wo_id, property_id, amount, description, store, date,
-    added_by: 'Receipt Reconciler (attach only)', added_by_id: 'receipt-recon-attach-only', role: 'hub',
+    added_by: customerCard ? 'Receipt Reconciler (customer card, reference only)' : fixedPrice ? 'Receipt Reconciler (fixed-price job cost, not billed)' : 'Receipt Reconciler (attach only)', added_by_id: 'receipt-recon-attach-only', role: 'hub',
     category: 'attached_only',
+    ...(customerCard ? { category: 'customer_paid', non_billable: true, non_billable_reason: 'customer_card' } : {}),
+    ...(fixedPrice ? { category: 'company', non_billable: true, non_billable_reason: 'fixed_price' } : {}),   // customer-card reference: existing customer_paid category + explicit Non_Billable flag
+    receipt_number: row.Invoice_Number || '',
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source,
   });
@@ -4734,10 +4773,24 @@ async function receiptAttachOnly(env, body) {
   if (addJson && addJson.success) {
     await updateRow(env, 'Receipt_Recon_Queue', id, {
       Status: 'attached_only', Confirmed_WO_ID: wo_id, Confirmed_Amount: String(amount), Confirmed_Description: description,
-      Notes: addJson.duplicate ? 'Image already attached to that WO — not re-attached.' : 'Image attached only — not billed, no invoice line added.',
+      Confirmed_Receipt_ID: addJson.duplicate ? '' : String(addJson.id || ''),
+      Notes: addJson.duplicate ? 'Image already attached to that WO — not re-attached.'
+        : (fixedPrice ? 'Fixed-price job cost recorded on WO ' + wo_id + ' — not billed to the customer, no invoice line added.' : customerCard ? 'Customer-card receipt attached to WO ' + wo_id + ' as a reference — not billed, not expensed, no invoice line added.' : 'Image attached only — not billed, no invoice line added.'),
     });
   }
-  return json({ ok: true, wo_id, property_id, attached_only: true, ...addJson });
+  // Fixed-price cost is OUR expense: send it to the QuickBooks receipts inbox now, like the no-WO expense path. A failure is returned and shown, never swallowed.
+  const qbEmail = (fixedPrice && addJson && addJson.success && !addJson.duplicate && addJson.id) ? await emailExpenseToQB(env, addJson.id) : null;
+  return json({ ok: true, wo_id, property_id, attached_only: true, customer_card: customerCard, fixed_price: fixedPrice, qb_email: qbEmail, receipt_number: String(row.Invoice_Number || '').trim(), ...addJson });
+}
+
+// Nov 17 2026: send ONE already-written Receipts row to the QuickBooks receipts inbox now (fixed-price job costs are our expense). Never throws:
+// the outcome comes back as { sent, error } and the page shows it, so a failed email is visible, not swallowed.
+async function emailExpenseToQB(env, receiptId) {
+  try {
+    const r = await sendReceiptsToQBEmail(env, { ids: [String(receiptId)], limit: 1 });
+    const j = await r.json();
+    return { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
+  } catch (e) { return { sent: false, error: String(e && e.message || e) }; } // silent-ok: the error is returned to the caller and shown on the page
 }
 
 // Receipt-date cutoff (Brett, Sep 22 2026: "exclude items that go back to 2025 and 2023").
@@ -5420,7 +5473,7 @@ async function receiptReconSearch(env, url) {
     if (dateParam && String(r.Date || '').slice(0, 10) !== dateParam) return false;
     if (!qRaw) return true;
     if (hasAmount && Math.abs(Number(r.Amount) - qAmount) < 0.01) return true;
-    const blob = _rcNorm([r.Store, r.Description, r.WO_ID, r.Property_ID].filter(Boolean).join(' '));
+    const blob = _rcNorm([r.Store, r.Description, r.WO_ID, r.Property_ID, r.Receipt_Number].filter(Boolean).join(' '));
     return !!(qNorm && blob.indexOf(qNorm) >= 0);
   }).map(r => {
     const prop = r.Property_ID ? propById.get(String(r.Property_ID)) : null;
@@ -5428,6 +5481,7 @@ async function receiptReconSearch(env, url) {
     return {
       id: r.ID, amount: r.Amount, store: r.Store, description: r.Description, date: r.Date,
       category: r.Category, active: String(r.Active || '').toUpperCase() !== 'FALSE',
+      receipt_number: r.Receipt_Number || '', non_billing: receiptIsNonBilling(r), non_billable_reason: r.Non_Billable_Reason || '',
       wo_id: r.WO_ID || '', wo_description: wo ? (wo.Description || '') : '',
       property_id: r.Property_ID || '', property_address: prop ? (prop.Address || '') : '',
       qb_email_sent: String(r.QB_Email_Sent || '').toUpperCase() === 'TRUE',
@@ -7301,7 +7355,7 @@ function scopeMaterialsBudgetSummary(budgetCost, budgetPrice, woId, receipts) {
   if (receipts === null) return { budget_cost: budgetCost, budget_price: budgetPrice, actual: null, receipt_count: null, variance: null, state: 'unknown' };
   // Vendor-logged receipts (Role 'vendor') are the vendor's own purchases, inside their cost — not
   // Ridge Co spending — so they never count toward "actual" here.
-  const mine = woId ? (receipts || []).filter(rc => String(rc.WO_ID) === String(woId) && String(rc.Active || '').toUpperCase() !== 'FALSE' && (parseFloat(rc.Amount) || 0) > 0 && String(rc.Role || '').toLowerCase() !== 'vendor') : [];
+  const mine = woId ? (receipts || []).filter(rc => String(rc.WO_ID) === String(woId) && String(rc.Active || '').toUpperCase() !== 'FALSE' && !(receiptIsNonBilling(rc) && String(rc.Non_Billable_Reason || '') !== 'fixed_price') && (parseFloat(rc.Amount) || 0) > 0 && String(rc.Role || '').toLowerCase() !== 'vendor') : [];
   const actual = +mine.reduce((sum, rc) => sum + (parseFloat(rc.Amount) || 0), 0).toFixed(2);
   const variance = +(budgetCost - actual).toFixed(2); // + = under budget, - = over
   // No materials budget → 'none': those receipts aren't part of the proposal and keep billing
@@ -13992,6 +14046,13 @@ async function approveInvoiceReview(env, body) {
     catch (e) { return json({ error: 'Could not confirm whether this job is billed through a signed proposal, so its receipts were not billed — try again.' }, 503); }
     if (covered) return json({ error: `This job is billed through signed proposal Scope #${covered.scope_id} (its payment milestones already include materials) — its receipts can't be invoiced again here. Reload and untick them.`, scope_covered: covered }, 409);
   }
+  // Nov 17 2026 backstop: a reference-only receipt (customer-card attach, attach-only) must never be billed to the customer, even from a stale page.
+  if (_ownIds.length) {
+    let _nb = [];
+    try { _nb = await nonBillingReceiptIdsAmong(env, _ownIds); }
+    catch (e) { return json({ error: 'Could not confirm which receipts are billable (the Receipts tab could not be read), so none were billed — try again.' }, 503); }
+    if (_nb.length) return json({ error: `Receipt(s) ${_nb.join(', ')} are reference-only (customer card or attached image) and can't be billed to the customer. Untick them and approve again.`, code: 'receipt_not_billable', receipt_ids: _nb }, 409);
+  }
   const today = new Date().toISOString().split('T')[0];
   // Padded pricing (Oct 19 2026): the invoice builder folds the instant-pay pad into its cost basis and tells us the amount; we re-derive it from
   // the fee schedule and refuse a mismatch loudly, so the pad on the bill always equals the pad the customer's price was built on.
@@ -14155,6 +14216,7 @@ async function approveInvoiceReviewBulk(env, body) {
   // Same signed-scope-proposal receipt backstop as approveInvoiceReview (Sep 22 2026) — read
   // Scopes/Scope_Signatures at most once for the whole batch, and only if some approval carries
   // receipts. A failed read fails just the approvals that carry receipts, never silently passes them.
+  let _nbRows = null;
   let _cover = null, _coverErr = null, _coverLoaded = false;
   const coverFor = async woId => {
     if (!_coverLoaded) {
@@ -14180,6 +14242,15 @@ async function approveInvoiceReviewBulk(env, body) {
       try { covered = await coverFor(wo_id); }
       catch (e) { results.push({ bill_id, wo_id, success: false, error: 'Could not confirm whether this job is billed through a signed proposal — its receipts were not billed. Try again.' }); continue; }
       if (covered) { results.push({ bill_id, wo_id, success: false, error: `Billed through signed proposal Scope #${covered.scope_id} — its receipts can't be invoiced again here. Untick them and re-approve.`, scope_covered: covered }); continue; }
+    }
+    {
+      const _ids = String(a.own_material_ids || '').split(',').map(x => x.trim()).filter(Boolean);
+      if (_ids.length) {
+        let _nb = [];
+        try { if (!_nbRows) _nbRows = await fetchTab(env, 'Receipts'); _nb = await nonBillingReceiptIdsAmong(env, _ids, _nbRows); }
+        catch (e) { results.push({ bill_id, wo_id, success: false, error: 'Could not confirm which receipts are billable (the Receipts tab could not be read) — nothing was billed. Try again.' }); continue; }
+        if (_nb.length) { results.push({ bill_id, wo_id, success: false, code: 'receipt_not_billable', error: `Receipt(s) ${_nb.join(', ')} are reference-only (customer card or attached image) and can't be billed. Untick them and re-approve.` }); continue; }
+      }
     }
     // Same dedup rule as the single-item approve: approving the same bill/job twice hands
     // back the existing row instead of logging a duplicate.
@@ -26915,6 +26986,7 @@ async function sendReceiptsToQBEmail(env, opts) {
   // don't correspond to any real transaction on the account being reconciled.
   const onlyIds = (opts && Array.isArray(opts.ids) && opts.ids.length) ? new Set(opts.ids.map(String)) : null;
   const pending = all.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && String(r.QB_Email_Sent || '').toUpperCase() !== 'TRUE' && String(r.Payment_Source || 'company_card') !== 'vendor_reimburse'
+    && !(String(r.Non_Billable || '').toUpperCase() === 'TRUE' && String(r.Non_Billable_Reason || '') !== 'fixed_price')   // customer-card references were never a Ridge Co purchase; a fixed-price job cost IS ours
     && (!onlyIds || onlyIds.has(String(r.ID))));
   const batch = pending.slice(0, limit);
   if (!batch.length) return json({ ok: true, sent: 0, remaining: 0, note: 'nothing pending' });
