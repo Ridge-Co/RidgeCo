@@ -3474,7 +3474,7 @@ async function addReceipt(env, body) {
         Mime_Type: '', Receipt_ID: String(newId),
         Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE',
       });
-    } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_write', Skill_Or_Endpoint: '/receipt/add', Success: 'FALSE', Notes: `receipt_id=${newId} wo_id=${wo_id} err=${String(e && e.message || e)}` }); } catch (_) {} }
+    } catch (e) { await softFail(env, 'addReceipt:galleryWrite', e, { severity: 'P2', ref: String(newId || ''), source: 'write', context: 'the receipt saved but its photo gallery row was not' }); try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_write', Skill_Or_Endpoint: '/receipt/add', Success: 'FALSE', Notes: `receipt_id=${newId} wo_id=${wo_id} err=${String(e && e.message || e)}` }); } catch (_) { /* silent-ok: the gallery failure is already in the failure ledger */ } }
   }
 
   return json({ success: true, amount: amt.toFixed(2), id: newId, payment_source: paymentSource });
