@@ -961,12 +961,12 @@ function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId, receiptDate
   } else {
     html += '<optgroup label="Open at this property"><option value="" disabled>— none open —</option></optgroup>';
   }
-  // Closed work orders from the last 30 days (counted from today or from the receipt date) are always offered: a receipt often lands just after the job closes.
+  // Closed work orders from the last RECENT_CLOSED_DAYS (a year; counted from today or from the receipt date) are always offered; the checkbox shows all of them.
   if (!showClosed) {
-    const DAY = 86400000, now = Date.now(), rd = Date.parse(String(receiptDate || '').slice(0, 10) + 'T00:00:00Z');
-    const recent = closed.filter(w => { const t = Date.parse(String(w.Completed_Date || '').slice(0, 10) + 'T00:00:00Z'); return !isNaN(t) && (Math.abs(now - t) <= 30 * DAY || (!isNaN(rd) && Math.abs(rd - t) <= 30 * DAY)); })
+    const now = Date.now();
+    const recent = closed.filter(w => woClosedInWindow(w, now, receiptDate))
       .sort((a,b) => Number(b.ID)-Number(a.ID));
-    if (recent.length) html += '<optgroup label="Closed in the last 30 days">' + recent.map(w => opt(w, '')).join('') + '</optgroup>';
+    if (recent.length) html += '<optgroup label="'+recentClosedLabel()+'">' + recent.map(w => opt(w, '')).join('') + '</optgroup>';
   }
   if (showClosed) {
     const closedSorted = closed.slice().sort((a,b) => Number(b.ID)-Number(a.ID));
