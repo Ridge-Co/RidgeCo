@@ -6649,7 +6649,8 @@ async function proposalStampSms(env, scopeId, status) {
     const r = await updateRow(env, 'Scopes', scopeId, { Owner_SMS_Status: status, Owner_SMS_Time: new Date().toISOString() });
     if (r && r.status >= 400) throw new Error('Scopes update HTTP ' + r.status);
   } catch (e) {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_stamp_failed', Skill_Or_Endpoint: 'proposalStampSms', Success: 'FALSE', Notes: 'scope=' + scopeId + ' status=' + status + ' err=' + String((e && e.message) || e).slice(0, 160) }); } catch (_) {}
+    await softFail(env, 'proposalStampSms', e, { severity: 'P2', ref: String(scopeId), source: 'write', context: 'the owner text outcome (' + status + ') was not saved on the Scope, so the Scope Creator will not show it' });
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_sms_stamp_failed', Skill_Or_Endpoint: 'proposalStampSms', Success: 'FALSE', Notes: 'scope=' + scopeId + ' status=' + status + ' err=' + String((e && e.message) || e).slice(0, 160) }); } catch (_) { /* silent-ok: telemetry is best effort, the stamp failure is already in the failure ledger */ }
   }
 }
 // Text the owner "your estimate was emailed". Gated like every owner SMS (global / property / owner toggles, test mode).
