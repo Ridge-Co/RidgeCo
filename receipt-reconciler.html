@@ -1440,6 +1440,7 @@ function rowCard(r){
     if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', true, this)">🔄 Mark as refund</button>';
     if (isRefund && sug.manual_refund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', false, this)">↩ Not a refund</button>';
     if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="markCustomerCard(\''+r.ID+'\', true, this)">💳 This was on a customer\'s card</button>';
+    if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="attachFixedPriceRow(\''+r.ID+'\', this)">🏷️ Fixed-price job: cost only, don\'t bill</button>';
     if (sug.manual_customer_card) html += '<button class="btn secondary small" onclick="markCustomerCard(\''+r.ID+'\', false, this)">↩ Not a customer-card purchase</button>';
     html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\', this)">Skip</button>';
   } else {
