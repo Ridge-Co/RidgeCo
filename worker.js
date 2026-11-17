@@ -15337,7 +15337,7 @@ async function logWOAuditMany(env, entries) {
   if (!entries || !entries.length) return;
   try {
     if (entries.some(e => e.channel || e.messageType || e.messageBody || e.originalBody)) {
-      try { await ensureColumns(env, 'WO_Audit', WO_AUDIT_MSG_COLS); } catch (e) {}
+      try { await ensureColumns(env, 'WO_Audit', WO_AUDIT_MSG_COLS); } catch (e) {} // silent-ok: ensureColumns reports its own failure to the ledger
     }
     const data = await sheetsRequest(env, 'GET', `/values/WO_Audit`);
     const rows = data.values||[]; if (!rows.length) return;
