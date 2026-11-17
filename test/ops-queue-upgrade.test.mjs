@@ -267,9 +267,11 @@ ok(STATUSES.length === 7 && STATUSES.includes('proposed'), 'statuses unchanged (
   eq([SHEET[0].Build_State, SHEET[0].Status], ['live', 'done'], 'supplied merged PR → live');
   eq(SHEET[1].Build_State, 'pr_closed', 'supplied closed PR → flagged');
   eq([SHEET[2].PR_Number, SHEET[2].Build_State], ['52', 'pr_open'], 'supplied PR matched by body');
-  eq(r.body.errors.length, 1, 'PR missing from the supplied list falls back to GitHub and reports its failure');
-  eq(r.body.errors[0].id, '43', 'which row');
-  ok(/rate-limits/.test(r.body.errors[0].error), 'error explains the rate limit');
+  // Nov 17 2026: a GitHub 403/429 is a rate limit in every mode now (it used to be a loud error outside the 15-minute tick).
+  eq(r.body.errors.length, 0, 'a GitHub rate limit is not an error any more');
+  eq(r.body.rate_limited.length, 1, 'PR missing from the supplied list falls back to GitHub and reports the refusal as rate_limited');
+  eq(r.body.rate_limited[0].id, '43', 'which row');
+  ok(/rate-limits/.test(r.body.rate_limited[0].error), 'the refusal explains the rate limit');
   eq(calls, 1, 'GitHub only called for the one PR not supplied');
 }
 
