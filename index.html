@@ -16764,7 +16764,7 @@ function hubHoldBadge(reason) {
   if (m) {
     var d0 = new Date(), p = function(n) { return (n < 10 ? '0' : '') + n; };
     var today = d0.getFullYear() + '-' + p(d0.getMonth() + 1) + '-' + p(d0.getDate());
-    if (m[1] < today) over = ' <span style="color:#b42318;font-weight:bold;font-size:11px">⚠ back-date passed (' + m[1] + ') — chase this hold</span>';
+    if (m[1] < today) over = ' <span style="color:#b42318;font-weight:bold;font-size:12px">⚠ back-date passed (' + m[1] + ') — chase this hold</span>';
   }
   return ' <span style="color:var(--muted);font-size:11px">— ' + esc(reason) + '</span>' + over;
 }
