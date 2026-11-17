@@ -49,7 +49,7 @@ var JobOrder = (function () {
     else if (today && f.back < today) errors.push('past');
     return { ok: errors.length === 0, errors: errors };
   }
-  // The one string saved in Work_Orders.Hold_Reason. The Hub reads "expected back YYYY-MM-DD" out of it to flag late holds.
+  // The one string saved in Work_Orders.Hold_Reason. The Hub reads the trailing date out of it to flag late holds.
   function holdText(f) {
     var s = reasonLabel(f.code);
     var detail = String(f.detail || '').replace(/\s+/g, ' ').trim();
