@@ -9435,12 +9435,12 @@ async function createWorkOrder(env, body) {
 
   // If a checklist was defined at creation, make sure the column exists BEFORE we read the
   // header row — otherwise the field maps to a non-existent header and is silently dropped.
-  if (body.checklist) { try { await ensureColumns(env, 'Work_Orders', ['Checklist']); } catch(_){} }
+  if (body.checklist) { try { await ensureColumns(env, 'Work_Orders', ['Checklist']); } catch(_){} } // silent-ok: ensureColumns reports its own failure to the ledger
   // Max price (Nov 5 2026): admin-only field (the router strips it from portal sessions); the column is added only when a max is actually set.
   // (parsed inline, not via maxPriceNum, so this function stays self-contained for the tests that run it on its own)
   const _mpRaw = parseFloat(String(body.max_price == null ? '' : body.max_price).replace(/[$,\s]/g, ''));
   const _maxPrice = Number.isFinite(_mpRaw) && _mpRaw > 0 ? Math.round(_mpRaw * 100) / 100 : 0;
-  if (_maxPrice) { try { await ensureColumns(env, 'Work_Orders', ['Max_Price']); } catch(_){} }
+  if (_maxPrice) { try { await ensureColumns(env, 'Work_Orders', ['Max_Price']); } catch(_){} } // silent-ok: ensureColumns reports its own failure to the ledger
   const data = await sheetsRequest(env, 'GET', `/values/Work_Orders`);
   const rows = data.values || [];
   if (!rows.length) throw new Error('Work_Orders tab has no headers');
@@ -10131,7 +10131,7 @@ async function addonWithdraw(env, body, callerRole, callerSessionId) {
     const es = String((est && est.Status) || 'Pending');
     if (!['Pending', 'Needs Info', ''].includes(es)) return json({ error: 'Too late to withdraw — this was already ' + es }, 400);
   } else if (status !== 'Draft') return json({ error: 'This job is not additional work' }, 400);
-  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   const now = new Date().toISOString();
   await updateWOFields(env, childId, {
     Voided: 'TRUE', Void_Reason: 'Other', Void_Reason_Detail: 'Additional work withdrawn by vendor', Voided_By: 'vendor:' + vendorId, Voided_Date: now,
@@ -10339,7 +10339,7 @@ async function woVoid(env, body) {
   const combinedInto = reason === 'Combined' ? (body.combined_into_wo_id || '') : '';
   if (reason === 'Combined' && !combinedInto) return json({ error: 'combined_into_wo_id required when reason is Combined' }, 400);
 
-  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   const workorders = await fetchTab(env, 'Work_Orders');
   const wo = findWO(workorders, woId);
   if (!wo) return json({ error: 'WO not found' }, 404);
@@ -10431,7 +10431,7 @@ async function woBulkVoid(env, body) {
   const combinedInto = reason === 'Combined' ? String(body.combined_into_wo_id || '') : '';
   if (reason === 'Combined' && !combinedInto) return json({ error: 'combined_into_wo_id required when reason is Combined' }, 400);
 
-  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   const workorders = await fetchTab(env, 'Work_Orders');
   if (combinedInto && !findWO(workorders, combinedInto)) return json({ error: `Target work order ${combinedInto} not found` }, 404);
 
@@ -10568,7 +10568,7 @@ async function woCombine(env, body) {
   if (!combinedIds.length) return json({ error: 'combined_wo_ids required (at least one)' }, 400);
   if (combinedIds.includes(String(survivorId))) return json({ error: 'survivor_wo_id cannot also appear in combined_wo_ids' }, 400);
 
-  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {}
+  try { await ensureColumns(env, 'Work_Orders', WO_VOID_COLUMNS); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   const workorders = await fetchTab(env, 'Work_Orders');
   const survivor = findWO(workorders, survivorId);
   if (!survivor) return json({ error: `Survivor work order ${survivorId} not found` }, 404);
@@ -12062,7 +12062,7 @@ async function updateStatus(env, body) {
   if (body.status === 'Complete' || body.status === 'Pending Invoice')
     fields.Completed_Date = wo.Completed_Date || new Date().toISOString();
   if (body.status === 'On Hold') {
-    try { await ensureColumns(env, 'Work_Orders', ['Hold_Reason']); } catch (_) {}
+    try { await ensureColumns(env, 'Work_Orders', ['Hold_Reason']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
     fields.Hold_Reason = holdReason;
   }
   await updateWOFields(env, body.wo_id, fields);
@@ -14234,7 +14234,7 @@ async function retranslateEstimate(env, body) {
   if (!Array.isArray(lines) || !lines.length) return json({ error: 'Estimate has no line items' }, 400);
   const en = await estimateEnglishFields(env, lines, est.Change_Reason || '', { force: true });
   if (!en.ok) return json({ ok: false, success: false, error: 'Translation is unavailable right now (' + (en.error || 'unknown') + ') — nothing was changed. Try again in a minute.' }, 502);
-  try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); } catch (_) {}
+  try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   await updateRow(env, 'Estimates', est.ID, { Line_Items: JSON.stringify(en.line_items), Change_Reason_EN: en.change_reason_en || '' });
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_retranslate', Skill_Or_Endpoint: '/estimate/retranslate', Success: 'TRUE', Notes: `estimate=${est.ID} wo=${est.WO_ID} v${est.Version}` }); } catch (_) {}
   return json({ success: true, ok: true, estimate_id: est.ID, wo_id: est.WO_ID, version: est.Version, line_items: en.line_items, change_reason_en: en.change_reason_en || '',
@@ -14608,7 +14608,7 @@ async function flagEstimate(env, body, kind) {
   if (_blockMsg) return json({ error: _blockMsg }, 400);
   const st = String(latest.Status || 'Pending');
   if (!['Pending', 'Needs Info'].includes(st)) return json({ error: `That estimate is "${st}" — only a pending estimate can be flagged ${kind === 'decline' ? 'declined' : 'needs-info'}.` }, 409);
-  try { await ensureColumns(env, 'Estimates', ['Needs_Info_Date', 'Declined_Date', 'Decline_Reason']); } catch (_) {}
+  try { await ensureColumns(env, 'Estimates', ['Needs_Info_Date', 'Declined_Date', 'Decline_Reason']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   const now = new Date().toISOString();
   await updateRow(env, 'Estimates', latest.ID, kind === 'decline'
     ? { Status: 'Declined', Declined_Date: now, Decline_Reason: String(body.reason || '').slice(0, 300) }
@@ -14634,7 +14634,7 @@ async function setApprovalStage(env, { woId, scopeId, stage, onlyFrom }) {
   let ok = false;
   try {
     if (woId) {
-      try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) {}
+      try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
       if (onlyFrom) {
         const wo = findWO(await fetchTab(env, 'Work_Orders'), woId);
         if (!wo || !onlyFrom.includes(String(wo.Approval_Stage || ''))) return false;
@@ -14642,7 +14642,7 @@ async function setApprovalStage(env, { woId, scopeId, stage, onlyFrom }) {
       await updateWOFields(env, woId, { Approval_Stage: stage, Estimate_Revised: '' }); ok = true;
     }
     if (scopeId) {
-      try { await ensureColumns(env, 'Scopes', ['Approval_Stage']); } catch (_) {}
+      try { await ensureColumns(env, 'Scopes', ['Approval_Stage']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
       await updateRow(env, 'Scopes', scopeId, { Approval_Stage: stage }); ok = true;
     }
   } catch (_) { /* best-effort */ }
@@ -14685,8 +14685,8 @@ async function backfillApprovalStage(env, body) {
   }
   let written = 0;
   if (apply && plan.length) {
-    try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) {}
-    try { await ensureColumns(env, 'Scopes', ['Approval_Stage']); } catch (_) {}
+    try { await ensureColumns(env, 'Work_Orders', ['Approval_Stage', 'Estimate_Revised']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
+    try { await ensureColumns(env, 'Scopes', ['Approval_Stage']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
     for (const p of plan) {
       try {
         if (p.type === 'wo') await updateWOFields(env, p.id, { Approval_Stage: p.stage });
@@ -15337,7 +15337,7 @@ async function logWOAuditMany(env, entries) {
   if (!entries || !entries.length) return;
   try {
     if (entries.some(e => e.channel || e.messageType || e.messageBody || e.originalBody)) {
-      try { await ensureColumns(env, 'WO_Audit', WO_AUDIT_MSG_COLS); } catch (e) {}
+      try { await ensureColumns(env, 'WO_Audit', WO_AUDIT_MSG_COLS); } catch (e) {} // silent-ok: ensureColumns reports its own failure to the ledger
     }
     const data = await sheetsRequest(env, 'GET', `/values/WO_Audit`);
     const rows = data.values||[]; if (!rows.length) return;
@@ -15613,7 +15613,7 @@ async function ownerUpdateWO(env, body) {
   // grayed-out treatment).
   if ('Managed_By' in allowed) {
     if (!['RidgeCo','Owner'].includes(allowed.Managed_By)) return json({ error: "Managed_By must be 'RidgeCo' or 'Owner'" }, 400);
-    try { await ensureColumns(env, 'Work_Orders', ['Managed_By']); } catch (_) {}
+    try { await ensureColumns(env, 'Work_Orders', ['Managed_By']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   }
   const [workorders, properties] = await fetchTabs(env, ['Work_Orders','Properties']);
   const wo = findWO(workorders, body.wo_id); if (!wo) return json({ error: 'WO not found' }, 404);
@@ -15635,7 +15635,7 @@ async function adminUpdateWO(env, body) {
   // portal's grayed-out treatment) branch on this being exactly one of two strings.
   if ('Managed_By' in body.fields) {
     if (!['RidgeCo','Owner'].includes(body.fields.Managed_By)) return json({ error: "Managed_By must be 'RidgeCo' or 'Owner'" }, 400);
-    try { await ensureColumns(env, 'Work_Orders', ['Managed_By']); } catch (_) {}
+    try { await ensureColumns(env, 'Work_Orders', ['Managed_By']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   }
   await updateRow(env, 'Work_Orders', body.wo_id, body.fields);
   // One batched audit write covering every changed field, instead of a GET+POST pair per
@@ -16639,7 +16639,7 @@ async function logAttachment(env, body) {
     // Vendor Additional Work (Sep 30 2026): addon_item = the item index this photo belongs to. The row
     // below is a FIXED object, so the column must exist first and the value must be named here.
     const _addonItem = (body.addon_item === undefined || body.addon_item === null) ? '' : String(body.addon_item).trim();
-    if (_addonItem !== '') { try { await ensureColumns(env, 'Attachments', ['Addon_Item']); } catch(_){} }
+    if (_addonItem !== '') { try { await ensureColumns(env, 'Attachments', ['Addon_Item']); } catch(_){} } // silent-ok: ensureColumns reports its own failure to the ledger
     await addRow(env,'Attachments',{WO_ID:body.wo_id||'',File_Name:body.file_name||'',File_Type:body.file_type||'photo',Drive_File_ID:body.file_id||'',Drive_URL:body.file_url||'',Mime_Type:body.mime_type||'',Created_Date:new Date().toISOString().split('T')[0],Active:'TRUE',Addon_Item:_addonItem});
     // Share the just-uploaded job media anyone-with-link so it opens in the portal without a Google
     // login. This is the resumable-upload path the vendor portal uses (createUploadSession → PUT → here).
@@ -17316,7 +17316,7 @@ async function shouldNotifyOwner(env, wo, statusEvent) {
 async function addWishlistItem(env, body) {
   // Ensure the Status column exists so new items are born 'Active' and the Dev Log status
   // buttons have somewhere to write (rule 37: never write a column that isn't there).
-  try { await ensureColumns(env, 'Wishlist', ['Status']); } catch (e) { /* non-fatal — add still works */ }
+  try { await ensureColumns(env, 'Wishlist', ['Status']); } catch (e) { /* non-fatal — add still works */ } // silent-ok: ensureColumns reports its own failure to the ledger
   const data=await sheetsRequest(env,'GET',`/values/Wishlist`); const rows=data.values||[['ID','Text','Created','Active','Status']], headers=rows[0];
   const now=new Date().toISOString().replace('T',' ').split('.')[0];
   const newRow=headers.map(h=>({ID:String(nextSafeId(rows)),Text:body.text||'',Created:now,Active:'TRUE',Status:'Active'}[h]??''));
@@ -17333,7 +17333,7 @@ async function setWishlistStatus(env, body) {
   const ALLOWED = ['Active','In progress','Done','Not applicable'];
   if (id === undefined || id === null || id === '') return json({ error: 'id required' }, 400);
   if (!ALLOWED.includes(status)) return json({ error: 'invalid status' }, 400);
-  try { await ensureColumns(env, 'Wishlist', ['Status']); } catch (e) { /* if it already exists, updateRow proceeds */ }
+  try { await ensureColumns(env, 'Wishlist', ['Status']); } catch (e) { /* if it already exists, updateRow proceeds */ } // silent-ok: ensureColumns reports its own failure to the ledger
   return await updateRow(env, 'Wishlist', id, { Status: status });
 }
 
@@ -26237,7 +26237,7 @@ function buildScopeProposalEmailHtml({ ownerName, addr, url, pixelUrl }) {
 // scoped to {owner, rev}. Revoke = bump Owners.AR_Report_Rev; a token whose rev no longer
 // matches is dead. No separate token-storage table — the sheet row IS the source of truth.
 async function arReportLinkToken(env, ownerId) {
-  try { await ensureColumns(env, 'Owners', ['AR_Report_Rev']); } catch (e) {}
+  try { await ensureColumns(env, 'Owners', ['AR_Report_Rev']); } catch (e) {} // silent-ok: ensureColumns reports its own failure to the ledger
   const owners = await fetchTab(env, 'Owners');
   const owner = owners.find(o => String(o.ID) === String(ownerId));
   const rev = String((owner && owner.AR_Report_Rev) || '0');
@@ -26259,7 +26259,7 @@ async function arReportLinkAuth(env, tok) {
 async function arReportRevoke(env, body) {
   const ownerId = String((body && body.owner_id) || '').trim();
   if (!ownerId) return json({ error: 'owner_id required' }, 400);
-  try { await ensureColumns(env, 'Owners', ['AR_Report_Rev']); } catch (e) {}
+  try { await ensureColumns(env, 'Owners', ['AR_Report_Rev']); } catch (e) {} // silent-ok: ensureColumns reports its own failure to the ledger
   const owners = await fetchTab(env, 'Owners');
   const owner = owners.find(o => String(o.ID) === ownerId);
   if (!owner) return json({ error: 'Owner not found' }, 404);
@@ -27936,7 +27936,7 @@ async function woShareAuth(env, tok, woWanted){
 // Shared by woShareLink (copy-draft) and woShareSend (real SMS): mints the link token (format and
 // TTL unchanged) and builds the ready-to-send EN/ES message. Returns {error,status} or {res, vendor}.
 async function woShareBuild(env, woId, pageBase){
-  try { await ensureColumns(env, 'Work_Orders', ['Share_Rev']); } catch(e){}
+  try { await ensureColumns(env, 'Work_Orders', ['Share_Rev']); } catch(e){} // silent-ok: ensureColumns reports its own failure to the ledger
   const [wos, props, units, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Units','Vendors']);
   const wo = findWO(wos, woId);
   if(!wo) return { error:'WO not found', status:404 };
@@ -28020,7 +28020,7 @@ async function woShareSend(env, body){
 async function woShareRevoke(env, body){
   const woId = String((body && (body.wo_id||body.wo))||'').trim();
   if(!woId) return json({ error:'wo_id required' }, 400);
-  try { await ensureColumns(env, 'Work_Orders', ['Share_Rev']); } catch(e){}
+  try { await ensureColumns(env, 'Work_Orders', ['Share_Rev']); } catch(e){} // silent-ok: ensureColumns reports its own failure to the ledger
   const wos = await fetchTab(env, 'Work_Orders');
   const wo = findWO(wos, woId);
   if(!wo) return json({ error:'WO not found' }, 404);
@@ -31616,10 +31616,10 @@ const PROPERTY_SOURCE_FIELDS = ['Source_Name', 'Source_Type', 'Source_Phone', 'S
 async function propertyUpdate(env, body) {
   const fields = (body && body.fields) || {};
   if (PROPERTY_SOURCE_FIELDS.some(f => fields[f] !== undefined)) {
-    try { await ensureColumns(env, 'Properties', PROPERTY_SOURCE_FIELDS); } catch (_) {}
+    try { await ensureColumns(env, 'Properties', PROPERTY_SOURCE_FIELDS); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   }
   if (fields.Commercial_Subtype !== undefined) {
-    try { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); } catch (_) {}
+    try { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   }
   return await updateRow(env, 'Properties', body.id, fields);
 }
@@ -33330,6 +33330,7 @@ async function qbMapEntity(env, body) {
 // verification (<=10 min later) repairs it exactly as before. A failure is never memoized.
 const COLS_OK_MS = 10 * 60 * 1000;
 const __colsOk = new Map(); // "tab|col1,col2,..." -> verifiedAtMs
+const __ensureColsReq = {}; // one ledger report per tab per isolate (soft-failure helpers dedupe by `where` on this object); the Telemetry row below still goes out on every failure
 async function ensureColumns(env, tab, columns) {
   const _memo = (typeof __colsOk !== 'undefined') ? __colsOk : null; // null when a test slices this function out of module scope
   const _ck = tab + '|' + (columns || []).join(',');
@@ -33349,6 +33350,9 @@ async function ensureColumns(env, tab, columns) {
       // (typeof: other tests slice this function out of module scope without the helper; they keep the old row.)
       const _busy = typeof sheetsQuotaBusyError === 'function' && sheetsQuotaBusyError(e);
       try { await logTelemetry(env, { Source: 'worker', Job_Type: _busy ? 'sheets_quota_busy' : 'ensure_columns_failed', Skill_Or_Endpoint: _busy ? 'ensure_columns/' + tab : tab, Success: 'FALSE', Notes: `columns=${(columns || []).join(',')} err=${String((e && e.message) || e)}` }); } catch (le) { console.error('ensureColumns: could not log the failure to Ops_Telemetry (the original error is still thrown):', tab, le && le.message); }
+      // Nov 17 2026 (silent-failure burn-down phase 6): a real failure (not the calm quota-busy one) also goes to the failure ledger, once per tab per isolate,
+      // so the ~70 call sites that swallow this throw are no longer silent. reportFailure writes through ensureTab, never back through here.
+      if (!_busy && typeof softFail === 'function') await softFail(env, 'ensureColumns:' + tab, e, { req: __ensureColsReq, severity: 'P1', ref: tab, source: 'write', context: 'columns=' + (columns || []).join(',') });
     }
     throw e;
   }
