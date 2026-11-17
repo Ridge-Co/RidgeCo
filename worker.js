@@ -782,6 +782,14 @@ const _hubWorkerCore = {
             try { const _fd = await request.clone().formData(); _upOk = await isTestWO(env, String(_fd.get('wo_id') || '').trim()); } catch (e) { _upOk = false; }
             if (!_upOk) return json({ error: 'HUB_TEST_TOKEN: upload must target a TEST- work order, refusing' }, 403);
           }
+          // Vendor WRITE scope (Nov 16 2026): this route is multipart, so it never reaches the JSON-body gate below. Same rule, applied here.
+          if (callerRole === 'vendor') {
+            let _vUpWo = '';
+            try { _vUpWo = String((await request.clone().formData()).get('wo_id') || '').trim(); }
+            catch (e) { return await vendorWriteDeny(env, path, callerSessionId, 400, 'Could not read this upload. Please try again.', 'unreadable upload form: ' + String((e && e.message) || e).slice(0, 120)); }
+            const _vUpDenied = await vendorWriteScopeDenied(env, path, { wo_id: _vUpWo }, callerSessionId);
+            if (_vUpDenied) return _vUpDenied;
+          }
           return await handlePhotoUploadClean(env, request);
         }
         if (path === '/sms-inbound')  return await handleInboundSMS(env, request);
@@ -812,6 +820,11 @@ const _hubWorkerCore = {
           if (callerRole === 'owner') {
             const _owd = await ownerWriteScopeDenied(env, path, body, callerSessionId);
             if (_owd) return _owd;
+          }
+          // Vendor WRITE scope (Nov 16 2026): a vendor session may only write to a work order assigned to it, and only as itself.
+          if (callerRole === 'vendor') {
+            const _vwd = await vendorWriteScopeDenied(env, path, body, callerSessionId);
+            if (_vwd) return _vwd;
           }
           if (callerRole === 'tenant' && callerDemoSlot) {   // a demo tenant may write only inside its own demo slot
             const _dtw = await demoTenantWriteDenied(env, path, body, callerSessionId, callerDemoSlot);
@@ -2808,7 +2821,7 @@ async function woKeyedReadDenied(env, path, url, role, sessionId) {
 //   - author_role was self-declared, so a note could be posted "as a tenant" (which texts Brett).
 //   - /wishlist/add is Brett's internal dev wishlist, not an owner feature.
 // One gate, OWNER sessions only (admin secret and internal tokens never reach it). Every denial is a 4xx plus a FAILED
-// Ops_Telemetry row (`owner_write_scope_denied`) - never silent. Tenant and vendor write scopes are separate (BACKLOG).
+// Ops_Telemetry row (`owner_write_scope_denied`) - never silent. The vendor write scope is vendorWriteScopeDenied below (Nov 16 2026); the tenant one is still BACKLOG.
 const OWNER_WO_WRITE_PATHS = ['/wo/add-note', '/wo/append-description', '/wo/owner-update', '/wo/set-tenant-visibility', '/log-attachment', '/create-upload-session'];
 const OWNER_WO_CREATE_FIELDS = ['property_id', 'unit_id', 'trade', 'priority', 'description', 'type', 'owner_wo_ref', 'tenant_visible', 'tenant_notify_created', 'tenant_notify_updates', 'created_by', 'notes', 'room'];
 async function ownerWriteScopeDenied(env, path, body, ownerId) {
@@ -2842,6 +2855,70 @@ async function ownerWriteScopeDenied(env, path, body, ownerId) {
   // The identity is the session's, never the client's: no posting a note "as a tenant", no omitting owner_id to skip a check.
   b.owner_id = sid;
   if (path === '/wo/add-note' || path === '/wo/append-description') b.author_role = 'owner';
+  return null;
+}
+
+// ── VENDOR WRITE SCOPE (Nov 16 2026, access fix 2 of 3; the "vendor write scope" BACKLOG item named above) ─────────────
+// What was wrong: the Oct 14 identity binding stops a vendor session NAMING another vendor's id, and GETs that name a work
+// order are checked (woKeyedReadDenied). Nothing checked WRITES. A signed-in vendor could post an estimate, a status change, a
+// checklist, a schedule, photos / files, a bill, hours or a receipt against ANY work order id, and could delete any time entry
+// or receipt by its row id. Several of those handlers also trusted the body for WHO was acting (Vendor_ID on a bill,
+// updated_by_role on a status change).
+// One gate, VENDOR sessions only (admin secret, internal tokens and the shared work-order link never reach it):
+//   - the work order named in the body must be assigned to this vendor (Work_Orders.Vendor_ID = the session's id). That one
+//     rule also covers bid groups (each vendor in a bid group has their OWN copy of the job, with their id on it) and
+//     additional-work drafts (the draft child is created assigned to the vendor). Same rule as attachmentScopeAllows('vendor').
+//   - routes that create a money / status record need a work order; upload routes may have none (bill-with-no-job photos) or
+//     the vendor's own onboarding id (VENDOR-<their id>).
+//   - deleting a time entry / receipt: the row must be the vendor's own.
+//   - who is acting comes from the session, never the body.
+// Every refusal is a 4xx with a plain reason (English / Spanish, the portal shows it as is) plus a FAILED Ops_Telemetry row
+// (`vendor_write_scope_denied`) - never silent. Routes that check the vendor themselves are left alone: additional work,
+// /vendor-task-request/mark-done, /vendor/update-contact, bill-with-no-job, self-serve work orders, property-access requests.
+const VENDOR_WO_WRITE_PATHS = ['/estimate', '/status', '/wo/checklist', '/schedule', '/time-entry/add', '/receipt/add', '/vendor-bill/add'];   // a work order is REQUIRED
+const VENDOR_WO_OPTIONAL_PATHS = ['/upload-photo', '/create-upload-session', '/log-attachment', '/vendor-bill/reconcile-receipts'];          // checked when a work order is named
+const VENDOR_OWN_ROW_DELETE_PATHS = { '/time-entry/delete': { tab: 'Time_Entries', by: 'Entered_By_ID', what: 'time entry' }, '/receipt/delete': { tab: 'Receipts', by: 'Added_By_ID', what: 'receipt' } };
+const VENDOR_NOT_YOURS_MSG = 'This work order is not assigned to you, so nothing was saved. Contact Ridge Co if this is a mistake. / Esta orden de trabajo no está asignada a usted, así que no se guardó nada. Comuníquese con Ridge Co si es un error.';
+// PURE. May this vendor write to this work order row?
+function vendorOwnsWO(wo, vendorId) {
+  const sid = String(vendorId || '');
+  return !!wo && sid !== '' && String(wo.Vendor_ID || '') === sid;
+}
+async function vendorWriteDeny(env, path, vendorId, status, error, why) {
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_write_scope_denied', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `vendor=${String(vendorId || '')} ${why}`.slice(0, 480) });
+  return json({ error, code: 'vendor_write_scope_denied' }, status);
+}
+// Returns a Response when the vendor session may NOT make this write, otherwise null (and the body now carries the session's identity).
+async function vendorWriteScopeDenied(env, path, body, vendorId) {
+  const delRule = VENDOR_OWN_ROW_DELETE_PATHS[path];
+  const required = VENDOR_WO_WRITE_PATHS.includes(path), optional = VENDOR_WO_OPTIONAL_PATHS.includes(path);
+  if (!delRule && !required && !optional) return null;
+  const sid = String(vendorId || '');
+  const b = (body && typeof body === 'object') ? body : null;
+  if (!sid || !b) return await vendorWriteDeny(env, path, sid, 403, 'Forbidden', 'no vendor id or no body');
+  if (delRule) {
+    const id = String(b.id == null ? '' : b.id).trim();
+    if (!id) return await vendorWriteDeny(env, path, sid, 400, 'id required', 'no row id');
+    const row = (await fetchTab(env, delRule.tab)).find(r => String(r.ID) === id);
+    if (!row || String(row.Role || '') !== 'vendor' || String(row[delRule.by] || '') !== sid) {
+      return await vendorWriteDeny(env, path, sid, 403, `This ${delRule.what} is not yours, so it was not removed. / Este registro no es suyo, así que no se eliminó.`, `${delRule.tab} id=${id.slice(0, 40)} ${row ? 'belongs to ' + String(row.Role || '?') + ':' + String(row[delRule.by] || '?').slice(0, 40) : 'not found'}`);
+    }
+    return null;
+  }
+  const woId = String(b.wo_id || b.WO_ID || b.wo || '').trim();
+  if (!woId) {
+    if (required) return await vendorWriteDeny(env, path, sid, 400, 'wo_id required', 'no work order named');
+    return null;                                              // an upload with no job (bill-with-no-job photos): nothing of anyone else's is touched
+  }
+  if (optional && woId === 'VENDOR-' + sid) return null;      // the vendor's own onboarding documents
+  if (!vendorOwnsWO(findWO(await fetchTab(env, 'Work_Orders'), woId), sid)) return await vendorWriteDeny(env, path, sid, 403, VENDOR_NOT_YOURS_MSG, `wo=${woId.slice(0, 40)}`);
+  // The identity is the session's, never the client's: no bill "from" another vendor, no status change "as admin".
+  if (b.Vendor_ID !== undefined && b.Vendor_ID !== null && b.Vendor_ID !== '' && String(b.Vendor_ID) !== sid) return await vendorWriteDeny(env, path, sid, 403, 'Forbidden', `sent Vendor_ID=${String(b.Vendor_ID).slice(0, 40)}`);
+  if (path === '/vendor-bill/add') { b.Vendor_ID = sid; if (String(b.Entered_By || '').toLowerCase() === 'hub') delete b.Entered_By; }   // 'hub' is how the Hub marks its own bills (it skips the vendor checklist gate); a vendor session cannot claim it
+  if (path === '/estimate' || path === '/status' || path === '/schedule') b.vendor_id = sid;
+  if (path === '/status' || path === '/schedule' || path === '/wo/checklist') b.updated_by_role = 'vendor';
+  if (path === '/time-entry/add') { b.role = 'vendor'; b.entered_by_id = sid; }
+  if (path === '/receipt/add') { b.role = 'vendor'; b.added_by_id = sid; }
   return null;
 }
 
