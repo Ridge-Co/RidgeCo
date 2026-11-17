@@ -9422,6 +9422,51 @@ function refreshWOStatusBadge(woId, prevStatus) {
 
 var _hubBillSaving = {};
 var _hubBillPrevStatus = {};
+var _hubBillGate = {};
+
+// What a bill still needs before it can be saved (Brett, Nov 17 2026). Rules live in vendor-job-order.js so the portal and the Hub agree.
+// Photos are read from the job's attachments; if they cannot be read the check passes rather than block a real bill on a network blip.
+function hubBillNeeds(k, woId, receiptItems, cb) {
+  var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); }) || {};
+  var done = (typeof WOStatus !== 'undefined') ? WOStatus.inSet('DONE_THROUGH_PAID', wo.Status || '') : true;
+  var desc = (document.getElementById('hb-invdesc-' + k) || {}).value || '';
+  var finish = function(after, hasReceiptFile) {
+    var receipts = receiptItems.map(function(r, i) { return { n: i + 1, amount: r.amount, pay: r.pay, hasImage: hasReceiptFile }; });
+    cb(JobOrder.missingForBill({ jobDone: done, afterPhotos: after, description: desc, receipts: receipts }));
+  };
+  if (typeof JobOrder === 'undefined') { cb([]); return; }
+  api('GET', '/attachments?wo_id=' + woId).then(function(items) {
+    if (!Array.isArray(items)) { finish(null, true); return; }
+    var live = items.filter(function(f) { return f.Active !== 'FALSE'; });
+    var count = function(t) { return live.filter(function(f) { return String(f.File_Type || '').toLowerCase() === t; }).length; };
+    finish(count('after'), count('receipt') > 0);
+  }).catch(function() { finish(null, true); });
+}
+
+function hubBillShowNeeds(k, woId, missing) {
+  var msg = document.getElementById('hb-msg-' + k);
+  if (!msg) return;
+  var line = function(m) {
+    if (m.key === 'complete') return 'Mark the job Complete first. A bill can only be added after the work is done.';
+    if (m.key === 'after') return 'Add at least 1 AFTER photo of the finished work.';
+    if (m.key === 'desc') return 'Write what was done in the invoice description (at least ' + JobOrder.MIN_DESC + ' characters).';
+    return 'Attach the receipt picture for receipt #' + m.n + ' (needed to pay it back).';
+  };
+  var needsComplete = missing.some(function(m) { return m.key === 'complete'; });
+  msg.innerHTML = '<div style="background:#fdecea;border:2px solid #b42318;border-radius:6px;padding:10px 12px;color:#b42318">' +
+    '<div style="font-weight:bold;font-size:13px;margin-bottom:6px">This bill cannot be saved yet. Still needed:</div>' +
+    '<ul style="margin:0 0 0 18px;padding:0;font-weight:bold;font-size:12.5px">' + missing.map(function(m) { return '<li>' + esc(line(m)) + '</li>'; }).join('') + '</ul>' +
+    (needsComplete ? '<button type="button" class="btn small" style="margin-top:8px" onclick="hubBillMarkComplete(\'' + k + '\',\'' + esc(String(woId)) + '\')">Mark complete now</button>' : '') + '</div>';
+}
+
+function hubBillMarkComplete(k, woId) {
+  api('POST', '/status', { wo_id: woId, status: 'Complete', updated_by: 'Admin', updated_by_role: 'admin' }).then(function(res) {
+    if (res && (res.success || res.id)) {
+      toast('Marked complete. Check the list, then save the bill.', 'success');
+      loadAll().then(function() { hubBillSubmit(k, woId); });
+    } else toast('Error: ' + ((res && res.error) || 'unknown'), 'error');
+  });
+}
 
 function hubBillSubmit(k, woId) {
   if (_hubBillSaving[k]) return;                       // double-tap guard, same as the portal
