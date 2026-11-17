@@ -38415,7 +38415,7 @@ async function qbSendCombinedInvoice(env, ctx) {
         try {
           const cg = await qbApi(env, `customer/${encodeURIComponent(ownerQbId)}?minorversion=73`, 'GET', null, token);
           billEmail = (cg && cg.Customer && cg.Customer.PrimaryEmailAddr && cg.Customer.PrimaryEmailAddr.Address) || '';
-        } catch (e) {}
+        } catch (e) { await softFail(env, 'qbSendCombinedInvoice:sendTo', e, { severity: 'P1', ref: String(leadIr.ID || ''), source: 'qbo', context: 'the invoice posted but the customer contact could not be read from QuickBooks, so no send-to was saved' }); }
       }
     }
     const emailOk = billEmail.length <= 100 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(billEmail);
