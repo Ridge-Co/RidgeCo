@@ -15131,7 +15131,7 @@ async function addEstimateVersion(env, body) {
       overMaxReason = String(body.over_max_reason || '').trim().slice(0, 1000);
       if (overMaxReason.length < 5) {
         let _ml = String(body.lang || '').toLowerCase() === 'es' ? 'es' : 'en';
-        try { const _mv = body.vendor_id ? (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(body.vendor_id)) : null; if (vendorWantsSpanish(_mv)) _ml = 'es'; } catch (_) {}
+        try { const _mv = body.vendor_id ? (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(body.vendor_id)) : null; if (vendorWantsSpanish(_mv)) _ml = 'es'; } catch (e) { await softFail(env, 'addEstimateVersion:langLookup', e, { severity: 'P2', ref: String(body.vendor_id || ''), source: 'read', context: 'the vendor language could not be read, so the over-max message may be in English' }); }
         return json({ error: _ml === 'es' ? 'Este presupuesto supera el precio máximo de este trabajo. Escriba la razón de la diferencia para poder enviarlo.' : 'This estimate is over the max price for this job. Add the reason for the difference to send it.', code: 'over_max_reason_needed', max: _mx, subtotal: +subtotal.toFixed(2), lang: _ml }, 409);
       }
       overMaxReasonEn = overMaxReason;
