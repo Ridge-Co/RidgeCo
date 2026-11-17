@@ -26342,7 +26342,7 @@ async function arReportSend(env, body) {
   // report content and link are still the authentic owner's data — nothing is faked.
   const testEmail = typeof body.test_email === 'string' ? body.test_email.trim() : '';
   const { groups } = await arReportRollup(env, {});
-  const results = [];
+  const results = [], auditReq = {};   // Phase 2: one audit-log report per request, not one per owner
   for (const ownerId of ids) {
     const group = groups.find(g => String(g.owner_id) === ownerId);
     if (!group) { results.push({ owner_id: ownerId, sent: false, reason: 'no open items found' }); continue; }
