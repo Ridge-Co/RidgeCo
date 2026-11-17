@@ -31616,7 +31616,7 @@ const PROPERTY_SOURCE_FIELDS = ['Source_Name', 'Source_Type', 'Source_Phone', 'S
 async function propertyUpdate(env, body) {
   const fields = (body && body.fields) || {};
   if (PROPERTY_SOURCE_FIELDS.some(f => fields[f] !== undefined)) {
-    try { await ensureColumns(env, 'Properties', PROPERTY_SOURCE_FIELDS); } catch (_) {}
+    try { await ensureColumns(env, 'Properties', PROPERTY_SOURCE_FIELDS); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   }
   if (fields.Commercial_Subtype !== undefined) {
     try { await ensureColumns(env, 'Properties', ['Commercial_Subtype']); } catch (_) {}
