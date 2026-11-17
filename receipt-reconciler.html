@@ -1621,12 +1621,13 @@ async function submitReassign(id, btn){
   const store = document.getElementById(idAttr+'-ra-store').value.trim();
   const date = document.getElementById(idAttr+'-ra-date').value.trim();
   const description = document.getElementById(idAttr+'-ra-desc').value.trim();
-  if (!confirm('Void the original BMore/Ridge Co expense and repost it '+(wo_id?('to WO '+wo_id):'to that property, no work order')+'? This only works if it hasn\'t been emailed to QuickBooks yet.')) return;
+  if (!confirm('Void the original BMore/Ridge Co expense and repost it '+(wo_id?('to WO '+wo_id):'to that property, no work order')+'? If it was already emailed to QuickBooks, you will be shown what to delete there by hand.')) return;
   if (btn) btn.disabled = true;
   statusEl.innerHTML = '<span class="info">Reassigning…</span>';
   try {
     const res = await post('/receipt-recon/reassign', { id, wo_id, property_id, amount, store, date, description });
     if (res.error) throw new Error(res.error);
+    if (res.qb_delete_needed) qbbShowDeleteNeeded(res.qb_delete_needed);
     statusEl.innerHTML = '<span class="ok">✓ Reassigned to '+esc(wo_id||('Property '+property_id))+'.</span>';
     finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
