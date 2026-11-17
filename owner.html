@@ -708,8 +708,10 @@ function switchTab(tab) {
   document.getElementById('panelSubmit').style.display = tab==='submit' ? '' : 'none';
   document.getElementById('panelNotify').style.display = tab==='notify' ? '' : 'none';
   document.getElementById('panelTenants').style.display = tab==='tenants' ? '' : 'none';
+  document.getElementById('panelApprovals').style.display = tab==='approvals' ? '' : 'none';
   if (tab==='notify') loadNotifyPrefs();
   if (tab==='tenants') openTenantsTab();
+  if (tab==='approvals') oaLoad(false);
 }
 
 var tenantRosterPanel = null;
