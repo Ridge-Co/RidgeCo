@@ -63,7 +63,7 @@ function world(nFiles, cfg = {}, dateFor = () => '2026-09-10') {
   };
   const names = Object.keys(deps);
   const fn = new Function(...names, aiCreditGuardPrelude() + `return (${extractFn('receiptReconScan')});`)(...names.map(n => deps[n]));
-  return { scan: (b) => fn({}, b), queue, get downloads() { return downloads; } };
+  return { scan: (b) => fn({}, b), queue, reports, get downloads() { return downloads; } };
 }
 
 {
