@@ -3463,7 +3463,7 @@ async function addReceipt(env, body) {
     WO_ID: wo_id || '', Property_ID: property_id || '', Amount: amt.toFixed(2), Description: description||'', Store: store||'',
     Date: date||new Date().toISOString().split('T')[0], Added_By: added_by||'', Added_By_ID: String(added_by_id||''),
     Role: role||'hub', Category: category || (wo_id ? 'billable' : 'company'), Payment_Source: paymentSource,
-    Non_Billable: non_billable ? 'TRUE' : '', Receipt_Number: String(receipt_number || '').trim(),
+    Non_Billable: non_billable ? 'TRUE' : '', Non_Billable_Reason: non_billable ? String(non_billable_reason || '') : '', Receipt_Number: String(receipt_number || '').trim(),
     Source_File_ID: source_file_id || '', Source_File_URL: source_file_url || '',
     QB_Email_Sent: 'FALSE', QB_Email_Sent_Date: '',
     Created_Date: new Date().toISOString(), Active: 'TRUE',
