@@ -16717,11 +16717,15 @@ function quickStatusChange(woId, newStatus) {
   // On Hold requires a reason server-side (Sep 14 2026) — prompt here so the person gets a
   // clear "why" ask instead of a bare 400 back from the API after the fact.
   if (newStatus === 'On Hold') {
-    var reason = prompt('Reason for putting this work order on hold:');
-    if (reason === null) return; // cancelled — don't change status at all
-    reason = reason.trim();
-    if (!reason) { toast('A reason is required to put a work order on hold','error'); return; }
-    payload.hold_reason = reason;
+    // Nov 17 2026: reason from the shared list + expected-back date, both required (same picker as the vendor portal).
+    hubHoldDialog(1, function(text) {
+      payload.hold_reason = text;
+      api('POST','/status',payload).then(function(res){
+        if (res.success||res.id) { toast('Status → On Hold','success'); loadAll().then(function(){ openWODetail(woId); }); }
+        else toast('Error: '+(res.error||'unknown'),'error');
+      });
+    });
+    return;
   }
   api('POST','/status',payload)
     .then(function(res){
