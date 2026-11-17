@@ -42,7 +42,7 @@
   // Oct 21 2026: phones and browsers kill in-flight requests when a tab is backgrounded, the screen locks or the page navigates ("Load failed" on
   // Safari, "Failed to fetch" on Chrome). Those are not Hub failures. Remember when the page was last hidden so such an error can be recognised.
   var lastHiddenAt = 0;
-  function noteHidden() { try { if (document.visibilityState === 'hidden') lastHiddenAt = Date.now(); } catch (e) { /* no visibility API: the Hub check below still decides */ } }
+  function noteHidden() { try { if (document.visibilityState === 'hidden') lastHiddenAt = Date.now(); } catch (e) { /* no visibility API: the Hub check below still decides */ } } // silent-ok: no visibility API, the Hub check still decides
   try { document.addEventListener('visibilitychange', noteHidden); window.addEventListener('pageshow', function () { unloading = false; }); noteHidden(); } catch (e) { consoleErr('[failure-reporter] visibility watch failed', e); }
   function recentlyHidden() { try { return document.visibilityState === 'hidden' || (lastHiddenAt && Date.now() - lastHiddenAt < 15000); } catch (e) { return false; } }
 
