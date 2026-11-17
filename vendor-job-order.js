@@ -23,7 +23,7 @@ var JobOrder = (function () {
     { code: 'approval', en: 'Waiting for approval from Ridge Co or the owner' },
     { code: 'other',    en: 'Other reason (explain below)' }
   ];
-  var MIN_DESC = 10;   // characters of "what did you do" (after trimming); stops a lone dash or "ok"
+  var MIN_DESC = 10;   // characters of work description (after trimming); stops a lone dash or "ok"
 
   function pad(n) { return (n < 10 ? '0' : '') + n; }
   function iso(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
