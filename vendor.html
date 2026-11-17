@@ -4529,7 +4529,7 @@ function isVendorBusy(){
       }
       if (tag !== pageEtagKnown){
         pageEtagKnown = tag;
-        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){}
+        try { localStorage.setItem(PAGE_ETAG_KEY, tag); } catch(e){} // silent-ok: storage blocked or full, the value is just not remembered
         isVendorBusy() ? banner() : reloadFresh();
       }
     }).catch(function(){});
