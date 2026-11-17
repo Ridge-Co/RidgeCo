@@ -11712,6 +11712,7 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
   // Owners see WHO is on the job (name+trade) but not a direct line to the vendor — keeps
   // the vendor relationship mediated through Brett rather than owners going around him.
   if (opts.ownerView)  { delete base.Invoice_ID; base.Display_Status = base.Status === 'Pending Invoice' ? 'Complete' : base.Status; base.vendor_phone = ''; }
+  if (opts.tenantView || opts.ownerView || opts.vendorView || opts.sharedView || opts.viewingVendorId) { for (const k of Object.keys(base)) if (k.startsWith('Triage_')) delete base[k]; }   // queue #142: triage is Brett's, never tenant / owner / vendor facing
   return base;
 }
 
