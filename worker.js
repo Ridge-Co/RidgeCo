@@ -13231,7 +13231,7 @@ async function addVendorBill(env, body) {
       // A re-submit didn't create a second bill, but the hours it was built from still
       // belong to the bill that DID get created. Link them to that one rather than leaving
       // them loose and billable a second time.
-      try { await linkTimeEntriesToBill(env, body.time_entry_ids, String(dupe.ID || ''), dupeKey); } catch (e) {}
+      try { await linkTimeEntriesToBill(env, body.time_entry_ids, String(dupe.ID || ''), dupeKey); } catch (e) { await softFail(env, 'addVendorBill:linkHoursDupe', e, { severity: 'P1', ref: String(dupe.ID || ''), source: 'write', context: 'a re-submitted bill was recognised but its hours were not linked to it, so they stay billable a second time' }); }
       return json({ success: true, duplicate: true, id: String(dupe.ID || '') });
     }
   }
