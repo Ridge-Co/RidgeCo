@@ -10728,7 +10728,7 @@ async function woCombine(env, body) {
         await smsGatedSend(env, { wo_id: survivorId, message_type: 'owner_wo_combined_ref', recipient_type: 'owner', owner, property, message_body: msg });
       }
     }
-  } catch (e) { /* non-fatal — combine already succeeded */ }
+  } catch (e) { await softFail(env, 'woCombine:ownerTexts', e, { severity: 'P0', ref: String(survivorId), source: 'send', context: 'the combine worked but the owner text did not go out' }); }   // the combine itself already succeeded, so this stays non-fatal
 
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_combine', Skill_Or_Endpoint: '/wo/combine', Success: 'TRUE', Notes: `survivor=${survivorId} combined=${combinedIds.join(',')}` }); } catch (_) {} // silent-ok: telemetry is best effort, a logging miss must not fail the request
 
