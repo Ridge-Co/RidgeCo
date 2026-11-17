@@ -26369,7 +26369,7 @@ async function arReportSend(env, body) {
       try {
         await ensureTab(env, AR_REPORT_LOG_TAB, AR_REPORT_LOG_COLS);
         await addRow(env, AR_REPORT_LOG_TAB, { Timestamp: new Date().toISOString(), Owner_ID: ownerId, Owner_Name: group.owner_name, Email: sendTo || '', Total_Open: group.total_open.toFixed(2), Invoice_Count: String(group.invoices.length), Link: link, Result: 'FAILED: ' + reason, Trigger: testEmail ? 'manual-test' : (body.trigger || 'manual') });
-      } catch (_) {}
+      } catch (_) { /* silent-ok: the failed send is already in results for the page; this audit row is best effort */ }
     }
   }
   return json({ ok: true, preview, sent: results.filter(r => r.sent).length, results });
