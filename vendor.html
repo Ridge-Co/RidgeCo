@@ -1360,6 +1360,7 @@ function syncPaidQuickButtons() {
   Array.prototype.forEach.call(bar.querySelectorAll('button'), function(b) { b.className = (+b.getAttribute('data-days') === paidRange) ? 'active' : ''; });
 }
 function loadWOsForCurrentTab() {
+  if (window.VendorHome && VendorHome.on()) return VendorHome.listFor(currentTab);   // new layout: one load feeds To do / Waiting / Paid
   if (currentTab === 'paid') return fetchPaidWOs();
   if (currentTab === 'due') return fetchDueWOs();
   if (currentTab === 'invoiced') return fetchInvoicedWOs();
