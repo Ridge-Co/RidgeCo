@@ -4516,11 +4516,11 @@ async function listReceiptReconQueue(env, url) {
   return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (status === 'all' || (r.Status || 'pending') === status))
     .map(r => {
       const dupSignals = (r.Status || 'pending') === 'pending' ? receiptDupSignals({ total: r.Total, date: r.Receipt_Date, store: r.Vendor, invoice: r.Invoice_Number }, receiptsForDup, rows, { selfQueueId: r.ID }).slice(0, 5) : [];
-      let suggestion = null; try { suggestion = JSON.parse(r.Suggestion || 'null'); } catch (e) {}
-      let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) {}
-      let items_summary = []; try { items_summary = JSON.parse(r.Items_Summary || '[]'); } catch (e) {}
-      let duplicate_evidence = []; try { duplicate_evidence = JSON.parse(r.Duplicate_Evidence_JSON || '[]'); } catch (e) {}
-      let rescan_matches = []; try { rescan_matches = JSON.parse(r.Rescan_Match_JSON || '[]'); } catch (e) {}
+      let suggestion = parseJsonCell(r.Suggestion, null, { env, where: 'listReceiptReconQueue:Suggestion', ref: String(r.ID || ''), severity: 'P2' });
+      let items = parseJsonCell(r.Items, [], { env, where: 'listReceiptReconQueue:Items', ref: String(r.ID || ''), severity: 'P2' });
+      let items_summary = parseJsonCell(r.Items_Summary, [], { env, where: 'listReceiptReconQueue:Items_Summary', ref: String(r.ID || ''), severity: 'P2' });
+      let duplicate_evidence = parseJsonCell(r.Duplicate_Evidence_JSON, [], { env, where: 'listReceiptReconQueue:Duplicate_Evidence_JSON', ref: String(r.ID || ''), severity: 'P2' });
+      let rescan_matches = parseJsonCell(r.Rescan_Match_JSON, [], { env, where: 'listReceiptReconQueue:Rescan_Match_JSON', ref: String(r.ID || ''), severity: 'P2' });
       // Sep 23 2026 build: Brett's manual "mark as refund" override for a row the automatic
       // refund detection (receiptExtract's refund_signal_text / negative-total check) missed.
       // Only ever flips the category the frontend reads to decide which card to render — never
@@ -6457,7 +6457,7 @@ async function scopeProposal(env, body) {
   const materialsPricing = scopeParseMaterialsPricing(s);
   const priced = scopeItemsPricing(items, _pc, materialsPricing); // markup applied here, server-side, per item
   const maxUpfront = await scopeMaxUpfrontPct(env);
-  const rawSchedule = scopeParsePaymentSchedule(s);
+  const rawSchedule = scopeParsePaymentSchedule(s, env);
   const scheduleCheck = scopeValidatePaymentSchedule(rawSchedule, maxUpfront);
   // rawSchedule was already validated when it was saved (scopeSetPaymentSchedule) or is the
   // built-in default, so scheduleCheck.error should never fire here — but if a schedule was
@@ -6834,7 +6834,7 @@ async function scopeProposalView(env, url, ua, ctx) {
   const photos = await scopeProposalPhotos(env, s);
   const subtotal = +(items.reduce((sum, it) => { if (it.optional) return sum; const sel = (it.variants || []).find(v => v.key === it.selected_key) || it.variants[0]; return sum + (sel ? sel.price : 0); }, 0)).toFixed(2);
   const deposit = +(subtotal / 2).toFixed(2);
-  const rawSchedule = scopeParsePaymentSchedule(s);
+  const rawSchedule = scopeParsePaymentSchedule(s, env);
   const scheduleValidation = scopeValidatePaymentSchedule(rawSchedule, await scopeMaxUpfrontPct(env));
   const schedule = scopeComputeMilestoneAmounts(scheduleValidation.schedule || scopeDefaultPaymentSchedule(), subtotal, 0)
     .map(m => ({ label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: m.customer_amount, calc_mode: m.calc_mode, flat_customer_amount: m.flat_customer_amount })); // never vendor_amount — customer-facing boundary
@@ -7013,8 +7013,8 @@ function scopeVendorPayableSchedule(milestones) {
   if (carry > 0 && out.length) out[out.length - 1].vendor_payable = +(out[out.length - 1].vendor_payable + carry).toFixed(2);
   return out;
 }
-function scopeParsePaymentSchedule(s) {
-  try { const arr = JSON.parse((s && s.Payment_Schedule_JSON) || 'null'); if (Array.isArray(arr) && arr.length) return arr; } catch (_) {}
+function scopeParsePaymentSchedule(s, env) {
+  { const arr = parseJsonCell(s && s.Payment_Schedule_JSON, null, { env, where: 'scopeParsePaymentSchedule', ref: String((s && s.ID) || ''), severity: 'P1' }); if (Array.isArray(arr) && arr.length) return arr; }   // an unreadable schedule falls back to the default split and is reported
   return scopeDefaultPaymentSchedule();
 }
 
@@ -7057,7 +7057,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   const dup = existing.find(r => r.Scope_ID === String(s.ID) && String(r.Active || '').toUpperCase() !== 'FALSE');
   if (dup) return json({ ok: true, id: dup.ID, duplicate: true, subtotal: +dup.Subtotal || 0, deposit: +dup.Deposit_Amount || 0 });
 
-  let items = []; try { items = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
+  let items = []; try { items = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (e) { await softFail(env, 'scopeProposalSign:items', e, { severity: 'P1', ref: String(s.ID || ''), source: 'parse', context: 'the proposal items are unreadable, so signing was refused as not ready' }); }
   if (!items.length) return json({ error: 'Proposal not ready to sign yet.' }, 400);
   const selections = (body && body.selections && typeof body.selections === 'object') ? body.selections : {};
   let subtotal = 0;
@@ -7105,7 +7105,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   if (items.some(it => it.optional)) {
     // A schedule that can't absorb the signed total (all rows flat, or fixed $ exceed the total) must
     // never be signed — refuse BEFORE any write, tell Brett (telemetry), show the customer a plain message.
-    const sv = scopeValidatePaymentSchedule(scopeParsePaymentSchedule(s), await scopeMaxUpfrontPct(env));
+    const sv = scopeValidatePaymentSchedule(scopeParsePaymentSchedule(s, env), await scopeMaxUpfrontPct(env));
     const addonProblem = scopeScheduleAddonProblem(sv.schedule || scopeDefaultPaymentSchedule(), subtotal);
     if (addonProblem) {
       let telemetryError = '';
@@ -7115,7 +7115,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   }
   const now = new Date();
   if (rcMaterialsCost > 0 || rcMaterialsPrice > 0) {
-    try { await ensureColumns(env, 'Scope_Signatures', ['RC_Materials_Cost', 'RC_Materials_Price']); } catch (_) { /* logged centrally by ensureColumns */ }
+    try { await ensureColumns(env, 'Scope_Signatures', ['RC_Materials_Cost', 'RC_Materials_Price']); } catch (_) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
   }
   const sigResp = await addRow(env, 'Scope_Signatures', {
     RC_Materials_Cost: rcMaterialsCost ? String(rcMaterialsCost) : '', RC_Materials_Price: rcMaterialsPrice ? String(rcMaterialsPrice) : '',
@@ -7127,7 +7127,7 @@ async function scopeProposalSign(env, body, ip, ua) {
     IP: String(ip || '').slice(0, 60), User_Agent: String(ua || '').slice(0, 300),
     Status: 'Signed', Created_Date: now.toISOString(), Active: 'TRUE',
   });
-  const sigJson = await sigResp.json().catch(() => ({}));
+  const sigJson = await sigResp.json().catch(async (e) => { await softFail(env, 'scopeProposalSign:sigAnswer', e, { severity: 'P1', ref: String(s.ID || ''), source: 'parse', context: 'the signature saved but its id could not be read back, so milestone rows are not linked to it' }); return {}; });
   const signatureId = sigJson.id;
 
   // Expand the scope's payment schedule (whatever Brett configured on scope-creator.html, or the
@@ -7140,12 +7140,12 @@ async function scopeProposalSign(env, body, ip, ua) {
   if (signatureId) {
     try {
       const maxUpfront = await scopeMaxUpfrontPct(env);
-      const rawSchedule = scopeParsePaymentSchedule(s);
+      const rawSchedule = scopeParsePaymentSchedule(s, env);
       const { schedule } = scopeValidatePaymentSchedule(rawSchedule, maxUpfront);
       const clean = schedule || scopeDefaultPaymentSchedule();
       const amounts = scopeComputeMilestoneAmounts(clean, subtotal, vendorCostTotal);
       await paymentMilestonesTab(env);
-      try { await ensureColumns(env, 'Payment_Milestones', ['Vendor_Paid_At_This_Milestone', 'Calc_Mode', 'Flat_Customer_Amount']); } catch (_) {}
+      try { await ensureColumns(env, 'Payment_Milestones', ['Vendor_Paid_At_This_Milestone', 'Calc_Mode', 'Flat_Customer_Amount']); } catch (_) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
       for (let i = 0; i < amounts.length; i++) {
         const m = amounts[i];
         const mResp = await addRow(env, 'Payment_Milestones', {
@@ -7156,7 +7156,7 @@ async function scopeProposalSign(env, body, ip, ua) {
           Calc_Mode: m.calc_mode === 'flat' ? 'flat' : 'percent',
           Flat_Customer_Amount: (m.flat_customer_amount != null ? String(m.flat_customer_amount) : ''),
         });
-        const mJson = await mResp.json().catch(() => ({}));
+        const mJson = await mResp.json().catch(async (e) => { await softFail(env, 'scopeProposalSign:milestoneAnswer', e, { severity: 'P1', ref: String(s.ID || ''), source: 'parse', context: 'a payment milestone saved but its id could not be read back' }); return {}; });
         milestones.push(Object.assign({ id: mJson.id }, m));
       }
     } catch (e) {
@@ -7175,7 +7175,7 @@ async function scopeProposalSign(env, body, ip, ua) {
     const job = s.WO_ID ? ('work order ' + s.WO_ID) : ('proposal #' + s.ID);
     await sendTemplatedSms(env, { type: 'admin_proposal_signed', kind: 'admin', wo_id: s.WO_ID || '', unit_id: s.Unit_ID || '', property: c.property, tokens: { Signer: signer, Job: job, Address: c.address } });
     if (c.vendor && c.vendor.Phone) await sendTemplatedSms(env, { type: 'vendor_proposal_signed', kind: 'vendor', vendor: c.vendor, wo_id: s.WO_ID || '', unit_id: s.Unit_ID || '', property: c.property, tokens: { FirstName: vendorFirstName(c.vendor), Job: job } });
-  } catch (_) {}
+  } catch (e) { await softFail(env, 'scopeProposalSign:texts', e, { severity: 'P0', ref: String(s.ID || ''), source: 'sms', context: 'the proposal was signed but the admin or vendor text was not sent' }); }
   return json({ ok: true, subtotal, deposit, schedule: milestones });
 }
 
@@ -7234,24 +7234,24 @@ function scopeSigFinalBillGap(row, inHouseFallback) {
 async function scopeProposalSignedList(env, url) {
   await scopeSigTab(env);
   const rows = await fetchTab(env, 'Scope_Signatures');
-  const scopes = await fetchTab(env, 'Scopes').catch(() => []);
-  const props = await fetchTab(env, 'Properties').catch(() => []);
+  const scopes = (await fetchTabSoft(env, 'Scopes', { where: 'scopeProposalSignedList:Scopes', severity: 'P1' })).rows;
+  const props = (await fetchTabSoft(env, 'Properties', { where: 'scopeProposalSignedList:Properties', severity: 'P2' })).rows;
   // Vendors is read only to re-derive the in-house case for legacy rows (see scopeSigBillGap).
-  const vendors = await fetchTab(env, 'Vendors').catch(() => []);
+  const vendors = (await fetchTabSoft(env, 'Vendors', { where: 'scopeProposalSignedList:Vendors', severity: 'P2' })).rows;
   // Payment_Milestones (Sep 14 2026): rows signed under the new milestone system carry these;
   // rows signed before it shipped have none and keep rendering the old deposit/final UI
   // (signed-proposals.html branches on milestones.length).
   let allMilestones = [];
-  try { await paymentMilestonesTab(env); allMilestones = await fetchTab(env, 'Payment_Milestones'); } catch (_) {}
+  try { await paymentMilestonesTab(env); allMilestones = await fetchTab(env, 'Payment_Milestones'); } catch (e) { await softFail(env, 'scopeProposalSignedList:milestones', e, { severity: 'P1', ref: '', source: 'read', context: 'milestones could not be read, so signed proposals show the old deposit and final layout' }); }
   // Receipts on each signed scope's work order = the ACTUAL side of Ridge Co materials budget
   // vs actual (Sep 22 2026). null (not []) on a read failure so the page says "couldn't check"
   // instead of a confident $0.
   let allReceipts = null;
-  try { allReceipts = await fetchTab(env, 'Receipts'); } catch (_) {}
+  try { allReceipts = await fetchTab(env, 'Receipts'); } catch (e) { await softFail(env, 'scopeProposalSignedList:receipts', e, { severity: 'P2', ref: '', source: 'read', context: 'receipts could not be read, so the page says it could not check' }); }
   const out = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').map(r => {
     const sc = scopes.find(x => x.ID === r.Scope_ID) || {};
     const p = props.find(x => x.ID === sc.Property_ID) || {};
-    let sel = {}; try { sel = JSON.parse(r.Selections_JSON || '{}'); } catch (_) {}
+    let sel = parseJsonCell(r.Selections_JSON, {}, { env, where: 'scopeProposalSignedList:selections', ref: String(r.ID || ''), severity: 'P2' });
     const subtotal = +r.Subtotal || 0, deposit = +r.Deposit_Amount || 0, vendorCostTotal = +r.Vendor_Cost_Total || 0;
     // The Hub's "Bill vendor (deposit share)" figure must be the amount book() will ACTUALLY
     // bill — Vendor_Cost_Total × deposit/subtotal — not the vendor's full job cost. Showing the
@@ -13713,7 +13713,7 @@ async function moveVendorBillToNewWO(env, body) {
   const movedAttachmentIds = [];
   for (const a of moving) {
     try { await updateRow(env, 'Attachments', a.ID, { WO_ID: newWoId }); movedAttachmentIds.push(a.ID); }
-    catch (e) { /* best-effort — report what didn't move below rather than losing the whole apply over one row */ }
+    catch (e) { await softFail(env, 'moveVendorBillToNewWO:attachment', e, { severity: 'P1', ref: String(a.ID || ""), source: 'write', context: 'a photo did not move to the new work order' }); }
   }
   const failedAttachmentIds = moving.map(a => a.ID).filter(id => !movedAttachmentIds.includes(id));
 
@@ -13727,7 +13727,7 @@ async function moveVendorBillToNewWO(env, body) {
       notes: `Created by splitting bill ${billId} + ${movedAttachmentIds.length} photo(s) off ${oldWoId}.${reason ? ' Reason: ' + reason : ''}` },
   ]);
 
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'bill_split', Skill_Or_Endpoint: '/vendor-bill/move-to-new-wo', Success: 'TRUE', Notes: `old_wo=${oldWoId} new_wo=${newWoId} bill=${billId} attachments=${movedAttachmentIds.length}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'bill_split', Skill_Or_Endpoint: '/vendor-bill/move-to-new-wo', Success: 'TRUE', Notes: `old_wo=${oldWoId} new_wo=${newWoId} bill=${billId} attachments=${movedAttachmentIds.length}` }); } catch (_) { /* silent-ok: the bill split already succeeded and this row is only a log */ }
 
   return json({
     success: true, applied: true,
@@ -14570,7 +14570,7 @@ async function processDepositPaidSweep(env) {
     scopes = (await fetchTab(env, 'Scopes')).filter(x => String(x.Approval_Stage || '') === 'Pre-approved' && x.Active !== 'FALSE');
     out.checked = scopes.length;
     if (!scopes.length) { out.ok = !out.errors.length; return out; }
-    try { await paymentMilestonesTab(env); } catch (_) {}
+    try { await paymentMilestonesTab(env); } catch (e) { await softFail(env, 'processDepositPaidSweep:milestonesTab', e, { severity: 'P1', ref: '', source: 'write', context: 'the milestones tab could not be prepared, so deposits may not be detected this run' }); }
     tabs = { sigs: await fetchTab(env, 'Scope_Signatures'), milestones: await fetchTab(env, 'Payment_Milestones') };
   } catch (e) {
     // Oct 29 2026 (queue 222): Google's shared per-minute READ quota stopped the sweep's reads. Nothing was checked, nothing moved; the next run (the scheduler, or
@@ -27853,7 +27853,7 @@ async function receiptIntake(env, body) {
   else return json({ error: 'need file_id, file_url, or image_b64' }, 400);
   const ex = await receiptExtract(env, bytes, mime);
   const cfg = await fetchConfig(env);
-  let defaults = {}; try { defaults = JSON.parse(cfg.receipt_vendor_defaults || '{}'); } catch (e) {}
+  let defaults = {}; try { defaults = JSON.parse(cfg.receipt_vendor_defaults || '{}'); } catch (e) { await softFail(env, 'receiptIntake:vendorDefaults', e, { severity: 'P2', ref: '', source: 'parse', context: 'the saved vendor defaults are unreadable, so none were applied' }); }
   const vkey = String(ex.vendor || '').toLowerCase().trim();
   let category = ex.suggested_category || '';
   for (const k in defaults) { if (k && vkey && vkey.includes(k)) { category = defaults[k]; break; } }
@@ -27867,7 +27867,7 @@ async function receiptIntake(env, body) {
     Confidence: String(ex.confidence ?? ''), Status: 'pending', Filed_File_URL: '', Raw_Extract: JSON.stringify(ex).slice(0, 900), Notes: '', Active: 'TRUE',
   };
   const appended = await addRow(env, 'Receipts_Queue', row);
-  let newId = ''; try { const j = await appended.json(); newId = j.id || ''; } catch (e) {}
+  let newId = ''; try { const j = await appended.json(); newId = j.id || ''; } catch (e) { await softFail(env, 'receiptIntake:newId', e, { severity: 'P1', ref: '', source: 'parse', context: 'the receipt was queued but its new id could not be read back' }); }
   return json({ ok: true, id: newId, queued: { ...row, ID: newId }, extract: ex });
 }
 
@@ -30730,7 +30730,7 @@ async function findRecentDuplicate(env, tab, signature, windowSeconds, match) {
       if (ts >= cutoff) return r;
     }
     return null;
-  } catch (e) { return null; }
+  } catch (e) { await softFail(env, 'findRecentDuplicate', e, { severity: 'P1', ref: String(tab || ''), source: 'read', context: 'the recent-duplicate check could not read the tab, so a duplicate may be created' }); return null; }
 }
 
 // Duplicate-guard for /property/add and /unit/add (Sep 24 2026, Brett's ask): both handlers
@@ -34742,7 +34742,7 @@ async function qbLookupExisting(env, kind, displayName, email, token) {
     // normal shape here. Choosing between those puts an invoice on the wrong ledger, so
     // strong is offered as a SUGGESTION on the mapping screen and nothing more.
     if (m && m.confidence === 'exact') return m.id;
-  } catch (e) { /* fall through to the direct query */ }
+  } catch (e) { /* silent-ok: falls through to the direct QuickBooks query below */ }
 
   try {
     const type = kind === 'vendor' ? 'Vendor' : 'Customer';
@@ -34750,7 +34750,7 @@ async function qbLookupExisting(env, kind, displayName, email, token) {
     const data = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
     const rows = (data && data.QueryResponse && data.QueryResponse[type]) || [];
     if (rows.length === 1 && rows[0].Id) return rows[0].Id;   // exactly one, or don't guess
-  } catch (e) { /* fall through to create */ }
+  } catch (e) { await softFail(env, 'qbLookupExisting:query', e, { severity: 'P1', ref: String(kind || ''), source: 'qbo', context: 'the QuickBooks lookup failed, so a new record may be created instead of reusing an existing one' }); }
 
   return null;
 }
@@ -34773,7 +34773,7 @@ async function qbFindOrCreateCustomer(env, owner, displayName, token) {
         // Stop rather than guess — the mapping screen is where this gets settled.
         throw new Error(`"${dn}" matches QuickBooks #${found}, but that customer is already linked to "${qbOwnerDisplayName(clash)}". Sort it out on the QB Mapping screen.`);
       }
-      try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: found }); } catch (e) {}
+      try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: found }); } catch (e) { await softFail(env, 'qbFindOrCreateCustomer:linkFound', e, { severity: 'P1', ref: String(owner.ID), source: 'write', context: 'the QuickBooks customer was found but the owner row was not linked to it' }); }
     }
     return found;
   }
@@ -34796,7 +34796,7 @@ async function qbFindOrCreateCustomer(env, owner, displayName, token) {
   const r = await qbApi(env, 'customer?minorversion=73', 'POST', payload, token);
   const id = r?.Customer?.Id || qbDupId(r);
   if (!id) throw new Error(qbFault(r) || 'could not create QB customer');
-  if (owner.ID) { try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: id }); } catch (e) {} }
+  if (owner.ID) { try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: id }); } catch (e) { await softFail(env, 'qbFindOrCreateCustomer:linkCreated', e, { severity: 'P1', ref: String(owner.ID), source: 'write', context: 'the QuickBooks customer was created but the owner row was not linked to it, so the next send may create another' }); } }
   return id;
 }
 
@@ -34848,7 +34848,7 @@ async function qbFindOrCreateVendor(env, vendor, displayName, token) {
       if (clash) {
         throw new Error(`"${dn}" matches QuickBooks #${found}, but that vendor is already linked to "${qbVendorDisplayName(clash)}". Sort it out on the QB Mapping screen.`);
       }
-      try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: found }); } catch (e) {}
+      try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: found }); } catch (e) { await softFail(env, 'qbFindOrCreateVendor:linkFound', e, { severity: 'P1', ref: String(vendor.ID), source: 'write', context: 'the QuickBooks vendor was found but the vendor row was not linked to it' }); }
     }
     // Push billing email/address/tax ID (Phase 1 onboarding, brief section 3b) onto a vendor
     // that already has a linked QuickBooks Vendor — a brand-new vendor gets these baked into
@@ -34868,7 +34868,7 @@ async function qbFindOrCreateVendor(env, vendor, displayName, token) {
   const r = await qbApi(env, 'vendor?minorversion=73', 'POST', payload, token);
   const id = r?.Vendor?.Id || qbDupId(r);
   if (!id) throw new Error(qbFault(r) || 'could not create QB vendor');
-  if (vendor.ID) { try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: id }); } catch (e) {} }
+  if (vendor.ID) { try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: id }); } catch (e) { await softFail(env, 'qbFindOrCreateVendor:linkCreated', e, { severity: 'P1', ref: String(vendor.ID), source: 'write', context: 'the QuickBooks vendor was created but the vendor row was not linked to it, so the next bill may create another' }); } }
   return id;
 }
 
@@ -35621,7 +35621,7 @@ async function qbInvoiceLineDuplicates(env, token, amount, candidates) {
           matches.push({ invoice_id: String(inv.Id), doc: inv.DocNumber || '', date: inv.TxnDate, amount: Number(line.Amount || 0), description: String(line.Description || '').slice(0, 120) });
         }
       }
-    } catch (e) { /* one bad invoice open must not kill the rest of this receipt's check */ }
+    } catch (e) { await softFail(env, 'qbInvoiceLineDuplicates:openInvoice', e, { severity: 'P2', ref: String(cand.Id || ""), source: 'qbo', context: 'one invoice could not be opened, so a duplicate on it may be missed' }); }
   }
   return matches;
 }
@@ -35633,7 +35633,7 @@ async function qbInvoiceLineDuplicates(env, token, amount, candidates) {
 // row (see receiptReconCheckDuplicatesBulk).
 async function receiptCheckDuplicatesOne(env, row, opts) {
   opts = opts || {};
-  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (_) {}
+  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) { await softFail(env, 'receiptCheckDuplicatesOne:suggestion', e, { severity: 'P2', ref: String(row.ID || ''), source: 'parse', context: 'the saved scanner suggestion is unreadable, so the duplicate check ran without it' }); }
   const amount = row.Total, date = row.Receipt_Date;
   const propertyId = (suggestion && suggestion.property && suggestion.property.id) || '';
   const evidence = [];
@@ -35647,7 +35647,7 @@ async function receiptCheckDuplicatesOne(env, row, opts) {
         reason: `Same amount ($${(+d.amount || 0).toFixed(2)}), date (${d.date}), and store already logged as a Receipts entry${d.wo_id ? ' on WO ' + d.wo_id : ''} at this property.`,
       });
     }
-  } catch (e) { /* best-effort — a Receipts read failure shouldn't block the QB checks below */ }
+  } catch (e) { await softFail(env, 'receiptCheckDuplicatesOne:receipts', e, { severity: 'P1', ref: String(row.ID || ''), source: 'read', context: 'the Receipts tab could not be read, so a duplicate of an existing receipt may be missed' }); }
 
   // Nov 17 2026 (brief 4c): the other Receipt_Recon_Queue rows, pending ones included (the check used to ignore the queue
   // entirely, which is why two scans of the same $43.23 Home Depot receipt read "no matching entries"). Same amount, date within
@@ -35713,7 +35713,7 @@ async function receiptReconCheckDuplicatesBulk(env, body) {
   await ensureColumns(env, 'Receipt_Recon_Queue', ['Duplicate_Evidence_JSON', 'Duplicate_Checked_Date']);
   let token = null, allInvoices = null;
   try { token = await qbAccessToken(env); allInvoices = await qbAllInvoicesRaw(env, token); }
-  catch (e) { /* per-row calls below fall back to fetching their own token/list on a miss */ }
+  catch (e) { await softFail(env, 'receiptReconCheckDuplicatesBulk:qbPrefetch', e, { severity: 'P2', ref: '', source: 'qbo', context: 'the QuickBooks invoice list could not be fetched up front; each row fetches its own' }); }
   const results = [];
   for (const id of ids) {
     const row = rows.find(r => String(r.ID) === String(id));
@@ -35896,7 +35896,7 @@ async function receiptDuplicateAuditBuildIndex(env, body) {
     if (offset === 0 && body.reset !== false) {
       // Fresh run — clear stale rows from a previous audit before repopulating, so a second run
       // never double-counts an invoice's lines against themselves.
-      try { await sheetsRequest(env, 'POST', '/values/QB_Invoice_Line_Cache!A2:Z100000:clear', {}); } catch (_) { /* best-effort — a failed clear just means old + new rows coexist until the next reset */ }
+      try { await sheetsRequest(env, 'POST', '/values/QB_Invoice_Line_Cache!A2:Z100000:clear', {}); } catch (e) { await softFail(env, 'receiptDuplicateAuditBuildIndex:clear', e, { severity: 'P2', ref: '', source: 'write', context: 'the old invoice-line cache could not be cleared, so old and new rows coexist' }); }
     }
     const batch = invoices.slice(offset, offset + limit);
     const newRows = [];
@@ -35906,7 +35906,7 @@ async function receiptDuplicateAuditBuildIndex(env, body) {
       try {
         const full = await qbApi(env, `invoice/${inv.Id}?minorversion=73`, 'GET', null, token);
         for (const l of qbInvoiceLineCacheRows(full && full.Invoice)) { newRows.push(l); lineCount++; }
-      } catch (e) { /* one bad invoice open must not kill the rest of this batch */ }
+      } catch (e) { await softFail(env, 'receiptDuplicateAuditBuildIndex:openInvoice', e, { severity: 'P2', ref: String(inv.Id || ""), source: 'qbo', context: 'one invoice could not be opened, so its lines are missing from the duplicate index' }); }
     }
     if (newRows.length) {
       const cached = new Date().toISOString();
@@ -35998,7 +35998,7 @@ async function receiptDuplicateAuditFlags(env, url) {
   const status = url && url.searchParams.get('status');
   const [rows, receipts] = await Promise.all([
     fetchTab(env, 'Receipt_Duplicate_Audit'),
-    fetchTab(env, 'Receipts').catch(() => []),
+    fetchTabSoft(env, 'Receipts', { where: 'receiptDuplicateAuditFlags:Receipts', severity: 'P2' }).then(r => r.rows),
   ]);
   let out = rows.filter(r => r.Active !== 'FALSE');
   if (status && status !== 'all') out = out.filter(r => (r.Status || 'pending') === status);
@@ -36010,7 +36010,7 @@ async function receiptDuplicateAuditFlags(env, url) {
       return {
         id: f.ID, receipt_id: f.Receipt_ID, wo_id: f.WO_ID, store: f.Store, receipt_date: f.Receipt_Date,
         amount: Number(f.Amount) || 0, match_count: Number(f.Match_Count) || 0,
-        matches: (() => { try { return JSON.parse(f.Matches_JSON || '[]'); } catch (_) { return []; } })(),
+        matches: parseJsonCell(f.Matches_JSON, [], { env, where: 'receiptDuplicateAuditFlags:matches', ref: String(f.ID || ''), severity: 'P2' }),
         status: f.Status || 'pending', flagged_date: f.Flagged_Date || '', reviewed_date: f.Reviewed_Date || '',
         image_attached: img.image_attached, image_url: img.image_url,
       };
