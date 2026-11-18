@@ -32346,7 +32346,7 @@ async function qbApprovedReceipts(env, ir) {
   try {
     const rows = await fetchTab(env, 'Receipts');
     return rows.filter(r => ids.includes(String(r.ID)) && r.Active !== 'FALSE');
-  } catch (e) { return []; }
+  } catch (e) { await softFail(env, 'qbApprovedReceipts:Receipts', e, { severity: 'P1', source: 'read', ref: String((ir && ir.ID) || ''), context: 'the invoice repair rebuilds its lines without the approved receipts' }); return []; }
 }
 
 // The item an invoice was originally posted against. Reused when repairing so the wording
