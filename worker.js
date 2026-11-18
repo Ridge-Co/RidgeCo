@@ -8807,7 +8807,7 @@ function ownerApprovalTotal(itemsJson, env) {
 // PURE. The cards one owner sees. `scopes` = Scopes rows, `props`/`units` = Properties/Units rows, `sigs` = Scope_Signatures rows.
 // A proposal shows once it has been SENT (Sent_Date) and carries its customer items. State: approved (an active signature exists),
 // declined / question (the owner's saved response, only while no signature exists), else waiting. Answered cards older than 90 days drop off.
-function ownerApprovalCards(scopes, props, units, sigs, ownerId, nowMs) {
+function ownerApprovalCards(scopes, props, units, sigs, ownerId, nowMs, env) {
   const mine = new Set((props || []).filter(p => String(p.Owner_ID || '') === String(ownerId) && String(p.Active || '').toUpperCase() !== 'FALSE').map(p => String(p.ID)));
   const cutoff = nowMs - OWNER_APPROVAL_WINDOW_DAYS * 86400000;
   const out = [];
