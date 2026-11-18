@@ -1254,6 +1254,7 @@ function filterVendorWOs() {
     var pa=(PRI[(a.Priority||'normal').toLowerCase()]??2), pb=(PRI[(b.Priority||'normal').toLowerCase()]??2);
     return pa!==pb?pa-pb:(a.property_address||'').localeCompare(b.property_address||'');
   });
+  if (window.VendorHome && VendorHome.on()) filtered = VendorHome.regroup(filtered);   // new layout: groups stay together whatever the sort
   renderWOs(filtered, { filtered: true });
 }
 
