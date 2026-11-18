@@ -6325,7 +6325,7 @@ async function backfillScopeWOVendor(env) {
 async function backfillReceiptAttachments(env, body) {
   const apply = !!(body && body.apply === true);
   const [receipts, attachments] = await Promise.all([
-    fetchTab(env, 'Receipts').catch(() => []),
+    fetchTab(env, 'Receipts').catch(e => softFail(env, 'backfillReceiptAttachments:Receipts', e, { severity: 'P2', source: 'read' }).then(() => [])),
     fetchTab(env, 'Attachments').catch(() => []),
   ]);
   const alreadyLinked = new Set(
