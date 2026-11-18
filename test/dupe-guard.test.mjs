@@ -33,7 +33,8 @@ const fetchTab = async (env, tab) => {
   if (TABS[tab] === undefined) throw new Error(`Unable to parse range: ${tab}`);
   return TABS[tab];
 };
-const findRecentDuplicate = new Function('fetchTab', `return (${extractFn('findRecentDuplicate')});`)(fetchTab);
+const softFail = async () => ({ ok: false });
+const findRecentDuplicate = new Function('fetchTab', 'softFail', `return (${extractFn('findRecentDuplicate')});`)(fetchTab, softFail);
 
 const nowIso = () => new Date().toISOString();
 const agoIso = (secs) => new Date(Date.now() - secs * 1000).toISOString();

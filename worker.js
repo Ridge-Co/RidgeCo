@@ -3472,7 +3472,7 @@ async function addReceipt(env, body) {
     QB_Email_Sent: 'FALSE', QB_Email_Sent_Date: '',
     Created_Date: new Date().toISOString(), Active: 'TRUE',
   });
-  let newId = ''; try { const j = await addResp.clone().json(); newId = j && j.id || ''; } catch (e) {}
+  let newId = ''; try { const j = await addResp.clone().json(); newId = j && j.id || ''; } catch (e) { await softFail(env, 'addReceipt:newId', e, { severity: 'P1', ref: String(wo_id || ''), source: 'parse', context: 'the receipt was saved but its new id could not be read back, so no photo gallery row was linked to it' }); }
 
   // Sep 28 2026 fix (Brett — WO-1229/Amanda's garbage disposal): a receipt confirmed through the
   // Receipt Reconciler correctly writes Source_File_ID/Source_File_URL onto this new Receipts
@@ -3499,7 +3499,7 @@ async function addReceipt(env, body) {
         Mime_Type: '', Receipt_ID: String(newId),
         Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE',
       });
-    } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_write', Skill_Or_Endpoint: '/receipt/add', Success: 'FALSE', Notes: `receipt_id=${newId} wo_id=${wo_id} err=${String(e && e.message || e)}` }); } catch (_) {} }
+    } catch (e) { await softFail(env, 'addReceipt:galleryWrite', e, { severity: 'P2', ref: String(newId || ''), source: 'write', context: 'the receipt saved but its photo gallery row was not' }); try { await logTelemetry(env, { Source: 'worker', Job_Type: 'receipt_attachment_gallery_write', Skill_Or_Endpoint: '/receipt/add', Success: 'FALSE', Notes: `receipt_id=${newId} wo_id=${wo_id} err=${String(e && e.message || e)}` }); } catch (_) { /* silent-ok: the gallery failure is already in the failure ledger */ } }
   }
 
   return json({ success: true, amount: amt.toFixed(2), id: newId, payment_source: paymentSource });
@@ -4219,7 +4219,7 @@ function statementWindowCount(line, receipts, queueRows) {
 async function receiptReconScan(env, body) {
   // Oct 16 2026: AI credit paused -> touch nothing (no Drive listing, no OCR call, no attempt counted); files wait in the folder.
   { const st = await aiCreditCheck(env); if (st.paused) return aiCreditPausedJson({ message: AI_SCAN_PAUSED_MSG, scanned: 0, remaining: 0, paused_since: st.at || null, reason: 'paused: AI credit - receipts stay in the Drive folder and are scanned automatically after AI resumes' }); }
-  const cfg = await fetchConfig(env).catch(() => ({}));
+  const cfg = await fetchConfig(env).catch(async (e) => { await softFail(env, 'receiptReconScan:config', e, { severity: 'P2', source: 'read', context: 'settings could not be read, so the scan used its default per-run limit' }); return {}; });
   // Per-call cap on NEW files (Sep 22 2026). Each file costs ~4 subrequests (Drive download, OCR,
   // Sheets append); uncapped, a big drop (e.g. an email backfill) blew Cloudflare's per-invocation
   // subrequest limit partway through — same failure rule 155a hit at 25 for QB email forwarding.
@@ -4240,7 +4240,7 @@ async function receiptReconScan(env, body) {
   if (data.error) return json({ ok: false, error: 'Drive list failed: ' + (data.error.message || JSON.stringify(data.error)) }, 500);
   const files = (data.files || []).filter(f => /image|pdf/i.test(f.mimeType || ''));
 
-  let existing = []; try { existing = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) {}
+  let existing = []; try { existing = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { await softFail(env, 'receiptReconScan:queueRead', e, { severity: 'P1', source: 'read', context: 'the receipt queue could not be read, so the scan stopped instead of re-adding every file as a duplicate row' }); return json({ ok: false, error: 'The receipt queue could not be read, so nothing was scanned. Try again in a minute.' }, 500); }
   const seen = new Set(existing.map(r => r.Source_File_ID).filter(Boolean));
   // A file the OCR can't read (Sep 22 2026: recon_smoke_test.png, "Could not process image")
   // was never written to the queue, so every scan retried it forever — one wasted AI call per
@@ -4541,11 +4541,11 @@ async function listReceiptReconQueue(env, url) {
   return json(rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (status === 'all' || (r.Status || 'pending') === status))
     .map(r => {
       const dupSignals = (r.Status || 'pending') === 'pending' ? receiptDupSignals({ total: r.Total, date: r.Receipt_Date, store: r.Vendor, invoice: r.Invoice_Number }, receiptsForDup, rows, { selfQueueId: r.ID }).slice(0, 5) : [];
-      let suggestion = null; try { suggestion = JSON.parse(r.Suggestion || 'null'); } catch (e) {}
-      let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) {}
-      let items_summary = []; try { items_summary = JSON.parse(r.Items_Summary || '[]'); } catch (e) {}
-      let duplicate_evidence = []; try { duplicate_evidence = JSON.parse(r.Duplicate_Evidence_JSON || '[]'); } catch (e) {}
-      let rescan_matches = []; try { rescan_matches = JSON.parse(r.Rescan_Match_JSON || '[]'); } catch (e) {}
+      let suggestion = parseJsonCell(r.Suggestion, null, { env, where: 'listReceiptReconQueue:Suggestion', ref: String(r.ID || ''), severity: 'P2' });
+      let items = parseJsonCell(r.Items, [], { env, where: 'listReceiptReconQueue:Items', ref: String(r.ID || ''), severity: 'P2' });
+      let items_summary = parseJsonCell(r.Items_Summary, [], { env, where: 'listReceiptReconQueue:Items_Summary', ref: String(r.ID || ''), severity: 'P2' });
+      let duplicate_evidence = parseJsonCell(r.Duplicate_Evidence_JSON, [], { env, where: 'listReceiptReconQueue:Duplicate_Evidence_JSON', ref: String(r.ID || ''), severity: 'P2' });
+      let rescan_matches = parseJsonCell(r.Rescan_Match_JSON, [], { env, where: 'listReceiptReconQueue:Rescan_Match_JSON', ref: String(r.ID || ''), severity: 'P2' });
       // Sep 23 2026 build: Brett's manual "mark as refund" override for a row the automatic
       // refund detection (receiptExtract's refund_signal_text / negative-total check) missed.
       // Only ever flips the category the frontend reads to decide which card to render — never
@@ -4664,7 +4664,7 @@ async function receiptReconConfirm(env, body) {
   const description = body.description || row.PO_Reference || row.Vendor || '';
   const store = body.store || row.Vendor || '';
   const date = body.date || row.Receipt_Date || '';
-  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) {}
+  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) { await softFail(env, 'receiptReconConfirm:suggestion', e, { severity: 'P2', ref: String(row.ID || ''), source: 'parse', context: 'the saved scanner suggestion on this receipt is unreadable, so the category was worked out without it' }); }
   // Brett, Sep 22 2026: "attach receipts to Ridge Co and 1864 Kerns School Rd as an expense
   // rather than selecting a work order". A no-WO confirm is ALWAYS an expense record, even when
   // the scanner suggested 'billable' (a Home Depot receipt with a job address on it) — otherwise
@@ -4684,7 +4684,7 @@ async function receiptReconConfirm(env, body) {
     payment_source: body.payment_source, allow_negative: (noWo && isRefundRow),
     receipt_number: row.Invoice_Number || '',   // Nov 17 2026: the OCR'd receipt/order number persists on the WO side (blank stays blank)
   });
-  const addJson = await addResp.json().catch(() => ({}));
+  const addJson = await addResp.json().catch(async (e) => { await softFail(env, 'receiptReconConfirm:addAnswer', e, { severity: 'P1', ref: String(row.ID || ''), source: 'parse', context: 'the receipt add answer was unreadable, so it may have saved even though this shows as failed' }); return {}; });
   let invoiceLink = null;
   if (addJson && addJson.success && !addJson.duplicate && wo_id && addJson.id) {
     // A signed scope proposal's WO is billed through its payment milestones — folding this
@@ -4955,8 +4955,8 @@ async function receiptReconRefundCandidates(env, body) {
   const rows = await fetchTab(env, 'Receipt_Recon_Queue');
   const row = rows.find(r => String(r.ID) === String(id));
   if (!row) return json({ error: 'queue row not found' }, 404);
-  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) {}
-  let items = []; try { items = JSON.parse(row.Items || '[]'); } catch (e) {}
+  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) { await softFail(env, 'receiptReconRefundCandidates:suggestion', e, { severity: 'P2', ref: String(id), source: 'parse', context: 'the saved scanner suggestion on this refund is unreadable' }); }
+  let items = []; try { items = JSON.parse(row.Items || '[]'); } catch (e) { await softFail(env, 'receiptReconRefundCandidates:items', e, { severity: 'P2', ref: String(id), source: 'parse', context: 'the saved item list on this refund is unreadable, so matching candidates may be incomplete' }); }
   const receipts = await fetchTab(env, 'Receipts');
   const candidates = receiptRefundFindMatches({ store: row.Vendor, amount: row.Total, date: row.Receipt_Date, items }, receipts);
   return json({ ok: true, id, refund: { store: row.Vendor || '', amount: row.Total || '', date: row.Receipt_Date || '', items }, candidates });
@@ -4994,7 +4994,7 @@ async function receiptReconRefundReverse(env, body) {
   const row = rows.find(r => String(r.ID) === String(id));
   if (!row) return json({ error: 'queue row not found' }, 404);
   if (['confirmed', 'attached_only', 'refund_reversed'].includes(row.Status)) return json({ error: `already ${row.Status}`, id }, 409);
-  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) {}
+  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) { await softFail(env, 'receiptReconRefundReverse:suggestion', e, { severity: 'P2', ref: String(id), source: 'parse', context: 'the saved scanner suggestion on this refund is unreadable' }); }
   const isRefundRow = (suggestion && suggestion.category === 'refund') || Number(row.Total) < 0;
   if (!isRefundRow) return json({ error: 'This queue row is not flagged as a refund.' }, 400);
 
@@ -5021,7 +5021,7 @@ async function receiptReconRefundReverse(env, body) {
     category: 'refund', source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: body.payment_source, allow_negative: true,
   });
-  const addJson = await addResp.json().catch(() => ({}));
+  const addJson = await addResp.json().catch(async (e) => { await softFail(env, 'receiptReconRefundReverse:addAnswer', e, { severity: 'P1', ref: String(id), source: 'parse', context: 'the refund add answer was unreadable, so it may have saved even though this shows as failed' }); return {}; });
   let invoiceLink = null;
   if (addJson && addJson.success && !addJson.duplicate && addJson.id) {
     // Same signed-scope-proposal carve-out receiptReconConfirm uses: a job billed through
@@ -5214,7 +5214,7 @@ async function receiptReconReassign(env, body) {
     source_file_id: row.Source_File_ID || '', source_file_url: row.Source_File_URL || '',
     payment_source: original.Payment_Source,
   });
-  const addJson = await addResp.json().catch(() => ({}));
+  const addJson = await addResp.json().catch(async (e) => { await softFail(env, 'receiptReconReassign:addAnswer', e, { severity: 'P1', ref: String(row.ID || ''), source: 'parse', context: 'the receipt add answer was unreadable, so it may have saved even though this shows as failed' }); return {}; });
 
   let invoiceLink = null;
   if (addJson && addJson.success && !addJson.duplicate && wo_id && addJson.id) {
@@ -5478,8 +5478,8 @@ async function receiptReconSearch(env, url) {
   const hasAmount = qRaw.replace(/[^0-9.]/g, '').length > 0 && !isNaN(qAmount);
 
   let properties = [], workorders = [];
-  try { properties = await fetchTab(env, 'Properties'); } catch (e) {}
-  try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) {}
+  try { properties = await fetchTab(env, 'Properties'); } catch (e) { await softFail(env, 'receiptReconSearch:properties', e, { severity: 'P2', ref: '', source: 'read', context: 'the properties list could not be read, so search results may be missing property names' }); }
+  try { workorders = await fetchTab(env, 'Work_Orders'); } catch (e) { await softFail(env, 'receiptReconSearch:workorders', e, { severity: 'P2', ref: '', source: 'read', context: 'the work orders list could not be read, so search results may be missing jobs' }); }
   const propById = new Map(properties.map(p => [String(p.ID), p]));
   const woById = new Map(workorders.map(w => [String(w.ID), w]));
 
@@ -6525,7 +6525,7 @@ async function scopeProposal(env, body) {
   const materialsPricing = scopeParseMaterialsPricing(s);
   const priced = scopeItemsPricing(items, _pc, materialsPricing); // markup applied here, server-side, per item
   const maxUpfront = await scopeMaxUpfrontPct(env);
-  const rawSchedule = scopeParsePaymentSchedule(s);
+  const rawSchedule = scopeParsePaymentSchedule(s, env);
   const scheduleCheck = scopeValidatePaymentSchedule(rawSchedule, maxUpfront);
   // rawSchedule was already validated when it was saved (scopeSetPaymentSchedule) or is the
   // built-in default, so scheduleCheck.error should never fire here — but if a schedule was
@@ -6902,7 +6902,7 @@ async function scopeProposalView(env, url, ua, ctx) {
   const photos = await scopeProposalPhotos(env, s);
   const subtotal = +(items.reduce((sum, it) => { if (it.optional) return sum; const sel = (it.variants || []).find(v => v.key === it.selected_key) || it.variants[0]; return sum + (sel ? sel.price : 0); }, 0)).toFixed(2);
   const deposit = +(subtotal / 2).toFixed(2);
-  const rawSchedule = scopeParsePaymentSchedule(s);
+  const rawSchedule = scopeParsePaymentSchedule(s, env);
   const scheduleValidation = scopeValidatePaymentSchedule(rawSchedule, await scopeMaxUpfrontPct(env));
   const schedule = scopeComputeMilestoneAmounts(scheduleValidation.schedule || scopeDefaultPaymentSchedule(), subtotal, 0)
     .map(m => ({ label: m.label, percent: m.percent, trigger: m.trigger, customer_amount: m.customer_amount, calc_mode: m.calc_mode, flat_customer_amount: m.flat_customer_amount })); // never vendor_amount — customer-facing boundary
@@ -7081,8 +7081,8 @@ function scopeVendorPayableSchedule(milestones) {
   if (carry > 0 && out.length) out[out.length - 1].vendor_payable = +(out[out.length - 1].vendor_payable + carry).toFixed(2);
   return out;
 }
-function scopeParsePaymentSchedule(s) {
-  try { const arr = JSON.parse((s && s.Payment_Schedule_JSON) || 'null'); if (Array.isArray(arr) && arr.length) return arr; } catch (_) {}
+function scopeParsePaymentSchedule(s, env) {
+  { const arr = parseJsonCell(s && s.Payment_Schedule_JSON, null, { env, where: 'scopeParsePaymentSchedule', ref: String((s && s.ID) || ''), severity: 'P1' }); if (Array.isArray(arr) && arr.length) return arr; }   // an unreadable schedule falls back to the default split and is reported
   return scopeDefaultPaymentSchedule();
 }
 
@@ -7125,7 +7125,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   const dup = existing.find(r => r.Scope_ID === String(s.ID) && String(r.Active || '').toUpperCase() !== 'FALSE');
   if (dup) return json({ ok: true, id: dup.ID, duplicate: true, subtotal: +dup.Subtotal || 0, deposit: +dup.Deposit_Amount || 0 });
 
-  let items = []; try { items = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
+  let items = []; try { items = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (e) { await softFail(env, 'scopeProposalSign:items', e, { severity: 'P1', ref: String(s.ID || ''), source: 'parse', context: 'the proposal items are unreadable, so signing was refused as not ready' }); }
   if (!items.length) return json({ error: 'Proposal not ready to sign yet.' }, 400);
   const selections = (body && body.selections && typeof body.selections === 'object') ? body.selections : {};
   let subtotal = 0;
@@ -7173,7 +7173,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   if (items.some(it => it.optional)) {
     // A schedule that can't absorb the signed total (all rows flat, or fixed $ exceed the total) must
     // never be signed — refuse BEFORE any write, tell Brett (telemetry), show the customer a plain message.
-    const sv = scopeValidatePaymentSchedule(scopeParsePaymentSchedule(s), await scopeMaxUpfrontPct(env));
+    const sv = scopeValidatePaymentSchedule(scopeParsePaymentSchedule(s, env), await scopeMaxUpfrontPct(env));
     const addonProblem = scopeScheduleAddonProblem(sv.schedule || scopeDefaultPaymentSchedule(), subtotal);
     if (addonProblem) {
       let telemetryError = '';
@@ -7183,7 +7183,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   }
   const now = new Date();
   if (rcMaterialsCost > 0 || rcMaterialsPrice > 0) {
-    try { await ensureColumns(env, 'Scope_Signatures', ['RC_Materials_Cost', 'RC_Materials_Price']); } catch (_) { /* logged centrally by ensureColumns */ }
+    try { await ensureColumns(env, 'Scope_Signatures', ['RC_Materials_Cost', 'RC_Materials_Price']); } catch (_) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
   }
   const sigResp = await addRow(env, 'Scope_Signatures', {
     RC_Materials_Cost: rcMaterialsCost ? String(rcMaterialsCost) : '', RC_Materials_Price: rcMaterialsPrice ? String(rcMaterialsPrice) : '',
@@ -7195,7 +7195,7 @@ async function scopeProposalSign(env, body, ip, ua) {
     IP: String(ip || '').slice(0, 60), User_Agent: String(ua || '').slice(0, 300),
     Status: 'Signed', Created_Date: now.toISOString(), Active: 'TRUE',
   });
-  const sigJson = await sigResp.json().catch(() => ({}));
+  const sigJson = await sigResp.json().catch(async (e) => { await softFail(env, 'scopeProposalSign:sigAnswer', e, { severity: 'P1', ref: String(s.ID || ''), source: 'parse', context: 'the signature saved but its id could not be read back, so milestone rows are not linked to it' }); return {}; });
   const signatureId = sigJson.id;
 
   // Expand the scope's payment schedule (whatever Brett configured on scope-creator.html, or the
@@ -7208,12 +7208,12 @@ async function scopeProposalSign(env, body, ip, ua) {
   if (signatureId) {
     try {
       const maxUpfront = await scopeMaxUpfrontPct(env);
-      const rawSchedule = scopeParsePaymentSchedule(s);
+      const rawSchedule = scopeParsePaymentSchedule(s, env);
       const { schedule } = scopeValidatePaymentSchedule(rawSchedule, maxUpfront);
       const clean = schedule || scopeDefaultPaymentSchedule();
       const amounts = scopeComputeMilestoneAmounts(clean, subtotal, vendorCostTotal);
       await paymentMilestonesTab(env);
-      try { await ensureColumns(env, 'Payment_Milestones', ['Vendor_Paid_At_This_Milestone', 'Calc_Mode', 'Flat_Customer_Amount']); } catch (_) {}
+      try { await ensureColumns(env, 'Payment_Milestones', ['Vendor_Paid_At_This_Milestone', 'Calc_Mode', 'Flat_Customer_Amount']); } catch (_) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
       for (let i = 0; i < amounts.length; i++) {
         const m = amounts[i];
         const mResp = await addRow(env, 'Payment_Milestones', {
@@ -7224,7 +7224,7 @@ async function scopeProposalSign(env, body, ip, ua) {
           Calc_Mode: m.calc_mode === 'flat' ? 'flat' : 'percent',
           Flat_Customer_Amount: (m.flat_customer_amount != null ? String(m.flat_customer_amount) : ''),
         });
-        const mJson = await mResp.json().catch(() => ({}));
+        const mJson = await mResp.json().catch(async (e) => { await softFail(env, 'scopeProposalSign:milestoneAnswer', e, { severity: 'P1', ref: String(s.ID || ''), source: 'parse', context: 'a payment milestone saved but its id could not be read back' }); return {}; });
         milestones.push(Object.assign({ id: mJson.id }, m));
       }
     } catch (e) {
@@ -7243,7 +7243,7 @@ async function scopeProposalSign(env, body, ip, ua) {
     const job = s.WO_ID ? ('work order ' + s.WO_ID) : ('proposal #' + s.ID);
     await sendTemplatedSms(env, { type: 'admin_proposal_signed', kind: 'admin', wo_id: s.WO_ID || '', unit_id: s.Unit_ID || '', property: c.property, tokens: { Signer: signer, Job: job, Address: c.address } });
     if (c.vendor && c.vendor.Phone) await sendTemplatedSms(env, { type: 'vendor_proposal_signed', kind: 'vendor', vendor: c.vendor, wo_id: s.WO_ID || '', unit_id: s.Unit_ID || '', property: c.property, tokens: { FirstName: vendorFirstName(c.vendor), Job: job } });
-  } catch (_) {}
+  } catch (e) { await softFail(env, 'scopeProposalSign:texts', e, { severity: 'P0', ref: String(s.ID || ''), source: 'sms', context: 'the proposal was signed but the admin or vendor text was not sent' }); }
   return json({ ok: true, subtotal, deposit, schedule: milestones });
 }
 
@@ -7302,24 +7302,24 @@ function scopeSigFinalBillGap(row, inHouseFallback) {
 async function scopeProposalSignedList(env, url) {
   await scopeSigTab(env);
   const rows = await fetchTab(env, 'Scope_Signatures');
-  const scopes = await fetchTab(env, 'Scopes').catch(() => []);
-  const props = await fetchTab(env, 'Properties').catch(() => []);
+  const scopes = (await fetchTabSoft(env, 'Scopes', { where: 'scopeProposalSignedList:Scopes', severity: 'P1' })).rows;
+  const props = (await fetchTabSoft(env, 'Properties', { where: 'scopeProposalSignedList:Properties', severity: 'P2' })).rows;
   // Vendors is read only to re-derive the in-house case for legacy rows (see scopeSigBillGap).
-  const vendors = await fetchTab(env, 'Vendors').catch(() => []);
+  const vendors = (await fetchTabSoft(env, 'Vendors', { where: 'scopeProposalSignedList:Vendors', severity: 'P2' })).rows;
   // Payment_Milestones (Sep 14 2026): rows signed under the new milestone system carry these;
   // rows signed before it shipped have none and keep rendering the old deposit/final UI
   // (signed-proposals.html branches on milestones.length).
   let allMilestones = [];
-  try { await paymentMilestonesTab(env); allMilestones = await fetchTab(env, 'Payment_Milestones'); } catch (_) {}
+  try { await paymentMilestonesTab(env); allMilestones = await fetchTab(env, 'Payment_Milestones'); } catch (e) { await softFail(env, 'scopeProposalSignedList:milestones', e, { severity: 'P1', ref: '', source: 'read', context: 'milestones could not be read, so signed proposals show the old deposit and final layout' }); }
   // Receipts on each signed scope's work order = the ACTUAL side of Ridge Co materials budget
   // vs actual (Sep 22 2026). null (not []) on a read failure so the page says "couldn't check"
   // instead of a confident $0.
   let allReceipts = null;
-  try { allReceipts = await fetchTab(env, 'Receipts'); } catch (_) {}
+  try { allReceipts = await fetchTab(env, 'Receipts'); } catch (e) { await softFail(env, 'scopeProposalSignedList:receipts', e, { severity: 'P2', ref: '', source: 'read', context: 'receipts could not be read, so the page says it could not check' }); }
   const out = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').map(r => {
     const sc = scopes.find(x => x.ID === r.Scope_ID) || {};
     const p = props.find(x => x.ID === sc.Property_ID) || {};
-    let sel = {}; try { sel = JSON.parse(r.Selections_JSON || '{}'); } catch (_) {}
+    let sel = parseJsonCell(r.Selections_JSON, {}, { env, where: 'scopeProposalSignedList:selections', ref: String(r.ID || ''), severity: 'P2' });
     const subtotal = +r.Subtotal || 0, deposit = +r.Deposit_Amount || 0, vendorCostTotal = +r.Vendor_Cost_Total || 0;
     // The Hub's "Bill vendor (deposit share)" figure must be the amount book() will ACTUALLY
     // bill — Vendor_Cost_Total × deposit/subtotal — not the vendor's full job cost. Showing the
@@ -13593,7 +13593,7 @@ async function editVendorBillReceipts(env, body) {
   const newTotal = laborOrFlat + truckStock + receiptsReimburse;
   const oldTotal = parseFloat(bill.Total) || 0;
 
-  try { await ensureColumns(env, 'Vendor_Bills', ['Receipts_Reimburse_Total']); } catch (e) {}
+  try { await ensureColumns(env, 'Vendor_Bills', ['Receipts_Reimburse_Total']); } catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
 
   const fields = {
     Receipts_JSON: JSON.stringify(receipts),
@@ -13607,7 +13607,7 @@ async function editVendorBillReceipts(env, body) {
     fields.Status = 'submitted';
     resetToSubmitted = true;
     if (liveIR) {
-      try { await updateRow(env, 'Invoice_Review', liveIR.ID, { Active: 'FALSE' }); } catch (e) { /* non-fatal — the stale row is now orphaned but harmless; Review Bills re-derives from Vendor_Bills */ }
+      try { await updateRow(env, 'Invoice_Review', liveIR.ID, { Active: 'FALSE' }); } catch (e) { await softFail(env, 'editVendorBillReceipts:orphanReview', e, { severity: 'P2', ref: String(billId), source: 'write', context: 'the bill was reset to submitted but its old review row was not deactivated' }); }
     }
   }
 
@@ -13618,7 +13618,7 @@ async function editVendorBillReceipts(env, body) {
       `$${oldTotal.toFixed(2)} (${(JSON.parse(bill.Receipts_JSON || '[]') || []).length} receipt line(s))`,
       `$${newTotal.toFixed(2)} (${receipts.length} receipt line(s))`,
       resetToSubmitted ? 'Receipts edited on bill ' + billId + ' — reset to submitted, needs re-review before QuickBooks.' : 'Receipts edited on bill ' + billId + '.');
-  } catch (e) { /* audit is best-effort — the fix itself already landed */ }
+  } catch (e) { await softFail(env, 'editVendorBillReceipts:audit', e, { severity: 'P2', ref: String(billId), source: 'write', context: 'the receipts were edited but the audit-log row was not saved' }); }
 
   return json({
     success: true, bill_id: billId, total: newTotal.toFixed(2),
@@ -13781,7 +13781,7 @@ async function moveVendorBillToNewWO(env, body) {
   const movedAttachmentIds = [];
   for (const a of moving) {
     try { await updateRow(env, 'Attachments', a.ID, { WO_ID: newWoId }); movedAttachmentIds.push(a.ID); }
-    catch (e) { /* best-effort — report what didn't move below rather than losing the whole apply over one row */ }
+    catch (e) { await softFail(env, 'moveVendorBillToNewWO:attachment', e, { severity: 'P1', ref: String(a.ID || ""), source: 'write', context: 'a photo did not move to the new work order' }); }
   }
   const failedAttachmentIds = moving.map(a => a.ID).filter(id => !movedAttachmentIds.includes(id));
 
@@ -13795,7 +13795,7 @@ async function moveVendorBillToNewWO(env, body) {
       notes: `Created by splitting bill ${billId} + ${movedAttachmentIds.length} photo(s) off ${oldWoId}.${reason ? ' Reason: ' + reason : ''}` },
   ]);
 
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'bill_split', Skill_Or_Endpoint: '/vendor-bill/move-to-new-wo', Success: 'TRUE', Notes: `old_wo=${oldWoId} new_wo=${newWoId} bill=${billId} attachments=${movedAttachmentIds.length}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'bill_split', Skill_Or_Endpoint: '/vendor-bill/move-to-new-wo', Success: 'TRUE', Notes: `old_wo=${oldWoId} new_wo=${newWoId} bill=${billId} attachments=${movedAttachmentIds.length}` }); } catch (_) { /* silent-ok: the bill split already succeeded and this row is only a log */ }
 
   return json({
     success: true, applied: true,
@@ -13984,7 +13984,7 @@ async function qbUndoSend(env, body) {
         await updateRow(env, LOAN_LEDGER_TAB, entry.ID, { Active: 'FALSE' });
         loanReversed = Math.abs(parseFloat(entry.Amount) || 0);
       }
-    } catch (e) { /* no ledger tab / nothing to reverse — not fatal */ }
+    } catch (e) { if (!/Unable to parse range|not found|does not exist/i.test(String((e && e.message) || e))) await softFail(env, 'qbUndoSend:loanReverse', e, { severity: 'P1', ref: String(ir.ID || ''), source: 'write', context: 'the QuickBooks send was undone but a loan-ledger deduction may not have been reversed' }); }
 
     // A signed-proposal final billing: put its payments back to pending so they can be billed again
     // (otherwise the proposal would show as fully invoiced against a QuickBooks invoice that is gone).
@@ -13992,7 +13992,7 @@ async function qbUndoSend(env, body) {
     try { proposalReverted = (await qbProposalRevert(env, ir)).reverted; }
     catch (e) {
       proposalRevertError = 'QuickBooks was undone, but putting signed proposal Scope #' + (ir.Proposal_Scope_ID || '?') + ' back to unbilled failed: ' + String((e && e.message) || e) + ' — fix it on the Signed Proposals page.';
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_revert_failed', Skill_Or_Endpoint: '/qb/undo-send', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' ' + proposalRevertError).slice(0, 480) }); } catch (_) {}
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_revert_failed', Skill_Or_Endpoint: '/qb/undo-send', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' ' + proposalRevertError).slice(0, 480) }); } catch (_) { /* silent-ok: the failed proposal revert is already returned to the page */ }
     }
 
     // Mirror /invoice-review/unapprove exactly from here.
@@ -14020,7 +14020,7 @@ async function qbUndoSend(env, body) {
         `Undid the QuickBooks send for bill ${ir.Bill_ID || ir.ID} (invoice ${invoiceId || 'none'}, bill ${billId || 'none'} deleted in QuickBooks).` +
         (loanReversed ? ` Reversed a $${loanReversed.toFixed(2)} loan-ledger deduction.` : '') +
         (body.reason ? ` Reason: ${body.reason}` : ''));
-    } catch (e) { /* audit is best-effort */ }
+    } catch (e) { await softFail(env, 'qbUndoSend:audit', e, { severity: 'P2', ref: String(ir.ID || ''), source: 'write', context: 'the undo went through but its audit-log row was not saved' }); }
 
     return json({
       success: true, ok: true, id: ir.ID, wo_id: ir.WO_ID || '', bill_id: ir.Bill_ID || '',
@@ -14092,7 +14092,7 @@ async function approveInvoiceReview(env, body) {
         differs: !sameCents(already.Customer_Total, customer_total),
         qb_status: already.QB_Invoice_Status || 'pending' });
     }
-  } catch (e) { /* tab unreadable — fall through and let the append surface the real error */ }
+  } catch (e) { await softFail(env, 'approveInvoiceReview:dupCheck', e, { severity: 'P1', ref: String(wo_id || ''), source: 'read', context: 'the already-approved check could not read Invoice_Review, so a second review row may be created' }); }   // falls through and lets the append surface the real error
   // Neither tab has these columns yet, and updateRow/addRow map by header — a write to a
   // column that isn't there reports success and stores nothing.
   try {
@@ -14100,7 +14100,7 @@ async function approveInvoiceReview(env, body) {
       ensureColumns(env, 'Vendor_Bills',   ['Own_Wage', 'Profit', 'Own_Materials']),
       ensureColumns(env, 'Invoice_Review', ['Own_Wage', 'Profit', 'Own_Materials', 'Own_Material_IDs']),
     ]);
-  } catch (e) { /* the money fields below still land; only the split is lost */ }
+  } catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
   if (padRes.pad > 0) { await ensureColumns(env, 'Invoice_Review', ['Instant_Pad']); }   // not in the try above: a pad that cannot be stored must stop the approval
 
   // 1. Update Vendor_Bills row: mark reviewed, save markup fields — only when there IS a
@@ -14165,7 +14165,7 @@ async function approveInvoiceReview(env, body) {
     const parsed = await addRes.clone().json();
     if (parsed && parsed.error) return addRes;      // missing tab / no header row — surface it
     realId = String(parsed && parsed.id || '');
-  } catch (e) { /* fall through with an empty id rather than fail the whole approval */ }
+  } catch (e) { await softFail(env, 'approveInvoiceReview:newId', e, { severity: 'P1', ref: String(wo_id || ''), source: 'parse', context: 'the invoice review row was added but its new id could not be read back, so the instant-pay pad was not verified' }); }   // falls through with an empty id rather than failing the whole approval
   if (padRes.pad > 0 && realId) {
     // A pad that did not land would send the vendor a legacy deduction while the customer's price was built on a pad: say so, never go quiet.
     try {
@@ -14173,7 +14173,7 @@ async function approveInvoiceReview(env, body) {
       const back = (await fetchTab(env, 'Invoice_Review')).find(r => String(r.ID) === realId);
       if (!back || Math.abs((+back.Instant_Pad || 0) - padRes.pad) > 0.005) throw new Error('Instant_Pad read back as "' + (back ? back.Instant_Pad : 'no row') + '"');
     } catch (e) {
-      await logTelemetry(env, { Source: 'worker', Job_Type: 'approve_instant_pad_not_saved', Skill_Or_Endpoint: '/invoice-review/approve', Success: 'FALSE', Notes: ('ir=' + realId + ' wo=' + wo_id + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
+      await logTelemetry(env, { Source: 'worker', Job_Type: 'approve_instant_pad_not_saved', Skill_Or_Endpoint: '/invoice-review/approve', Success: 'FALSE', Notes: ('ir=' + realId + ' wo=' + wo_id + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => { /* silent-ok: the failure is returned to the page just below */ });
       return json({ success: false, id: realId, error: 'The invoice was approved, but its $' + padRes.pad.toFixed(2) + ' instant-pay pad did not save (' + String((e && e.message) || e).slice(0, 120) + '). Withdraw the approval and approve again before sending to QuickBooks.' }, 500);
     }
   }
@@ -14655,7 +14655,7 @@ async function processDepositPaidSweep(env) {
     scopes = (await fetchTab(env, 'Scopes')).filter(x => String(x.Approval_Stage || '') === 'Pre-approved' && x.Active !== 'FALSE');
     out.checked = scopes.length;
     if (!scopes.length) { out.ok = !out.errors.length; return out; }
-    try { await paymentMilestonesTab(env); } catch (_) {}
+    try { await paymentMilestonesTab(env); } catch (e) { await softFail(env, 'processDepositPaidSweep:milestonesTab', e, { severity: 'P1', ref: '', source: 'write', context: 'the milestones tab could not be prepared, so deposits may not be detected this run' }); }
     tabs = { sigs: await fetchTab(env, 'Scope_Signatures'), milestones: await fetchTab(env, 'Payment_Milestones') };
   } catch (e) {
     // Oct 29 2026 (queue 222): Google's shared per-minute READ quota stopped the sweep's reads. Nothing was checked, nothing moved; the next run (the scheduler, or
@@ -27066,7 +27066,7 @@ async function sendReceiptsToQBEmail(env, opts) {
 
   let queueRows = []; try { queueRows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { await softFail(env, 'sendReceiptsToQB:queueRead', e, { severity: 'P2', ref: '', source: 'read', context: 'the receipt queue could not be read, so forwarded receipts may be missing queue details' }); }
   const [properties, workorders] = await Promise.all([
-    fetchTab(env, 'Properties').catch(() => []), fetchTab(env, 'Work_Orders').catch(() => []),
+    fetchTabSoft(env, 'Properties', { where: 'sendReceiptsToQB:Properties', severity: 'P2' }).then(r => r.rows), fetchTabSoft(env, 'Work_Orders', { where: 'sendReceiptsToQB:Work_Orders', severity: 'P2' }).then(r => r.rows),
   ]);
 
   let sent = 0, sentNoFile = 0, blocked = 0; const failed = [], warnings = [];
@@ -28132,7 +28132,7 @@ async function receiptIntake(env, body) {
   else return json({ error: 'need file_id, file_url, or image_b64' }, 400);
   const ex = await receiptExtract(env, bytes, mime);
   const cfg = await fetchConfig(env);
-  let defaults = {}; try { defaults = JSON.parse(cfg.receipt_vendor_defaults || '{}'); } catch (e) {}
+  let defaults = {}; try { defaults = JSON.parse(cfg.receipt_vendor_defaults || '{}'); } catch (e) { await softFail(env, 'receiptIntake:vendorDefaults', e, { severity: 'P2', ref: '', source: 'parse', context: 'the saved vendor defaults are unreadable, so none were applied' }); }
   const vkey = String(ex.vendor || '').toLowerCase().trim();
   let category = ex.suggested_category || '';
   for (const k in defaults) { if (k && vkey && vkey.includes(k)) { category = defaults[k]; break; } }
@@ -28146,7 +28146,7 @@ async function receiptIntake(env, body) {
     Confidence: String(ex.confidence ?? ''), Status: 'pending', Filed_File_URL: '', Raw_Extract: JSON.stringify(ex).slice(0, 900), Notes: '', Active: 'TRUE',
   };
   const appended = await addRow(env, 'Receipts_Queue', row);
-  let newId = ''; try { const j = await appended.json(); newId = j.id || ''; } catch (e) {}
+  let newId = ''; try { const j = await appended.json(); newId = j.id || ''; } catch (e) { await softFail(env, 'receiptIntake:newId', e, { severity: 'P1', ref: '', source: 'parse', context: 'the receipt was queued but its new id could not be read back' }); }
   return json({ ok: true, id: newId, queued: { ...row, ID: newId }, extract: ex });
 }
 
@@ -31009,7 +31009,7 @@ async function findRecentDuplicate(env, tab, signature, windowSeconds, match) {
       if (ts >= cutoff) return r;
     }
     return null;
-  } catch (e) { return null; }
+  } catch (e) { await softFail(env, 'findRecentDuplicate', e, { severity: 'P1', ref: String(tab || ''), source: 'read', context: 'the recent-duplicate check could not read the tab, so a duplicate may be created' }); return null; }
 }
 
 // Duplicate-guard for /property/add and /unit/add (Sep 24 2026, Brett's ask): both handlers
@@ -32453,14 +32453,14 @@ async function qbRepairInvoice(env, body) {
     }
 
     // Share the photo folder so the link in the memo actually opens for the customer.
-    if (folderId) { try { const gtok = await getAccessToken(env); await driveShareAnyone(gtok, folderId); } catch (e) {} }
+    if (folderId) { try { const gtok = await getAccessToken(env); await driveShareAnyone(gtok, folderId); } catch (e) { await softFail(env, 'qbRepairInvoice:sharePhotos', e, { severity: 'P2', ref: String(ir.ID || ''), source: 'drive', context: 'the invoice was repaired but the photo folder was not shared, so the link in the memo may not open for the customer' }); } }
 
     const r = await qbApi(env, 'invoice?minorversion=73', 'POST', patch, token);
     const updated = r && r.Invoice;
     if (!updated) return json({ error: qbFault(r) || 'QuickBooks refused the update.' }, 500);
 
     if (String(ir.Repair_Flagged || '').toUpperCase() === 'TRUE') {
-      try { await updateRow(env, 'Invoice_Review', ir.ID, { Repair_Flagged: 'FALSE', Repair_Reason: '' }); } catch (e) { /* non-fatal — the repair itself already succeeded */ }
+      try { await updateRow(env, 'Invoice_Review', ir.ID, { Repair_Flagged: 'FALSE', Repair_Reason: '' }); } catch (e) { await softFail(env, 'qbRepairInvoice:clearFlag', e, { severity: 'P2', ref: String(ir.ID || ''), source: 'write', context: 'the invoice was repaired but the Repair_Flagged mark was not cleared' }); }
     }
 
     return json({ ok: true, applied: true, invoice_id: qbInvId, wo_id: ir.WO_ID,
@@ -35034,7 +35034,7 @@ async function qbLookupExisting(env, kind, displayName, email, token) {
     // normal shape here. Choosing between those puts an invoice on the wrong ledger, so
     // strong is offered as a SUGGESTION on the mapping screen and nothing more.
     if (m && m.confidence === 'exact') return m.id;
-  } catch (e) { /* fall through to the direct query */ }
+  } catch (e) { /* silent-ok: falls through to the direct QuickBooks query below */ }
 
   try {
     const type = kind === 'vendor' ? 'Vendor' : 'Customer';
@@ -35042,7 +35042,7 @@ async function qbLookupExisting(env, kind, displayName, email, token) {
     const data = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
     const rows = (data && data.QueryResponse && data.QueryResponse[type]) || [];
     if (rows.length === 1 && rows[0].Id) return rows[0].Id;   // exactly one, or don't guess
-  } catch (e) { /* fall through to create */ }
+  } catch (e) { await softFail(env, 'qbLookupExisting:query', e, { severity: 'P1', ref: String(kind || ''), source: 'qbo', context: 'the QuickBooks lookup failed, so a new record may be created instead of reusing an existing one' }); }
 
   return null;
 }
@@ -35065,7 +35065,7 @@ async function qbFindOrCreateCustomer(env, owner, displayName, token) {
         // Stop rather than guess — the mapping screen is where this gets settled.
         throw new Error(`"${dn}" matches QuickBooks #${found}, but that customer is already linked to "${qbOwnerDisplayName(clash)}". Sort it out on the QB Mapping screen.`);
       }
-      try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: found }); } catch (e) {}
+      try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: found }); } catch (e) { await softFail(env, 'qbFindOrCreateCustomer:linkFound', e, { severity: 'P1', ref: String(owner.ID), source: 'write', context: 'the QuickBooks customer was found but the owner row was not linked to it' }); }
     }
     return found;
   }
@@ -35088,7 +35088,7 @@ async function qbFindOrCreateCustomer(env, owner, displayName, token) {
   const r = await qbApi(env, 'customer?minorversion=73', 'POST', payload, token);
   const id = r?.Customer?.Id || qbDupId(r);
   if (!id) throw new Error(qbFault(r) || 'could not create QB customer');
-  if (owner.ID) { try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: id }); } catch (e) {} }
+  if (owner.ID) { try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: id }); } catch (e) { await softFail(env, 'qbFindOrCreateCustomer:linkCreated', e, { severity: 'P1', ref: String(owner.ID), source: 'write', context: 'the QuickBooks customer was created but the owner row was not linked to it, so the next send may create another' }); } }
   return id;
 }
 
@@ -35140,7 +35140,7 @@ async function qbFindOrCreateVendor(env, vendor, displayName, token) {
       if (clash) {
         throw new Error(`"${dn}" matches QuickBooks #${found}, but that vendor is already linked to "${qbVendorDisplayName(clash)}". Sort it out on the QB Mapping screen.`);
       }
-      try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: found }); } catch (e) {}
+      try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: found }); } catch (e) { await softFail(env, 'qbFindOrCreateVendor:linkFound', e, { severity: 'P1', ref: String(vendor.ID), source: 'write', context: 'the QuickBooks vendor was found but the vendor row was not linked to it' }); }
     }
     // Push billing email/address/tax ID (Phase 1 onboarding, brief section 3b) onto a vendor
     // that already has a linked QuickBooks Vendor — a brand-new vendor gets these baked into
@@ -35160,7 +35160,7 @@ async function qbFindOrCreateVendor(env, vendor, displayName, token) {
   const r = await qbApi(env, 'vendor?minorversion=73', 'POST', payload, token);
   const id = r?.Vendor?.Id || qbDupId(r);
   if (!id) throw new Error(qbFault(r) || 'could not create QB vendor');
-  if (vendor.ID) { try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: id }); } catch (e) {} }
+  if (vendor.ID) { try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: id }); } catch (e) { await softFail(env, 'qbFindOrCreateVendor:linkCreated', e, { severity: 'P1', ref: String(vendor.ID), source: 'write', context: 'the QuickBooks vendor was created but the vendor row was not linked to it, so the next bill may create another' }); } }
   return id;
 }
 
@@ -35442,7 +35442,7 @@ async function qbPayBills(env, body) {
     try {
       const ar = await qbApi(env, `account/${encodeURIComponent(payAcct)}?minorversion=73`, 'GET', null, token);
       payAcctName = (ar && ar.Account && ar.Account.Name) || '';
-    } catch (_) { /* name is cosmetic for the preview */ }
+    } catch (_) { /* silent-ok: the account name is cosmetic in the preview */ }
   }
 
   if (preview) {
@@ -35525,7 +35525,7 @@ async function qbPayBills(env, body) {
       }
     } catch (e) {
       // The QuickBooks payment already succeeded, so this must never look like a payment failure — but it is NOT silent.
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_paid_text_failed', Skill_Or_Endpoint: '/qb/pay-bills', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 300) }); } catch (_) {}
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_paid_text_failed', Skill_Or_Endpoint: '/qb/pay-bills', Success: 'FALSE', Notes: String((e && e.message) || e).slice(0, 300) }); } catch (_) { /* silent-ok: the vendor text failure is already shown on each result below */ }
       for (const r of paidResults) if (!r.vendor_text) r.vendor_text = { sent: false, reason: 'text failed: ' + String((e && e.message) || e).slice(0, 120) };
     }
   }
@@ -35913,7 +35913,7 @@ async function qbInvoiceLineDuplicates(env, token, amount, candidates) {
           matches.push({ invoice_id: String(inv.Id), doc: inv.DocNumber || '', date: inv.TxnDate, amount: Number(line.Amount || 0), description: String(line.Description || '').slice(0, 120) });
         }
       }
-    } catch (e) { /* one bad invoice open must not kill the rest of this receipt's check */ }
+    } catch (e) { await softFail(env, 'qbInvoiceLineDuplicates:openInvoice', e, { severity: 'P2', ref: String(cand.Id || ""), source: 'qbo', context: 'one invoice could not be opened, so a duplicate on it may be missed' }); }
   }
   return matches;
 }
@@ -35925,7 +35925,7 @@ async function qbInvoiceLineDuplicates(env, token, amount, candidates) {
 // row (see receiptReconCheckDuplicatesBulk).
 async function receiptCheckDuplicatesOne(env, row, opts) {
   opts = opts || {};
-  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (_) {}
+  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) { await softFail(env, 'receiptCheckDuplicatesOne:suggestion', e, { severity: 'P2', ref: String(row.ID || ''), source: 'parse', context: 'the saved scanner suggestion is unreadable, so the duplicate check ran without it' }); }
   const amount = row.Total, date = row.Receipt_Date;
   const propertyId = (suggestion && suggestion.property && suggestion.property.id) || '';
   const evidence = [];
@@ -35939,7 +35939,7 @@ async function receiptCheckDuplicatesOne(env, row, opts) {
         reason: `Same amount ($${(+d.amount || 0).toFixed(2)}), date (${d.date}), and store already logged as a Receipts entry${d.wo_id ? ' on WO ' + d.wo_id : ''} at this property.`,
       });
     }
-  } catch (e) { /* best-effort — a Receipts read failure shouldn't block the QB checks below */ }
+  } catch (e) { await softFail(env, 'receiptCheckDuplicatesOne:receipts', e, { severity: 'P1', ref: String(row.ID || ''), source: 'read', context: 'the Receipts tab could not be read, so a duplicate of an existing receipt may be missed' }); }
 
   // Nov 17 2026 (brief 4c): the other Receipt_Recon_Queue rows, pending ones included (the check used to ignore the queue
   // entirely, which is why two scans of the same $43.23 Home Depot receipt read "no matching entries"). Same amount, date within
@@ -36005,7 +36005,7 @@ async function receiptReconCheckDuplicatesBulk(env, body) {
   await ensureColumns(env, 'Receipt_Recon_Queue', ['Duplicate_Evidence_JSON', 'Duplicate_Checked_Date']);
   let token = null, allInvoices = null;
   try { token = await qbAccessToken(env); allInvoices = await qbAllInvoicesRaw(env, token); }
-  catch (e) { /* per-row calls below fall back to fetching their own token/list on a miss */ }
+  catch (e) { await softFail(env, 'receiptReconCheckDuplicatesBulk:qbPrefetch', e, { severity: 'P2', ref: '', source: 'qbo', context: 'the QuickBooks invoice list could not be fetched up front; each row fetches its own' }); }
   const results = [];
   for (const id of ids) {
     const row = rows.find(r => String(r.ID) === String(id));
@@ -36188,7 +36188,7 @@ async function receiptDuplicateAuditBuildIndex(env, body) {
     if (offset === 0 && body.reset !== false) {
       // Fresh run — clear stale rows from a previous audit before repopulating, so a second run
       // never double-counts an invoice's lines against themselves.
-      try { await sheetsRequest(env, 'POST', '/values/QB_Invoice_Line_Cache!A2:Z100000:clear', {}); } catch (_) { /* best-effort — a failed clear just means old + new rows coexist until the next reset */ }
+      try { await sheetsRequest(env, 'POST', '/values/QB_Invoice_Line_Cache!A2:Z100000:clear', {}); } catch (e) { await softFail(env, 'receiptDuplicateAuditBuildIndex:clear', e, { severity: 'P2', ref: '', source: 'write', context: 'the old invoice-line cache could not be cleared, so old and new rows coexist' }); }
     }
     const batch = invoices.slice(offset, offset + limit);
     const newRows = [];
@@ -36198,7 +36198,7 @@ async function receiptDuplicateAuditBuildIndex(env, body) {
       try {
         const full = await qbApi(env, `invoice/${inv.Id}?minorversion=73`, 'GET', null, token);
         for (const l of qbInvoiceLineCacheRows(full && full.Invoice)) { newRows.push(l); lineCount++; }
-      } catch (e) { /* one bad invoice open must not kill the rest of this batch */ }
+      } catch (e) { await softFail(env, 'receiptDuplicateAuditBuildIndex:openInvoice', e, { severity: 'P2', ref: String(inv.Id || ""), source: 'qbo', context: 'one invoice could not be opened, so its lines are missing from the duplicate index' }); }
     }
     if (newRows.length) {
       const cached = new Date().toISOString();
@@ -36290,7 +36290,7 @@ async function receiptDuplicateAuditFlags(env, url) {
   const status = url && url.searchParams.get('status');
   const [rows, receipts] = await Promise.all([
     fetchTab(env, 'Receipt_Duplicate_Audit'),
-    fetchTab(env, 'Receipts').catch(() => []),
+    fetchTabSoft(env, 'Receipts', { where: 'receiptDuplicateAuditFlags:Receipts', severity: 'P2' }).then(r => r.rows),
   ]);
   let out = rows.filter(r => r.Active !== 'FALSE');
   if (status && status !== 'all') out = out.filter(r => (r.Status || 'pending') === status);
@@ -36302,7 +36302,7 @@ async function receiptDuplicateAuditFlags(env, url) {
       return {
         id: f.ID, receipt_id: f.Receipt_ID, wo_id: f.WO_ID, store: f.Store, receipt_date: f.Receipt_Date,
         amount: Number(f.Amount) || 0, match_count: Number(f.Match_Count) || 0,
-        matches: (() => { try { return JSON.parse(f.Matches_JSON || '[]'); } catch (_) { return []; } })(),
+        matches: parseJsonCell(f.Matches_JSON, [], { env, where: 'receiptDuplicateAuditFlags:matches', ref: String(f.ID || ''), severity: 'P2' }),
         status: f.Status || 'pending', flagged_date: f.Flagged_Date || '', reviewed_date: f.Reviewed_Date || '',
         image_attached: img.image_attached, image_url: img.image_url,
       };
@@ -37063,7 +37063,7 @@ async function qbSendStandaloneInvoice(env, body, ctx) {
   // One invoice/bill line per submitted line item, straight off the bill's own descriptions —
   // there is no WO description to fall back to for a standalone bill (§5).
   let receipts = [];
-  try { receipts = JSON.parse(billRow.Receipts_JSON || '[]'); } catch (e) {}
+  try { receipts = JSON.parse(billRow.Receipts_JSON || '[]'); } catch (e) { await softFail(env, 'qbSendStandaloneInvoice:receipts', e, { severity: 'P1', ref: String(billRow.ID || ''), source: 'parse', context: 'the bill receipts are unreadable, so the invoice was built without receipt lines or attachments' }); }
   const itemRef = { value: trade.item };
   const invLines = (Array.isArray(receipts) ? receipts : []).map(rc => {
     const amt = +(Number(rc && rc.amount) || 0).toFixed(2);
@@ -37158,7 +37158,7 @@ async function qbSendStandaloneInvoice(env, body, ctx) {
 
   const billNotOwed = vendorCost <= 0 || vendorInHouse;
   const status = ((invoiceId || billToRidgeco) && (billId || billNotOwed)) ? 'sent' : (invoiceId || billId) ? 'partial' : 'pending';
-  try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number']); } catch (e) {}
+  try { await ensureColumns(env, 'Invoice_Review', ['QB_Bill_To', 'QB_In_House', 'QB_Invoice_Number', 'QB_Bill_Number']); } catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
   await updateRow(env, 'Invoice_Review', ir.ID, {
     QB_Invoice_ID: invoiceId, QB_Bill_ID: billId, QB_Invoice_Status: status,
     QB_Bill_To: billToRidgeco ? 'ridgeco' : (billTo.level + (billTo.display ? ': ' + billTo.display : '')),
@@ -38020,7 +38020,7 @@ async function qbSendInvoice(env, body) {
 
     // Count receipts (with an image): all → customer invoice; reimbursable → also the vendor bill.
     let reimburseWithUrl = 0, allWithUrl = 0;
-    try { const _r = JSON.parse((billRow && billRow.Receipts_JSON) || '[]'); if (Array.isArray(_r)) { allWithUrl = _r.filter(x => x && x.url).length; reimburseWithUrl = _r.filter(x => x && x.pay !== 'account' && x.url).length; } } catch (e) {}
+    try { const _r = JSON.parse((billRow && billRow.Receipts_JSON) || '[]'); if (Array.isArray(_r)) { allWithUrl = _r.filter(x => x && x.url).length; reimburseWithUrl = _r.filter(x => x && x.pay !== 'account' && x.url).length; } } catch (e) { await softFail(env, 'qbSendInvoice:receipts', e, { severity: 'P1', ref: String((billRow && billRow.ID) || ''), source: 'parse', context: 'the bill receipts are unreadable, so the receipt counts and attachments on this send may be wrong' }); }
 
     // DocNumber is deliberately NOT sent — QuickBooks assigns the next number in its own
     // sequence. Supplying one here would break that sequence and collide on a re-send.
@@ -38096,7 +38096,7 @@ async function qbSendInvoice(env, body) {
             previewLoanDeduction = Math.min(computeLoanDeduction(laborPrev, previewLoanBalance), money2(vendorCost - creditVend - (depCredit ? depCredit.amount : 0)));
             if (previewLoanDeduction > 0) warnings.push(`Loan repayment: $${previewLoanDeduction.toFixed(2)} will be deducted from ${vendDisplay}'s payment (current balance $${previewLoanBalance.toFixed(2)}).`);
           }
-        } catch (e) { /* best-effort — confirm still applies/records the real deduction */ }
+        } catch (e) { await softFail(env, 'qbSendInvoice:loanPreview', e, { severity: 'P2', ref: String(ir.ID || ''), source: 'read', context: 'the loan-repayment preview could not be calculated; confirm still applies the real deduction' }); }
       }
 
       return json({ preview: {
@@ -38165,7 +38165,7 @@ async function qbSendInvoice(env, body) {
         fee: (!storedFee && !vendorInHousePre && vendorCostGross > 0) ? { on: feeOn, amount: adjPre.fee } : null,
       });
     } catch (e) {
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_netting_persist_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' ' + String((e && e.message) || e)).slice(0, 480) }); } catch (_) {}
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_netting_persist_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' ' + String((e && e.message) || e)).slice(0, 480) }); } catch (_) { /* silent-ok: the failure is returned to the page just below */ }
       return json({ ok: false, error: 'Could not save the billing decision on this review row (' + String((e && e.message) || e).slice(0, 140) + ') — nothing was sent to QuickBooks.', warnings }, 500);
     }
 
@@ -38238,7 +38238,7 @@ async function qbSendInvoice(env, body) {
           try {
             const cg = await qbApi(env, `customer/${encodeURIComponent(ownerQbId)}?minorversion=73`, 'GET', null, token);
             billEmail = (cg && cg.Customer && cg.Customer.PrimaryEmailAddr && cg.Customer.PrimaryEmailAddr.Address) || '';
-          } catch (e) { /* best-effort — the invoice still posts, just without a saved send-to */ }
+          } catch (e) { await softFail(env, 'qbSendInvoice:sendTo', e, { severity: 'P1', ref: String(ir.ID || ''), source: 'qbo', context: 'the invoice posted but the customer contact could not be read from QuickBooks, so no send-to was saved' }); }
         }
       }
       // Only attach a well-formed address within QuickBooks' 100-char limit. A malformed or
@@ -38279,7 +38279,7 @@ async function qbSendInvoice(env, body) {
             if (others.length) {
               warnings.push(`Invoice number ${invoiceDocNumber} is already used by invoice ${others.map(o => o.Id).join(', ')}. QuickBooks' counter has fallen behind your manual invoices — set the next number in QuickBooks or you'll keep getting duplicates.`);
             }
-          } catch (e) { /* the invoice exists; the duplicate check is advisory */ }
+          } catch (e) { await softFail(env, 'qbSendInvoice:dupNumberCheck', e, { severity: 'P2', ref: String(ir.ID || ''), source: 'qbo', context: 'the invoice-number duplicate check could not run' }); }
         }
       }
     }
@@ -38352,7 +38352,7 @@ async function qbSendInvoice(env, body) {
               warnings.push('Fee credit: $' + used.applied.toFixed(2) + ' of the credit owed to ' + vendDisplay + ' was taken off this bill\'s deduction (credit left $' + used.balance.toFixed(2) + ').');
             } catch (e) {
               warnings.push('⚠ The bill went out with a $' + adjFinal.credit_applied.toFixed(2) + ' fee-credit line, but recording the credit as used failed (' + String((e && e.message) || e).slice(0, 120) + ') — post a matching negative entry on ' + vendDisplay + '\'s fee-credit ledger by hand or the credit will be used twice.');
-              await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' vendor=' + vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
+              await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + ir.ID + ' vendor=' + vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => { /* silent-ok: the credit failure is already shown in the warning above */ });
             }
           }
           if (adjFinal.fee > 0) warnings.push('Instant-pay fee: send $' + adjFinal.bill_total.toFixed(2) + ' to ' + vendDisplay + ' (bill $' + money2(vendorCostGross - loanAdj.deduction).toFixed(2) + (creditVend > 0 ? ' − $' + creditVend.toFixed(2) + ' already billed' : '') + (depCredit ? ' − $' + depCredit.amount.toFixed(2) + ' deposit already paid' : '') + ' − $' + adjFinal.fee.toFixed(2) + ' fee).');
@@ -38401,7 +38401,7 @@ async function qbSendInvoice(env, body) {
         await updateWOFields(env, ir.WO_ID, { Status: 'Invoiced' });
         // The work order screen reads QBO_Invoice_Number and nothing ever wrote it.
         if (invoiceDocNumber) await updateWOFields(env, ir.WO_ID, { QBO_Invoice_Number: invoiceDocNumber });
-      } catch (e) {}
+      } catch (e) { await softFail(env, 'qbSendInvoice:markInvoiced', e, { severity: 'P1', ref: String(ir.WO_ID || ''), source: 'write', context: 'the invoice went to QuickBooks but the Work Order was not marked Invoiced or given its invoice number' }); }
     }
 
     // Signed proposal: mark its remaining payments billed (and the scope closed) so the progress-bill
@@ -38653,7 +38653,7 @@ async function qbSendCombinedInvoice(env, ctx) {
         fee: String(leadIr.Instant_Fee || '').trim() === '' ? { on: rowBuilds.some(rb => rb.feeOn), amount: feeTotal } : null,
       });
     } catch (e) {
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_netting_persist_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + leadIr.ID + ' ' + String((e && e.message) || e)).slice(0, 480) }); } catch (_) {}
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'proposal_netting_persist_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + leadIr.ID + ' ' + String((e && e.message) || e)).slice(0, 480) }); } catch (_) { /* silent-ok: the failure is returned to the page just below */ }
       return json({ ok: false, error: 'Could not save the billing decision on this review row (' + String((e && e.message) || e).slice(0, 140) + ') — nothing was sent to QuickBooks.', warnings }, 500);
     }
 
@@ -38707,7 +38707,7 @@ async function qbSendCombinedInvoice(env, ctx) {
         try {
           const cg = await qbApi(env, `customer/${encodeURIComponent(ownerQbId)}?minorversion=73`, 'GET', null, token);
           billEmail = (cg && cg.Customer && cg.Customer.PrimaryEmailAddr && cg.Customer.PrimaryEmailAddr.Address) || '';
-        } catch (e) {}
+        } catch (e) { await softFail(env, 'qbSendCombinedInvoice:sendTo', e, { severity: 'P1', ref: String(leadIr.ID || ''), source: 'qbo', context: 'the invoice posted but the customer contact could not be read from QuickBooks, so no send-to was saved' }); }
       }
     }
     const emailOk = billEmail.length <= 100 && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(billEmail);
@@ -38736,7 +38736,7 @@ async function qbSendCombinedInvoice(env, ctx) {
           const hits = (dupR && dupR.QueryResponse && dupR.QueryResponse.Invoice) || [];
           const others = hits.filter(x => String(x.Id) !== String(invoiceId));
           if (others.length) warnings.push(`Invoice number ${invoiceDocNumber} is already used by invoice ${others.map(o => o.Id).join(', ')}.`);
-        } catch (e) {}
+        } catch (e) { await softFail(env, 'qbSendCombinedInvoice:dupNumberCheck', e, { severity: 'P2', ref: String(leadIr.ID || ''), source: 'qbo', context: 'the invoice-number duplicate check could not run' }); }
       }
     }
 
@@ -38796,7 +38796,7 @@ async function qbSendCombinedInvoice(env, ctx) {
                 warnings.push('Fee credit: $' + used.applied.toFixed(2) + ' of the credit owed to ' + rb.vendDisplay + ' was taken off this bill\'s deduction (credit left $' + used.balance.toFixed(2) + ').');
               } catch (e) {
                 warnings.push('⚠ The bill for ' + rb.vendDisplay + ' went out with a $' + rb.adj.credit_applied.toFixed(2) + ' fee-credit line, but recording the credit as used failed (' + String((e && e.message) || e).slice(0, 120) + ') — post a matching negative entry on the fee-credit ledger by hand or it will be used twice.');
-                await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + rb.row.ID + ' vendor=' + rb.vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => {});
+                await logTelemetry(env, { Source: 'worker', Job_Type: 'fee_credit_apply_failed', Skill_Or_Endpoint: '/qb/send-invoice', Success: 'FALSE', Notes: ('ir=' + rb.row.ID + ' vendor=' + rb.vendor.ID + ' bill=' + billId + ' ' + String((e && e.message) || e)).slice(0, 400) }).catch(() => { /* silent-ok: the credit failure is already shown in the warning above */ });
               }
             }
             if (rb.adj.fee > 0) warnings.push('Instant-pay fee: send $' + rb.adj.bill_total.toFixed(2) + ' to ' + rb.vendDisplay + ' (bill $' + rb.vendorCost.toFixed(2) + (rb.credit > 0 ? ' − $' + rb.credit.toFixed(2) + ' already billed' : '') + (rb.dep ? ' − $' + rb.dep.amount.toFixed(2) + ' deposit already paid' : '') + ' − $' + rb.adj.fee.toFixed(2) + ' fee).');
@@ -38837,7 +38837,7 @@ async function qbSendCombinedInvoice(env, ctx) {
         try {
           await updateWOFields(env, _wid, { Status: 'Invoiced' });
           if (invoiceDocNumber) await updateWOFields(env, _wid, { QBO_Invoice_Number: invoiceDocNumber });
-        } catch (e) {}
+        } catch (e) { await softFail(env, 'qbSendCombinedInvoice:markInvoiced', e, { severity: 'P1', ref: String(_wid), source: 'write', context: 'the invoice went to QuickBooks but the Work Order was not marked Invoiced or given its invoice number' }); }
       }
     }
 

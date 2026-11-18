@@ -69,6 +69,9 @@ function makeWorld(o = {}) {
     updateRow: async (e, tab, id, f) => { log.updates.push({ tab, id: String(id), f }); tabs[tab] = (tabs[tab] || []).map(r => String(r.ID) === String(id) ? Object.assign({}, r, f) : r); },
     setConfigKey: async (e, { key, value }) => { log.configWrites.push({ key, value }); tabs.Config[key] = value; return J({ success: true }); },
     receiptReconConfirm: async (e, body) => { log.confirms.push(body); const r = o.confirm ? await o.confirm(body, tabs) : { success: true, id: 'R' + body.id }; return J(r); },
+    softFail: async () => ({ ok: false }),
+    parseJsonCell: (cell, fb) => { if (cell === undefined || cell === null || String(cell).trim() === '') return fb; try { return JSON.parse(cell); } catch (e) { return fb; } },
+    fetchTabSoft: async (e, name) => { try { return { rows: await deps.fetchTab(e, name), error: null }; } catch (err) { return { rows: [], error: String(err.message || err) }; } },
     json: J, isStaging: () => false,
     qbAccessToken: async () => { throw new Error('QuickBooks not reachable in this test'); },
   };
