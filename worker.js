@@ -7251,7 +7251,7 @@ async function scopeProposalSignedList(env, url) {
   const out = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').map(r => {
     const sc = scopes.find(x => x.ID === r.Scope_ID) || {};
     const p = props.find(x => x.ID === sc.Property_ID) || {};
-    let sel = {}; try { sel = JSON.parse(r.Selections_JSON || '{}'); } catch (_) {}
+    let sel = parseJsonCell(r.Selections_JSON, {}, { env, where: 'scopeProposalSignedList:selections', ref: String(r.ID || ''), severity: 'P2' });
     const subtotal = +r.Subtotal || 0, deposit = +r.Deposit_Amount || 0, vendorCostTotal = +r.Vendor_Cost_Total || 0;
     // The Hub's "Bill vendor (deposit share)" figure must be the amount book() will ACTUALLY
     // bill — Vendor_Cost_Total × deposit/subtotal — not the vendor's full job cost. Showing the
