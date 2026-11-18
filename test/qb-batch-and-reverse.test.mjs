@@ -119,10 +119,10 @@ console.log('paging: nothing silently dropped');
   const job = await w.call('schedRunDailyReceiptsPost');
   ok(job.partial === true && job.progress_made === true && job.ok === true, 'the daily job returns partial + progress_made so the scheduler resumes it');
   const r3 = await w.call('sendReceiptsToQBEmail', { release: true, limit: 50 });
-  ok(r3.sent === 2 && r3.remaining === 0, 'a limit above the cap is clamped to 8 (5 sent by the job, 2 left)');
-  ok(w.sent.length === 12 && new Set(w.sent.map(m => m.subject)).size === 12, 'all 12 were sent exactly once across the slices');
+  ok(r3.sent === 5 && r3.remaining === 1, 'a limit above the cap is clamped to 5 (3 + 3 + 5 sent, 1 left)');
   const fin = await w.call('schedRunDailyReceiptsPost');
-  ok(!fin.partial && fin.ok === true, 'with nothing left the job finishes normally (and runs the summary/purge steps)');
+  ok(!fin.partial && fin.ok === true, 'the slice that sends the last one finishes the job normally (and runs the summary/purge steps)');
+  ok(w.sent.length === 12 && new Set(w.sent.map(m => m.subject)).size === 12, 'all 12 were sent exactly once across the slices');
 }
 
 console.log('double-send protection and loud failures');
