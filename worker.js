@@ -1480,7 +1480,7 @@ async function checkPinLockout(env, pin) {
     if (lockedUntil && lockedUntil > new Date())
       return { locked: true, minutes_remaining: Math.ceil((lockedUntil - Date.now()) / 60000), fail_count: failCount };
     return { locked: false, fail_count: failCount };
-  } catch(e) { return { locked: false, fail_count: 0 }; }
+  } catch(e) { await softFail(env, 'checkPinLockout', e, { severity: 'P0', ref: '', source: 'read', context: 'the PIN lockout sheet could not be read, so this sign-in was let through without a lockout check' }); return { locked: false, fail_count: 0 }; }
 }
 
 async function recordPinFailure(env, pin) {
