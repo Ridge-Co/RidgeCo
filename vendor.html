@@ -2244,7 +2244,7 @@ function submitStatus(woId, idx) {
   }
   // Save the checklist FIRST (the server re-checks it before accepting Complete), then post the status.
   showActionMsg(idx, 'Saving…', '');
-  persistChecklist(idx).then(function(saved) {
+  return persistChecklist(idx).then(function(saved) {   // returns true when the status saved, false when it did not (the new home list needs to know)
     if (!saved && status === 'Complete') { showActionMsg(idx, esc(t('Could not save the checklist. Try again.')), 'error'); return null; }
     return api('/status', {
       method: 'POST',
