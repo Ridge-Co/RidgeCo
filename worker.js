@@ -28277,7 +28277,7 @@ async function approveReceiptQueue(env, body) {
     } catch (e) { /* filing best-effort — still mark reviewed */ }
   }
   await updateRow(env, 'Receipts_Queue', id, { Vendor: vendor, Receipt_Date: date, Total: String(total), Category: category, Suggested_WO_ID: woId, Suggested_Property_ID: propId, Status: 'filed', Filed_File_URL: filedUrl });
-  try { const vk = String(vendor || '').toLowerCase().trim(); if (vk && category) { const d = JSON.parse(cfg.receipt_vendor_defaults || '{}'); d[vk] = category; await setConfigKey(env, { key: 'receipt_vendor_defaults', value: JSON.stringify(d) }); } } catch (e) {}
+  try { const vk = String(vendor || '').toLowerCase().trim(); if (vk && category) { const d = JSON.parse(cfg.receipt_vendor_defaults || '{}'); d[vk] = category; await setConfigKey(env, { key: 'receipt_vendor_defaults', value: JSON.stringify(d) }); } } catch (e) { await softFail(env, 'approveReceiptQueue:learn_vendor_default', e, { severity: 'P2', ref: String(id), source: 'parse' }); }
   return json({ ok: true, id, filed: filedUrl || null, category });
 }
 
