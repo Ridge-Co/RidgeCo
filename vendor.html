@@ -2252,7 +2252,7 @@ function submitStatus(woId, idx) {
       body: JSON.stringify({ wo_id: woId, status: status, notes: notes, updated_by: session.vendor_name, updated_by_role: 'vendor', vendor_id: session.vendor_id, lang: LANG }),
     });
   }).then(function(data) {
-    if (data === null || data === undefined) return;
+    if (data === null || data === undefined) return false;
     if (data.success) {
       showActionMsg(idx, '✓ Status updated to ' + status, 'success');
       // Update badge in card header
