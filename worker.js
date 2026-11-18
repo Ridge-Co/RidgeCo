@@ -36967,7 +36967,7 @@ async function qbUploadAttachable(env, qbToken, entityType, entityId, filename, 
 // Best-effort — every failure is a warning, never blocks the send.
 async function qbAttachReceipts(env, qbToken, invoiceId, billId, billRow, warnings) {
   let receipts = [];
-  try { receipts = JSON.parse((billRow && billRow.Receipts_JSON) || '[]'); } catch (e) {}
+  receipts = parseJsonCell(billRow && billRow.Receipts_JSON, [], { env, where: 'qbAttachReceipts:Receipts_JSON', ref: String((billRow && billRow.ID) || ''), severity: 'P1' });
   const withUrl = (Array.isArray(receipts) ? receipts : []).filter(r => r && r.url);
   if (!withUrl.length) return;
   let gtoken;
