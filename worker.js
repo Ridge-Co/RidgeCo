@@ -1414,6 +1414,60 @@ export class ReadMeterStore {
   }
 }
 
+// -- WORKFLOWS TRIAL (queue #92, Phase 1 of 3, Nov 18 2026) ---------------------------------------------------------------------
+// ONE non-money flow (the receipt scan) run as a Cloudflare Workflow on STAGING ONLY, to measure whether the Free plan's limits fit real Hub
+// steps. The Workflow class lives in src/workflows-entry.js (the file wrangler.toml names as "main"); the flow in src/workflow-trial.js.
+// All three routes are ADMIN-ONLY (in no ROLE_SCOPES list) and refuse on production with 403: production keeps the scheduler path untouched.
+// Nothing here sends a text or an email, calls QuickBooks, or reads or writes a customer, owner, vendor or tenant record.
+function workflowTrialStagingOnly(env) {
+  if (env && env.__STAGING__) return null;
+  return json({ ok: false, error: 'The Workflows trial runs on staging only. Production keeps using the scheduler.' }, 403);
+}
+async function workflowTrialStart(env, body, url) {
+  const refuse = workflowTrialStagingOnly(env); if (refuse) return refuse;
+  if (!env.RECEIPT_SCAN_TRIAL || typeof env.RECEIPT_SCAN_TRIAL.create !== 'function') {
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'workflow_trial_start_failed', Skill_Or_Endpoint: '/workflow-trial/start', Success: 'FALSE', Notes: 'RECEIPT_SCAN_TRIAL binding is missing: wrangler.toml [[workflows]] did not deploy to this Worker' });
+    return json({ ok: false, error: 'The Workflow binding RECEIPT_SCAN_TRIAL is not on this Worker, so no run was started. The deploy did not pick up the [[workflows]] entry in wrangler.toml.' }, 503);
+  }
+  try {
+    const inst = await env.RECEIPT_SCAN_TRIAL.create({ params: { origin: url.origin, force_fail_once: !!(body && body.force_fail_once === true) } });
+    return json({ ok: true, id: inst.id, force_fail_once: !!(body && body.force_fail_once === true), status_path: '/workflow-trial/status?id=' + encodeURIComponent(inst.id) });
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 300);
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'workflow_trial_start_failed', Skill_Or_Endpoint: '/workflow-trial/start', Success: 'FALSE', Notes: msg });
+    return json({ ok: false, error: 'The trial run could not be started: ' + msg }, 500);
+  }
+}
+async function workflowTrialStatus(env, url) {
+  const refuse = workflowTrialStagingOnly(env); if (refuse) return refuse;
+  const id = String(url.searchParams.get('id') || '').trim();
+  if (!id) return json({ ok: false, error: 'id is required' }, 400);
+  if (!env.RECEIPT_SCAN_TRIAL || typeof env.RECEIPT_SCAN_TRIAL.get !== 'function') return json({ ok: false, error: 'The Workflow binding RECEIPT_SCAN_TRIAL is not on this Worker.' }, 503);
+  try {
+    const inst = await env.RECEIPT_SCAN_TRIAL.get(id);
+    return json({ ok: true, id, status: await inst.status() });
+  } catch (e) {
+    return json({ ok: false, error: 'Could not read the run: ' + String((e && e.message) || e).slice(0, 300) }, 500);
+  }
+}
+async function workflowTrialReport(env, body) {
+  const refuse = workflowTrialStagingOnly(env); if (refuse) return refuse;
+  const phase = String((body && body.phase) || '');
+  if (!['preflight', 'finish', 'failed'].includes(phase)) return json({ ok: false, error: 'phase must be preflight, finish or failed' }, 400);
+  const runId = String((body && body.run_id) || '').slice(0, 80);
+  if (!runId) return json({ ok: false, error: 'run_id is required' }, 400);
+  const notes = { run_id: runId, phase };
+  for (const k of ['scan_ms', 'scan_attempt', 'summary', 'error']) if (body[k] !== undefined) notes[k] = typeof body[k] === 'number' ? body[k] : String(body[k]).slice(0, 220);
+  try {
+    // A Success=FALSE row is also a failure-ledger event (logTelemetry does that), so a failed run reaches Needs Attention.
+    await logTelemetry(env, { Source: 'workflow', Job_Type: 'workflow_trial_' + phase, Skill_Or_Endpoint: 'ReceiptScanTrialWorkflow:' + runId, Latency_ms: typeof body.scan_ms === 'number' ? body.scan_ms : '', Success: phase === 'failed' ? 'FALSE' : 'TRUE', Notes: JSON.stringify(notes).slice(0, 480) });
+  } catch (e) {
+    console.error('workflowTrialReport: telemetry write failed:', schedErrText(e));
+    return json({ ok: false, error: 'The step report could not be saved: ' + schedErrText(e).slice(0, 200) }, 500);   // 500 makes the Workflow step retry; the report is never dropped quietly
+  }
+  return json({ ok: true, recorded: phase, run_id: runId });
+}
+
 // Thin wrapper (Sep 29 2026): every response to the read-only PRODUCTION token is scrubbed of
 // login PINs / named Config secrets (see scrubResponseForProdReadToken). Everything else passes through.
 export default {
