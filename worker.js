@@ -27150,7 +27150,7 @@ async function qbBatchList(env) {
   let receipts, queue;
   try { [receipts, queue] = await Promise.all([fetchTab(env, 'Receipts'), fetchTab(env, 'Receipt_Recon_Queue')]); }
   catch (e) { return json({ ok: false, error: 'Could not read Receipts: ' + String(e && e.message || e) }, 500); }
-  const [properties, workorders] = await Promise.all([fetchTab(env, 'Properties').catch(() => []), fetchTab(env, 'Work_Orders').catch(() => [])]);
+  const [properties, workorders] = await Promise.all([fetchTabSoft(env, 'Properties', { where: 'qbBatchList:Properties', severity: 'P2' }).then(r => r.rows), fetchTabSoft(env, 'Work_Orders', { where: 'qbBatchList:Work_Orders', severity: 'P2' }).then(r => r.rows)]);   // a failed read is reported; the list still shows with blank WO/property text
   const qByReceipt = new Map(); for (const q of queue) { if (q.Confirmed_Receipt_ID && ['confirmed', 'attached_only'].includes(q.Status)) qByReceipt.set(String(q.Confirmed_Receipt_ID), q); }
   const propById = new Map(properties.map(p => [String(p.ID), p])), woById = new Map(workorders.map(w => [String(w.ID), w]));
   const items = receipts.filter(r => qbBatchWaiting(r))
