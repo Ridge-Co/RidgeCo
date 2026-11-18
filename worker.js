@@ -36595,7 +36595,7 @@ function sanitizeCustomerText(text) {
   return String(text || '').split(/\r?\n/).map(l => l.trim()).filter(l => l && !looksLikeAccessDetail(l)).join('\n');
 }
 
-function parseChecklistItems(raw) {
+function parseChecklistItems(raw, env, ref) {
   let arr = raw;
   if (typeof raw === 'string') { try { arr = JSON.parse(raw || '[]'); } catch (_) { return []; } }
   if (!Array.isArray(arr)) return [];
