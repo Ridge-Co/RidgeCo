@@ -36763,7 +36763,7 @@ function hubVisitLaborLines(timeEntries, laborAmt, tradeName, wo, ir, itemRef) {
   });
 }
 
-function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, ownReceipts, timeEntries) {
+function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, ownReceipts, timeEntries, env) {
   // An override is used when REPAIRING an existing invoice: the wording changes, the
   // account it posted to must not. Trade resolution has changed since some invoices were
   // sent, and moving posted revenue between income accounts is a separate decision.
