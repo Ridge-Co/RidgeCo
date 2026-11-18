@@ -26909,7 +26909,7 @@ async function backfillItemsSummary(env, opts) {
   let updated = 0; const failed = []; let paused = false;
   for (const r of batch) {
     try {
-      let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) { /* silent-ok: a row whose Items JSON is unreadable is reported just below as "empty summary returned" */ }
+      const items = parseJsonCell(r.Items, [], { env, where: 'backfillItemsSummary:Items', ref: String(r.ID || ''), severity: 'P2' });
       const summary = await summarizeItemsCheap(env, items);
       if (summary.length) { await updateRow(env, 'Receipt_Recon_Queue', r.ID, { Items_Summary: JSON.stringify(summary) }); updated++; }
       else failed.push({ id: r.ID, error: 'empty summary returned' });
