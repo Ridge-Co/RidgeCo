@@ -7156,7 +7156,7 @@ async function scopeProposalSign(env, body, ip, ua) {
           Calc_Mode: m.calc_mode === 'flat' ? 'flat' : 'percent',
           Flat_Customer_Amount: (m.flat_customer_amount != null ? String(m.flat_customer_amount) : ''),
         });
-        const mJson = await mResp.json().catch(() => ({}));
+        const mJson = await mResp.json().catch(async (e) => { await softFail(env, 'scopeProposalSign:milestoneAnswer', e, { severity: 'P1', ref: String(s.ID || ''), source: 'parse', context: 'a payment milestone saved but its id could not be read back' }); return {}; });
         milestones.push(Object.assign({ id: mJson.id }, m));
       }
     } catch (e) {
