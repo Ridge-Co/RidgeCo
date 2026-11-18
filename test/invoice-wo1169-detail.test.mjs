@@ -10,6 +10,7 @@
 import fs from 'fs';
 import assert from 'node:assert';
 import { test } from 'node:test';
+globalThis.parseJsonCell = globalThis.parseJsonCell || ((c, fb) => { if (c === undefined || c === null || String(c).trim() === '') return fb; try { return JSON.parse(c); } catch (e) { return fb; } });   // fake of the worker helper (the report itself is covered by json-cells-money-failure-reports.test.mjs)
 
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');

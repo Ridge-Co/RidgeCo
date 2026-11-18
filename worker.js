@@ -5593,7 +5593,7 @@ const SCOPES_HEADERS = ['ID','Property_ID','Unit_ID','Room','Title','Status','Ra
 const SCOPE_SCAN_FOLDER_DEFAULT = '1iXjjwsnPKF_GtlR8gesxS9uJppO4xntZ';
 
 async function scopesTab(env) { await ensureTab(env, 'Scopes', SCOPES_HEADERS); }
-function scopeParseItems(s) { try { const a = JSON.parse((s && s.Line_Items) || '[]'); return Array.isArray(a) ? a : []; } catch (_) { return []; } }
+function scopeParseItems(s, env) { const a = parseJsonCell(s && s.Line_Items, [], { env, where: 'scopeParseItems', ref: String((s && s.ID) || ''), severity: 'P1' }); return Array.isArray(a) ? a : []; }
 // Normalizes an item's pricing into a `variants` array — 1 entry = single fixed vendor cost,
 // 2+ entries = a customer CHOICE (e.g. "Repair Roof" vs "Replace Roof"; Brett, Aug 19 2026:
 // "options within scope such as repair or replace roof... may be options where other items
@@ -5762,7 +5762,7 @@ async function scopeList(env, url) {
     return r.Status;
   }
 
-  return json(rows.map(r => ({ id: r.ID, property_id: r.Property_ID, unit_id: r.Unit_ID, room: r.Room, title: r.Title, status: displayStatus(r), wo_id: r.WO_ID, approval_stage: r.Approval_Stage || '', parent_scope_id: r.Parent_Scope_ID, item_count: scopeParseItems(r).length, estimate_amount: r.Estimate_Amount, has_proposal: !!(r.Proposal_Text || '').trim(), created_date: r.Created_Date, updated_date: r.Updated_Date })));
+  return json(rows.map(r => ({ id: r.ID, property_id: r.Property_ID, unit_id: r.Unit_ID, room: r.Room, title: r.Title, status: displayStatus(r), wo_id: r.WO_ID, approval_stage: r.Approval_Stage || '', parent_scope_id: r.Parent_Scope_ID, item_count: scopeParseItems(r, env).length, estimate_amount: r.Estimate_Amount, has_proposal: !!(r.Proposal_Text || '').trim(), created_date: r.Created_Date, updated_date: r.Updated_Date })));
 }
 
 // Builds a customer-facing "<Address> Unit <Label>" string for a scope — looks up the real
@@ -5797,7 +5797,7 @@ async function scopeGet(env, url) {
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
   let srcs = parseJsonCell(s.Source_Refs, [], { env, where: 'scopeGet:Source_Refs', ref: String(s.ID || ''), severity: 'P2' }); if (!Array.isArray(srcs)) srcs = [];
-  return json(Object.assign({}, s, { line_items: scopeParseItems(s), source_refs: srcs }));
+  return json(Object.assign({}, s, { line_items: scopeParseItems(s, env), source_refs: srcs }));
 }
 
 // GET /scope/drive-list?folder= — list image/pdf files in the handwriting scan folder to pick from.
@@ -5859,7 +5859,7 @@ async function scopeCommand(env, body) {
   if (!id || !command) return json({ error: 'scope_id and command required' }, 400);
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
-  const items = scopeParseItems(s);
+  const items = scopeParseItems(s, env);
   const prompt = `You are editing a property-maintenance scope of work. Current line items as JSON:\n${JSON.stringify(items)}\n\nApply this instruction from the contractor:\n"""${command}"""\n\nReturn ONLY strict minified JSON: {"items":[...],"summary":"<one short sentence describing exactly what changed>"}. Each item keeps the shape {"id","area","trade","description","qty","note"}. Preserve the id of any item you keep; assign a fresh id (continue the li# numbering) to any new item. Remove items the instruction says to remove. Never add prices. JSON only.`;
   const txt = await scopeClaude(env, prompt, null, 2000);
   const parsed = scopeParseJSON(txt);
@@ -5964,7 +5964,7 @@ async function scopeSplit(env, body) {
   if (!id || !ids.length) return json({ error: 'scope_id and line_item_ids required' }, 400);
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
-  const items = scopeParseItems(s);
+  const items = scopeParseItems(s, env);
   const picked = items.filter(it => ids.includes(it.id));
   if (!picked.length) return json({ error: 'None of the selected items were found' }, 400);
   const now = new Date().toISOString();
@@ -5988,7 +5988,7 @@ async function scopeApprove(env, body) {
   const id = body.scope_id || body.id; if (!id) return json({ error: 'scope_id required' }, 400);
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
-  if (!scopeParseItems(s).length) return json({ error: 'Scope has no line items to approve' }, 400);
+  if (!scopeParseItems(s, env).length) return json({ error: 'Scope has no line items to approve' }, 400);
   await updateRow(env, 'Scopes', id, { Status: 'approved', Updated_Date: new Date().toISOString() });
   return json({ success: true });
 }
@@ -6000,7 +6000,7 @@ async function scopeToWO(env, body) {
   const id = body.scope_id || body.id; if (!id) return json({ error: 'scope_id required' }, 400);
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
-  const items = scopeParseItems(s); if (!items.length) return json({ error: 'Scope has no line items' }, 400);
+  const items = scopeParseItems(s, env); if (!items.length) return json({ error: 'Scope has no line items' }, 400);
   if (s.WO_ID) return json({ error: 'Scope already has a work order: ' + s.WO_ID, wo_id: s.WO_ID }, 409);
   const trades = [...new Set(items.map(it => (it.trade || '').trim()).filter(Boolean))];
   const trade = trades.length === 1 ? trades[0] : '';
@@ -6132,7 +6132,7 @@ async function woPushToScope(env, body) {
     willCreate = true;
   }
 
-  const existingItems = targetScope ? scopeParseItems(targetScope) : [];
+  const existingItems = targetScope ? scopeParseItems(targetScope, env) : [];
   const mappedItems = scopeItemsFromEstimate(lineItems, existingItems);
   if (!mappedItems.length) return json({ error: `Estimate ${estimate.ID}'s line items all have blank descriptions — nothing to convert.` }, 400);
 
@@ -6488,7 +6488,7 @@ async function scopeProposal(env, body) {
   const id = body.scope_id || body.id; if (!id) return json({ error: 'scope_id required' }, 400);
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
-  const items = scopeParseItems(s); if (!items.length) return json({ error: 'Scope has no line items' }, 400);
+  const items = scopeParseItems(s, env); if (!items.length) return json({ error: 'Scope has no line items' }, 400);
   // An item is priced once ANY option carries a vendor cost OR a Ridge Co materials cost — a
   // materials-only item (Ridge Co buys it, no vendor labor) is legitimately $0 vendor cost
   // (Sep 22 2026; before this, Brett had to type a fake $1 vendor cost, which then got paid to
@@ -6873,7 +6873,7 @@ async function scopeProposalView(env, url, ua, ctx) {
   // Awaited (short) so a failed log is never lost; append &preview=1 to the link to look without counting.
   if (url.searchParams.get('preview') !== '1') await proposalRecordHit(env, s, 'page', ua);
   let addr = await scopeAddr(env, s);
-  let rawItems = []; try { rawItems = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
+  let rawItems = parseJsonCell(s.Proposal_Items_JSON, [], { env, where: 'scopeProposalView:Proposal_Items_JSON', ref: String(s.ID || ''), severity: 'P1' });
   const items = rawItems.map(it => ({
     id: it.id, area: it.area, trade: it.trade, description: it.description,
     // no vendor_cost, no rc_materials_cost (Ridge Co's own materials cost) — only the customer's
@@ -6897,7 +6897,7 @@ async function scopeProposalView(env, url, ua, ctx) {
     const sigs = await fetchTab(env, 'Scope_Signatures');
     const row = sigs.find(r => r.Scope_ID === String(s.ID) && String(r.Active || '').toUpperCase() !== 'FALSE');
     if (row) {
-      let sel = {}; try { sel = JSON.parse(row.Selections_JSON || '{}'); } catch (_) {}
+      let sel = parseJsonCell(row.Selections_JSON, {}, { env, where: 'scopeProposalView:Selections_JSON', ref: String(s.ID || ''), severity: 'P1' });
       let signedSchedule = schedule; // fallback: unsigned live schedule, shown against the locked subtotal below
       try {
         await paymentMilestonesTab(env);
@@ -7130,7 +7130,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   // Vendor cost is looked up from Line_Items (the private source of truth), never from the
   // customer-facing Proposal_Items_JSON/selections payload, and never returned to the client.
   let vendorCostTotal = 0;
-  for (const it of scopeParseItems(s)) {
+  for (const it of scopeParseItems(s, env)) {
     const key = finalSelections[it.id];
     if (key === undefined) continue; // declined optional add-on — not signed, so no vendor cost
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
@@ -7140,7 +7140,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   // vendorCostTotal (so never on a vendor bill); recorded as the budget Signed Proposals tracks
   // matched receipts against. Cost from private Line_Items, customer price from Proposal_Items_JSON.
   let rcMaterialsCost = 0, rcMaterialsPrice = 0;
-  for (const it of scopeParseItems(s)) {
+  for (const it of scopeParseItems(s, env)) {
     const key = finalSelections[it.id];
     if (key === undefined) continue; // declined optional add-on
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
@@ -7480,8 +7480,8 @@ function computeStandaloneBillTotals(lineItems) {
 }
 
 async function scopeSigResolveParties(env, s, row) {
-  let selections = {}; try { selections = JSON.parse(row.Selections_JSON || '{}'); } catch (_) {}
-  const items = scopeParseItems(s);
+  let selections = parseJsonCell(row.Selections_JSON, {}, { env, where: 'scopeSigResolveParties:Selections_JSON', ref: String(s.ID || ''), severity: 'P1' });
+  const items = scopeParseItems(s, env);
   const tradeName = scopeSigTrade(items, selections);
   const trade = QB_TRADE_MAP[tradeName] || QB_TRADE_MAP.General;
 
@@ -8792,8 +8792,8 @@ const OWNER_APPROVAL_DOUBLE_TAP_MS = 2 * 60 * 1000;
 function ownerApprovalsEnabled(cfg) { return String((cfg && cfg.owner_approvals_enabled) || '').trim().toUpperCase() === 'TRUE'; }
 // PURE. The customer price of one proposal from its stored Proposal_Items_JSON: the SAME arithmetic scopeProposalView uses for `subtotal`
 // (selected option of every non-optional item). null when there is nothing to total (the card then says "Open to see price").
-function ownerApprovalTotal(itemsJson) {
-  let items = []; try { items = JSON.parse(itemsJson || '[]'); } catch (_) { return null; }
+function ownerApprovalTotal(itemsJson, env) {
+  const items = parseJsonCell(itemsJson, [], { env, where: 'ownerApprovalTotal', ref: 'Proposal_Items_JSON', severity: 'P1' });
   if (!Array.isArray(items) || !items.length) return null;
   let sum = 0;
   for (const it of items) {
@@ -8807,7 +8807,7 @@ function ownerApprovalTotal(itemsJson) {
 // PURE. The cards one owner sees. `scopes` = Scopes rows, `props`/`units` = Properties/Units rows, `sigs` = Scope_Signatures rows.
 // A proposal shows once it has been SENT (Sent_Date) and carries its customer items. State: approved (an active signature exists),
 // declined / question (the owner's saved response, only while no signature exists), else waiting. Answered cards older than 90 days drop off.
-function ownerApprovalCards(scopes, props, units, sigs, ownerId, nowMs) {
+function ownerApprovalCards(scopes, props, units, sigs, ownerId, nowMs, env) {
   const mine = new Set((props || []).filter(p => String(p.Owner_ID || '') === String(ownerId) && String(p.Active || '').toUpperCase() !== 'FALSE').map(p => String(p.ID)));
   const cutoff = nowMs - OWNER_APPROVAL_WINDOW_DAYS * 86400000;
   const out = [];
@@ -8826,7 +8826,7 @@ function ownerApprovalCards(scopes, props, units, sigs, ownerId, nowMs) {
     out.push({
       scope_id: String(s.ID), title: String(s.Title || ''),
       property: String(prop.Address || ('Property ' + s.Property_ID)), unit: unit && unit.Unit_Label ? String(unit.Unit_Label) : '',
-      total: ownerApprovalTotal(s.Proposal_Items_JSON),
+      total: ownerApprovalTotal(s.Proposal_Items_JSON, env),
       state, question_asked: state === 'waiting' && resp === 'question',
       sent_at: String(s.Sent_Date || ''), opened_at: String(s.Page_First_Viewed || ''), answered_at: answeredAt,
       response_text: state === 'declined' ? String(s.Owner_Response_Text || '') : '',
@@ -8843,7 +8843,7 @@ async function ownerApprovals(env, callerRole, callerSessionId, url) {
   if (!ownerApprovalsEnabled(cfg)) return json({ ok: true, enabled: false, message: 'not available', cards: [] });
   await scopesTab(env); await scopeSigTab(env);
   const [scopes, props, units, sigs] = await fetchTabs(env, ['Scopes', 'Properties', 'Units', 'Scope_Signatures']);
-  const cards = ownerApprovalCards(scopes, props, units, sigs, ownerId, Date.now());
+  const cards = ownerApprovalCards(scopes, props, units, sigs, ownerId, Date.now(), env);
   for (const c of cards) {
     if (c.state !== 'waiting') continue;
     const row = scopes.find(s => String(s.ID) === c.scope_id);
@@ -10082,7 +10082,7 @@ function addonMissingPhotoItems(items, photoRows) {
   return (Array.isArray(items) ? items : []).map(it => it.index).filter(ix => !have.has(String(ix)));
 }
 
-function addonParseItems(child) { try { const a = JSON.parse(child.Addon_Items_JSON || '[]'); return Array.isArray(a) ? a : []; } catch (_) { return []; } }
+function addonParseItems(child, env) { const a = parseJsonCell(child.Addon_Items_JSON, [], { env, where: 'addonParseItems', ref: String((child && child.ID) || ''), severity: 'P1' }); return Array.isArray(a) ? a : []; }
 function addonLatestEstimate(estimates, woId) {
   const v = (estimates || []).filter(e => e.WO_ID === woId && e.Active !== 'FALSE');
   return v.length ? v.reduce((a, b) => (parseInt(a.Version) || 0) > (parseInt(b.Version) || 0) ? a : b) : null;
@@ -10120,7 +10120,7 @@ async function addonStart(env, body, callerRole, callerSessionId) {
   if (created.duplicate) {
     // double-tap: hand back the child that already exists
     const existing = findWO(await fetchTab(env, 'Work_Orders'), childId);
-    const stored = existing ? addonParseItems(existing) : [];
+    const stored = existing ? addonParseItems(existing, env) : [];
     return json({ success: true, duplicate: true, child_wo_id: childId, items: (stored.length ? stored : v.items).map(it => ({ index: it.index, desc: it.desc })) });
   }
   try { await assignVendor(env, { wo_id: childId, vendor_id: vendorId, notify: false }); } catch (e) { /* surfaced by the field check below */ }
@@ -10151,7 +10151,7 @@ async function addonSubmit(env, body, callerRole, callerSessionId) {
   if (status === 'Withdrawn') return json({ error: 'This additional work was withdrawn' }, 400);
   if (status !== 'Draft' && status !== 'Submitted') return json({ error: 'This job is not an additional-work draft' }, 400);
 
-  const items = addonParseItems(child);
+  const items = addonParseItems(child, env);
   if (!items.length) return json({ error: 'Draft has no items' }, 400);
   const missing = addonMissingPhotoItems(items, attachments.filter(a => a.WO_ID === childId));
   if (missing.length) return json({ error: 'Every item needs at least one photo', missing_items: missing }, 400);
@@ -10238,8 +10238,8 @@ async function addonList(env, url, callerRole, callerSessionId) {
   const out = children.map(c => {
     const est = addonLatestEstimate(estimates, c.ID);
     const photos = addonPhotosByItem(attachments, c.ID);
-    let lines = []; try { lines = JSON.parse((est && est.Line_Items) || '[]'); } catch (_) {}
-    const items = addonParseItems(c).map(it => {
+    let lines = parseJsonCell(est && est.Line_Items, [], { env, where: 'addonList:Line_Items', ref: String(c.ID || ''), severity: 'P1' });
+    const items = addonParseItems(c, env).map(it => {
       const line = lines.find(l => l && Number(l.addon_item) === it.index) || {};
       const ph = photos[String(it.index)] || [];
       return { index: it.index, desc: it.desc, desc_en: line.desc_en || '', photo_count: ph.length, photos: ph };
@@ -10315,7 +10315,7 @@ async function addonOwnerNotice(env, body) {
   let lines = [], linesUnreadable = false;
   try { lines = JSON.parse((est && est.Line_Items) || '[]'); } catch (e) { linesUnreadable = true; await softFail(env, 'addonOwnerNotice:lineItems', e, { req, severity: 'P1', ref: childId, source: 'parse', context: 'the owner notice was built without the saved estimate lines' }); }
   const photos = addonPhotosByItem(attachments, childId);
-  const items = addonParseItems(child);
+  const items = addonParseItems(child, env);
   const itemTexts = items.map(it => {
     const line = lines.find(l => l && Number(l.addon_item) === it.index) || {};
     return englishOnly(line.desc_en || it.desc);
@@ -12031,20 +12031,20 @@ function maxPriceNum(v) {
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
 }
 
-function estimateSubtotalOf(e) {
+function estimateSubtotalOf(e, env) {
   const s = parseFloat(String((e && e.Subtotal) == null ? '' : e.Subtotal).replace(/[$,\s]/g, ''));
   if (Number.isFinite(s)) return s;
-  try { return (JSON.parse((e && e.Line_Items) || '[]') || []).reduce((t, li) => t + (parseFloat(li && li.amount) || 0), 0); } catch (_) { return 0; }
+  { const li = parseJsonCell(e && e.Line_Items, [], { env, where: 'estimateSubtotalOf', ref: String((e && e.ID) || ''), severity: 'P1' }); return Array.isArray(li) ? li.reduce((t, x) => t + (parseFloat(x && x.amount) || 0), 0) : 0; }
 }
 
 // What the vendor may bill: the max price, or the latest APPROVED estimate for this WO if that is higher. 0 = no max set.
-function woMaxCeiling(wo, estimates) {
+function woMaxCeiling(wo, estimates, env) {
   const max = maxPriceNum(wo && wo.Max_Price);
   if (!max) return 0;
   const approved = (estimates || [])
     .filter(e => String(e.WO_ID) === String(wo.ID) && ['approved', 'converted'].includes(String(e.Status || '').trim().toLowerCase()))   // 'Converted' = approved and pushed into a proposal
     .sort((a, b) => (parseInt(b.Version || '0') || 0) - (parseInt(a.Version || '0') || 0));
-  return Math.max(max, approved.length ? estimateSubtotalOf(approved[0]) : 0);
+  return Math.max(max, approved.length ? estimateSubtotalOf(approved[0], env) : 0);
 }
 
 function maxPriceMoney(n) { return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
@@ -12056,7 +12056,7 @@ async function maxPriceGateResponse(env, wo, vendorId, total, hintLang) {
   const amt = parseFloat(String(total == null ? '' : total).replace(/[$,\s]/g, ''));
   if (!Number.isFinite(amt) || amt <= max + 0.004) return null;
   let ceiling = max;
-  try { ceiling = woMaxCeiling(wo, await fetchTab(env, 'Estimates')); } catch (_) { ceiling = max; }
+  try { ceiling = woMaxCeiling(wo, await fetchTab(env, 'Estimates'), env); } catch (_) { ceiling = max; }
   if (amt <= ceiling + 0.004) return null;
   let lang = String(hintLang || '').toLowerCase() === 'es' ? 'es' : 'en';
   if (vendorId) { try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (vendorWantsSpanish(v)) lang = 'es'; } catch (_) {} }
@@ -14318,7 +14318,7 @@ async function retranslateEstimate(env, body) {
   else if (body && body.wo_id && body.version != null) est = all.find(e => e.WO_ID === String(body.wo_id) && String(e.Version) === String(body.version) && e.Active !== 'FALSE');
   else return json({ error: 'estimate_id, or wo_id + version, required' }, 400);
   if (!est) return json({ error: 'Estimate not found' }, 404);
-  let lines = []; try { lines = JSON.parse(est.Line_Items || '[]'); } catch (_) {}
+  const lines = parseJsonCell(est.Line_Items, [], { env, where: 'retranslateEstimate:Line_Items', ref: String(est.ID || ''), severity: 'P1' });
   if (!Array.isArray(lines) || !lines.length) return json({ error: 'Estimate has no line items' }, 400);
   const en = await estimateEnglishFields(env, lines, est.Change_Reason || '', { force: true });
   if (!en.ok) return json({ ok: false, success: false, error: 'Translation is unavailable right now (' + (en.error || 'unknown') + ') — nothing was changed. Try again in a minute.' }, 502);
@@ -15392,7 +15392,7 @@ async function generateEstimateText(env, body) {
   if (!_pc) return json({ error: 'Pricing not configured — set PRICING_CONFIG (Cloudflare secret) or the Config sheet `pricing_config` row.' }, 400);
   const pricing = calcTieredEstimate(rawCost, _pc);
   let includeIntegrityClause=false;
-  if (wo_id) { try { const all=await fetchTab(env,'Estimates'); const versions=all.filter(e=>e.WO_ID===wo_id).sort((a,b)=>parseInt(a.Version||'1')-parseInt(b.Version||'1')); if(versions.length){const firstItems=JSON.parse(versions[0].Line_Items||'[]'); if(firstItems.length>1&&line_items.length<firstItems.length) includeIntegrityClause=true;} } catch(e){} }
+  if (wo_id) { try { const all=await fetchTab(env,'Estimates'); const versions=all.filter(e=>e.WO_ID===wo_id).sort((a,b)=>parseInt(a.Version||'1')-parseInt(b.Version||'1')); if(versions.length){const firstItems=parseJsonCell(versions[0].Line_Items, [], { env, where: 'generateEstimateText:Line_Items', ref: String(wo_id), severity: 'P1' }); if(firstItems.length>1&&line_items.length<firstItems.length) includeIntegrityClause=true;} } catch(e){ await softFail(env, 'generateEstimateText:integrityClause', e, { severity: 'P1', ref: String(wo_id), source: 'read' }); } }
   const itemsList=line_items.map(li=>`- ${englishOnly(li.desc_en || li.desc)}`).join('\n');   // owner-facing text is English (Sep 28 2026): desc_en when the vendor wrote Spanish
   const integrityClauseText=includeIntegrityClause?'\n- Estimate Integrity Clause: This estimate is priced as a single, unified project based on current mobilization efficiencies. If individual line items are selectively removed or declined by the client, any remaining approved items are subject to a 15% price adjustment plus a $150 travel/mobilization fee.':'';
   // Standing policy (Aug 21 2026, Brett) — same boilerplate as scopeProposal()'s doc: standalone/
@@ -32386,7 +32386,7 @@ async function qbRepairable(env, url) {
       const origItemRef = qbOriginalItemRef(q);
       const woTimeEntries = allTimeEntries.filter(e => String(e.WO_ID) === String(ir.WO_ID));
       const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
-      const rebuilt = buildInvoiceLines(ir, _inEn.billRow, trade, resolved.name, wo, origItemRef, await qbApprovedReceipts(env, ir), _inEn.timeEntries);
+      const rebuilt = buildInvoiceLines(ir, _inEn.billRow, trade, resolved.name, wo, origItemRef, await qbApprovedReceipts(env, ir), _inEn.timeEntries, env);
 
       const folderId  = wo.Drive_Folder_ID || '';
       const folderUrl = wo.Drive_Folder_URL || (folderId ? ('https://drive.google.com/drive/folders/' + folderId) : '');
@@ -32443,7 +32443,7 @@ async function qbRepairInvoice(env, body) {
     const origRef = qbOriginalItemRef(existing);
     const woTimeEntries = allTimeEntries.filter(e => String(e.WO_ID) === String(ir.WO_ID));
     const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
-    const rebuilt = buildInvoiceLines(ir, _inEn.billRow, trade, resolved.name, wo, origRef, await qbApprovedReceipts(env, ir), _inEn.timeEntries);
+    const rebuilt = buildInvoiceLines(ir, _inEn.billRow, trade, resolved.name, wo, origRef, await qbApprovedReceipts(env, ir), _inEn.timeEntries, env);
     // Without the original item we'd fall back to the freshly-resolved trade, which could
     // move posted revenue to a different income account. Say so rather than doing it.
     const itemWarning = origRef ? '' : 'Could not read the income account this invoice posted to, so it would be re-derived from the trade. Check it in QuickBooks afterwards.';
@@ -36763,7 +36763,7 @@ function hubVisitLaborLines(timeEntries, laborAmt, tradeName, wo, ir, itemRef) {
   });
 }
 
-function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, ownReceipts, timeEntries) {
+function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, ownReceipts, timeEntries, env) {
   // An override is used when REPAIRING an existing invoice: the wording changes, the
   // account it posted to must not. Trade resolution has changed since some invoices were
   // sent, and moving posted revenue between income accounts is a separate decision.
@@ -36771,7 +36771,7 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
   const lines = [];
   let materialsTotal = 0;
   let receipts = [];
-  try { receipts = JSON.parse(billRow?.Receipts_JSON || '[]'); } catch (e) {}
+  receipts = parseJsonCell(billRow?.Receipts_JSON, [], { env, where: 'buildInvoiceLines:Receipts_JSON', ref: String((billRow && billRow.ID) || ''), severity: 'P1' });
   if (Array.isArray(receipts)) {
     for (const rc of receipts) {
       const amt = +(Number(rc && rc.amount) || 0).toFixed(2);
@@ -36967,7 +36967,7 @@ async function qbUploadAttachable(env, qbToken, entityType, entityId, filename, 
 // Best-effort — every failure is a warning, never blocks the send.
 async function qbAttachReceipts(env, qbToken, invoiceId, billId, billRow, warnings) {
   let receipts = [];
-  try { receipts = JSON.parse((billRow && billRow.Receipts_JSON) || '[]'); } catch (e) {}
+  receipts = parseJsonCell(billRow && billRow.Receipts_JSON, [], { env, where: 'qbAttachReceipts:Receipts_JSON', ref: String((billRow && billRow.ID) || ''), severity: 'P1' });
   const withUrl = (Array.isArray(receipts) ? receipts : []).filter(r => r && r.url);
   if (!withUrl.length) return;
   let gtoken;
@@ -37977,7 +37977,7 @@ async function qbSendInvoice(env, body) {
     }
 
     const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
-    const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
+    const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries, env);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
     // Nov 2 2026: checklist items left off (vendor reason code) or withheld (looked like an access code) are flagged here.
     workDoneWarnings(wo).forEach(w => warnings.push(w));
@@ -38518,8 +38518,8 @@ async function qbSendCombinedInvoice(env, ctx) {
       const _rowWo = ctx.woList ? findWO(ctx.woList, r.WO_ID) : null;
       const _isAddon = !!(_rowWo && String(_rowWo.Type || '') === 'addon' && String(_rowWo.Parent_WO_ID || '').trim() && String(r.WO_ID) !== String(woId));
       const inv = _isAddon
-        ? buildInvoiceLines(Object.assign({}, r, { WO_ID: _rowWo.Parent_WO_ID }), _inEn.billRow, trade, tradeName, _rowWo, null, ownReceipts, _inEn.timeEntries)
-        : buildInvoiceLines(r, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
+        ? buildInvoiceLines(Object.assign({}, r, { WO_ID: _rowWo.Parent_WO_ID }), _inEn.billRow, trade, tradeName, _rowWo, null, ownReceipts, _inEn.timeEntries, env)
+        : buildInvoiceLines(r, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries, env);
       if (_isAddon) inv.lines.forEach(l => { l.Description = ('Additional work — ' + l.Description).slice(0, 4000); });
       if (inv.laborAmt < 0) warnings.push(`Bill ${r.Bill_ID || r.ID}: materials exceed its customer total — labor line is negative, check the bill.`);
 

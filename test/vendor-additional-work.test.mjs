@@ -2,6 +2,7 @@
 // combined-invoice.test.mjs: pure helpers are executed for real, handlers are executed against stubbed
 // Sheets helpers, and the money / plumbing edits are asserted structurally.
 import fs from 'fs';
+globalThis.parseJsonCell = globalThis.parseJsonCell || ((c, fb) => { if (c === undefined || c === null || String(c).trim() === '') return fb; try { return JSON.parse(c); } catch (e) { return fb; } });   // fake of the worker helper (the report itself is covered by json-cells-money-failure-reports.test.mjs)
 import './_wo-status-global.mjs';   // WOStatus for the sandboxed worker.js functions (queue #140)
 const src = fs.readFileSync('worker.js', 'utf8');
 
