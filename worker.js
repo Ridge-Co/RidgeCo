@@ -6326,7 +6326,7 @@ async function backfillReceiptAttachments(env, body) {
   const apply = !!(body && body.apply === true);
   const [receipts, attachments] = await Promise.all([
     fetchTab(env, 'Receipts').catch(e => softFail(env, 'backfillReceiptAttachments:Receipts', e, { severity: 'P2', source: 'read' }).then(() => [])),
-    fetchTab(env, 'Attachments').catch(() => []),
+    fetchTab(env, 'Attachments').catch(e => softFail(env, 'backfillReceiptAttachments:Attachments', e, { severity: 'P1', source: 'read', context: 'the already-linked list is empty, so a backfill run could add duplicate gallery rows' }).then(() => [])),
   ]);
   const alreadyLinked = new Set(
     attachments.filter(a => String(a.File_Type || '').toLowerCase() === 'receipt' && a.Receipt_ID)
