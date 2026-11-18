@@ -12059,7 +12059,7 @@ async function maxPriceGateResponse(env, wo, vendorId, total, hintLang) {
   try { ceiling = woMaxCeiling(wo, await fetchTab(env, 'Estimates'), env); } catch (e) { await softFail(env, 'maxPriceGateResponse:Estimates', e, { severity: 'P1', ref: String((wo && wo.ID) || ''), source: 'read' }); ceiling = max; }
   if (amt <= ceiling + 0.004) return null;
   let lang = String(hintLang || '').toLowerCase() === 'es' ? 'es' : 'en';
-  if (vendorId) { try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (vendorWantsSpanish(v)) lang = 'es'; } catch (_) {} }
+  if (vendorId) { try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (vendorWantsSpanish(v)) lang = 'es'; } catch (e) { await softFail(env, 'maxPriceGateResponse:Vendors', e, { severity: 'P2', source: 'read' }); } }
   const msg = lang === 'es'
     ? 'Esta factura (' + maxPriceMoney(amt) + ') supera el precio máximo de este trabajo (' + maxPriceMoney(ceiling) + '). Acepte el precio máximo, o envíe un nuevo presupuesto con la razón de la diferencia.'
     : 'This invoice (' + maxPriceMoney(amt) + ') is over the max price for this job (' + maxPriceMoney(ceiling) + '). Accept the max price, or send a new estimate with the reason for the difference.';
