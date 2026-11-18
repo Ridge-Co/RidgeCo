@@ -1181,6 +1181,8 @@ const _hubWorkerCore = {
         if (path === '/receipt-scan')             return await receiptScan(env);
         if (path === '/receipt-queue/approve')    return await approveReceiptQueue(env, body);
         if (path === '/receipt-recon/scan')       return await receiptReconScan(env, body);
+        if (path === '/workflow-trial/start')     return await workflowTrialStart(env, body, url);   // queue #92 Phase 1: ADMIN-ONLY (no ROLE_SCOPES entry), staging only; starts one trial run of the receipt-scan Workflow
+        if (path === '/workflow-trial/report')    return await workflowTrialReport(env, body);       // queue #92 Phase 1: ADMIN-ONLY, staging only; the Workflow reports each step here (Ops_Telemetry row; a failure also reaches the failure ledger)
         if (path === '/receipt-recon/import-statement') return await receiptReconImportStatement(env, body);
         if (path === '/receipt-recon/confirm')    return await receiptReconConfirm(env, body);
         if (path === '/receipt/attach-only')      return await receiptAttachOnly(env, body);
