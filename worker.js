@@ -6293,7 +6293,7 @@ async function adminGeminiContextUpdate(env, body) {
 
 async function backfillScopeWOVendor(env) {
   const [scopes, workorders] = await Promise.all([
-    fetchTab(env, 'Scopes').catch(() => []),
+    fetchTab(env, 'Scopes').catch(e => softFail(env, 'backfillScopeWOVendor:Scopes', e, { severity: 'P2', source: 'read' }).then(() => [])),
     fetchTab(env, 'Work_Orders').catch(() => []),
   ]);
   const woById = new Map(workorders.map(w => [String(w.ID), w]));
