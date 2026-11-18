@@ -2272,11 +2272,14 @@ function submitStatus(woId, idx) {
         if (window.JobOrder) JobOrder.nudgeInvoice(woId);
         else if (currentTab === 'open') setTimeout(function(){ loadWorkOrders(); }, 1500);
       }
+      return true;
     } else {
       showActionMsg(idx, esc((data && data.error) || 'Error saving status.'), 'error');
+      return false;
     }
   }).catch(function() {
     showActionMsg(idx, 'Connection error.', 'error');
+    return false;
   });
 }
 
