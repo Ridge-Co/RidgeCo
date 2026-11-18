@@ -27188,7 +27188,7 @@ function qbBatchListItem(r, q, wo, prop) {
     wo_id: r.WO_ID || '', wo_description: wo ? String(wo.Description || '').slice(0, 120) : '',
     property_id: r.Property_ID || '', property_address: prop ? (prop.Address || '') : '',
     queue_id: q ? String(q.ID) : '', can_reverse: !!q && st !== 'sending',
-    error: r.QB_Batch_Error || '', last_attempt: r.QB_Batch_Sent_Date || '',
+    error: String(r.QB_Batch_Error || '').indexOf('claim:') === 0 ? '' : (r.QB_Batch_Error || ''), last_attempt: r.QB_Batch_Sent_Date || '',
   };
 }
 // GET /receipts/qb-batch — everything the "Waiting to send to QuickBooks" panel shows. Read-only.
