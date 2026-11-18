@@ -21841,7 +21841,7 @@ async function processRecurringWorkOrders(env, opts) {
     if (!due) continue;
     let skips = {}; skips = parseJsonCell(tpl.Last_Skips, {}, { env, where: 'processRecurringWorkOrders:Last_Skips', ref: String(tpl.ID || ''), severity: 'P1' }) || {};
     let skipsChanged = false, postedAny = false;
-    for (const target of recurTargets(tpl)) {
+    for (const target of recurTargets(tpl, env)) {
       const key = recurTargetKey(target);
       const mine = workorders.filter(w => w.Recurring_Template_ID === String(tpl.ID) && w.Property_ID === target.p && (w.Unit_ID || '') === target.u);
       if (mine.some(w => w.Recurring_Due === due)) continue;      // already posted for this occurrence
