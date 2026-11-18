@@ -144,4 +144,38 @@ sheets.Receipt_Recon_Queue.push(q({ ID: '12' }));
 await W.receiptAttachOnly(env, { id: '12', wo_id: '1001', customer_card: true });
 ok(spies.sendReceiptsToQBEmail === qb2 && sheets.Receipts.find(r => r.Non_Billable_Reason === 'customer_card'), 'customer-card attach still sends nothing to QuickBooks and is tagged customer_card');
 
+// ── Nov 17 2026 (Brett): customer-card receipts cannot be confirmed without a work order ─────────────────────────────────────────────────────────
+console.log('customer-card confirm guard');
+const rcBefore = sheets.Receipts.length, qbSpy = spies.sendReceiptsToQBEmail;
+const gq = (id, o) => sheets.Receipt_Recon_Queue.push(q(Object.assign({ ID: id }, o)));
+gq('301');                                                                     // manually marked customer card
+gq('302', { Manual_Customer_Card: '', Suggestion: JSON.stringify({ category: 'customer_paid', action: 'exclude' }) });   // scanner said customer paid
+gq('303', { Manual_Customer_Card: '', Suggestion: JSON.stringify({ category: 'billable', card_status: 'customer' }) });  // scanner card status
+gq('304', { Manual_Customer_Card: '', Suggestion: JSON.stringify({ category: 'billable' }) });                          // an ordinary receipt
+gq('305', { Suggestion: JSON.stringify({ category: 'refund', manual_refund: true }) });                                   // manual refund mark wins over the card mark
+for (const id of ['301', '302', '303']) {
+  const r = await W.receiptReconConfirm(env, { id, no_wo: true, property_id: '11', amount: '43.23' });
+  ok(r.status === 409 && r.body.code === 'customer_card_needs_wo' && /customer's card/.test(r.body.error) && /Attach to work order/.test(r.body.error), 'queue row ' + id + ': a customer-card receipt confirmed as a no-work-order expense is refused (409 customer_card_needs_wo) with a plain on-screen message');
+}
+const noJob = await W.receiptReconConfirm(env, { id: '301' });
+ok(noJob.status === 400 && /wo_id required/.test(noJob.body.error), 'no work order and no expense flag is still refused by the existing wo_id check');
+ok(sheets.Receipts.length === rcBefore && spies.sendReceiptsToQBEmail === qbSpy, 'none of the refused confirms wrote a Receipts row or touched QuickBooks');
+ok(sheets.Receipt_Recon_Queue.filter(r => ['301', '302', '303'].includes(r.ID)).every(r => r.Status === 'pending'), 'the refused queue rows stay pending (nothing half-done)');
+const okRow = await W.receiptReconConfirm(env, { id: '304', no_wo: true, property_id: '11', amount: '43.23' });
+ok(okRow.body.ok === true && sheets.Receipt_Recon_Queue.find(r => r.ID === '304').Status === 'confirmed', 'an ordinary receipt still confirms as an expense (guard only hits customer-card receipts)');
+const ref = await W.receiptReconConfirm(env, { id: '305', no_wo: true, property_id: '11' });
+ok(ref.status !== 409 || ref.body.code !== 'customer_card_needs_wo', 'a manual-refund mark wins over the customer-card mark, as in the queue read');
+sheets.Receipt_Recon_Queue.push(q({ ID: '306' }));
+const att = await W.receiptAttachOnly(env, { id: '306', wo_id: '1001', customer_card: true });
+ok(att.body.ok && att.body.customer_card === true, 'attach-only (the customer-card path) still works');
+sheets.Receipt_Recon_Queue.push(q({ ID: '307', Manual_Customer_Card: '', Suggestion: JSON.stringify({ category: 'billable' }) }));
+const fpa = await W.receiptAttachOnly(env, { id: '307', wo_id: '1001', amount: '5.00', non_billing_reason: 'fixed_price' });
+ok(fpa.body.ok && fpa.body.fixed_price === true, 'the fixed-price path still works');
+ok(/receiptRowIsCustomerCard\(row\) && \(noWo \|\| !wo_id\)/.test(grab('receiptReconConfirm', true)), 'the guard sits in receiptReconConfirm itself, so the page, the bulk expense action and auto-rules all hit it');
+const bulk2 = grab('receiptReconBulkAction', true);
+ok(/failed\.push\(\{ id, error: resJson\.error \}\)/.test(bulk2), 'bulk actions report a refused row in their failed list (shown on screen), not silently');
+const htmlRc = fs.readFileSync(new URL('../receipt-reconciler.html', import.meta.url), 'utf8');
+ok(/if \(excluded\) html \+= '<button class="btn small" disabled title="Paid on a customer card/.test(htmlRc) && /Confirm \(not available: customer card\)/.test(htmlRc), 'the page shows a disabled Confirm with the reason on a customer-card receipt');
+ok(/!excluded && isPendingLike/.test(htmlRc) && /if \(!excluded && !isCompany && !isRefund\) html \+= '<button class="btn small" onclick="confirmRow/.test(htmlRc), 'the enabled Confirm and the one-tap expense buttons are not offered on a customer-card receipt');
+
 console.log(`\nreceipt-customer-card-nonbilling: ${n}/${n} passing`);
