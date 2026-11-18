@@ -5292,7 +5292,7 @@ async function receiptCardsChange(env, body) {
   const cust = (owner === 'customer' && custOld.includes(l4)) ? custOld.slice() : custOld.filter(x => x !== l4);
   if (owner === 'mine' && !mine.includes(l4)) mine.push(l4);
   if (owner === 'customer' && !cust.includes(l4)) cust.push(l4);
-  const labels = receiptCardLabelsFromCfg(cfg.receipt_card_labels);
+  const labels = receiptCardLabelsFromCfg(cfg.receipt_card_labels, env);
   if (owner === 'remove') delete labels[l4];
   else if (body.label !== undefined) { const lab = String(body.label || '').trim().slice(0, 40); if (lab) labels[l4] = lab; else delete labels[l4]; }
   const writes = [];
