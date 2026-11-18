@@ -18,7 +18,7 @@ function extractFn(name) {
 }
 const FNS = ['qbBatchStatus', 'qbBatchWaiting', 'qbBatchSendable', 'qbBatchSubject', 'qbBatchWrite', 'sendReceiptsToQBEmail', 'qbBatchAction', 'qbBatchDeleteDone', 'qbDeleteNeeded',
   'qbBatchQueuedNote', 'qbBatchListItem', 'qbBatchHoursUntil', 'qbBatchList', 'voidConfirmedReceiptForQueueRow', 'receiptReconUndo', 'receiptReconConfirm', 'receiptReconReassign',
-  'findReceiptForQueueRow', '_rcNorm', 'receiptRowIsCustomerCard', 'schedRunDailyReceiptsPost'];
+  'findReceiptForQueueRow', '_rcNorm', 'receiptRowIsCustomerCard', 'schedRunDailyReceiptsPost', 'qbBatchFresh', 'qbBatchStillDue', 'qbBatchClaimHeld', 'qbBatchEtDayMinutes'];
 const jsonResp = (o, status = 200) => ({ status, json: async () => o, clone() { return this; } });
 
 function world(opts = {}) {
