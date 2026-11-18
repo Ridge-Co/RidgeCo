@@ -16,15 +16,17 @@ const src = [
 
 const json = (b, s = 200) => ({ body: b, status: s });
 function mk(tabs, opts = {}) {
-  const calls = { updates: [], audits: [], ensured: [] };
+  const calls = { updates: [], audits: [], ensured: [], soft: [] };
+  const softFail = async (env, where, err, o) => { calls.soft.push(where + '|' + ((o && o.severity) || '') + '|' + ((o && o.ref) || '')); };
   const fetchTab = async (env, tab) => { if (opts.failTab === tab) throw new Error('sheet read failed'); return tabs[tab] || []; };
   const findWO = (rows, id) => rows.find(r => String(r.ID) === String(id));
   const ensureColumns = async (env, tab, cols) => { calls.ensured.push(tab + ':' + cols.join()); };
   const updateWOFields = async (env, id, f) => { calls.updates.push([id, f]); if (!opts.dropWrites) Object.assign(tabs.Work_Orders.find(r => r.ID === id), f); };
   const invalidateTabCache = () => {};
   const logWOAudit = async (...a) => { calls.audits.push(a); };
-  const lib = new Function('json', 'fetchTab', 'findWO', 'ensureColumns', 'updateWOFields', 'invalidateTabCache', 'logWOAudit',
-    src + '; return { maxPriceNum, woMaxCeiling, maxPriceGateResponse, setWoMaxPrice };')(json, fetchTab, findWO, ensureColumns, updateWOFields, invalidateTabCache, logWOAudit);
+  const lib = new Function('json', 'fetchTab', 'findWO', 'ensureColumns', 'updateWOFields', 'invalidateTabCache', 'logWOAudit', 'softFail', 'parseJsonCell',
+    src + '; return { maxPriceNum, woMaxCeiling, maxPriceGateResponse, setWoMaxPrice };')(json, fetchTab, findWO, ensureColumns, updateWOFields, invalidateTabCache, logWOAudit, softFail,
+    (c, fb) => { if (c === undefined || c === null || String(c).trim() === '') return fb; try { return JSON.parse(c); } catch (e) { return fb; } });
   return { ...lib, calls };
 }
 
@@ -76,9 +78,10 @@ function mk(tabs, opts = {}) {
   ok(r2.status === 409 && r2.body.ceiling === 450, 'but not above it');
 }
 {
-  const { maxPriceGateResponse: gate } = mk({ Vendors: [] }, { failTab: 'Estimates' });
+  const { maxPriceGateResponse: gate, calls } = mk({ Vendors: [] }, { failTab: 'Estimates' });
   const wo = { ID: 'WO-1', Max_Price: '300.00' };
   ok((await gate({}, wo, '', 301)).status === 409, 'if estimates cannot be read the bill over the max is still held (fails closed)');
+  ok(calls.soft.length === 1 && calls.soft[0] === 'maxPriceGateResponse:Estimates|P1|WO-1', 'and the failed estimates read is reported at P1 with the WO id');
   eq(await gate({}, wo, '', 300), null, 'and a bill within the max still goes through');
 }
 

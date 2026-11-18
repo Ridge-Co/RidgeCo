@@ -10507,7 +10507,7 @@ async function woBulkVoid(env, body) {
   // issue at all; it just means the vendor-bill leg of the money check can't run (Customer_Charge
   // / QBO_Invoice_Number still do), same fail-open posture findRecentDuplicate uses.
   let vendorBills = [];
-  try { vendorBills = await fetchTab(env, 'Vendor_Bills'); } catch (e) {}
+  try { vendorBills = await fetchTab(env, 'Vendor_Bills'); } catch (e) { await softFail(env, 'woBulkVoid:Vendor_Bills', e, { severity: 'P1', source: 'read' }); }
 
   const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
   const voided = [], skipped = [];
@@ -10850,7 +10850,7 @@ async function findLockedVendorBillForWOs(env, woIds) {
   const relevant = vendorBills.filter(b => ids.has(String(b.WO_ID)) && b.Active !== 'FALSE');
   if (!relevant.length) return null;
   let invoiceReview = [];
-  try { invoiceReview = await fetchTab(env, 'Invoice_Review'); } catch (e) {}
+  try { invoiceReview = await fetchTab(env, 'Invoice_Review'); } catch (e) { await softFail(env, 'findLockedVendorBillForWOs:Invoice_Review', e, { severity: 'P1', source: 'read' }); }
   for (const bill of relevant) {
     if (vendorBillReassignLock(bill, invoiceReview)) return bill;
   }
@@ -11999,7 +11999,7 @@ async function assignVendor(env, body, internal) {
 // A vendor cannot mark a job Complete or submit an invoice until every checklist item is ticked or has a
 // reason code. Enforced here (the portal also checks first) so a stale page, a share link, or a direct
 // call cannot get around it. Hub/admin callers are not gated. Message is in the vendor's chosen language.
-function checklistUnresolvedItems(raw) { return parseChecklistItems(raw).filter(it => !it.done && !it.code); }
+function checklistUnresolvedItems(raw, env, ref) { return parseChecklistItems(raw, env, ref).filter(it => !it.done && !it.code); }
 
 function checklistGateMessage(count, action, lang) {
   const n = Number(count) || 0;
@@ -12011,11 +12011,11 @@ function checklistGateMessage(count, action, lang) {
 
 // Returns null when the vendor may proceed, else a ready-to-send 409 Response.
 async function checklistGateResponse(env, wo, vendorId, action, hintLang) {
-  const open = checklistUnresolvedItems(wo && wo.Checklist);
+  const open = checklistUnresolvedItems(wo && wo.Checklist, env, wo && wo.ID);
   if (!open.length) return null;
   let lang = String(hintLang || '').toLowerCase() === 'es' ? 'es' : 'en';
   if (vendorId) {
-    try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (v && String(v.Language || '').toLowerCase() === 'es') lang = 'es'; } catch (_) {}
+    try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (v && String(v.Language || '').toLowerCase() === 'es') lang = 'es'; } catch (e) { await softFail(env, 'checklistGateResponse:Vendors', e, { severity: 'P2', source: 'read' }); }
   }
   return json({ error: checklistGateMessage(open.length, action, lang), code: 'checklist_incomplete', unresolved: open.map(i => i.t), lang }, 409);
 }
@@ -12056,10 +12056,10 @@ async function maxPriceGateResponse(env, wo, vendorId, total, hintLang) {
   const amt = parseFloat(String(total == null ? '' : total).replace(/[$,\s]/g, ''));
   if (!Number.isFinite(amt) || amt <= max + 0.004) return null;
   let ceiling = max;
-  try { ceiling = woMaxCeiling(wo, await fetchTab(env, 'Estimates'), env); } catch (_) { ceiling = max; }
+  try { ceiling = woMaxCeiling(wo, await fetchTab(env, 'Estimates'), env); } catch (e) { await softFail(env, 'maxPriceGateResponse:Estimates', e, { severity: 'P1', ref: String((wo && wo.ID) || ''), source: 'read' }); ceiling = max; }
   if (amt <= ceiling + 0.004) return null;
   let lang = String(hintLang || '').toLowerCase() === 'es' ? 'es' : 'en';
-  if (vendorId) { try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (vendorWantsSpanish(v)) lang = 'es'; } catch (_) {} }
+  if (vendorId) { try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (vendorWantsSpanish(v)) lang = 'es'; } catch (e) { await softFail(env, 'maxPriceGateResponse:Vendors', e, { severity: 'P2', source: 'read' }); } }
   const msg = lang === 'es'
     ? 'Esta factura (' + maxPriceMoney(amt) + ') supera el precio máximo de este trabajo (' + maxPriceMoney(ceiling) + '). Acepte el precio máximo, o envíe un nuevo presupuesto con la razón de la diferencia.'
     : 'This invoice (' + maxPriceMoney(amt) + ') is over the max price for this job (' + maxPriceMoney(ceiling) + '). Accept the max price, or send a new estimate with the reason for the difference.';
@@ -12087,7 +12087,7 @@ async function setWoMaxPrice(env, body) {
   const after = findWO(await fetchTab(env, 'Work_Orders'), woId);
   const stored = String((after && after.Max_Price) || '');
   if (maxPriceNum(stored) !== maxPriceNum(val)) return json({ error: 'The max price did not save — please try again.', saved: false }, 500);
-  if (old !== stored) { try { await logWOAudit(env, woId, 'admin', 'admin', 'Max_Price', old, stored, val ? 'Max price set (vendor-facing)' : 'Max price cleared'); } catch (_) {} }
+  if (old !== stored) { try { await logWOAudit(env, woId, 'admin', 'admin', 'Max_Price', old, stored, val ? 'Max price set (vendor-facing)' : 'Max price cleared'); } catch (e) { await softFail(env, 'setWoMaxPrice:audit', e, { severity: 'P1', ref: woId, source: 'write' }); } }
   return json({ success: true, saved: true, wo_id: woId, max_price: stored });
 }
 
@@ -12222,7 +12222,7 @@ async function saveChecklist(env, body) {
   const value = typeof body.checklist === 'string' ? body.checklist : JSON.stringify(body.checklist || []);
   await updateWOFields(env, body.wo_id, { Checklist: value });
   if (body.updated_by) {
-    try { await logWOAudit(env, body.wo_id, body.updated_by, body.updated_by_role || 'vendor', 'Checklist', '', 'updated', body.note || ''); } catch(_){}
+    try { await logWOAudit(env, body.wo_id, body.updated_by, body.updated_by_role || 'vendor', 'Checklist', '', 'updated', body.note || ''); } catch (e) { await softFail(env, 'saveChecklist:audit', e, { severity: 'P2', ref: String(body.wo_id), source: 'write' }); }
   }
   return json({ success: true });
 }
@@ -13125,7 +13125,7 @@ async function ensureLoanLedgerTab(env) {
 // logic below can never create — it stops exactly at 0, see computeLoanDeduction).
 async function getVendorLoanBalance(env, vendorId) {
   let rows = [];
-  try { rows = await fetchTab(env, LOAN_LEDGER_TAB); } catch (e) { return 0; } // tab doesn't exist yet → no loans
+  try { rows = await fetchTab(env, LOAN_LEDGER_TAB); } catch (e) { if (!/unable to parse range|not found|does not exist/i.test(String((e && e.message) || e))) await softFail(env, 'getVendorLoanBalance:Loan_Ledger', e, { severity: 'P1', ref: String(vendorId || ''), source: 'read' }); return 0; } // tab doesn't exist yet → no loans; any other failure is reported
   return rows.filter(r => r.Active !== 'FALSE' && String(r.Vendor_ID) === String(vendorId))
     .reduce((sum, r) => sum + (parseFloat(r.Amount) || 0), 0);
 }
@@ -14324,7 +14324,7 @@ async function retranslateEstimate(env, body) {
   if (!en.ok) return json({ ok: false, success: false, error: 'Translation is unavailable right now (' + (en.error || 'unknown') + ') — nothing was changed. Try again in a minute.' }, 502);
   try { await ensureColumns(env, 'Estimates', ['Change_Reason_EN']); } catch (_) {} // silent-ok: ensureColumns reports its own failure to the ledger
   await updateRow(env, 'Estimates', est.ID, { Line_Items: JSON.stringify(en.line_items), Change_Reason_EN: en.change_reason_en || '' });
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_retranslate', Skill_Or_Endpoint: '/estimate/retranslate', Success: 'TRUE', Notes: `estimate=${est.ID} wo=${est.WO_ID} v${est.Version}` }); } catch (_) {}
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'estimate_retranslate', Skill_Or_Endpoint: '/estimate/retranslate', Success: 'TRUE', Notes: `estimate=${est.ID} wo=${est.WO_ID} v${est.Version}` }); } catch (_) {}   // silent-ok: telemetry is best effort, the estimate is already saved
   return json({ success: true, ok: true, estimate_id: est.ID, wo_id: est.WO_ID, version: est.Version, line_items: en.line_items, change_reason_en: en.change_reason_en || '',
     changed: en.line_items.some(li => li.desc_en) || !!en.change_reason_en });
 }
@@ -14505,7 +14505,7 @@ async function scopeDepositInvoiceId(env, scopeId, tabs) {
   if (tabs) { sigs = tabs.sigs; milestones = tabs.milestones; }
   else {
     sigs = await fetchTab(env, 'Scope_Signatures');
-    try { await paymentMilestonesTab(env); } catch (_) {}
+    try { await paymentMilestonesTab(env); } catch (_) {}   // silent-ok: the Payment_Milestones read right after fails loudly if the tab is missing
     milestones = await fetchTab(env, 'Payment_Milestones');
   }
   return resolveScopeDepositInvoice(sigs, milestones, scopeId);
@@ -14963,8 +14963,8 @@ async function depositApprove(env, body) {
   if (body.preview_only) return json({ success: true, preview: true, ...summary });
 
   const [properties, units] = await Promise.all([
-    fetchTab(env, 'Properties').catch(() => []),
-    fetchTab(env, 'Units').catch(() => []),
+    fetchTab(env, 'Properties').catch(e => softFail(env, 'depositApprove:Properties', e, { severity: 'P2', ref: String(wo.ID || ''), source: 'read' }).then(() => [])),
+    fetchTab(env, 'Units').catch(e => softFail(env, 'depositApprove:Units', e, { severity: 'P2', ref: String(wo.ID || ''), source: 'read' }).then(() => [])),
   ]);
   const prop = properties.find(p => String(p.ID) === String(wo.Property_ID));
   const unit = units.find(u => String(u.ID) === String(wo.Unit_ID));
@@ -27540,7 +27540,7 @@ async function vendorBillReconcileReceipts(env, body) {
 
   let logged = [];
   try { const all = await fetchTab(env, 'Receipts'); logged = wo_id ? all.filter(r => String(r.WO_ID) === String(wo_id) && r.Active !== 'FALSE') : []; }
-  catch (e) { /* best-effort — an unreadable Receipts tab still returns what was detected */ }
+  catch (e) { await softFail(env, 'vendorBillReconcileReceipts:Receipts', e, { severity: 'P2', ref: String(wo_id || ''), source: 'read' }); /* an unreadable Receipts tab still returns what was detected */ }
 
   const matched = [], unmatched = [];
   const usedLoggedIds = new Set();
@@ -28675,8 +28675,8 @@ async function woSharedReceipt(env, body){
 
 // A share-link vendor can only tick items / pick reasons on the checklist that already exists — never add,
 // rename or remove items, and never touch the generated-wording field. Matches items by text.
-function mergeVendorChecklist(existingRaw, incomingRaw) {
-  const existing = parseChecklistItems(existingRaw), incoming = parseChecklistItems(incomingRaw);
+function mergeVendorChecklist(existingRaw, incomingRaw, env, ref) {
+  const existing = parseChecklistItems(existingRaw, env, ref), incoming = parseChecklistItems(incomingRaw, env, ref);
   const byText = {}; incoming.forEach(it => { byText[it.t] = it; });
   const valid = ['', 'na', 'separate', 'estimate', 'access', 'parts'];
   return existing.map(it => {
@@ -28694,7 +28694,7 @@ async function woSharedChecklist(env, body){
   const wos = await fetchTab(env, 'Work_Orders');
   const wo = findWO(wos, auth.wo);
   if(!wo) return json({ error:'WO not found' }, 404);
-  const merged = mergeVendorChecklist(wo.Checklist, body && body.checklist);
+  const merged = mergeVendorChecklist(wo.Checklist, body && body.checklist, env, wo.ID);
   if (!merged.length) return json({ error:'This work order has no checklist.' }, 400);
   const vendors = await fetchTab(env, 'Vendors');
   const vendor = vendors.find(v=>v.ID===auth.vid)||{};
@@ -31367,7 +31367,7 @@ async function hubTestWriteAllowed(env, path, body) {
     return { ok: _okProp, debug: _okProp ? undefined : 'delivery-intake-guard: email resolves to a non-TEST property ' + _pl.property.ID };
   }
   if (path === '/intake/retry') {
-    const _q = (await fetchTab(env, INTAKE_TAB).catch(() => [])).find(r => String(r.ID) === String(body && body.id));
+    const _q = (await fetchTab(env, INTAKE_TAB).catch(() => [])).find(r => String(r.ID) === String(body && body.id)); // silent-ok: a failed read makes the test-write guard refuse, the safe side
     if (!_q || !String(_q.Message_ID || '').startsWith('TEST-')) return { ok: false, debug: 'intake-guard: retry row is not a TEST- message' };
     if (body.unit_id && !body.property_id) return { ok: false, debug: 'intake-guard: unit_id override requires a TEST property_id' };
     if (body.property_id) return { ok: await isTestRecord(env, 'Properties', body.property_id) };
@@ -31402,7 +31402,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/wo-template/preview') return true; // read-only computation, writes nothing
   if (path === '/wo-snippet/add') return String((body && body.Name) || '').startsWith('TEST-');
   if (path === '/wo-snippet/update') {
-    const _sn = (await fetchTab(env, WO_SNIPPETS_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id));
+    const _sn = (await fetchTab(env, WO_SNIPPETS_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id)); // silent-ok: a failed read makes the test-write guard refuse, the safe side
     return !!_sn && String(_sn.Name || '').startsWith('TEST-');
   }
   // Portal access tracking (Oct 22 2026): the staging token may send or preview a PIN / welcome text, or regenerate a PIN, only for a TEST- person
@@ -31467,7 +31467,7 @@ async function hubTestWriteAllowed(env, path, body) {
     return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
   }
   if (path === '/insp/booking/decide' || path === '/insp/booking/cancel') {
-    const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id));
+    const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id)); // silent-ok: a failed read makes the test-write guard refuse, the safe side
     return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
   }
   // Inspection billing (Oct 22 2026): a preview writes nothing; every real step may only touch a booking / customer that is a TEST- customer.
@@ -31581,13 +31581,13 @@ async function hubTestWriteAllowed(env, path, body) {
   // read-only (it never edits a row), so it is safe for any row on staging.
   if (path === '/scope/create') return await isTestRecord(env, 'Properties', body && body.property_id);
   if (path === '/scope/update' || path === '/scope/proposal' || path === '/scope/proposal/link') {
-    const _sc2 = (await fetchTab(env, 'Scopes').catch(() => [])).find(x => String(x.ID) === String(body && body.scope_id));
+    const _sc2 = (await fetchTab(env, 'Scopes').catch(() => [])).find(x => String(x.ID) === String(body && body.scope_id)); // silent-ok: a failed read makes the test-write guard refuse, the safe side
     if (!_sc2) return false;
     return await isTestRecord(env, 'Properties', _sc2.Property_ID);
   }
   if (path === '/message-queue/translate') return true;
   if (path === '/scope/payment-schedule') {
-    const _sc = (await fetchTab(env, 'Scopes').catch(() => [])).find(x => String(x.ID) === String(body && body.scope_id));
+    const _sc = (await fetchTab(env, 'Scopes').catch(() => [])).find(x => String(x.ID) === String(body && body.scope_id)); // silent-ok: a failed read makes the test-write guard refuse, the safe side
     if (!_sc) return false;
     return await isTestRecord(env, 'Properties', _sc.Property_ID);
   }
@@ -36595,9 +36595,9 @@ function sanitizeCustomerText(text) {
   return String(text || '').split(/\r?\n/).map(l => l.trim()).filter(l => l && !looksLikeAccessDetail(l)).join('\n');
 }
 
-function parseChecklistItems(raw) {
+function parseChecklistItems(raw, env, ref) {
   let arr = raw;
-  if (typeof raw === 'string') { try { arr = JSON.parse(raw || '[]'); } catch (_) { return []; } }
+  if (typeof raw === 'string') arr = parseJsonCell(raw, [], { env, where: 'parseChecklistItems', ref: String(ref || ''), severity: 'P1' });
   if (!Array.isArray(arr)) return [];
   return arr.filter(it => it && String(it.t || '').trim()).map(it => ({
     t: String(it.t).trim(),
