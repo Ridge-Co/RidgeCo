@@ -3971,7 +3971,7 @@ async function receiptAccuracyCtx(env, cfgIn, opts) {
   if (!cfg) { try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; ctx.errors.push('Config: ' + schedErrText(e)); } }
   ctx.myCards = receiptCardListFromCfg(cfg.receipt_my_cards);
   ctx.custCards = String(env.RECEIPT_CUSTOMER_CARDS || cfg.receipt_customer_cards || '').split(',').map(s => s.replace(/\D/g, '').slice(-4)).filter(Boolean);
-  ctx.labels = receiptCardLabelsFromCfg(cfg.receipt_card_labels);
+  ctx.labels = receiptCardLabelsFromCfg(cfg.receipt_card_labels, env);
   const names = String(cfg.receipt_vendor_invoice_names || '').split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
   if (names.length) ctx.vendorInvoiceNames = names;
   if (!opts.noUnits) { try { ctx.units = await fetchTab(env, 'Units'); } catch (e) { ctx.errors.push('Units: ' + schedErrText(e)); } }
