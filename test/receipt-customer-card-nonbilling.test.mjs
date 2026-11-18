@@ -171,7 +171,19 @@ ok(att.body.ok && att.body.customer_card === true, 'attach-only (the customer-ca
 sheets.Receipt_Recon_Queue.push(q({ ID: '307', Manual_Customer_Card: '', Suggestion: JSON.stringify({ category: 'billable' }) }));
 const fpa = await W.receiptAttachOnly(env, { id: '307', wo_id: '1001', amount: '5.00', non_billing_reason: 'fixed_price' });
 ok(fpa.body.ok && fpa.body.fixed_price === true, 'the fixed-price path still works');
-ok(/receiptRowIsCustomerCard\(row\) && \(noWo \|\| !wo_id\)/.test(grab('receiptReconConfirm', true)), 'the guard sits in receiptReconConfirm itself, so the page, the bulk expense action and auto-rules all hit it');
+ok(/if \(receiptRowIsCustomerCard\(row\)\) \{/.test(grab('receiptReconConfirm', true)) && /customer_card_attach_only/.test(grab('receiptReconConfirm', true)), 'the guard sits in receiptReconConfirm itself, so the page, the bulk expense action and auto-rules all hit it');
+// review fixes (Nov 17): the two bypasses of the server-side rule
+const rc2 = sheets.Receipts.length, qq2 = spies.sendReceiptsToQBEmail;
+gq('308'); gq('309'); gq('310');
+const withWo = await W.receiptReconConfirm(env, { id: '308', wo_id: '1001', property_id: '11', amount: '43.23' });
+ok(withWo.status === 409 && withWo.body.code === 'customer_card_attach_only' && /Attach to work order/.test(withWo.body.error), 'a customer-card receipt confirmed WITH a work order is refused too (409 customer_card_attach_only): it can only be attached as a reference');
+const fpCc = await W.receiptAttachOnly(env, { id: '309', wo_id: '1001', amount: '5.00', non_billing_reason: 'fixed_price' });
+ok(fpCc.status === 409 && fpCc.body.code === 'customer_card_reference_only', 'a customer-card row cannot be attached as a fixed-price cost (it would be booked as a company expense and emailed to QuickBooks)');
+const plainCc = await W.receiptAttachOnly(env, { id: '310', wo_id: '1001', amount: '5.00' });
+ok(plainCc.status === 409 && plainCc.body.code === 'customer_card_reference_only', 'nor as a plain attach-only (also not a customer-card reference)');
+ok(sheets.Receipts.length === rc2 && spies.sendReceiptsToQBEmail === qq2 && sheets.Receipt_Recon_Queue.filter(r => ['308', '309', '310'].includes(r.ID)).every(r => r.Status === 'pending'), 'none of the bypass attempts wrote a Receipts row; the rows stay pending');
+const refCc = await W.receiptAttachOnly(env, { id: '310', wo_id: '1001', amount: '5.00', customer_card: true });
+ok(refCc.body.ok && refCc.body.customer_card === true && sheets.Receipts.find(r => r.WO_ID === '1001' && r.Non_Billable_Reason === 'customer_card' && String(r.Amount) === '5.00'), 'the same row still attaches as the customer-card reference (Non_Billable, customer_card)');
 const bulk2 = grab('receiptReconBulkAction', true);
 ok(/failed\.push\(\{ id, error: resJson\.error \}\)/.test(bulk2), 'bulk actions report a refused row in their failed list (shown on screen), not silently');
 const htmlRc = fs.readFileSync(new URL('../receipt-reconciler.html', import.meta.url), 'utf8');
