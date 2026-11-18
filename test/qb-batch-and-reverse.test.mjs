@@ -33,7 +33,7 @@ function world(opts = {}) {
     QB_BATCH_COLS: ['QB_Batch_Status', 'QB_Batch_Sent_Date', 'QB_Reversed_Date', 'QB_Email_Subject', 'QB_Batch_Error', 'QB_Delete_Confirmed', 'QB_Delete_Confirmed_Date'],
     QB_BATCH_MAX_PER_CALL: 5, QB_BATCH_DEFAULT_PER_CALL: 3, __qbBatchInflight: new Set(), invalidateTabCache: () => {},
     json: (o, s) => jsonResp(o, s),
-    fetchTab: async (env, t) => (tabs[t] || []).map(r => ({ ...r })),
+    fetchTab: async (env, t) => { if (t === 'Receipts') { flags.receiptReads = (flags.receiptReads || 0) + 1; if (flags.onRead) flags.onRead(flags.receiptReads, tabs); } return (tabs[t] || []).map(r => ({ ...r })); },
     fetchConfig: async () => ({ qb_receipts_email: 'qb@example.com' }),
     ensureColumns: async () => { if (opts.ensureFails) throw new Error('sheets down'); },
     updateRow: async (env, t, id, fields) => {
