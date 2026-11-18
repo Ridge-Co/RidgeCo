@@ -7242,7 +7242,7 @@ async function scopeProposalSignedList(env, url) {
   // rows signed before it shipped have none and keep rendering the old deposit/final UI
   // (signed-proposals.html branches on milestones.length).
   let allMilestones = [];
-  try { await paymentMilestonesTab(env); allMilestones = await fetchTab(env, 'Payment_Milestones'); } catch (_) {}
+  try { await paymentMilestonesTab(env); allMilestones = await fetchTab(env, 'Payment_Milestones'); } catch (e) { await softFail(env, 'scopeProposalSignedList:milestones', e, { severity: 'P1', ref: '', source: 'read', context: 'milestones could not be read, so signed proposals show the old deposit and final layout' }); }
   // Receipts on each signed scope's work order = the ACTUAL side of Ridge Co materials budget
   // vs actual (Sep 22 2026). null (not []) on a read failure so the page says "couldn't check"
   // instead of a confident $0.
