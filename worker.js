@@ -26934,7 +26934,7 @@ async function backfillItemsSummary(env, opts) {
 async function receiptsImageCheck(env) {
   const [receipts, queueRows] = await Promise.all([
     fetchTab(env, 'Receipts').catch(e => softFail(env, 'receiptsImageCheck:Receipts', e, { severity: 'P2', source: 'read' }).then(() => [])),
-    fetchTab(env, 'Receipt_Recon_Queue').catch(() => []),
+    fetchTab(env, 'Receipt_Recon_Queue').catch(e => softFail(env, 'receiptsImageCheck:Receipt_Recon_Queue', e, { severity: 'P2', source: 'read' }).then(() => [])),
   ]);
   const active = receipts.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE');
   let hasOwnFile = 0, recoveredExact = 0, nearMissSameWO = 0, noTraceAtAll = 0;
