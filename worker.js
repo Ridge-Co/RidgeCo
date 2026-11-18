@@ -10120,7 +10120,7 @@ async function addonStart(env, body, callerRole, callerSessionId) {
   if (created.duplicate) {
     // double-tap: hand back the child that already exists
     const existing = findWO(await fetchTab(env, 'Work_Orders'), childId);
-    const stored = existing ? addonParseItems(existing) : [];
+    const stored = existing ? addonParseItems(existing, env) : [];
     return json({ success: true, duplicate: true, child_wo_id: childId, items: (stored.length ? stored : v.items).map(it => ({ index: it.index, desc: it.desc })) });
   }
   try { await assignVendor(env, { wo_id: childId, vendor_id: vendorId, notify: false }); } catch (e) { /* surfaced by the field check below */ }
