@@ -8776,8 +8776,10 @@ function openManageTemplatesModal() {
   refreshTemplates();
 }
 
+var _tmplLoadError = '';
 function refreshTemplates() {
   return api('GET','/wo-templates').then(function(items) {
+    _tmplLoadError = Array.isArray(items) ? '' : ((items && items.error) || 'No answer from the Hub');
     _woTemplates = Array.isArray(items) ? items : [];
     renderTemplates();
     renderTemplatePicker(); // keep the New-WO "From Template" picker in sync if it's open
@@ -8787,7 +8789,8 @@ function refreshTemplates() {
 function renderTemplates() {
   var el = document.getElementById('templates-list');
   if (!el) return;
-  if (!_woTemplates.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px">No custom templates yet. Built-in templates (HVAC filter, pest control, etc.) are always available from "📋 From Template" when creating a WO. Add one here to make it show up there too.</div>'; return; }
+  if (_tmplLoadError) { el.innerHTML = '<div style="color:var(--danger);padding:20px;font-size:15px">Could not load templates: ' + esc(_tmplLoadError) + '<div style="margin-top:10px"><button class="btn secondary" style="min-height:44px" onclick="refreshTemplates()">Retry</button></div></div>'; return; }
+  if (!_woTemplates.length) { el.innerHTML = '<div style="color:var(--muted);padding:20px;font-size:15px">No custom templates yet. Built-in templates (HVAC filter, pest control, etc.) are always available from "📋 From Template" when creating a WO. Add one here to make it show up there too, or tap "Add seasonal starter pack" to start with five ready-made yearly jobs.</div>'; return; }
   el.innerHTML = '<div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Trade</th><th>Owner</th><th>Schedule</th><th></th></tr></thead><tbody>' +
     _woTemplates.filter(function(t){ return t.Active!=='FALSE'; }).map(function(t) {
       var owner = safeArray(state.owners).find(function(o){ return o.ID===t.Owner_ID; });
@@ -8797,11 +8800,11 @@ function renderTemplates() {
         '<td style="color:var(--muted);font-size:11px">' + (owner?esc(owner.First_Name+(owner.Company?' / '+owner.Company:'')):'Global') + '</td>' +
         '<td style="font-size:11px">' + recurSummaryHtml(t) + (t.Link_URL?'<div><a href="'+esc(t.Link_URL)+'" target="_blank" style="color:var(--info)">'+esc(t.Link_Label||'View')+'</a></div>':'') + '</td>' +
         '<td style="white-space:nowrap">' +
-          '<button class="btn small" style="margin-right:6px;min-height:32px" onclick="openEditTemplateModal(\''+t.ID+'\')">Edit</button>' +
-          '<button class="btn small secondary" style="margin-right:6px;min-height:32px" onclick="openPostNowModal(\''+t.ID+'\')">Post Now</button>' +
-          '<button class="btn small secondary" style="margin-right:6px;min-height:32px" onclick="copyTemplate(\''+t.ID+'\')">Copy</button>' +
-          '<button class="btn small secondary" style="margin-right:6px;min-height:32px" onclick="createWOFromTemplate(\''+t.ID+'\')">Create WO</button>' +
-          '<button class="btn small danger" style="min-height:32px" onclick="if(confirm(\'Delete?\')) api(\'POST\',\'/wo-template/update\',{id:\''+t.ID+'\',fields:{Active:\'FALSE\'}}).then(refreshTemplates)">Del</button>' +
+          '<button class="btn small" style="margin-right:6px;min-height:44px" onclick="openEditTemplateModal(\''+t.ID+'\')">Edit</button>' +
+          '<button class="btn small secondary" style="margin-right:6px;min-height:44px" onclick="openPostNowModal(\''+t.ID+'\')">Post Now</button>' +
+          '<button class="btn small secondary" style="margin-right:6px;min-height:44px" onclick="copyTemplate(\''+t.ID+'\')">Copy</button>' +
+          '<button class="btn small secondary" style="margin-right:6px;min-height:44px" onclick="createWOFromTemplate(\''+t.ID+'\')">Create WO</button>' +
+          '<button class="btn small danger" style="min-height:44px" onclick="if(confirm(\'Delete?\')) api(\'POST\',\'/wo-template/update\',{id:\''+t.ID+'\',fields:{Active:\'FALSE\'}}).then(refreshTemplates)">Del</button>' +
         '</td></tr>';
     }).join('') + '</tbody></table></div>';
 }
@@ -8830,7 +8833,7 @@ function recurDescribe(t) {
   return s;
 }
 function recurSummaryHtml(t) {
-  if (!recurIsOn(t.Recurrence_Enabled)) return '<span style="color:var(--muted)">Manual only</span>';
+  if (!recurIsOn(t.Recurrence_Enabled)) return '<span style="color:var(--muted)">Manual only</span>' + ((t.Freq_Type && !recurTargetsOf(t).length) ? '<div style="color:var(--muted);font-size:13px">Starter - not switched on yet</div>' : '');
   var tg = recurTargetsOf(t), v = safeArray(state.vendors).find(function(x){ return x.ID===t.Default_Vendor_ID; });
   return '<div><b>🔁 ' + esc(recurDescribe(t)) + '</b></div>' +
     '<div style="color:var(--muted)">' + (tg.length ? tg.length+' linked location'+(tg.length>1?'s':'') : '<span style="color:#b42318">not linked to any property yet</span>') +
@@ -8943,6 +8946,39 @@ function saveDescAsSnippet() {
   if (!txt) { toast('Nothing in the description to save','error'); return; }
   var name = prompt('Name this snippet (uses the highlighted text, or the whole description):'); if (!name) return;
   api('POST','/wo-snippet/add',{Name:name.trim(),Text:txt,Active:'TRUE'}).then(function(r){ if (r && r.id) { toast('Snippet saved','success'); loadSnippets(); } else toast('Could not save snippet','error'); });
+}
+// Seasonal starter pack (queue #108): dry run first, then add. Every template is added OFF, with no property, vendor or tenant notice.
+function packListHtml(rows, label) {
+  return rows.map(function(r){ return '<div style="padding:8px 0;border-bottom:1px solid var(--border)"><div style="font-weight:bold">' + esc(r.name) + '</div><div style="color:var(--muted);font-size:13px">' + esc(r.trade||'') + ' · ' + esc(r.due||'') + ' · ' + label + '</div></div>'; }).join('');
+}
+function openSeasonalPackModal() {
+  openModal('modal-seasonal-pack');
+  var body = document.getElementById('pack-body'), btn = document.getElementById('pack-add-btn');
+  btn.style.display = 'none'; btn.disabled = false;
+  document.getElementById('pack-note').style.display = '';
+  body.innerHTML = '<div class="loading">Checking what is already there…</div>';
+  function fail(msg) { body.innerHTML = '<div style="color:var(--danger)">Could not check your templates: ' + esc(msg) + '. Nothing was added.</div><button class="btn secondary" style="min-height:44px;margin-top:8px" onclick="openSeasonalPackModal()">Retry</button>'; }
+  api('POST','/wo-template/seed-seasonal',{dry_run:true}).then(function(r){
+    if (!r || r.ok !== true) { fail((r && r.error) || 'no answer from the Hub'); return; }
+    var add = r.would_add || [], there = r.already_there || [];
+    if (!add.length) { body.innerHTML = '<div>All five are already in your templates. Nothing to add.</div>' + packListHtml(there, 'already there'); document.getElementById('pack-note').style.display = 'none'; return; }
+    body.innerHTML = packListHtml(add, 'will be added') + packListHtml(there, 'already there - skipped');
+    btn.style.display = '';
+  }).catch(function(e){ fail((e && e.message) || 'network problem'); });
+}
+function confirmSeasonalPack() {
+  var btn = document.getElementById('pack-add-btn'); btn.disabled = true;   // double-tap guard: first line, before any await
+  var body = document.getElementById('pack-body');
+  api('POST','/wo-template/seed-seasonal',{dry_run:false}).then(function(r){
+    if (!r || typeof r.ok !== 'boolean') { btn.disabled = false; body.insertAdjacentHTML('afterbegin','<div style="color:var(--danger);margin-bottom:8px">Could not add the pack: ' + esc((r && r.error) || 'no answer from the Hub') + '. Check the list before trying again.</div>'); return; }
+    var added = r.added || [], failed = r.failed || [];
+    var msg = '<div style="margin-bottom:8px;font-weight:bold">Added ' + added.length + '. Open each one to pick properties and switch it on.</div>';
+    if (failed.length) msg += '<div style="color:var(--danger);margin-bottom:8px">Could not add: ' + failed.map(function(f){ return esc(f.name) + ' (' + esc(f.error) + ')'; }).join('; ') + '</div>';
+    body.innerHTML = msg;
+    document.getElementById('pack-note').style.display = 'none';
+    if (failed.length) { btn.disabled = false; btn.textContent = 'Try the rest again'; } else { btn.style.display = 'none'; }
+    refreshTemplates();
+  }).catch(function(e){ btn.disabled = false; body.insertAdjacentHTML('afterbegin','<div style="color:var(--danger);margin-bottom:8px">Could not add the pack: ' + esc((e && e.message) || 'network problem') + '. Check the list before trying again.</div>'); });
 }
 function copyTemplate(id) {
   var t = _woTemplates.find(function(x){ return x.ID===id; }); if (!t) return;
@@ -15565,9 +15601,10 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   <div class="modal" style="max-width:700px">
     <div class="modal-header"><div class="modal-title">WO TEMPLATES — MANAGE</div><button class="modal-close" onclick="closeModal('modal-manage-templates')">✕</button></div>
     <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Custom templates pre-fill new WO forms — including a link to a Google Sheet, document, or checklist. These show up under "Your Templates" in the "📋 From Template" picker when creating a work order, alongside the built-in ones.</p>
-    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
-      <button class="btn small" onclick="openAddTemplateModal()">+ Add Template</button>
-      <button class="btn secondary small" onclick="refreshTemplates()">↻ Refresh</button>
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+      <button class="btn small" style="min-height:44px" onclick="openAddTemplateModal()">+ Add Template</button>
+      <button class="btn secondary small" style="min-height:44px" id="pack-open-btn" onclick="openSeasonalPackModal()">Add seasonal starter pack</button>
+      <button class="btn secondary small" style="min-height:44px" onclick="refreshTemplates()">↻ Refresh</button>
     </div>
     <div id="templates-list"><div class="loading">Loading…</div></div>
     <div class="modal-actions">
@@ -15661,6 +15698,16 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
       <button class="btn secondary" onclick="closeModal('modal-add-template')">Cancel</button>
       <button class="btn" id="tmpl-save-btn" onclick="submitAddTemplate()">SAVE TEMPLATE</button>
     </div>
+  </div>
+</div>
+
+<!-- SEASONAL STARTER PACK MODAL (queue #108, Nov 18 2026): preview first (dry run), then add. Admin only. -->
+<div class="modal-overlay" id="modal-seasonal-pack">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header"><div class="modal-title">SEASONAL STARTER PACK</div><button class="modal-close" onclick="closeModal('modal-seasonal-pack')">✕</button></div>
+    <div id="pack-body" style="font-size:15px"><div class="loading">Checking what is already there…</div></div>
+    <p id="pack-note" style="color:var(--muted);font-size:13px;margin:12px 0 0">These are added switched OFF and linked to no property. Nothing is posted and nobody is texted until you open one, pick properties and turn it on.</p>
+    <div class="modal-actions"><button class="btn secondary" style="min-height:44px" onclick="closeModal('modal-seasonal-pack')">Close</button><button class="btn" style="min-height:44px;display:none" id="pack-add-btn" onclick="confirmSeasonalPack()">Add these templates</button></div>
   </div>
 </div>
 

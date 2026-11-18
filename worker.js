@@ -1105,6 +1105,7 @@ const _hubWorkerCore = {
         if (path === '/wo-template/update')       { await ensureColumns(env, 'WO_Templates', RECUR_TEMPLATE_COLS); return await updateRow(env, 'WO_Templates', body.id, recurSanitizeTemplateFields(body.fields)); }
         if (path === '/wo-template/post-now')     return await recurPostNow(env, body);
         if (path === '/wo-template/copy')         return await recurCopyTemplate(env, body);
+        if (path === '/wo-template/seed-seasonal') return await recurSeedSeasonalPack(env, body);   // queue #108: ADMIN-ONLY (not in PUBLIC_PATHS, not in HUB_PROD_WRITE_PATHS); dry run by default
         if (path === '/wo-template/link')         return await recurLinkTemplate(env, body);
         if (path === '/wo-template/preview')      return await recurPreview(env, body);
         if (path === '/wo-snippet/add')           { await ensureTab(env, WO_SNIPPETS_TAB, WO_SNIPPETS_COLS); return await addRow(env, WO_SNIPPETS_TAB, body); }
@@ -21918,6 +21919,69 @@ async function recurCopyTemplate(env, body) {
   return await addRow(env, 'WO_Templates', copy);
 }
 
+// ── SEASONAL STARTER PACK (queue #108, Nov 18 2026) ─────────────────────────────────────────────────────
+// Five ready-made yearly preventive-maintenance templates for the recurring-WO engine above. Every one is seeded switched OFF, linked to no
+// property, with no vendor, no tenant notice and no max price, so seeding can never post a WO or text anyone. First due dates are next year's
+// (the engine never posts more than RECUR_LOOKBACK_DAYS late); this year's winterization is a Post Now after Brett links properties.
+// monthly_date + Freq_Interval 12 = yearly, 6 = twice a year, anchored on the Start_Date month. Descriptions carry no codes, prices or names.
+const SEASONAL_PM_PACK = [
+  { Name: 'PM - Winterization (pipes + outside faucets)', Trade: 'Plumbing', Freq_Interval: '12', Freq_Day_Of_Month: '1', Start_Date: '2027-11-01', _due: 'Every Nov 1',
+    Description: 'Shut off and drain every outside faucet / hose bib from the inside shutoff. Remove hoses. Insulate exposed pipes in crawl space, basement, garage and exterior walls. Check that heat is on and set no lower than 55. Photo of each faucet and each insulated run.' },
+  { Name: 'PM - HVAC pre-season service', Trade: 'HVAC', Freq_Interval: '6', Freq_Day_Of_Month: '1', Start_Date: '2027-04-01', _due: 'Every Apr 1 and Oct 1',
+    Description: 'Pre-season service: replace filter (note size), clean coils and condensate line, test heating and cooling, check thermostat. Photo of new filter and data plate. Report anything that needs a repair quote.' },
+  { Name: 'PM - Dryer vent cleaning', Trade: 'General', Freq_Interval: '12', Freq_Day_Of_Month: '15', Start_Date: '2027-09-15', _due: 'Every Sep 15',
+    Description: 'Clean dryer vent from dryer to outside cap. Check for kinks, crushed duct and a working exterior flap. Before and after photos.' },
+  { Name: 'PM - Water heater flush', Trade: 'Plumbing', Freq_Interval: '12', Freq_Day_Of_Month: '15', Start_Date: '2027-05-15', _due: 'Every May 15',
+    Description: 'Flush tank until water runs clear. Test the relief valve. Check for leaks, rust and the age on the data plate. Photo of data plate.' },
+  { Name: 'PM - Smoke / CO detector batteries', Trade: 'General', Freq_Interval: '12', Freq_Day_Of_Month: '10', Start_Date: '2027-03-10', _due: 'Every Mar 10',
+    Description: 'Test every smoke and CO detector. Replace batteries. Replace any unit over 10 years old (date is on the back). List the count and locations in your note.' },
+];
+function recurPackKey(n) { return String(n == null ? '' : n).toLowerCase().replace(/\s+/g, ' ').trim(); }
+function recurPackRow(p) {
+  const f = Object.assign({}, p); delete f._due;
+  return recurSanitizeTemplateFields(Object.assign(f, { Priority: 'normal', Freq_Type: 'monthly_date', Lead_Days: '14', Recurrence_Enabled: 'FALSE', Season_Enabled: 'FALSE', Targets: '[]', Default_Vendor_ID: '', Notify_Tenant: 'FALSE', Owner_ID: '', Active: 'TRUE' }));   // no max price column is set on purpose: absent = blank (the max-price guard test keeps that column to the vendor-facing code)
+}
+// POST /wo-template/seed-seasonal { dry_run? } - dry_run defaults to TRUE; only an explicit dry_run:false writes. Skips any pack name that already has an
+// Active template (case and spacing ignored). A real run re-reads the tab and confirms every new name landed; failures are returned by name and logged.
+async function recurSeedSeasonalPack(env, body) {
+  const dry = !(body && body.dry_run === false);
+  let tpls;
+  try { tpls = await fetchTab(env, 'WO_Templates'); }
+  catch (e) {
+    const msg = schedErrText(e).slice(0, 300);
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'seasonal_pack_seed', Skill_Or_Endpoint: '/wo-template/seed-seasonal', Success: 'FALSE', Notes: 'could not read WO_Templates: ' + msg });
+    return json({ ok: false, error: 'Could not read your templates, so nothing was checked or added: ' + msg }, 500);
+  }
+  const have = new Set(tpls.filter(t => String(t.Active || '').toUpperCase() !== 'FALSE').map(t => recurPackKey(t.Name)));
+  const missing = SEASONAL_PM_PACK.filter(p => !have.has(recurPackKey(p.Name)));
+  const there = SEASONAL_PM_PACK.filter(p => have.has(recurPackKey(p.Name))).map(p => ({ name: p.Name, trade: p.Trade, due: p._due }));
+  const show = (p) => ({ name: p.Name, trade: p.Trade, due: p._due });
+  if (dry) return json({ ok: true, dry_run: true, would_add: missing.map(show), already_there: there });
+  if (!missing.length) return json({ ok: true, dry_run: false, added: [], already_there: there, failed: [] });
+  const added = [], failed = [];
+  try { await recurEnsureCols(env); }
+  catch (e) { const msg = schedErrText(e).slice(0, 300); await logTelemetry(env, { Source: 'worker', Job_Type: 'seasonal_pack_seed', Skill_Or_Endpoint: '/wo-template/seed-seasonal', Success: 'FALSE', Notes: 'could not prepare the template columns: ' + msg }); return json({ ok: false, error: 'Could not prepare the template columns, so nothing was added: ' + msg }, 500); }
+  for (const p of missing) {
+    try {
+      const res = await addRow(env, 'WO_Templates', recurPackRow(p));
+      let j = null; try { j = await res.json(); } catch (je) { j = null; }
+      if (!res.ok || !j || !j.success) throw new Error((j && j.error) || ('HTTP ' + res.status));
+      added.push({ id: String(j.id), name: p.Name });
+    } catch (e) { failed.push({ name: p.Name, error: schedErrText(e).slice(0, 200) }); }
+  }
+  // Verify the writes (C4): re-read and confirm each new name is really there, OFF, with no targets.
+  if (added.length) {
+    let after = null;
+    try { after = await fetchTab(env, 'WO_Templates'); } catch (e) { for (const a of added.splice(0)) failed.push({ name: a.name, error: 'saved but could not be confirmed: ' + schedErrText(e).slice(0, 120) }); }
+    if (after) for (const a of added.slice()) {
+      const row = after.find(t => String(t.ID) === a.id && recurPackKey(t.Name) === recurPackKey(a.name));
+      if (!row || String(row.Recurrence_Enabled).toUpperCase() === 'TRUE' || String(row.Targets || '[]').replace(/\s/g, '') !== '[]') { added.splice(added.indexOf(a), 1); failed.push({ name: a.name, error: row ? 'was written with recurrence on or a property attached' : 'not found after the write' }); }
+    }
+  }
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'seasonal_pack_seed', Skill_Or_Endpoint: '/wo-template/seed-seasonal', Success: failed.length ? 'FALSE' : 'TRUE', Notes: ('added ' + added.length + (failed.length ? '; failed: ' + failed.map(f => f.name + ' (' + f.error + ')').join(', ') : '')).slice(0, 480) });
+  return json({ ok: failed.length === 0, dry_run: false, added, already_there: there, failed });
+}
+
 // POST /wo-template/link { template_id, property_id, unit_id?, action:'add'|'remove' } — the one
 // write path the Templates page, Property page and Unit page all use, so links stay in sync.
 async function recurLinkTemplate(env, body) {
@@ -31400,6 +31464,7 @@ async function hubTestWriteAllowed(env, path, body) {
     return true;
   }
   if (path === '/wo-template/preview') return true; // read-only computation, writes nothing
+  if (path === '/wo-template/seed-seasonal') return !!(body && body.dry_run === true); // queue #108: the staging token may only run the DRY run (writes nothing); the real seed needs the admin secret
   if (path === '/wo-snippet/add') return String((body && body.Name) || '').startsWith('TEST-');
   if (path === '/wo-snippet/update') {
     const _sn = (await fetchTab(env, WO_SNIPPETS_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id));
