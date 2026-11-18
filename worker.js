@@ -38519,7 +38519,7 @@ async function qbSendCombinedInvoice(env, ctx) {
       const _isAddon = !!(_rowWo && String(_rowWo.Type || '') === 'addon' && String(_rowWo.Parent_WO_ID || '').trim() && String(r.WO_ID) !== String(woId));
       const inv = _isAddon
         ? buildInvoiceLines(Object.assign({}, r, { WO_ID: _rowWo.Parent_WO_ID }), _inEn.billRow, trade, tradeName, _rowWo, null, ownReceipts, _inEn.timeEntries, env)
-        : buildInvoiceLines(r, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
+        : buildInvoiceLines(r, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries, env);
       if (_isAddon) inv.lines.forEach(l => { l.Description = ('Additional work — ' + l.Description).slice(0, 4000); });
       if (inv.laborAmt < 0) warnings.push(`Bill ${r.Bill_ID || r.ID}: materials exceed its customer total — labor line is negative, check the bill.`);
 
