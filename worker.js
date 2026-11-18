@@ -21350,7 +21350,7 @@ async function schedPreflight(env, dueNames, cfgRows, now, seeded) {
         for (const tpl of tpls) {
           const due = recurLatestDue(tpl, today); if (!due) continue;
           let skips = {}; try { skips = JSON.parse(tpl.Last_Skips || '{}') || {}; } catch (e) { skips = {}; notes.push('template ' + tpl.ID + ' has unreadable Last_Skips (' + schedErrText(e) + ')'); }
-          for (const tg of recurTargets(tpl)) {
+          for (const tg of recurTargets(tpl, env)) {
             const mine = wos.filter(w => w.Recurring_Template_ID === String(tpl.ID) && w.Property_ID === tg.p && (w.Unit_ID || '') === tg.u);
             if (mine.some(w => w.Recurring_Due === due)) continue;
             const key = recurTargetKey(tg); if (skips[key] && skips[key] >= due) continue;
@@ -21759,14 +21759,13 @@ function recurNextOccurrences(tpl, fromISO, count) {
   for (let i = 0; i < 3700 && out.length < (count || 5); i++) { if (recurIsOccurrence(tpl, d)) out.push(d); d = recurAddDays(d, 1); }
   return out;
 }
-function recurTargets(tpl) {
-  try {
-    const a = JSON.parse(String((tpl && tpl.Targets) || '[]') || '[]');
-    if (!Array.isArray(a)) return [];
-    const seen = new Set(), out = [];
-    for (const x of a) { if (!x || !x.p) continue; const t = { p: String(x.p), u: x.u ? String(x.u) : '' }; const k = t.p + '|' + t.u; if (!seen.has(k)) { seen.add(k); out.push(t); } }
-    return out;
-  } catch (_) { return []; }
+// A corrupt Targets cell reads as "no targets" (the template posts nothing), so it is reported at P1 with the template id. A blank cell is not a failure.
+function recurTargets(tpl, env) {
+  const a = parseJsonCell(String((tpl && tpl.Targets) || ''), [], { env, where: 'recurTargets:Targets', ref: String((tpl && tpl.ID) || ''), severity: 'P1' });
+  if (!Array.isArray(a)) return [];
+  const seen = new Set(), out = [];
+  for (const x of a) { if (!x || !x.p) continue; const t = { p: String(x.p), u: x.u ? String(x.u) : '' }; const k = t.p + '|' + t.u; if (!seen.has(k)) { seen.add(k); out.push(t); } }
+  return out;
 }
 function recurTargetKey(t) { return t.p + '|' + (t.u || ''); }
 function recurWOIsOpen(wo) { return !RECUR_CLOSED_STATUSES.includes(wo.Status) && String(wo.Active || '').toUpperCase() !== 'FALSE'; }
@@ -21852,7 +21851,7 @@ async function processRecurringWorkOrders(env, opts) {
     if (!due) continue;
     let skips = {}; skips = parseJsonCell(tpl.Last_Skips, {}, { env, where: 'processRecurringWorkOrders:Last_Skips', ref: String(tpl.ID || ''), severity: 'P1' }) || {};
     let skipsChanged = false, postedAny = false;
-    for (const target of recurTargets(tpl)) {
+    for (const target of recurTargets(tpl, env)) {
       const key = recurTargetKey(target);
       const mine = workorders.filter(w => w.Recurring_Template_ID === String(tpl.ID) && w.Property_ID === target.p && (w.Unit_ID || '') === target.u);
       if (mine.some(w => w.Recurring_Due === due)) continue;      // already posted for this occurrence
@@ -21884,7 +21883,7 @@ async function recurPostNow(env, body) {
   await recurEnsureCols(env);
   const tpl = (await fetchTab(env, 'WO_Templates')).find(t => String(t.ID) === String(body.template_id));
   if (!tpl) return json({ error: 'Template not found' }, 404);
-  let targets = recurTargets(tpl);
+  let targets = recurTargets(tpl, env);
   if (body.property_id) targets = [{ p: String(body.property_id), u: body.unit_id ? String(body.unit_id) : '' }];
   if (!targets.length) return json({ error: 'This template is not linked to any property/unit yet' }, 400);
   const ov = body.overrides && typeof body.overrides === 'object' ? body.overrides : {};
@@ -21936,7 +21935,7 @@ async function recurLinkTemplate(env, body) {
   const tpl = (await fetchTab(env, 'WO_Templates')).find(t => String(t.ID) === String(body.template_id));
   if (!tpl) return json({ error: 'Template not found' }, 404);
   const t = { p: String(body.property_id), u: body.unit_id ? String(body.unit_id) : '' };
-  let list = recurTargets(tpl).filter(x => recurTargetKey(x) !== recurTargetKey(t));
+  let list = recurTargets(tpl, env).filter(x => recurTargetKey(x) !== recurTargetKey(t));
   if (body.action !== 'remove') list.push(t);
   await updateRow(env, 'WO_Templates', tpl.ID, { Targets: JSON.stringify(list) });
   return json({ success: true, targets: list });
@@ -30879,11 +30878,18 @@ async function uiTestWindowHandler(env, url, request, body) {
 function configFromValues(values) {
   const config={}; (values||[]).forEach(([k,v])=>{if(k)config[k]=v||'';}); return config;
 }
+// A failed Config read makes every setting read as unset until the next good read, so it is reported (P1). At most once per isolate per 5 minutes:
+// during a Sheets outage every call fails, and the report itself is a Sheets write.
+let _cfgFailAt = 0;
 async function fetchConfig(env) {
   try {
     const data=await sheetsRequest(env,'GET',`/values/Config`); if(!data.values) return {};
     const config={}; data.values.forEach(([k,v])=>{if(k)config[k]=v||'';}); return config;
-  } catch(e){return {};}
+  } catch(e){
+    const n = Date.now();
+    if (n - _cfgFailAt > 300000) { _cfgFailAt = n; await softFail(env, 'fetchConfig:Config', e, { severity: 'P1', source: 'read', context: 'every Config setting reads as unset until the next good read' }); }
+    return {};
+  }
 }
 
 async function setConfigKey(env, body) {
@@ -31402,7 +31408,7 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!_t || !String(_t.Name || '').startsWith('TEST-')) return false;
     if (path === '/wo-template/link') return await isTestRecord(env, 'Properties', body && body.property_id);
     if (path === '/wo-template/post-now') {
-      const _tg = body && body.property_id ? [{ p: body.property_id }] : recurTargets(_t);
+      const _tg = body && body.property_id ? [{ p: body.property_id }] : recurTargets(_t, env);
       if (!_tg.length) return false;
       for (const x of _tg) { if (!(await isTestRecord(env, 'Properties', x.p))) return false; }
       if (_t.Default_Vendor_ID && !(await isTestRecord(env, 'Vendors', _t.Default_Vendor_ID))) return false;
@@ -36637,9 +36643,9 @@ function checklistItemPastTense(item) {
 
 // What the customer may read about the work. lines = past-tense items to print; excluded = reason-coded
 // items left off (flagged to the sender); withheld = items whose text looked like an access detail.
-function workDoneFromChecklist(raw) {
+function workDoneFromChecklist(raw, env, ref) {
   const lines = [], excluded = [], withheld = [];
-  parseChecklistItems(raw).forEach(it => {
+  parseChecklistItems(raw, env, ref).forEach(it => {
     if (it.code) { excluded.push({ t: it.t, code: it.code, why: it.why }); return; }
     if (looksLikeAccessDetail(it.t) || looksLikeAccessDetail(it.d)) { withheld.push({ t: it.t }); return; }
     const line = checklistItemPastTense(it);
@@ -36649,14 +36655,14 @@ function workDoneFromChecklist(raw) {
 }
 
 // "Work completed:\n• a\n• b" — '' when no checklist item qualifies.
-function workDoneBlock(wo) {
-  const wd = workDoneFromChecklist(wo && wo.Checklist);
+function workDoneBlock(wo, env) {
+  const wd = workDoneFromChecklist(wo && wo.Checklist, env, wo && wo.ID);
   return wd.lines.length ? ('Work completed:\n' + wd.lines.map(l => '• ' + l).join('\n')) : '';
 }
 
 // Preview warnings about a checklist-backed invoice (excluded / withheld items).
-function workDoneWarnings(wo) {
-  const wd = workDoneFromChecklist(wo && wo.Checklist);
+function workDoneWarnings(wo, env) {
+  const wd = workDoneFromChecklist(wo && wo.Checklist, env, wo && wo.ID);
   const out = [];
   const label = { na: 'not applicable', separate: 'separate work order', estimate: 'needs estimate', access: "couldn't access", parts: 'needs parts' };
   if (wd.excluded.length) out.push('ℹ ' + wd.excluded.length + ' checklist item' + (wd.excluded.length === 1 ? ' is' : 's are') + ' left OFF the invoice because the vendor gave a reason: ' + wd.excluded.map(e => '"' + e.t + '" (' + (label[e.code] || e.code) + ')').join('; ') + '.');
@@ -36680,8 +36686,8 @@ async function scopeWorkDoneForInvoice(env, s) {
   try {
     const wo = findWO(await fetchTab(env, 'Work_Orders'), s.WO_ID);
     if (!wo) { out.warnings.push('⚠ The linked work order ' + s.WO_ID + ' was not found, so the final invoice cannot list the work completed.'); return out; }
-    out.block = workDoneBlock(wo);
-    workDoneWarnings(wo).forEach(w => out.warnings.push(w));
+    out.block = workDoneBlock(wo, env);
+    workDoneWarnings(wo, env).forEach(w => out.warnings.push(w));
     if (!out.block) out.warnings.push('⚠ Work order ' + s.WO_ID + ' has no usable checklist items, so the final invoice will not list the work completed. Add them to the checklist first if the customer should read them.');
   } catch (e) {
     out.warnings.push('⚠ Could not read work order ' + s.WO_ID + ' (' + String((e && e.message) || e).slice(0, 120) + '), so the work-completed list is missing from this invoice.');
@@ -36689,7 +36695,7 @@ async function scopeWorkDoneForInvoice(env, s) {
   return out;
 }
 
-function buildLaborDescription(billRow, timeEntries, wo) {
+function buildLaborDescription(billRow, timeEntries, wo, env) {
   const billId = String((billRow && billRow.ID) || '').trim();
   const parts = [];
   const billDesc = englishOnly((billRow && billRow.Invoice_Description) || '').trim();   // customer-facing = English (Sep 28 2026): [ES]/[EN] tags resolve to the EN half
@@ -36700,7 +36706,7 @@ function buildLaborDescription(billRow, timeEntries, wo) {
     .forEach(e => parts.push(laborEntryText(e)));
   // Nov 2 2026: the checklist (what was actually done) follows anything the vendor typed, and replaces
   // the generic work-order text. That fallback text never carries access codes onto an invoice.
-  const doneBlock = workDoneBlock(wo);
+  const doneBlock = workDoneBlock(wo, env);
   if (parts.length) return parts.join('; ') + (doneBlock ? '\n' + doneBlock : '');
   if (doneBlock) return doneBlock;
   return sanitizeCustomerText((wo && (wo.Invoice_Memo || wo.Description)) || '');
@@ -36836,7 +36842,7 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
   // Landscaping" tells them nothing about the job.
   // Slice the description, not the joined string — otherwise a long one takes the
   // "— WO 1062" reference off the end with it.
-  const workDesc = buildLaborDescription(billRow, timeEntries, wo).slice(0, 3800);
+  const workDesc = buildLaborDescription(billRow, timeEntries, wo, env).slice(0, 3800);
   const labelParts = [tradeName];
   if (workDesc) labelParts.push(workDesc);
   labelParts.push('WO ' + (ir.WO_ID || ''));
@@ -37990,7 +37996,7 @@ async function qbSendInvoice(env, body) {
     const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries, env);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
     // Nov 2 2026: checklist items left off (vendor reason code) or withheld (looked like an access code) are flagged here.
-    workDoneWarnings(wo).forEach(w => warnings.push(w));
+    workDoneWarnings(wo, env).forEach(w => warnings.push(w));
     // Oct 23 2026 (invoice 1767): say so in the preview when the customer would read only the generic work-order text
     // even though hours were billed, and point at the opt-in that copies the private notes (nothing is copied automatically).
     {

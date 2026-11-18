@@ -13,7 +13,9 @@ function grab(name) {
 function grabConst(name) { const m = new RegExp('const ' + name + ' = [^;]*;').exec(src); if (!m) throw new Error('missing const ' + name); return m[0]; }
 const names = ['recurParseISO','recurDayNum','recurISOFromDayNum','recurAddDays','recurWeekday','recurDaysInMonth','recurInSeason','recurInt','recurIsOccurrence','recurLatestDue','recurNextOccurrences','recurTargets','recurTargetKey','recurWOIsOpen','recurIsTrue','recurSanitizeTemplateFields'];
 const code = [grabConst('RECUR_CLOSED_STATUSES'), grabConst('RECUR_LOOKBACK_DAYS'), ...names.map(grab)].join('\n') + '\nreturn {' + names.join(',') + '};';
-const R = new Function(code)();
+const parseNotes = [];
+const parseJsonCell = (c, fb, o) => { o = o || {}; if (c === undefined || c === null || String(c).trim() === '') return fb; try { return JSON.parse(c); } catch (e) { parseNotes.push(o.where + '|' + o.severity + '|' + o.ref); return fb; } };
+const R = new Function('parseJsonCell', code)(parseJsonCell);
 let pass = 0, fail = 0;
 const t = (n, c) => { if (c) pass++; else { fail++; console.log('FAIL:', n); } };
 const eq = (n, a, b) => t(n + ' -> ' + JSON.stringify(a), JSON.stringify(a) === JSON.stringify(b));
@@ -64,6 +66,10 @@ t('invalid date rejected', R.recurParseISO('2026-02-30') === null);
 // targets
 eq('targets parse+dedupe', R.recurTargets({ Targets: '[{"p":"1","u":"2"},{"p":"1","u":"2"},{"p":"3"},{"x":1}]' }), [{ p: '1', u: '2' }, { p: '3', u: '' }]);
 eq('targets bad json', R.recurTargets({ Targets: '{oops' }), []);
+eq('targets bad json is reported once at P1 with the template id', (R.recurTargets({ ID: 'T-9', Targets: '{oops' }, {}), parseNotes.slice(-1)[0]), 'recurTargets:Targets|P1|T-9');
+parseNotes.length = 0;
+eq('targets blank cell: empty, nothing reported', (R.recurTargets({ ID: 'T-1', Targets: '' }, {}), parseNotes.length), 0);
+eq('targets not a list: empty (as before)', R.recurTargets({ Targets: '{"p":"1"}' }), []);
 // open detection
 t('Assigned is open', R.recurWOIsOpen({ Status: 'Assigned' }));
 t('Complete is closed', !R.recurWOIsOpen({ Status: 'Complete' }));
