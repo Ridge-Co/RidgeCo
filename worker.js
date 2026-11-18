@@ -27040,18 +27040,19 @@ async function qbBatchWrite(env, id, fields) {
 // live around #16-21 on Sep 10 2026); the response says how many remain and the daily job returns partial:true so the scheduler resumes it
 // on the next tick. Nothing is dropped: the rest simply wait for the next slice, and failures are reported (failure ledger + response).
 async function sendReceiptsToQBEmail(env, opts) {
-  opts = opts || {};
-  if (opts.release !== true) {
-    return json({ ok: true, sent: 0, queued: true, note: 'Receipts are not emailed to QuickBooks one at a time any more. This one waits in the daily batch (Receipt Reconciler > Waiting to send to QuickBooks).' });
-  }
-  const limit = Math.max(1, Math.min(QB_BATCH_MAX_PER_CALL, parseInt(opts.limit) || QB_BATCH_DEFAULT_PER_CALL));
-  const cfg = await fetchConfig(env).catch(() => ({}));
+  // Discovered live (Sep 10 2026): a batch of 25 blew through Cloudflare's per-invocation
+  // subrequest budget partway through (driveDownload + gmail send + updateRow's own
+  // read-then-write is ~3-4 subrequests per receipt, on top of 5 for the initial tab reads) —
+  // requests started failing with "Too many subrequests" around #16-21. Capped conservatively
+  // here instead of guessing at the account's actual plan/limit; a larger backlog just takes
+  // more calls (the daily cron, or Brett/Claude calling this again — already-sent rows are
+  // always skipped so repeat calls are safe and cheap).
+  const limit = Math.max(1, Math.min(10, parseInt(opts && opts.limit) || 8));
+  const cfg = await fetchConfig(env).catch(async (e) => { await softFail(env, 'sendReceiptsToQB:config', e, { severity: 'P1', source: 'read', context: 'settings could not be read, so receipts were not forwarded to QuickBooks this run' }); return {}; });
   const qbEmail = (cfg.qb_receipts_email || env.QB_RECEIPTS_EMAIL || '').trim();
   if (!qbEmail) return json({ ok: false, error: 'qb_receipts_email is not set — add it as a Config/Settings key (or QB_RECEIPTS_EMAIL secret) first: the email address QuickBooks gave you for forwarding receipts.' }, 400);
 
-  // The batch columns MUST exist before anything is claimed: the 'sending' marker is the double-send guard, and a write to a missing column is silently dropped (rule 174).
-  try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date', 'Payment_Source'].concat(QB_BATCH_COLS)); }
-  catch (e) { return json({ ok: false, error: 'Could not prepare the Receipts columns, so nothing was emailed to QuickBooks: ' + String(e && e.message || e) }, 500); }
+  try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date']); } catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
 
   let all = []; try { all = await fetchTab(env, 'Receipts'); } catch (e) { return json({ ok: false, error: 'Could not read Receipts: ' + (e.message || e) }, 500); }
   const onlyIds = (opts.ids && Array.isArray(opts.ids) && opts.ids.length) ? new Set(opts.ids.map(String)) : null;
