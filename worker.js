@@ -27012,6 +27012,26 @@ async function qbBatchWrite(env, id, fields) {
   const j = (res && typeof res.json === 'function') ? await res.json().catch(() => null) : null;
   if (!j || j.success !== true || j.message === 'No matching fields') throw new Error('Receipts row ' + id + ' was not updated (' + ((j && (j.error || j.message)) || 'no answer') + ')');
 }
+// Nov 17 2026 (review): the sender re-reads ONE row fresh (cache dropped) right before and right after it claims it. Sheets has no compare-and-set, so this is the
+// strongest guard available: a row that was held, sent, reversed, voided or claimed by someone else since the batch was read is NEVER emailed.
+// __qbBatchInflight additionally stops two overlapping sends in the same Worker isolate (a double tap on "Send batch now") from taking the same row.
+const __qbBatchInflight = new Set();
+async function qbBatchFresh(env, id) {
+  invalidateTabCache('Receipts');
+  const rows = await fetchTab(env, 'Receipts');
+  return rows.find(x => String(x.ID) === String(id)) || null;
+}
+// PURE. Still due right now (re-read row): live, not reversed, not sent, and ready (or failed on an earlier day / manual).
+function qbBatchStillDue(cur, o) {
+  if (!cur || String(cur.Active || '').toUpperCase() === 'FALSE') return false;
+  if (String(cur.QB_Reversed_Date || '').trim()) return false;
+  return qbBatchSendable(cur, o);
+}
+// PURE. This sender's claim is the one on the row (status 'sending' carrying its token), and the row is still live and not reversed.
+function qbBatchClaimHeld(cur, token) {
+  if (!cur || String(cur.Active || '').toUpperCase() === 'FALSE' || String(cur.QB_Reversed_Date || '').trim()) return false;
+  return qbBatchStatus(cur) === 'sending' && String(cur.QB_Batch_Error || '') === token;
+}
 
 // POST /receipts/send-to-qb-email {limit?, ids?} — Brett, Sep 2026: every receipt that runs through
 // the Reconciler is Brett's own money out (an "internal expense" — the vendor-fronted-materials
