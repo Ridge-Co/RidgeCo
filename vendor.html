@@ -2292,9 +2292,9 @@ function acceptWO(woId, idx) {
     method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ wo_id: woId, status: 'Accepted', updated_by: session.vendor_name, updated_by_role: 'vendor', vendor_id: session.vendor_id }),
   }).then(function(data) {
-    if (data && data.success) { showActionMsg(idx, '✓ Accepted — unlocking details…', 'success'); setTimeout(loadWorkOrders, 900); }
-    else { showActionMsg(idx, 'Could not accept. Try again.', 'error'); }
-  }).catch(function() { showActionMsg(idx, 'Connection error.', 'error'); });
+    if (data && data.success) { showActionMsg(idx, '✓ Accepted — unlocking details…', 'success'); if (!(window.VendorHome && VendorHome.on())) setTimeout(loadWorkOrders, 900); return true; }
+    else { showActionMsg(idx, 'Could not accept. Try again.', 'error'); return false; }
+  }).catch(function() { showActionMsg(idx, 'Connection error.', 'error'); return false; });
 }
 function declineWO(woId, idx) {
   var reason = (prompt('Optional — a quick reason helps us reassign fast:') || '').trim();
