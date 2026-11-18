@@ -31467,7 +31467,7 @@ async function hubTestWriteAllowed(env, path, body) {
     return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
   }
   if (path === '/insp/booking/decide' || path === '/insp/booking/cancel') {
-    const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id));
+    const _bk = (await fetchTab(env, 'Insp_Bookings').catch(() => [])).find(x => String(x.ID) === String(body && body.id)); // silent-ok: a failed read makes the test-write guard refuse, the safe side
     return !!_bk && await isTestRecord(env, 'Insp_Customers', _bk.Customer_ID);
   }
   // Inspection billing (Oct 22 2026): a preview writes nothing; every real step may only touch a booking / customer that is a TEST- customer.
