@@ -27178,6 +27178,18 @@ function qbBatchHoursUntil(etNow, atHHMM, lastKey) {
   if (etNow.minutes < at) return Math.round((at - etNow.minutes) / 60 * 10) / 10;
   return 0;
 }
+// PURE. Minutes in the America/New_York calendar day 'YYYY-MM-DD' (1380 / 1440 / 1500). Finds the real UTC instant of ET midnight for that day and the next.
+function qbBatchEtDayMinutes(dateStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || '')); if (!m) return 1440;
+  const fmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', hour: '2-digit', minute: '2-digit' });
+  const midnight = (y, mo, d) => {
+    for (const off of [4, 5]) { const t = Date.UTC(y, mo, d, off, 0); const parts = fmt.formatToParts(new Date(t)); const hh = +parts.find(p => p.type === 'hour').value, mm = +parts.find(p => p.type === 'minute').value; if (hh === 0 && mm === 0) return t; }
+    return null;
+  };
+  const y = +m[1], mo = +m[2] - 1, d = +m[3];
+  const a = midnight(y, mo, d), b = midnight(y, mo, d + 1);
+  return (a === null || b === null) ? 1440 : Math.round((b - a) / 60000);
+}
 // PURE. The row the review list shows for one waiting receipt. `q` = the Receipt_Recon_Queue row that confirmed it (or null), `wo`/`prop` may be null.
 function qbBatchListItem(r, q, wo, prop) {
   const st = qbBatchStatus(r);
