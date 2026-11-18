@@ -1541,6 +1541,10 @@ function renderWOs(wos, opts) {
         '</div>' +
       '</div>' +
     '</div>';
+    if (window.VendorHome && VendorHome.on() && currentTab === 'todo') {   // plain headings between the groups (plan 4.1)
+      var _hg = VendorHome.groupForWO(wo), _ht = VendorHome.headingFor(_hg);
+      if (_ht && _ht !== _lastHeading) { cardHtml = VendorHome.headingHtml(_hg) + cardHtml; _lastHeading = _ht; }
+    }
     if (currentTab !== 'paid' && idx >= nActive + nPaid) cancelledHtml += cardHtml;
     else if (currentTab !== 'paid' && idx >= nActive) paidHtml += cardHtml;
     else html += cardHtml;
