@@ -8903,7 +8903,7 @@ async function ownerApprovalRespond(env, callerRole, callerSessionId, body) {
     return json({ error: 'Not saved, try again.', saved: false }, 500);   // no text is sent for an answer that was not saved
   }
   // history row (the owner's answer, who typed it, when)
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_' + wanted, Skill_Or_Endpoint: '/owner/approval/respond', Success: 'TRUE', Notes: `owner=${ownerId} scope=${scopeId} by=${name}`.slice(0, 480) }); } catch (e) { console.error('owner_approval history telemetry failed:', schedErrText(e)); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_' + wanted, Skill_Or_Endpoint: '/owner/approval/respond', Success: 'TRUE', Notes: `owner=${ownerId} scope=${scopeId} by=${name}`.slice(0, 480) }); } catch (e) { console.error('owner_approval history telemetry failed:', schedErrText(e)); }   // silent-ok: history row only, the answer itself was saved and read back above
   // Now, and only now, tell Brett. The saved response is the flag the Hub shows; it does not depend on this text.
   let alert;
   try {
