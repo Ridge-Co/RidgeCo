@@ -35103,7 +35103,7 @@ async function payAuthLog(env, result, detail, amount, by, idem) {
     await ensureColumns(env, PAY_AUTH_LOG_TAB, PAY_AUTH_LOG_COLS);
     await addRow(env, PAY_AUTH_LOG_TAB, { Timestamp: new Date().toISOString(), Result: result, Detail: String(detail || '').slice(0, 300), Amount: amount != null ? String(amount) : '', By: String(by || 'hub'), Idem: String(idem || '').slice(0, 80) });
     return true;
-  } catch (_) { return false; }
+  } catch (e) { await softFail(env, 'payAuthLog', e, { severity: 'P0', ref: String(idem || ''), source: 'write', context: 'a payment or mark-paid event could not be written to the payment log, so there is no durable record of it' }); return false; }
 }
 
 // POST /qb/pay-bills { bill_ids:[qbBillId,...], pay_account_id, passphrase, preview?, by? }
