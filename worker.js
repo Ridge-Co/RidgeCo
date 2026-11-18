@@ -1505,7 +1505,7 @@ async function recordPinFailure(env, pin) {
       await sheetsRequest(env, 'POST', `/values/PIN_Lockout:append?valueInputOption=RAW`, { values: [newRow] });
     }
     return { fail_count: newCount, locked: newCount >= PIN_MAX_ATTEMPTS };
-  } catch(e) { return { fail_count: 0, locked: false }; }
+  } catch(e) { await softFail(env, 'recordPinFailure', e, { severity: 'P0', ref: '', source: 'write', context: 'a wrong PIN could not be counted toward the lockout, so repeated guesses are not being limited' }); return { fail_count: 0, locked: false }; }
 }
 
 async function clearPinLockout(env, pin) {
