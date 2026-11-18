@@ -31391,7 +31391,7 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!_t || !String(_t.Name || '').startsWith('TEST-')) return false;
     if (path === '/wo-template/link') return await isTestRecord(env, 'Properties', body && body.property_id);
     if (path === '/wo-template/post-now') {
-      const _tg = body && body.property_id ? [{ p: body.property_id }] : recurTargets(_t);
+      const _tg = body && body.property_id ? [{ p: body.property_id }] : recurTargets(_t, env);
       if (!_tg.length) return false;
       for (const x of _tg) { if (!(await isTestRecord(env, 'Properties', x.p))) return false; }
       if (_t.Default_Vendor_ID && !(await isTestRecord(env, 'Vendors', _t.Default_Vendor_ID))) return false;
