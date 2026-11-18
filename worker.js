@@ -4518,7 +4518,7 @@ async function listReceiptReconQueue(env, url) {
       const dupSignals = (r.Status || 'pending') === 'pending' ? receiptDupSignals({ total: r.Total, date: r.Receipt_Date, store: r.Vendor, invoice: r.Invoice_Number }, receiptsForDup, rows, { selfQueueId: r.ID }).slice(0, 5) : [];
       let suggestion = parseJsonCell(r.Suggestion, null, { env, where: 'listReceiptReconQueue:Suggestion', ref: String(r.ID || ''), severity: 'P2' });
       let items = parseJsonCell(r.Items, [], { env, where: 'listReceiptReconQueue:Items', ref: String(r.ID || ''), severity: 'P2' });
-      let items_summary = []; try { items_summary = JSON.parse(r.Items_Summary || '[]'); } catch (e) {}
+      let items_summary = parseJsonCell(r.Items_Summary, [], { env, where: 'listReceiptReconQueue:Items_Summary', ref: String(r.ID || ''), severity: 'P2' });
       let duplicate_evidence = []; try { duplicate_evidence = JSON.parse(r.Duplicate_Evidence_JSON || '[]'); } catch (e) {}
       let rescan_matches = []; try { rescan_matches = JSON.parse(r.Rescan_Match_JSON || '[]'); } catch (e) {}
       // Sep 23 2026 build: Brett's manual "mark as refund" override for a row the automatic
