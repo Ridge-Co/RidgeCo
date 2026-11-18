@@ -23,6 +23,7 @@ function make(over = {}) {
     fetchTab: async () => state.rows,
     findWO: (rows, id) => rows.find(r => r.ID === id),
     json: (o, s = 200) => ({ body: o, status: s }),
+    parseJsonCell: (c, fb) => { if (c === undefined || c === null || String(c).trim() === '') return fb; try { return JSON.parse(c); } catch (e) { return fb; } },   // same contract as the worker helper, minus the report
     schedErrText: e => String((e && e.message) || e),
   };
   const mod = new Function(...Object.keys(fns), block + '\nreturn { triageByRules, triageParseKeywords, triageWorkOrder, triageIntakeSafe, woTriageSet, woTriagePreview, triageEnabled, triageSla, TRIAGE_COLS, TRIAGE_INTAKE_TYPES };')(...Object.values(fns));
