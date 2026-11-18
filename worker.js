@@ -4627,6 +4627,13 @@ async function appendReceiptToInvoiceReview(env, { wo_id, receipt_id, amount }) 
 // receiptSuggestCore's category logic) has no work order at all — pass no_wo:true for that
 // path; property_id is then optional too (Ridge Co overhead has no property; a receipt for
 // Milam Ridge, which has no owner to bill, would carry property_id but still no wo_id).
+// PURE. Is this queue row a receipt paid on a CUSTOMER's card (Brett's manual mark, or the scanner's customer_paid / customer card status)? A manual refund mark wins, same as the queue read.
+function receiptRowIsCustomerCard(row) {
+  if (!row) return false;
+  let sug = null; try { sug = JSON.parse(row.Suggestion || 'null'); } catch (e) { sug = null; }
+  if (sug && sug.manual_refund) return false;
+  return String(row.Manual_Customer_Card || '').toUpperCase() === 'TRUE' || !!(sug && (sug.category === 'customer_paid' || sug.card_status === 'customer'));
+}
 async function receiptReconConfirm(env, body) {
   const id = body.id; if (!id) return json({ error: 'id required' }, 400);
   const rows = await fetchTab(env, 'Receipt_Recon_Queue');
