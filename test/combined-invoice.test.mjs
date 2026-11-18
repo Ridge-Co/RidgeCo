@@ -6,6 +6,7 @@
 // static shape check on qbSendCombinedInvoice/qbSendInvoice so the loop-over-every-group-row
 // write-back, the per-vendor Bill loop, and the batch-mapping guard can't quietly regress.
 import fs from 'fs';
+globalThis.parseJsonCell = globalThis.parseJsonCell || ((c, fb) => { if (c === undefined || c === null || String(c).trim() === '') return fb; try { return JSON.parse(c); } catch (e) { return fb; } });   // fake of the worker helper (the report itself is covered by json-cells-money-failure-reports.test.mjs)
 const src = fs.readFileSync('worker.js', 'utf8');
 
 function grab(name) {
