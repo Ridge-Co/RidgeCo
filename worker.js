@@ -36597,7 +36597,7 @@ function sanitizeCustomerText(text) {
 
 function parseChecklistItems(raw, env, ref) {
   let arr = raw;
-  if (typeof raw === 'string') { try { arr = JSON.parse(raw || '[]'); } catch (_) { return []; } }
+  if (typeof raw === 'string') arr = parseJsonCell(raw, [], { env, where: 'parseChecklistItems', ref: String(ref || ''), severity: 'P1' });
   if (!Array.isArray(arr)) return [];
   return arr.filter(it => it && String(it.t || '').trim()).map(it => ({
     t: String(it.t).trim(),
