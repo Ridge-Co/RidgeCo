@@ -34796,7 +34796,7 @@ async function qbFindOrCreateCustomer(env, owner, displayName, token) {
   const r = await qbApi(env, 'customer?minorversion=73', 'POST', payload, token);
   const id = r?.Customer?.Id || qbDupId(r);
   if (!id) throw new Error(qbFault(r) || 'could not create QB customer');
-  if (owner.ID) { try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: id }); } catch (e) {} }
+  if (owner.ID) { try { await updateRow(env, 'Owners', owner.ID, { QBO_Customer_ID: id }); } catch (e) { await softFail(env, 'qbFindOrCreateCustomer:linkCreated', e, { severity: 'P1', ref: String(owner.ID), source: 'write', context: 'the QuickBooks customer was created but the owner row was not linked to it, so the next send may create another' }); } }
   return id;
 }
 
