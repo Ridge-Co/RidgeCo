@@ -27540,7 +27540,7 @@ async function vendorBillReconcileReceipts(env, body) {
 
   let logged = [];
   try { const all = await fetchTab(env, 'Receipts'); logged = wo_id ? all.filter(r => String(r.WO_ID) === String(wo_id) && r.Active !== 'FALSE') : []; }
-  catch (e) { /* best-effort — an unreadable Receipts tab still returns what was detected */ }
+  catch (e) { await softFail(env, 'vendorBillReconcileReceipts:Receipts', e, { severity: 'P2', ref: String(wo_id || ''), source: 'read' }); /* an unreadable Receipts tab still returns what was detected */ }
 
   const matched = [], unmatched = [];
   const usedLoggedIds = new Set();
