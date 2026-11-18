@@ -21350,7 +21350,7 @@ async function schedPreflight(env, dueNames, cfgRows, now, seeded) {
         for (const tpl of tpls) {
           const due = recurLatestDue(tpl, today); if (!due) continue;
           let skips = {}; try { skips = JSON.parse(tpl.Last_Skips || '{}') || {}; } catch (e) { skips = {}; notes.push('template ' + tpl.ID + ' has unreadable Last_Skips (' + schedErrText(e) + ')'); }
-          for (const tg of recurTargets(tpl)) {
+          for (const tg of recurTargets(tpl, env)) {
             const mine = wos.filter(w => w.Recurring_Template_ID === String(tpl.ID) && w.Property_ID === tg.p && (w.Unit_ID || '') === tg.u);
             if (mine.some(w => w.Recurring_Due === due)) continue;
             const key = recurTargetKey(tg); if (skips[key] && skips[key] >= due) continue;
