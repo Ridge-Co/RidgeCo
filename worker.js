@@ -27512,7 +27512,7 @@ async function ownerOnboardInviteCreate(env, body) {
     Note: ooClean(body.note, 300), Check_Attempts: '0', Needs_Review: 'FALSE', Active: 'TRUE',
   };
   const r = await addRow(env, 'Owner_Invites', row);
-  let id = ''; try { id = (await r.clone().json()).id || ''; } catch (e) {}
+  let id = ''; try { id = (await r.clone().json()).id || ''; } catch (e) { await softFail(env, 'ownerOnboardInviteCreate:newId', e, { severity: 'P2', ref: '', source: 'parse', context: 'the owner invite was saved but its id could not be read back, so the page cannot track it' }); }
   return json({ success: true, id, token, link: `${PORTAL_BASE}/owner-onboard.html?t=${token}`, expires: row.Expires_Date });
 }
 
