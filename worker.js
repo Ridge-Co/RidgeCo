@@ -13461,7 +13461,7 @@ async function vendorAccessRequestApprove(env, body) {
           await updateRow(env, 'Vendors', reqRow.Vendor_ID, { Billing_Property_Access: list.join(',') });
         }
       }
-    } catch (e) { /* the request itself is already resolved; the vendor list append is best-effort */ }
+    } catch (e) { await softFail(env, 'vendorAccessRequestApprove:listAppend', e, { severity: 'P1', ref: String(id), source: 'write', context: 'the request was marked approved but the property was not added to the vendor access list, so the vendor will still be blocked' }); }
   }
   return json({ success: true, id, status: newStatus });
 }
