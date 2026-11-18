@@ -24,8 +24,9 @@ function mk(tabs, opts = {}) {
   const updateWOFields = async (env, id, f) => { calls.updates.push([id, f]); if (!opts.dropWrites) Object.assign(tabs.Work_Orders.find(r => r.ID === id), f); };
   const invalidateTabCache = () => {};
   const logWOAudit = async (...a) => { calls.audits.push(a); };
-  const lib = new Function('json', 'fetchTab', 'findWO', 'ensureColumns', 'updateWOFields', 'invalidateTabCache', 'logWOAudit',
-    src + '; return { maxPriceNum, woMaxCeiling, maxPriceGateResponse, setWoMaxPrice };')(json, fetchTab, findWO, ensureColumns, updateWOFields, invalidateTabCache, logWOAudit);
+  const lib = new Function('json', 'fetchTab', 'findWO', 'ensureColumns', 'updateWOFields', 'invalidateTabCache', 'logWOAudit', 'softFail', 'parseJsonCell',
+    src + '; return { maxPriceNum, woMaxCeiling, maxPriceGateResponse, setWoMaxPrice };')(json, fetchTab, findWO, ensureColumns, updateWOFields, invalidateTabCache, logWOAudit, softFail,
+    (c, fb) => { if (c === undefined || c === null || String(c).trim() === '') return fb; try { return JSON.parse(c); } catch (e) { return fb; } });
   return { ...lib, calls };
 }
 
