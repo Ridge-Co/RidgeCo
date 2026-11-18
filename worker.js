@@ -7140,7 +7140,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   // vendorCostTotal (so never on a vendor bill); recorded as the budget Signed Proposals tracks
   // matched receipts against. Cost from private Line_Items, customer price from Proposal_Items_JSON.
   let rcMaterialsCost = 0, rcMaterialsPrice = 0;
-  for (const it of scopeParseItems(s)) {
+  for (const it of scopeParseItems(s, env)) {
     const key = finalSelections[it.id];
     if (key === undefined) continue; // declined optional add-on
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
