@@ -8913,7 +8913,8 @@ async function ownerApprovalRespond(env, callerRole, callerSessionId, body) {
     const sent = !!(r && (r.sent || r.held_for_quiet_hours || ((env.__STAGING__ ?? false) && r.send_ok)));
     alert = sent ? { sent: true, held: !!(r && r.held_for_quiet_hours) } : { sent: false, reason: (r && !r.send_ok) ? `blocked: ${r.gate_snapshot}` : 'the text did not go through' };
   } catch (e) { alert = { sent: false, reason: schedErrText(e).slice(0, 200) }; }
-  if (alert.sent) { try { await updateRow(env, 'Scopes', scopeId, { Owner_Response_Alerted: new Date(Date.now()).toISOString() }); } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_alert_mark_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `scope=${scopeId} ${schedErrText(e)}`.slice(0, 480) }); } catch (_) { console.error('owner_approval_alert_mark_failed telemetry failed:', schedErrText(e)); } } }
+  if (alert.sent) { try { await updateRow(env, 'Scopes', scopeId, { Owner_Response_Alerted: new Date(Date.now()).toISOString() }); } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_alert_mark_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `scope=${scopeId} ${schedErrText(e)}`.slice(0, 480) }); } catch (_) { console.error('owner_approval_alert_mark_failed telemetry failed:', schedErrText(e)); }   // silent-ok: already reported to the failure ledger just above
+  } }
   if (!alert.sent) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_alert_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `scope=${scopeId} ${alert.reason}`.slice(0, 480) }); } catch (e) { console.error('owner_approval_alert_failed telemetry failed:', schedErrText(e)); } }
   return json({ ok: true, saved: true, state: wanted === 'declined' ? 'declined' : 'waiting', alerted: !!alert.sent });
 }
