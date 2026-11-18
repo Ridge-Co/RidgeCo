@@ -31,4 +31,4 @@ Shapes: `automation` + `money record` (any, plus the standing parameters). Brett
 - C14 Check by hand: open Receipt Reconciler > "Waiting to send to QuickBooks".
 
 ## Late requests
-None yet.
+Brett's Nov 17 20:06 answers: (1) the first daily send of the whole backlog is fine; (2) the daily QuickBooks send is 12:00 AM (midnight) America/New_York: `daily_receipts_post` `at: '00:00'` in the HubScheduler.gs JOBS table and the Worker registry default (Brett must paste HubScheduler.gs into the Apps Script project and Save; the Apps Script time zone is already America/New_York); (3) voided receipts keep counting as portal evidence in `portalEvidenceFromRecords` (left unchanged on purpose); (4) a customer-card receipt cannot be confirmed without a work order: `receiptReconConfirm` refuses it with 409 code `customer_card_needs_wo` (page, bulk and auto-rule callers all hit it), the card shows a greyed-out Confirm with the reason; attach-only and fixed-price paths are unchanged.
