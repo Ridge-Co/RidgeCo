@@ -21873,7 +21873,7 @@ async function recurPostNow(env, body) {
   await recurEnsureCols(env);
   const tpl = (await fetchTab(env, 'WO_Templates')).find(t => String(t.ID) === String(body.template_id));
   if (!tpl) return json({ error: 'Template not found' }, 404);
-  let targets = recurTargets(tpl);
+  let targets = recurTargets(tpl, env);
   if (body.property_id) targets = [{ p: String(body.property_id), u: body.unit_id ? String(body.unit_id) : '' }];
   if (!targets.length) return json({ error: 'This template is not linked to any property/unit yet' }, 400);
   const ov = body.overrides && typeof body.overrides === 'object' ? body.overrides : {};
