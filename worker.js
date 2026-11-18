@@ -7057,7 +7057,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   const dup = existing.find(r => r.Scope_ID === String(s.ID) && String(r.Active || '').toUpperCase() !== 'FALSE');
   if (dup) return json({ ok: true, id: dup.ID, duplicate: true, subtotal: +dup.Subtotal || 0, deposit: +dup.Deposit_Amount || 0 });
 
-  let items = []; try { items = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (_) {}
+  let items = []; try { items = JSON.parse(s.Proposal_Items_JSON || '[]'); } catch (e) { await softFail(env, 'scopeProposalSign:items', e, { severity: 'P1', ref: String(s.ID || ''), source: 'parse', context: 'the proposal items are unreadable, so signing was refused as not ready' }); }
   if (!items.length) return json({ error: 'Proposal not ready to sign yet.' }, 400);
   const selections = (body && body.selections && typeof body.selections === 'object') ? body.selections : {};
   let subtotal = 0;
