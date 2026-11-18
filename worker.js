@@ -37977,7 +37977,7 @@ async function qbSendInvoice(env, body) {
     }
 
     const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
-    const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries);
+    const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries, env);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
     // Nov 2 2026: checklist items left off (vendor reason code) or withheld (looked like an access code) are flagged here.
     workDoneWarnings(wo).forEach(w => warnings.push(w));
