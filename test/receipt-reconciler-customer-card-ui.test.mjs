@@ -66,7 +66,8 @@ ok(opts.some(g => /Closed in the last year:.*1003/.test(g)), 'cancelled WO with 
 console.log('customer-card attach');
 ok(await page.locator('#rc2-wo').count() === 1 && await page.locator('#rc2-prop').count() === 1, 'the customer-card receipt now has a property + work order picker');
 ok(/not<\/b> billed|not billed/i.test(await page.locator('#rc2 .rc-cc-note').innerHTML()), 'the card says plainly it is not billed');
-ok(await page.locator('#rc2 button:has-text("Confirm")').count() === 0, 'the normal Confirm (billing) button is NOT on a customer-card card');
+ok(await page.locator('#rc2 button:has-text("Confirm"):not([disabled])').count() === 0, 'no ENABLED Confirm (billing) button is on a customer-card card');
+ok(await page.locator('#rc2 button[disabled]:has-text("Confirm")').count() === 1 && /customer card/i.test(await page.locator('#rc2 button[disabled]:has-text("Confirm")').getAttribute('title')), 'Nov 17 2026: a greyed-out Confirm is shown on a customer-card card, with the reason on it');
 ok(await page.locator('#rc2 button:has-text("Ridge Co expense")').count() === 0, 'the expense-to-QuickBooks buttons are NOT on a customer-card card');
 await page.locator('#rc2 button:has-text("Attach to work order")').click();
 ok(/Pick a work order/.test(await txt('#rc2-status')) && !calls.some(c => c.path === '/receipt/attach-only'), 'no work order picked: refused on the card, nothing sent');
