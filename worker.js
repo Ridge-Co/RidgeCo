@@ -36637,9 +36637,9 @@ function checklistItemPastTense(item) {
 
 // What the customer may read about the work. lines = past-tense items to print; excluded = reason-coded
 // items left off (flagged to the sender); withheld = items whose text looked like an access detail.
-function workDoneFromChecklist(raw) {
+function workDoneFromChecklist(raw, env, ref) {
   const lines = [], excluded = [], withheld = [];
-  parseChecklistItems(raw).forEach(it => {
+  parseChecklistItems(raw, env, ref).forEach(it => {
     if (it.code) { excluded.push({ t: it.t, code: it.code, why: it.why }); return; }
     if (looksLikeAccessDetail(it.t) || looksLikeAccessDetail(it.d)) { withheld.push({ t: it.t }); return; }
     const line = checklistItemPastTense(it);
