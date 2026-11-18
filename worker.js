@@ -5797,7 +5797,7 @@ async function scopeGet(env, url) {
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
   let srcs = parseJsonCell(s.Source_Refs, [], { env, where: 'scopeGet:Source_Refs', ref: String(s.ID || ''), severity: 'P2' }); if (!Array.isArray(srcs)) srcs = [];
-  return json(Object.assign({}, s, { line_items: scopeParseItems(s), source_refs: srcs }));
+  return json(Object.assign({}, s, { line_items: scopeParseItems(s, env), source_refs: srcs }));
 }
 
 // GET /scope/drive-list?folder= — list image/pdf files in the handwriting scan folder to pick from.
