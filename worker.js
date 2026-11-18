@@ -32386,7 +32386,7 @@ async function qbRepairable(env, url) {
       const origItemRef = qbOriginalItemRef(q);
       const woTimeEntries = allTimeEntries.filter(e => String(e.WO_ID) === String(ir.WO_ID));
       const _inEn = await invoiceInputsEnglish(env, billRow, woTimeEntries);
-      const rebuilt = buildInvoiceLines(ir, _inEn.billRow, trade, resolved.name, wo, origItemRef, await qbApprovedReceipts(env, ir), _inEn.timeEntries);
+      const rebuilt = buildInvoiceLines(ir, _inEn.billRow, trade, resolved.name, wo, origItemRef, await qbApprovedReceipts(env, ir), _inEn.timeEntries, env);
 
       const folderId  = wo.Drive_Folder_ID || '';
       const folderUrl = wo.Drive_Folder_URL || (folderId ? ('https://drive.google.com/drive/folders/' + folderId) : '');
