@@ -34750,7 +34750,7 @@ async function qbLookupExisting(env, kind, displayName, email, token) {
     const data = await qbApi(env, `query?query=${q}&minorversion=73`, 'GET', null, token);
     const rows = (data && data.QueryResponse && data.QueryResponse[type]) || [];
     if (rows.length === 1 && rows[0].Id) return rows[0].Id;   // exactly one, or don't guess
-  } catch (e) { /* fall through to create */ }
+  } catch (e) { await softFail(env, 'qbLookupExisting:query', e, { severity: 'P1', ref: String(kind || ''), source: 'qbo', context: 'the QuickBooks lookup failed, so a new record may be created instead of reusing an existing one' }); }
 
   return null;
 }
