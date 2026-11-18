@@ -26599,7 +26599,7 @@ async function gmailOAuthCallback(env, url) {
   if (!String(data.scope || '').includes('gmail.send')) return gmailCallbackPage(false, 'Permission not granted', 'Sending email permission was not granted on the Google screen. Nothing changed — try again and leave the "Send email on your behalf" box checked.');
   if (!data.refresh_token) return gmailCallbackPage(false, 'Gmail was not reconnected', 'Google did not return a long-lived token. Nothing changed — try Reconnect Gmail again.');
   await setConfigKey(env, { key: 'GMAIL_REFRESH_TOKEN', value: data.refresh_token });
-  try { await setConfigKey(env, { key: 'GMAIL_TOKEN_UPDATED', value: new Date().toISOString() }); } catch (_) {}
+  try { await setConfigKey(env, { key: 'GMAIL_TOKEN_UPDATED', value: new Date().toISOString() }); } catch (e) { await softFail(env, 'gmailOAuthCallback:tokenUpdated', e, { severity: 'P2', ref: '', source: 'write', context: 'Gmail was reconnected but the reconnect time could not be saved' }); }
   _gmailTokenCache = { token: data.access_token, at: Date.now(), source: 'config' };
   return gmailCallbackPage(true, 'Gmail reconnected', `The Hub can send as ${expected} again. You can close this tab and retry the send.`);
 }
