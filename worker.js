@@ -3954,7 +3954,7 @@ function receiptSuggestCore(input, properties, workorders, receipts, custCards, 
 // never has to touch the Cloudflare dashboard, a Config sheet row 'receipt_customer_cards' —
 // either works, comma-separated last-4s.
 async function receiptCustomerCards(env) {
-  const cfg = await fetchConfig(env).catch(() => ({}));
+  const cfg = await fetchConfig(env).catch(() => ({}));   // silent-ok: fetchConfig never throws, this is a spare fallback
   return String(env.RECEIPT_CUSTOMER_CARDS || cfg.receipt_customer_cards || '').split(',').map(s => s.replace(/\D/g,'').slice(-4)).filter(Boolean);
 }
 
