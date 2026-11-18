@@ -225,6 +225,7 @@ label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font
       <svg width="48" height="48" viewBox="0 0 48 48" fill="none" style="display:block;margin:0 auto 12px"><rect x="2" y="2" width="44" height="44" rx="8" fill="#f3f5f8" stroke="#1d4ed8" stroke-width="2"/><polygon points="24,8 40,38 8,38" fill="none" stroke="#1d4ed8" stroke-width="2" stroke-linejoin="round"/><polygon points="24,18 33,38 15,38" fill="#1d4ed8" fill-opacity="0.4"/></svg>
       <div class="logo">RIDGE CO</div>
       <div class="logo-sub" data-i18n="VENDOR PORTAL">VENDOR PORTAL</div>
+      <div id="loginLangToggle" data-notranslate style="display:flex;justify-content:center;gap:6px;margin:0 0 14px"></div>
       <div style="margin-bottom:16px;">
         <label>YOUR NAME <span style="font-weight:normal;color:var(--muted)">(first name, or company login name)</span></label>
         <input type="text" id="nameInput" placeholder="e.g. Alex, or Ace Plumbing" style="margin-bottom:10px" autocorrect="off" spellcheck="false">
@@ -459,7 +460,15 @@ function claimSubmit(key, btn, busyLabel) {
 function onLoginSuccess(data, persist) {
   session = data;
   if (data.token) SECRET = data.token;            // scoped token drives every subsequent call
-  LANG = (data.language === 'es') ? 'es' : 'en';
+  // Nov 16 2026: the login screen can already be drawn in Spanish (device language / saved choice). The vendor's profile language wins:
+  // remember it, and if the screen was drawn in Spanish for an English-language vendor, store the session and redraw from scratch.
+  var _newLang = (data.language === 'es') ? 'es' : 'en';
+  _saveLang(_newLang);
+  if (_esObs && _newLang !== 'es') {
+    if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){ console.error('session not stored before redraw', e); } }
+    location.reload(); return;
+  }
+  LANG = _newLang;
   var vn = document.getElementById('vendorName'); if (vn) vn.textContent = data.vendor_name || '';
   show('screenLogin', false);
   show('screenDash', true);
@@ -1294,8 +1303,9 @@ function comparePaidDate(a, b, desc) {
 }
 function fmtPaidDate(d) {
   var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d || ''); if (!m) return '';
-  var mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m[2] - 1];
-  return mon + ' ' + (+m[3]) + ', ' + m[1];
+  var es = (typeof LANG !== 'undefined' && LANG === 'es');   // helper is also loaded on its own by test/vendor-paid-tab.test.mjs, where LANG does not exist
+  var mon = (es ? ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'] : ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'])[+m[2] - 1];   // Nov 16 2026: Spanish month names
+  return es ? (+m[3]) + ' ' + mon + ' ' + m[1] : mon + ' ' + (+m[3]) + ', ' + m[1];
 }
 // Active jobs first, then Paid, then Cancelled (each keeps the order it came in). Pure.
 function partitionPaidCancelled(wos) {
@@ -1387,7 +1397,7 @@ function renderWOs(wos, opts) {
       'on hold': 'badge-onhold',
     }[(wo.Status || '').toLowerCase()] || 'badge-status';
 
-    var addrLine = wo.property_address + (wo.unit_label ? ' — Unit ' + wo.unit_label : '') + (wo.Room ? ' · ' + wo.Room : '');
+    var addrLine = wo.property_address + (wo.unit_label ? ' — ' + t('Unit') + ' ' + wo.unit_label : '') + (wo.Room ? ' · ' + wo.Room : '');
     var descShort = (wo.Description || '').substring(0, 80) + (wo.Description && wo.Description.length > 80 ? '…' : '');
 
     var gated = !!wo.access_gated;
@@ -1454,7 +1464,7 @@ function renderWOs(wos, opts) {
             '<button class="btn btn-sm" style="background:var(--danger);color:#fff" onclick="declineWO(\'' + wo.ID + '\',' + idx + ')">Decline</button>' +
           '</div></div>' : '') +
         (!gated ? '<div style="margin-bottom:12px"><button class="btn btn-sm" style="background:var(--info);color:#fff" onclick="openSchedModal(\'modalSched\',\'' + wo.ID + '\')">📅 Schedule</button></div>' : '') +
-        '<div class="detail-row"><span class="detail-label">Address</span><span class="detail-val">' + esc(wo.property_address) + (wo.unit_label ? ' Unit ' + esc(wo.unit_label) : '') + '</span></div>' +
+        '<div class="detail-row"><span class="detail-label">Address</span><span class="detail-val">' + esc(wo.property_address) + (wo.unit_label ? ' ' + esc(t('Unit')) + ' ' + esc(wo.unit_label) : '') + '</span></div>' +
         (wo.Room ? '<div class="detail-row"><span class="detail-label">Room / Area</span><span class="detail-val" style="color:var(--info);font-weight:bold">' + esc(wo.Room) + '</span></div>' : '') +
         (wo.Owner_WO_Ref ? '<div class="detail-row"><span class="detail-label">Owner Ref #</span><span class="detail-val" style="color:var(--info);font-weight:bold">' + esc(wo.Owner_WO_Ref) + '</span></div>' : '') +
         '<div class="detail-row"><span class="detail-label">Issue</span><span class="detail-val" style="text-align:justify;font-size:13px">' + esc(wo.Description || '—') + (wo.Description_EN && wo.Description_EN !== wo.Description ? '<div style="margin-top:6px;font-size:11px;color:var(--muted)">EN: ' + esc(wo.Description_EN) + '</div>' : '') + '</span></div>' +
@@ -1958,7 +1968,7 @@ function loadVendorBillSummary(woId, idx) {
     var latestBill = bills[bills.length - 1];
     if (badge) {
       var subDate = latestBill.Submitted_At ? new Date(latestBill.Submitted_At) : (latestBill.Created_Date ? new Date(latestBill.Created_Date) : null);
-      var subDateStr = subDate && !isNaN(subDate.getTime()) ? subDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+      var subDateStr = subDate && !isNaN(subDate.getTime()) ? subDate.toLocaleDateString(LANG === 'es' ? 'es-US' : 'en-US', { month: 'short', day: 'numeric' }) : '';
       badge.innerHTML = '<div style="display:inline-block;margin-top:4px;background:var(--accent2);color:#fff;font-size:11px;font-weight:bold;letter-spacing:.04em;padding:2px 8px;border-radius:10px">✓ ' + t('INVOICE SUBMITTED') + (subDateStr ? ' ' + subDateStr : '') + ' — $' + parseFloat(latestBill.Total||0).toFixed(2) + '</div>';
     }
     if (btn) btn.textContent = t('✏️ Update invoice');
@@ -4381,8 +4391,28 @@ var ES = {
 
 function t(key) {
   if (LANG !== 'es') return key;
-  return ES[key] !== undefined ? ES[key] : key;
+  return ES[key] !== undefined ? ES[key] : esT(key);   // Nov 16 2026: strings not in ES fall back to the shared vendor-i18n.js dictionary instead of staying English
 }
+
+// Login-screen language (Nov 16 2026). Before sign-in the page does not know the vendor, so it uses the saved choice, else the device language;
+// the EN / ES buttons change it. After sign-in the vendor's profile language takes over (see onLoginSuccess).
+var LANG_PREF_KEY = 'rc_vendor_lang';
+function _savedLang() { try { return localStorage.getItem(LANG_PREF_KEY); } catch (e) { return null; } }
+function _saveLang(l) { try { localStorage.setItem(LANG_PREF_KEY, l); } catch (e) { console.error('language choice not stored', e); } }
+function setLoginLang(l) { _saveLang(l); location.reload(); }
+(function initLoginLang() {
+  var pref = _savedLang();
+  var l = (pref === 'es' || pref === 'en') ? pref : (/^es\b/i.test(navigator.language || '') ? 'es' : 'en');
+  LANG = l;
+  var box = document.getElementById('loginLangToggle');
+  if (box) {
+    box.innerHTML = ['en', 'es'].map(function(c) {
+      var on = (c === l);
+      return '<button type="button" onclick="setLoginLang(\'' + c + '\')" aria-pressed="' + on + '" style="min-height:44px;min-width:88px;padding:0 14px;border-radius:8px;font-family:var(--font);font-size:13px;font-weight:bold;cursor:pointer;border:2px solid var(--accent);background:' + (on ? 'var(--accent)' : '#fff') + ';color:' + (on ? '#fff' : 'var(--accent)') + '">' + (c === 'en' ? 'English' : 'Español') + '</button>';
+    }).join('');
+  }
+  if (l === 'es') applyTranslations();
+})();
 
 function applyTranslations() {
   if (LANG !== 'es') return;
