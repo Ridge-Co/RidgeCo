@@ -27867,7 +27867,7 @@ async function receiptIntake(env, body) {
     Confidence: String(ex.confidence ?? ''), Status: 'pending', Filed_File_URL: '', Raw_Extract: JSON.stringify(ex).slice(0, 900), Notes: '', Active: 'TRUE',
   };
   const appended = await addRow(env, 'Receipts_Queue', row);
-  let newId = ''; try { const j = await appended.json(); newId = j.id || ''; } catch (e) {}
+  let newId = ''; try { const j = await appended.json(); newId = j.id || ''; } catch (e) { await softFail(env, 'receiptIntake:newId', e, { severity: 'P1', ref: '', source: 'parse', context: 'the receipt was queued but its new id could not be read back' }); }
   return json({ ok: true, id: newId, queued: { ...row, ID: newId }, extract: ex });
 }
 
