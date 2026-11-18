@@ -31402,7 +31402,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/wo-template/preview') return true; // read-only computation, writes nothing
   if (path === '/wo-snippet/add') return String((body && body.Name) || '').startsWith('TEST-');
   if (path === '/wo-snippet/update') {
-    const _sn = (await fetchTab(env, WO_SNIPPETS_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id));
+    const _sn = (await fetchTab(env, WO_SNIPPETS_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id)); // silent-ok: a failed read makes the test-write guard refuse, the safe side
     return !!_sn && String(_sn.Name || '').startsWith('TEST-');
   }
   // Portal access tracking (Oct 22 2026): the staging token may send or preview a PIN / welcome text, or regenerate a PIN, only for a TEST- person
