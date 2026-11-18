@@ -36679,7 +36679,7 @@ async function scopeWorkDoneForInvoice(env, s) {
   return out;
 }
 
-function buildLaborDescription(billRow, timeEntries, wo) {
+function buildLaborDescription(billRow, timeEntries, wo, env) {
   const billId = String((billRow && billRow.ID) || '').trim();
   const parts = [];
   const billDesc = englishOnly((billRow && billRow.Invoice_Description) || '').trim();   // customer-facing = English (Sep 28 2026): [ES]/[EN] tags resolve to the EN half
