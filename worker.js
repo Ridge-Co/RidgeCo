@@ -14964,7 +14964,7 @@ async function depositApprove(env, body) {
 
   const [properties, units] = await Promise.all([
     fetchTab(env, 'Properties').catch(e => softFail(env, 'depositApprove:Properties', e, { severity: 'P2', ref: String(wo.ID || ''), source: 'read' }).then(() => [])),
-    fetchTab(env, 'Units').catch(() => []),
+    fetchTab(env, 'Units').catch(e => softFail(env, 'depositApprove:Units', e, { severity: 'P2', ref: String(wo.ID || ''), source: 'read' }).then(() => [])),
   ]);
   const prop = properties.find(p => String(p.ID) === String(wo.Property_ID));
   const unit = units.find(u => String(u.ID) === String(wo.Unit_ID));
