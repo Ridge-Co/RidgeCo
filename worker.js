@@ -5593,7 +5593,7 @@ const SCOPES_HEADERS = ['ID','Property_ID','Unit_ID','Room','Title','Status','Ra
 const SCOPE_SCAN_FOLDER_DEFAULT = '1iXjjwsnPKF_GtlR8gesxS9uJppO4xntZ';
 
 async function scopesTab(env) { await ensureTab(env, 'Scopes', SCOPES_HEADERS); }
-function scopeParseItems(s) { try { const a = JSON.parse((s && s.Line_Items) || '[]'); return Array.isArray(a) ? a : []; } catch (_) { return []; } }
+function scopeParseItems(s, env) { const a = parseJsonCell(s && s.Line_Items, [], { env, where: 'scopeParseItems', ref: String((s && s.ID) || ''), severity: 'P1' }); return Array.isArray(a) ? a : []; }
 // Normalizes an item's pricing into a `variants` array — 1 entry = single fixed vendor cost,
 // 2+ entries = a customer CHOICE (e.g. "Repair Roof" vs "Replace Roof"; Brett, Aug 19 2026:
 // "options within scope such as repair or replace roof... may be options where other items
