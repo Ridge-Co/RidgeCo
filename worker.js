@@ -6000,7 +6000,7 @@ async function scopeToWO(env, body) {
   const id = body.scope_id || body.id; if (!id) return json({ error: 'scope_id required' }, 400);
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
-  const items = scopeParseItems(s); if (!items.length) return json({ error: 'Scope has no line items' }, 400);
+  const items = scopeParseItems(s, env); if (!items.length) return json({ error: 'Scope has no line items' }, 400);
   if (s.WO_ID) return json({ error: 'Scope already has a work order: ' + s.WO_ID, wo_id: s.WO_ID }, 409);
   const trades = [...new Set(items.map(it => (it.trade || '').trim()).filter(Boolean))];
   const trade = trades.length === 1 ? trades[0] : '';
