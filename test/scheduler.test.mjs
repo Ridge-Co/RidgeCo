@@ -138,6 +138,9 @@ t('review_mon EST: 13:29Z not due, 13:30Z due', due('review_mon', {}, '2026-11-0
 // daily 07:00 ET on DST change days
 t('daily_digest on the fall-back day (Nov 1, EST after 2am): 11:59Z = 06:59 EST not due, 12:00Z = 07:00 EST due', due('daily_digest', {}, '2026-11-01T11:59:00Z') === null && !!due('daily_digest', {}, '2026-11-01T12:00:00Z'));
 t('daily_digest on the spring-forward day (Mar 8, EDT): 10:59Z = 06:59 EDT not due, 11:00Z due', due('daily_digest', {}, '2026-03-08T10:59:00Z') === null && !!due('daily_digest', {}, '2026-03-08T11:00:00Z'));
+// Nov 17 2026 (Brett): the daily QuickBooks receipt batch goes out at 00:00 ET (midnight), after the day's receipts are confirmed
+t('daily_receipts_post is a midnight (00:00 ET) job', job('daily_receipts_post').at === '00:00');
+t('daily_receipts_post: due at 00:05 EDT, not due once it already ran that ET day', !!due('daily_receipts_post', {}, '2026-10-14T04:05:00Z') && due('daily_receipts_post', { last_key: '2026-10-14', last_status: 'ok' }, '2026-10-14T04:05:00Z') === null);
 t('daily_digest summer 07:00 EDT = 11:00Z; winter 07:00 EST = 12:00Z', !!due('daily_digest', {}, '2026-07-15T11:00:00Z') && due('daily_digest', {}, '2026-12-15T11:00:00Z') === null && !!due('daily_digest', {}, '2026-12-15T12:00:00Z'));
 // weekday gating
 t('review_mon not due on a Tuesday', due('review_mon', {}, '2026-10-13T15:00:00Z') === null);
@@ -188,7 +191,7 @@ t('ar_report_mon waits for 09:00 ET', due('ar_report_mon', {}, '2026-10-12T12:59
   const bo = P.schedDueJobs(backoff, iso('2026-10-14T19:05:00Z'), P.SCHED_JOBS, {}).map(d => d.name);
   t('a failed daily job in its retry back-off does not block anything (not due until the gap passes)', !bo.includes('daily_qb_sync') && bo.includes('str_cleaning'), bo.join());
   const early = P.schedDueJobs(S0(), iso('2026-10-14T09:00:00Z'), P.SCHED_JOBS, {}).map(d => d.name);   // Wed 05:00 EDT: only the interval jobs
-  t('before 7am ET only the 15-minute jobs are due', early.join() === 'door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning,followup_sweep,insp_shift_reminders,queue_sync', early.join());
+  t('before 7am ET only the 15-minute jobs (plus the midnight QuickBooks batch, catching up) are due', early.join() === 'daily_receipts_post,door_watchdog,sweep,sweep_work,sweep_checks,insp_guard,str_cleaning,followup_sweep,insp_shift_reminders,queue_sync', early.join());
   t('only[] restricts', P.schedDueJobs(S0(), iso('2026-10-12T14:00:00Z'), P.SCHED_JOBS, { only: ['sweep'] }).map(d => d.name).join() === 'sweep');
 }
 // schedStatus overdue logic
@@ -710,7 +713,8 @@ for (const N of [2, 5, 8]) {
 
 // 2o FIRST-EVER TICK: no duplicates. With a blank Scheduler_State, daily/weekly jobs whose slot already passed today (ET) are
 // SEEDED as done (the old crons / a person already ran them), 15-minute jobs run at once, and later slots run normally.
-const DAILY5 = ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'twilio_balance_log'];   // (name kept; it is now seven dailies, all at 07:00 ET)
+const DAILY5 = ['daily_digest', 'daily_receipts', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'twilio_balance_log'];   // (name kept; six dailies at 07:00 ET. daily_receipts_post is NOT here: since Nov 17 2026 it runs at 00:00 ET, see MIDNIGHT below)
+const DAILY_SEEDED = ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'twilio_balance_log'];   // registry order, incl. the midnight QuickBooks batch
 const INTERVAL5 = ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep', 'insp_shift_reminders', 'queue_sync'];
 // Drain one "tick" the way the Apps Script does: call until more=false. Returns { ran, first } (first = the first response).
 const drain = async (L, c, extra) => {
@@ -728,7 +732,7 @@ const drain = async (L, c, extra) => {
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-13T01:00:00Z'));
   const a = await drain(L, c);
   t('first tick Mon 21:00 ET runs ONLY the five 15-minute jobs', a.ran.join() === INTERVAL5.join(), a.ran);
-  t('first tick reports first_run + seeded:[the 5 dailies and the two Monday weeklies]', a.first.body.first_run === true && a.first.body.seeded.join() === [...DAILY5, 'review_mon', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_daily', 'str_digest_mon'].join(), a.first.body);
+  t('first tick reports first_run + seeded:[the 5 dailies and the two Monday weeklies]', a.first.body.first_run === true && a.first.body.seeded.join() === [...DAILY_SEEDED, 'review_mon', 'ar_report_mon', 'hub_impr_mon', 'hub_impr_daily', 'str_digest_mon'].join(), a.first.body);
   const s = stateOf(store);
   t('seeded jobs carry last_key = today (ET), last_status seeded, last_seeded:true and NO forged last_ok / last_start', ['daily_digest', 'review_mon', 'ar_report_mon'].every(n => s.jobs[n].last_key === '2026-10-12' && s.jobs[n].last_status === 'seeded' && s.jobs[n].last_seeded === true && !s.jobs[n].last_ok && !s.jobs[n].last_start), s.jobs.daily_digest);
   t('review_wed (Wednesday job) is not seeded on a Monday (it only gets the grace stamp)', !s.jobs.review_wed || (!s.jobs.review_wed.last_key && !s.jobs.review_wed.last_seeded), s.jobs.review_wed);
@@ -755,7 +759,7 @@ const drain = async (L, c, extra) => {
   // Monday 06:00 ET (10:00Z): nothing has passed yet -> nothing seeded, everything runs at its slot
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T10:00:00Z'));
   const a = await drain(L, c);
-  t('first tick Mon 06:00 ET seeds nothing (seeded is an empty list) and runs the five interval jobs', a.first.body.first_run === true && a.first.body.seeded.length === 0 && a.ran.join() === INTERVAL5.join() && !stateOf(store).seeded, a.first.body);
+  t('first tick Mon 06:00 ET seeds only the midnight job (its 00:00 slot already passed, not re-sent) and runs the interval jobs', a.first.body.first_run === true && a.first.body.seeded.join() === 'daily_receipts_post' && a.ran.join() === INTERVAL5.join(), a.first.body);
   c.v = Date.parse('2026-10-12T10:59:00Z');
   t('06:59 ET: dailies still not due', !(await drain(L, c)).ran.some(n => DAILY5.includes(n)));
   c.v = Date.parse('2026-10-12T11:00:00Z');
@@ -770,7 +774,7 @@ const drain = async (L, c, extra) => {
   // mid-morning first tick (Mon 08:45 ET): dailies + review_mon seeded, ar_report_mon (09:00) still to come
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T12:45:00Z'));
   const a = await drain(L, c);
-  t('first tick Mon 08:45 ET: seeds the dailies + review_mon but NOT ar_report_mon', a.first.body.seeded.join() === [...DAILY5, 'review_mon', 'hub_impr_mon', 'hub_impr_daily', 'str_digest_mon'].join(), a.first.body.seeded);
+  t('first tick Mon 08:45 ET: seeds the dailies + review_mon but NOT ar_report_mon', a.first.body.seeded.join() === [...DAILY_SEEDED, 'review_mon', 'hub_impr_mon', 'hub_impr_daily', 'str_digest_mon'].join(), a.first.body.seeded);
   c.v = Date.parse('2026-10-12T13:00:00Z');
   const b = await drain(L, c);
   t('...and ar_report_mon then runs at 09:00 ET while the seeded ones stay quiet', b.ran.includes('ar_report_mon') && !b.ran.includes('review_mon') && !b.ran.some(n => DAILY5.includes(n)), b.ran);
@@ -779,7 +783,7 @@ const drain = async (L, c, extra) => {
   // DST: fall-back day, Monday Nov 2 2026 is EST (UTC-5): 13:29Z = 08:29 EST
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-11-02T13:29:00Z'));
   const a = await drain(L, c);
-  t('DST (EST): first tick 08:29 EST seeds the dailies only (review_mon is 08:30 EST)', a.first.body.seeded.join() === [...DAILY5, 'hub_impr_mon', 'hub_impr_daily', 'str_digest_mon'].join() && a.ran.join() === INTERVAL5.join(), a.first.body.seeded);
+  t('DST (EST): first tick 08:29 EST seeds the dailies only (review_mon is 08:30 EST)', a.first.body.seeded.join() === [...DAILY_SEEDED, 'hub_impr_mon', 'hub_impr_daily', 'str_digest_mon'].join() && a.ran.join() === INTERVAL5.join(), a.first.body.seeded);
   c.v = Date.parse('2026-11-02T13:30:00Z');
   t('DST (EST): review_mon runs at 13:30Z = 08:30 EST', (await drain(L, c)).ran.includes('review_mon'));
   c.v = Date.parse('2026-11-02T14:00:00Z');
@@ -789,11 +793,11 @@ const drain = async (L, c, extra) => {
   // DST: spring-forward day, Sunday Mar 8 2026 is EDT after 2am (UTC-4): 10:59Z = 06:59 EDT, 11:00Z = 07:00 EDT
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-03-08T10:59:00Z'));
   const a = await drain(L, c);
-  t('DST (spring-forward day): first tick 06:59 EDT seeds nothing', a.first.body.seeded.length === 0 && a.ran.join() === INTERVAL5.join());
+  t('DST (spring-forward day): first tick 06:59 EDT seeds only the midnight job', a.first.body.seeded.join() === 'daily_receipts_post' && a.ran.join() === INTERVAL5.join());
   c.v = Date.parse('2026-03-08T11:00:00Z');
-  t('DST (spring-forward day): dailies run at 07:00 EDT (11:00Z), not an hour later', (await drain(L, c)).ran.filter(n => DAILY5.includes(n)).length === 7);
+  t('DST (spring-forward day): dailies run at 07:00 EDT (11:00Z), not an hour later', (await drain(L, c)).ran.filter(n => DAILY5.includes(n)).length === 6);
   const store2 = makeStore(), L2 = load(store2);
-  t('DST (spring-forward day): a first tick at 07:30 EDT seeds the five dailies + the 07:30 Hub Improvements check', (await drain(L2, clock(Date.parse('2026-03-08T11:30:00Z')))).first.body.seeded.join() === [...DAILY5, 'hub_impr_daily'].join());
+  t('DST (spring-forward day): a first tick at 07:30 EDT seeds the five dailies + the 07:30 Hub Improvements check', (await drain(L2, clock(Date.parse('2026-03-08T11:30:00Z')))).first.body.seeded.join() === [...DAILY_SEEDED, 'hub_impr_daily'].join());
 }
 {
   // a Scheduler_State row that exists but is blank is ALSO a first run
