@@ -7105,7 +7105,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   if (items.some(it => it.optional)) {
     // A schedule that can't absorb the signed total (all rows flat, or fixed $ exceed the total) must
     // never be signed — refuse BEFORE any write, tell Brett (telemetry), show the customer a plain message.
-    const sv = scopeValidatePaymentSchedule(scopeParsePaymentSchedule(s), await scopeMaxUpfrontPct(env));
+    const sv = scopeValidatePaymentSchedule(scopeParsePaymentSchedule(s, env), await scopeMaxUpfrontPct(env));
     const addonProblem = scopeScheduleAddonProblem(sv.schedule || scopeDefaultPaymentSchedule(), subtotal);
     if (addonProblem) {
       let telemetryError = '';
