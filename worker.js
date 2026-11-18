@@ -37980,7 +37980,7 @@ async function qbSendInvoice(env, body) {
     const inv = buildInvoiceLines(ir, _inEn.billRow, trade, tradeName, wo, null, ownReceipts, _inEn.timeEntries, env);
     if (inv.laborAmt < 0) warnings.push('Materials exceed the customer total — labor line is negative; check the bill.');
     // Nov 2 2026: checklist items left off (vendor reason code) or withheld (looked like an access code) are flagged here.
-    workDoneWarnings(wo).forEach(w => warnings.push(w));
+    workDoneWarnings(wo, env).forEach(w => warnings.push(w));
     // Oct 23 2026 (invoice 1767): say so in the preview when the customer would read only the generic work-order text
     // even though hours were billed, and point at the opt-in that copies the private notes (nothing is copied automatically).
     {
