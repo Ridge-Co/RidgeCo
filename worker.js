@@ -42238,7 +42238,7 @@ function inspStrDayText(c, label) {
 }
 function inspStrConfig(env, cfg) {
   const staged = !!(env.__STAGING__ ?? isStaging(env));
-  let fixture = null; if (staged && cfg && cfg.STR_GUARD_FIXTURE) { try { fixture = JSON.parse(cfg.STR_GUARD_FIXTURE); } catch (e) { console.error('insp: STR_GUARD_FIXTURE is not valid JSON:', e && e.message); } }
+  let fixture = null; if (staged && cfg && cfg.STR_GUARD_FIXTURE) { fixture = parseJsonCell(cfg.STR_GUARD_FIXTURE, null, { env, where: 'inspStrConfig:STR_GUARD_FIXTURE', ref: 'STR_GUARD_FIXTURE', severity: 'P2' }); }
   const rawSources = String((cfg && cfg.STR_GUARD_BOOKING_SOURCES) || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
   const cleaningCal = String((cfg && cfg.STR_GUARD_CLEANING_CAL) || '').trim();
   // The cleaning calendar can never be the bookings feed: its "Gina Cleaning" / "Kayla N/A" entries would be read as guest stays and close
