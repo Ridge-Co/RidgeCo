@@ -21840,7 +21840,7 @@ async function processRecurringWorkOrders(env, opts) {
   for (const tpl of templates) {
     const due = recurLatestDue(tpl, today);
     if (!due) continue;
-    let skips = {}; try { skips = JSON.parse(tpl.Last_Skips || '{}') || {}; } catch (_) {}
+    let skips = {}; skips = parseJsonCell(tpl.Last_Skips, {}, { env, where: 'processRecurringWorkOrders:Last_Skips', ref: String(tpl.ID || ''), severity: 'P1' }) || {};
     let skipsChanged = false, postedAny = false;
     for (const target of recurTargets(tpl)) {
       const key = recurTargetKey(target);
