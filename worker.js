@@ -7234,7 +7234,7 @@ function scopeSigFinalBillGap(row, inHouseFallback) {
 async function scopeProposalSignedList(env, url) {
   await scopeSigTab(env);
   const rows = await fetchTab(env, 'Scope_Signatures');
-  const scopes = await fetchTab(env, 'Scopes').catch(() => []);
+  const scopes = (await fetchTabSoft(env, 'Scopes', { where: 'scopeProposalSignedList:Scopes', severity: 'P1' })).rows;
   const props = await fetchTab(env, 'Properties').catch(() => []);
   // Vendors is read only to re-derive the in-house case for legacy rows (see scopeSigBillGap).
   const vendors = await fetchTab(env, 'Vendors').catch(() => []);
