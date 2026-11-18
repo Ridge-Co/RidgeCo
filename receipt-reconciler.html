@@ -41,6 +41,8 @@
   .rc-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start;margin-bottom:8px;flex-wrap:wrap;}
   .rc-title{font-size:13px;font-weight:bold;line-height:1.35;}
   .rc-sub{font-size:11px;color:var(--muted);margin-top:2px;}
+  .rc-rn{display:inline-block;font-size:12px;font-weight:600;color:#1e3a8a;background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:0 7px;cursor:pointer;user-select:all;white-space:nowrap;}
+  .rc-cc-note{font-size:12px;color:#7c2d12;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:6px 8px;margin:6px 0;}
   .rc-meta{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:8px;}
   .rc-meta > div{font-size:12px;}
   .rc-meta .lbl{display:block;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:1px;}
@@ -200,6 +202,8 @@
   <div id="stmt-status" class="rc-status" style="margin-left:0"></div>
   <div id="stmt-result" style="font-size:12px;margin-top:6px"></div>
 </div>
+
+<div id="qb-batch-section"></div>
 
 <div class="section">
   <div class="tabs" id="tabs"></div>
@@ -583,7 +587,7 @@ function searchResultCard(r){
   const active = r.active ? '' : ' <span class="pill danger">Voided</span>';
   return '<div class="rcard">'
     + '<div class="rc-top"><div><div class="rc-title">'+esc(r.store||'(store unknown)')+' — $'+money(r.amount)+active+'</div>'
-    + '<div class="rc-sub">'+esc((r.date||'').slice(0,10))+' · '+where+' · '+esc(r.category||'')+(r.added_by?' · added by '+esc(r.added_by):'')+'</div></div>'
+    + '<div class="rc-sub">'+esc((r.date||'').slice(0,10))+' · '+where+' · '+esc(r.category||'')+(r.added_by?' · added by '+esc(r.added_by):'')+(r.receipt_number?' · '+receiptNumChip({ Invoice_Number: r.receipt_number }):'')+(r.non_billing?' · <span class="pill muted">reference only, not billed</span>':'')+'</div></div>'
     + '<div>'+qb+'</div></div>'
     + (r.description ? '<div class="rc-items">'+esc(r.description)+'</div>' : '')
     + (r.source_file_url ? '<div class="rc-foot"><a href="'+esc(r.source_file_url)+'" target="_blank">View receipt →</a><span></span></div>' : '')
@@ -895,6 +899,38 @@ function woDateWindowWarning(receiptDate, wo){
   return null;
 }
 
+// Nov 17 2026 (Brett): closed/past work orders are offered by default for a whole YEAR, not 30 days. Change the number here only; the optgroup label follows it.
+const RECENT_CLOSED_DAYS = 365;
+function recentClosedLabel(){ return RECENT_CLOSED_DAYS === 365 ? 'Closed in the last year' : 'Closed in the last ' + RECENT_CLOSED_DAYS + ' days'; }
+// The date a closed WO is measured from: Completed_Date, else Completed_At, else Created_Date (the opened date) so a closed WO with a blank
+// Completed_Date (a cancelled or declined one, for example) never vanishes from the picker. Returns '' only when the WO has no usable date at all (then woClosedInWindow keeps it listed).
+function woClosedRefDate(w){
+  const keys = ['Completed_Date', 'Completed_At', 'Created_Date'];
+  for (let i = 0; i < keys.length; i++) { const v = String((w && w[keys[i]]) || '').slice(0, 10); if (ISO_DATE_RE.test(v)) return v; }
+  return '';
+}
+// True when a closed WO is within RECENT_CLOSED_DAYS of today OR of the receipt date (a receipt often lands just after the job closes).
+function woClosedInWindow(w, nowMs, receiptDate){
+  const DAY = 86400000, ref = woClosedRefDate(w);
+  if (!ref) return true;   // no usable date at all: we cannot show it is old, so it must not vanish
+  const t = Date.parse(ref + 'T00:00:00Z'); if (isNaN(t)) return true;
+  const rd = Date.parse(String(receiptDate || '').slice(0, 10) + 'T00:00:00Z');
+  return Math.abs(nowMs - t) <= RECENT_CLOSED_DAYS * DAY || (!isNaN(rd) && Math.abs(rd - t) <= RECENT_CLOSED_DAYS * DAY);
+}
+// Receipt # (the OCR'd Receipt_Recon_Queue.Invoice_Number: a Home Depot order number like WH37678511, a Lowe's 99431). Blank renders as nothing, never 'undefined'.
+function receiptNumberOf(r){ const v = r && r.Invoice_Number; return (v === undefined || v === null) ? '' : String(v).trim(); }
+function receiptNumChip(r){
+  const rn = receiptNumberOf(r);
+  return rn ? '<span class="rc-rn" data-rn="'+esc(rn)+'" title="Tap to copy" onclick="copyReceiptNumber(this)">Receipt # '+esc(rn)+'</span>' : '';
+}
+function copyReceiptNumber(el){
+  const rn = el.getAttribute('data-rn') || '';
+  const done = () => toast('Copied receipt # <b>'+esc(rn)+'</b>');
+  const fail = (why) => toast('<span class="err">Could not copy automatically ('+esc(why)+') - the number is selectable: '+esc(rn)+'</span>');
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(rn).then(done, e => fail(e && e.message || 'blocked'));
+  else fail('clipboard not available');
+}
+
 function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId, receiptDate){
   if (!propId) return '<option value="">— pick a property first —</option>';
   const atProp = allWOs.filter(w => String(w.Property_ID) === String(propId) && (!unitId || String(w.Unit_ID) === String(unitId)));
@@ -927,12 +963,12 @@ function woSelectHTML(propId, selectedWoId, showClosed, sug, unitId, receiptDate
   } else {
     html += '<optgroup label="Open at this property"><option value="" disabled>— none open —</option></optgroup>';
   }
-  // Closed work orders from the last 30 days (counted from today or from the receipt date) are always offered: a receipt often lands just after the job closes.
+  // Closed work orders from the last RECENT_CLOSED_DAYS (a year; counted from today or from the receipt date) are always offered; the checkbox shows all of them.
   if (!showClosed) {
-    const DAY = 86400000, now = Date.now(), rd = Date.parse(String(receiptDate || '').slice(0, 10) + 'T00:00:00Z');
-    const recent = closed.filter(w => { const t = Date.parse(String(w.Completed_Date || '').slice(0, 10) + 'T00:00:00Z'); return !isNaN(t) && (Math.abs(now - t) <= 30 * DAY || (!isNaN(rd) && Math.abs(rd - t) <= 30 * DAY)); })
+    const now = Date.now();
+    const recent = closed.filter(w => woClosedInWindow(w, now, receiptDate))
       .sort((a,b) => Number(b.ID)-Number(a.ID));
-    if (recent.length) html += '<optgroup label="Closed in the last 30 days">' + recent.map(w => opt(w, '')).join('') + '</optgroup>';
+    if (recent.length) html += '<optgroup label="'+recentClosedLabel()+'">' + recent.map(w => opt(w, '')).join('') + '</optgroup>';
   }
   if (showClosed) {
     const closedSorted = closed.slice().sort((a,b) => Number(b.ID)-Number(a.ID));
@@ -986,7 +1022,8 @@ function updatePostingLine(id){
   const prop = allProperties.find(p => String(p.ID) === propSel.value);
   const unit = unitSel && unitSel.value ? allUnits.find(u => String(u.ID) === unitSel.value) : null;
   const wo = woId ? allWOs.find(w => String(w.ID) === woId) : null;
-  let line = '<b>Posting to:</b> ' + esc(prop ? (prop.Address||('Property '+prop.ID)) : '');
+  const ccRef = !!(rowSuggestions[id] && rowSuggestions[id].category === 'customer_paid');
+  let line = (ccRef ? '<b>Attaching (reference only, not billed) to:</b> ' : '<b>Posting to:</b> ') + esc(prop ? (prop.Address||('Property '+prop.ID)) : '');
   if (unit) line += ' ' + esc(unit.Unit_Label || ('Unit '+unit.ID));
   line += wo ? (' — WO ' + esc(wo.ID)) : ' — <span class="warn">no work order selected yet</span>';
   el.innerHTML = line;
@@ -1031,7 +1068,8 @@ function updateWoDetail(id){
   const receiptDate = dateEl ? dateEl.value.trim() : '';
   const link = 'index.html?wo=' + encodeURIComponent(wo.ID);
   const dl = woDatesLabel(wo);
-  let html = '<a href="'+esc(link)+'" target="_blank" rel="noopener">Open WO '+esc(wo.ID)+' ↗</a>'
+  const rnChip = receiptNumChip(rowsById[id] || {});
+  let html = (rnChip ? rnChip + ' ' : '') + '<a href="'+esc(link)+'" target="_blank" rel="noopener">Open WO '+esc(wo.ID)+' ↗</a>'
     + ' · ' + (dl ? esc(dl.charAt(0).toUpperCase()+dl.slice(1)) : '<span class="warn">no opened/closed date on file for this WO</span>');
   const warn = woDateWindowWarning(receiptDate, wo);
   if (warn) html += '<div class="rc-wo-warn">'+esc(warn.message)+'</div>';
@@ -1178,7 +1216,7 @@ function bulkExpense(mode){
     if (!k) { toast('<span class="err">1864 Kerns School Rd isn\'t in the Properties list.</span>'); return; }
     property_id = String(k.ID); where = '1864 Kerns School Rd';
   }
-  if (!confirm('Post ' + ids.length + ' selected receipt(s) as a ' + where + ' expense straight to QuickBooks — no work order, no customer invoice? This really posts to QuickBooks, same as the single-tap expense button, ' + ids.length + ' time(s).')) return;
+  if (!confirm('Post ' + ids.length + ' selected receipt(s) as a ' + where + ' expense — no work order, no customer invoice? Each one waits in the daily QuickBooks batch (nothing is emailed right now; you can hold or reverse them under Waiting to send to QuickBooks).')) return;
   bulkAction('expense', { property_id });
 }
 
@@ -1270,7 +1308,7 @@ function rowCard(r){
   html += '<div class="rc-top"><div style="display:flex;gap:8px;align-items:flex-start">'
         + '<input type="checkbox" class="rc-check" data-id="'+esc(r.ID)+'" onchange="updateBulkBar()" title="Select for bulk action">'
         + '<div><div class="rc-title">'+esc(r.Vendor||'(vendor unknown)')+' — $'+money(r.Total)+'</div>'
-        + '<div class="rc-sub">'+esc(r.Receipt_Date||'')+(r.PO_Reference?' · '+esc(r.PO_Reference):'')+' · '+esc(entrySourceLabel(r))+'</div></div></div>'
+        + '<div class="rc-sub">'+esc(r.Receipt_Date||'')+(receiptNumberOf(r)?' · '+receiptNumChip(r):'')+(r.PO_Reference && String(r.PO_Reference).trim() !== receiptNumberOf(r)?' · '+esc(r.PO_Reference):'')+' · '+esc(entrySourceLabel(r))+'</div></div></div>'
         + '<div>'+categoryPill(sug.category, sug.action)+'</div></div>';
 
   if (r.items && r.items.length) html += '<div class="rc-items">Items: '+r.items.map(esc).join(', ')+'</div>';
@@ -1311,7 +1349,10 @@ function rowCard(r){
       ).filter(Boolean).join(', ')
     : (r.PO_Reference || '');
 
-  if (!excluded && !isCompany && !isRefund && isPendingLike) {
+  // Nov 17 2026 (Brett): a customer-card receipt (excluded = category customer_paid) still picks a work order. It is ATTACHED there as a reference
+  // for the customer and is never billed (see attachCustomerCardRow and the server's customer_card path).
+  if (excluded && isPendingLike) html += '<div class="rc-cc-note">💳 Paid on a customer\'s card. Pick the work order to attach this receipt to as a reference for the customer. It is <b>not</b> billed, not expensed, and adds nothing to the invoice.</div>';
+  if (!isCompany && !isRefund && isPendingLike) {
     html += '<div class="rc-fields">'
       + '<div><label>Property</label><select id="'+idAttr+'-prop" onchange="refreshUnitSelect(\''+r.ID+'\')">'+propertyOptions(propId)+'</select></div>'
       + '<div><label>Unit (optional — narrows the work-order list)</label><select id="'+idAttr+'-unit" onchange="refreshWoSelect(\''+r.ID+'\')">'+unitOptions(propId, '')+'</select></div>'
@@ -1366,14 +1407,14 @@ function rowCard(r){
   }
 
   // Brett, Sep 22 2026: one tap to record a receipt as an EXPENSE (no work order, no customer
-  // invoice) against Ridge Co or 1864 Kerns School Rd — it goes straight to QuickBooks' receipts
-  // inbox for the expense record. Offered on every pending receipt, including ones the scanner
+  // invoice) against Ridge Co or 1864 Kerns School Rd — it waits in the daily QuickBooks batch
+  // (receipts inbox) for the expense record. Offered on every pending receipt, including ones the scanner
   // matched to a job address, so nothing is forced onto a work order unless Brett picks one.
   // For a refund (Part 3), this is the "no match / partial — post as expense" path: same button,
   // same endpoint, but the amount field above is negative so it posts as money back.
   if (!excluded && isPendingLike) {
     const kerns = kernsProperty();
-    html += '<div class="rc-expense"><span class="rc-expense-label">'+(isRefund ? 'No match, or only a partial refund? Post as a negative expense — no work order:' : 'Expense only — no work order, straight to QuickBooks:')+'</span>'
+    html += '<div class="rc-expense"><span class="rc-expense-label">'+(isRefund ? 'No match, or only a partial refund? Post as a negative expense — no work order:' : 'Expense only — no work order, goes in the daily QuickBooks batch:')+'</span>'
       + '<button class="btn small expbtn" onclick="confirmExpense(\''+r.ID+'\', this, \'ridgeco\')">🧾 Ridge Co expense</button>'
       + (kerns ? '<button class="btn small expbtn" onclick="confirmExpense(\''+r.ID+'\', this, \'kerns\')">🏡 1864 Kerns School Rd</button>' : '')
       + (!isCompany && !isRefund ? '<button class="btn small expbtn secondaryexp" onclick="confirmExpense(\''+r.ID+'\', this, \'selected\')">Expense to the property picked above</button>' : '')
@@ -1384,6 +1425,9 @@ function rowCard(r){
   html += '<div class="rc-foot">' + fileLink + '<div class="actions">';
   if (isPendingLike) {
     if (!excluded && !isCompany && !isRefund) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm</button>';
+    // Nov 17 2026: a customer-card receipt cannot be confirmed (it is the customer's money). The button is shown greyed out with the reason; the server refuses it too (customer_card_needs_wo).
+    if (excluded) html += '<button class="btn small" disabled title="Paid on a customer card: it cannot be confirmed or booked as an expense. Attach it to a work order instead.">✓ Confirm (not available: customer card)</button>';
+    if (excluded) html += '<button class="btn small" onclick="attachCustomerCardRow(\''+r.ID+'\', this)">📎 Attach to work order (reference only, not billed)</button>';
     if (isCompany) html += '<button class="btn small" id="'+idAttr+'-bizbtn" onclick="confirmBusinessExpense(\''+r.ID+'\', this)">✓ Confirm as business expense</button>'
       + '<button class="btn small" id="'+idAttr+'-billbtn" style="display:none" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm to this work order</button>';
     if (isDuplicateFlagged) html += '<button class="btn small warnbtn" onclick="confirmDuplicate(\''+r.ID+'\', this)">🖐 Confirm duplicate</button>';
@@ -1400,13 +1444,14 @@ function rowCard(r){
     if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', true, this)">🔄 Mark as refund</button>';
     if (isRefund && sug.manual_refund) html += '<button class="btn secondary small" onclick="markRefundPending(\''+r.ID+'\', false, this)">↩ Not a refund</button>';
     if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="markCustomerCard(\''+r.ID+'\', true, this)">💳 This was on a customer\'s card</button>';
+    if (!excluded && !isRefund) html += '<button class="btn secondary small" onclick="attachFixedPriceRow(\''+r.ID+'\', this)">🏷️ Fixed-price job: cost only, don\'t bill</button>';
     if (sug.manual_customer_card) html += '<button class="btn secondary small" onclick="markCustomerCard(\''+r.ID+'\', false, this)">↩ Not a customer-card purchase</button>';
     html += '<button class="btn secondary small" onclick="skipRow(\''+r.ID+'\', this)">Skip</button>';
   } else {
     if (r.Status === 'skipped') html += '<button class="btn secondary small" onclick="unskipRow(\''+r.ID+'\', this)">↩ Move back to Pending</button>';
     // Sep 23 2026 build: un-flip a confirmed BMore/Ridge Co expense and rebill it to a property +
     // work order (Brett's ask — only offered for 'company'-category confirmed rows, and only
-    // works server-side while the original hasn't been emailed to QuickBooks yet).
+    // works even after it was emailed: the answer then carries qb_delete_needed, Nov 17 2026).
     if (r.Status === 'confirmed' && sug.category === 'company') html += '<button class="btn secondary small" onclick="toggleReassign(\''+r.ID+'\')">🔁 Reassign to a work order</button>';
     // Undo a wrongly confirmed/expensed receipt into the refund flow — reuses the exact Pending
     // refund UI once it drops back to Pending (see markRefundConfirmed).
@@ -1506,6 +1551,44 @@ async function attachOnlyRow(id, btn){
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
 
+// Nov 17 2026: attach a customer-card receipt to the picked work order as a reference. Same endpoint as "Attach image only"; customer_card:true makes
+// the Worker write a non-billing Receipts row (never an invoice line, never a QuickBooks expense). A failure is shown on the card, never swallowed.
+async function attachCustomerCardRow(id, btn){ return attachNonBillingRow(id, btn, 'customer_card'); }
+// Nov 17 2026 (Brett): fixed-price job, we paid but the job price already covers it. Same non-billing path as customer-card; the cost is still ours (goes to QuickBooks).
+async function attachFixedPriceRow(id, btn){
+  const bill = document.getElementById('rc'+id+'-bill');   // a business-expense card keeps its pickers behind a toggle: open them first
+  if (bill && !bill.checked){ bill.checked = true; toggleBillCustomer(id); const st = document.getElementById('rc'+id+'-status'); if (st) st.innerHTML = '<span class="info">Pick the property and work order, then tap "Fixed-price job" again.</span>'; return; }
+  return attachNonBillingRow(id, btn, 'fixed_price');
+}
+async function attachNonBillingRow(id, btn, reason){
+  const fixed = reason === 'fixed_price';
+  if (btn) btn.disabled = true;
+  const idAttr = 'rc'+id;
+  const statusEl = document.getElementById(idAttr+'-status');
+  const woSel = document.getElementById(idAttr+'-wo');
+  const woManual = document.getElementById(idAttr+'-wo-manual');
+  const wo_id = (woManual && woManual.value.trim()) || (woSel ? woSel.value.trim() : '');
+  if (!wo_id){ statusEl.innerHTML = '<span class="err">Pick a work order (or type one) '+(fixed ? 'for this fixed-price job' : 'to attach this to, or Skip it')+'.</span>'; if (btn) btn.disabled = false; return; }
+  if (!allWOs.some(w => String(w.ID) === wo_id)){
+    statusEl.innerHTML = '<span class="err">✗ No work order with ID "'+esc(wo_id)+'" exists — check the number.</span>';
+    if (btn) btn.disabled = false;
+    return;
+  }
+  const amount = document.getElementById(idAttr+'-amt').value.trim();
+  const store = document.getElementById(idAttr+'-store').value.trim();
+  const date = document.getElementById(idAttr+'-date').value.trim();
+  const description = document.getElementById(idAttr+'-desc').value.trim();
+  statusEl.innerHTML = '<span class="info">'+(fixed ? 'Recording the job cost, not billing…' : 'Attaching as a reference, not billing…')+'</span>';
+  try {
+    const res = await post('/receipt/attach-only', { id, wo_id, amount, store, date, description, non_billing_reason: reason, customer_card: !fixed });
+    if (res.error) throw new Error(res.error);
+    const qbBad = fixed && res.qb_email && !res.qb_email.sent;
+    if (qbBad) toast('<span class="err">Job cost saved on WO '+esc(wo_id)+' and not billed, but it was NOT sent to QuickBooks: '+esc(res.qb_email.error || 'unknown reason')+' (the daily sweep will retry).</span>');
+    statusEl.innerHTML = fixed ? '<span class="ok">✓ Fixed-price job cost recorded on '+esc(wo_id)+' — not billed, nothing added to the invoice.</span>' : '<span class="ok">✓ Attached to '+esc(wo_id)+' as a reference — not billed, nothing added to the invoice.</span>';
+    finishCard(id);
+  } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
+}
+
 // Part 3 (Sep 22 2026 brief) — READ-ONLY search for the original purchase a refund might be
 // reversing. Renders each candidate with enough to eyeball at a glance (store/date/amount, exact-
 // amount flag, description) and a per-candidate confirm button; picking one is the only thing
@@ -1586,7 +1669,7 @@ function toggleReassign(id){
     + '<div class="full"><label>Description</label><textarea id="'+idAttr+'-ra-desc">'+esc(r.Confirmed_Description||'')+'</textarea></div>'
     + '</div>'
     + '<div class="row"><button class="btn small warnbtn" onclick="submitReassign(\''+id+'\', this)">Post reassignment</button>'
-    + '<span style="font-size:11px;color:var(--muted)">Voids the original BMore/Ridge Co expense (only works if it hasn\'t been emailed to QuickBooks yet) and posts a fresh receipt to whatever you pick here.</span></div>';
+    + '<span style="font-size:11px;color:var(--muted)">Voids the original BMore/Ridge Co expense (if it was already emailed to QuickBooks you will be told what to delete there by hand) and posts a fresh receipt to whatever you pick here.</span></div>';
   refreshReassignWo(id);
 }
 function refreshReassignUnit(id){
@@ -1619,12 +1702,13 @@ async function submitReassign(id, btn){
   const store = document.getElementById(idAttr+'-ra-store').value.trim();
   const date = document.getElementById(idAttr+'-ra-date').value.trim();
   const description = document.getElementById(idAttr+'-ra-desc').value.trim();
-  if (!confirm('Void the original BMore/Ridge Co expense and repost it '+(wo_id?('to WO '+wo_id):'to that property, no work order')+'? This only works if it hasn\'t been emailed to QuickBooks yet.')) return;
+  if (!confirm('Void the original BMore/Ridge Co expense and repost it '+(wo_id?('to WO '+wo_id):'to that property, no work order')+'? If it was already emailed to QuickBooks, you will be shown what to delete there by hand.')) return;
   if (btn) btn.disabled = true;
   statusEl.innerHTML = '<span class="info">Reassigning…</span>';
   try {
     const res = await post('/receipt-recon/reassign', { id, wo_id, property_id, amount, store, date, description });
     if (res.error) throw new Error(res.error);
+    if (res.qb_delete_needed) qbbShowDeleteNeeded(res.qb_delete_needed);
     statusEl.innerHTML = '<span class="ok">✓ Reassigned to '+esc(wo_id||('Property '+property_id))+'.</span>';
     finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
@@ -1757,7 +1841,7 @@ function ruleSave(btn){ panelAction(btn, async () => {
 function ruleDeactivate(id, btn){ if (!armed(btn, 'Tap again to turn off')) return; panelAction(btn, async () => { const res = await post('/receipt-recon/rules/deactivate', { id }); if (res.error) throw new Error(res.error); }); }
 async function autoUndo(id, btn){
   if (!armed(btn, 'Tap again to undo')) return;
-  panelAction(btn, async () => { const res = await post('/receipt-recon/undo', { id }); if (res.error) throw new Error(res.error); toast('<span class="ok">↩ Undone — back in Pending.</span>'); });
+  panelAction(btn, async () => { const res = await post('/receipt-recon/undo', { id }); if (res.error) throw new Error(res.error); toast('<span class="ok">↩ Undone — back in Pending.</span>'); if (res.qb_delete_needed) qbbShowDeleteNeeded(res.qb_delete_needed); });
 }
 
 // Pending-row manual refund toggle. The card re-renders with different fields once the category
@@ -1779,12 +1863,13 @@ async function markRefundPending(id, refund, btn){
 // switching to the Pending tab shows it with the normal find-match/negative-expense refund UI.
 async function markRefundConfirmed(id, btn){
   const statusEl = document.getElementById('rc'+id+'-status');
-  if (!confirm('Pull this receipt back into Pending as a refund? If it was already billed, the original expense/receipt gets voided first (only works if it hasn\'t been emailed to QuickBooks yet) — then it shows up in Pending flagged as a refund, same flow as any other refund.')) return;
+  if (!confirm('Pull this receipt back into Pending as a refund? If it was already billed, the original expense/receipt gets voided first (if it was already emailed to QuickBooks you will be shown what to delete there by hand) — then it shows up in Pending flagged as a refund, same flow as any other refund.')) return;
   if (btn) btn.disabled = true;
   if (statusEl) statusEl.innerHTML = '<span class="info">Converting to a refund…</span>';
   try {
     const res = await post('/receipt-recon/mark-refund-confirmed', { id });
     if (res.error) throw new Error(res.error);
+    if (res.qb_delete_needed) qbbShowDeleteNeeded(res.qb_delete_needed);
     if (statusEl) statusEl.innerHTML = '<span class="ok">✓ Moved back to Pending, flagged as a refund.</span>';
     finishCard(id);
   } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
@@ -1801,13 +1886,14 @@ async function markRefundConfirmed(id, btn){
 // was already emailed to QuickBooks.
 async function undoConfirmation(id, btn){
   const statusEl = document.getElementById('rc'+id+'-status');
-  if (!confirm('Undo this confirmation? This reverses the amount out of the invoice/work order and removes the attached image, then drops it back into Pending. Only works if it hasn\'t already been emailed to QuickBooks.')) return;
+  if (!confirm('Undo this confirmation? This reverses the amount out of the invoice/work order and removes the attached image, then drops it back into Pending. If it was already emailed to QuickBooks, you will be shown what to delete there by hand.')) return;
   if (btn) btn.disabled = true;
   if (statusEl) statusEl.innerHTML = '<span class="info">Undoing…</span>';
   try {
     const res = await post('/receipt-recon/undo', { id });
     if (res.error) throw new Error(res.error);
-    if (statusEl) statusEl.innerHTML = '<span class="ok">✓ Undone — back in Pending, invoice and attachment reversed.</span>';
+    if (res.qb_delete_needed) qbbShowDeleteNeeded(res.qb_delete_needed);
+    if (statusEl) statusEl.innerHTML = '<span class="ok">✓ Undone — back in Pending, invoice and attachment reversed.'+(res.qb_delete_needed?' Delete it in QuickBooks by hand (see the red box).':'')+'</span>';
     finishCard(id);
   } catch(e){ if (statusEl) statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
@@ -1850,7 +1936,7 @@ async function confirmExpense(id, btn, mode){
     if (res.duplicate) { statusEl.innerHTML = '<span class="warn">Already recorded — skipped, not double-posted.</span>'; }
     else {
       const qb = res.qb_email || {};
-      const qbLine = qb.sent ? ' Sent to QuickBooks.' : ' ⚠ Recorded, but the QuickBooks email didn\'t go out'+(qb.error?' ('+esc(qb.error)+')':'')+' — the 7am sweep will retry it.';
+      const qbLine = qb.error ? ' ⚠ Recorded, but it could not be queued for QuickBooks ('+esc(qb.error)+').' : ' Waiting in the daily QuickBooks batch (hold or reverse it under Waiting to send to QuickBooks).';
       statusEl.innerHTML = '<span class="ok">✓ $'+esc(res.amount||amount)+' recorded as a '+esc(where)+' expense — no work order, no customer invoice.'+qbLine+'</span>';
     }
     finishCard(id);
@@ -1875,7 +1961,7 @@ async function confirmBusinessExpense(id, btn){
     if (res.error) throw new Error(res.error);
     statusEl.innerHTML = res.duplicate
       ? '<span class="warn">Already recorded — skipped, not double-posted.</span>'
-      : '<span class="ok">✓ Recorded $'+esc(res.amount||amount)+' as a business expense'+(property_id?' on that property':'')+'. It\'ll go to QuickBooks in the next receipts sweep.</span>';
+      : '<span class="ok">✓ Recorded $'+esc(res.amount||amount)+' as a business expense'+(property_id?' on that property':'')+'. It waits in the daily QuickBooks batch.</span>';
     finishCard(id);
   } catch(e){ statusEl.innerHTML = '<span class="err">❌ '+esc(e.message)+'</span>'; if (btn) btn.disabled = false; }
 }
@@ -1954,8 +2040,138 @@ async function confirmDuplicateFromEvidence(id, idx, btn){
 }
 
 
+// ═══ QB-BATCH-UI-BEGIN (Nov 17 2026) — "Waiting to send to QuickBooks" + "Delete this in QuickBooks by hand" ═══════════════════════════════════
+// Self-contained on purpose (own container #qb-batch-section, own functions, all prefixed qbb): the receipt-picker branch edits other parts of this page.
+// Nothing here is emailed from the page: it lists what the daily job will send, lets Brett hold / reverse a receipt, send the batch now, and tick off
+// the QuickBooks entries he still has to delete by hand after reversing a receipt that had already been sent.
+let qbbState = null, qbbOpen = false, qbbBusy = false, qbbStatusHtml = '';
+// '00:00' -> '12:00 AM (midnight)', '07:00' -> '7:00 AM'
+function qbbClock(at){
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(at||'')); if (!m) return esc(at||'');
+  const h = +m[1], mm = m[2];
+  return (h % 12 || 12) + ':' + mm + (h < 12 ? ' AM' : ' PM') + (h === 0 && mm === '00' ? ' (midnight)' : '');
+}
+function qbbHoursText(ns){
+  if (!ns) return 'send time unknown';
+  if (!ns.hours_until) return 'goes out at the next scheduler check (daily send is due)';
+  return 'goes out in about ' + ns.hours_until + ' h (daily at ' + qbbClock(ns.at) + ' Eastern)';
+}
+function qbbDeleteBoxHtml(d){
+  const id = esc(d.receipt_id);
+  return '<div class="qbb-del" id="qbb-del-'+id+'" style="border:2px solid #b42318;background:#fdecea;border-radius:6px;padding:10px;margin:8px 0">'
+    + '<div style="font-weight:bold;color:#b42318;margin-bottom:4px">Delete this in QuickBooks by hand</div>'
+    + '<div style="font-size:12px">Vendor: <b>'+esc(d.vendor)+'</b> · Amount: <b>$'+esc(money(d.amount))+'</b> · Receipt date: <b>'+esc(d.receipt_date)+'</b><br>'
+    + 'Hub receipt #'+esc(d.hub_receipt_number)+' · Email subject sent: <i>'+esc(d.email_subject)+'</i><br>Emailed to QuickBooks on '+esc(String(d.qb_email_sent_date||'').slice(0,10))+'</div>'
+    + '<label style="display:block;margin-top:8px;font-size:12px;cursor:pointer"><input type="checkbox" onchange="qbbDeleteDone(\''+id+'\', this)"> I deleted it in QuickBooks</label></div>';
+}
+function qbbShowDeleteNeeded(d){
+  if (!d) return;
+  let box = document.getElementById('qbb-delete-toast');
+  if (!box) { box = document.createElement('div'); box.id = 'qbb-delete-toast'; box.style.cssText = 'position:fixed;left:8px;right:8px;bottom:8px;z-index:60;max-width:560px;margin:auto'; document.body.appendChild(box); }
+  box.innerHTML = qbbDeleteBoxHtml(d) + '<div style="text-align:right"><button class="btn small secondary" onclick="this.parentNode.parentNode.innerHTML=\'\';qbbLoad()">Close (it stays in the list below until ticked)</button></div>';
+  qbbLoad();
+}
+async function qbbDeleteDone(receiptId, cb){
+  cb.disabled = true;
+  try {
+    const res = await post('/receipts/qb-batch/delete-done', { receipt_id: receiptId, done: cb.checked });
+    if (res.error) throw new Error(res.error);
+    toast('<span class="ok">Recorded: deleted in QuickBooks (receipt #'+esc(receiptId)+').</span>');
+    await qbbLoad();
+  } catch(e){ cb.checked = !cb.checked; toast('<span class="err">Could not save the tick: '+esc(e.message)+'</span>'); }
+  cb.disabled = false;
+}
+async function qbbLoad(){
+  const el = document.getElementById('qb-batch-section'); if (!el) return;
+  try {
+    const d = await get('/receipts/qb-batch');
+    if (d.error || d.ok === false) throw new Error(d.error || 'failed');
+    qbbState = d; qbbRender();
+  } catch(e){ el.innerHTML = '<div class="section"><div class="err">❌ Could not load the QuickBooks batch list: '+esc(e.message)+'</div></div>'; }
+}
+function qbbRender(){
+  const el = document.getElementById('qb-batch-section'); if (!el || !qbbState) return;
+  const d = qbbState, c = d.counts || {};
+  const waiting = (c.ready||0) + (c.held||0) + (c.failed||0) + (c.sending||0);
+  const cleanup = d.cleanup || [];
+  const badge = '<span class="pill '+((c.failed||c.sending)?'danger':'suggest')+'" id="qbb-count">'+waiting+'</span>';
+  let h = '<div class="section"><details id="qbb-details"'+(qbbOpen || cleanup.length ? ' open' : '')+' ontoggle="qbbOpen=this.open">'
+    + '<summary style="cursor:pointer;font-weight:bold">Waiting to send to QuickBooks '+badge
+    + (cleanup.length ? ' <span class="pill danger">'+cleanup.length+' to delete in QuickBooks</span>' : '')+'</summary>';
+  h += '<div style="font-size:12px;color:var(--muted);margin:6px 0">'+esc(qbbHoursText(d.next_send))+'. '+(c.held?esc(c.held+' on hold (not sent until you release them). '):'')+'</div>';
+  if (d.schedule_note) h += '<div class="warn" style="font-size:12px;margin:4px 0">⚠ '+esc(d.schedule_note)+'</div>';
+  if (cleanup.length) {
+    h += '<div style="margin:8px 0"><b>Still to delete in QuickBooks (tick when done)</b>'+cleanup.map(qbbDeleteBoxHtml).join('')+'</div>';
+  }
+  if (!(d.items||[]).length) h += '<div class="empty">Nothing is waiting.</div>';
+  h += (d.items||[]).map(it => {
+    const rid = esc(it.receipt_id);
+    const where = it.wo_id ? ('WO '+esc(it.wo_id)+(it.wo_description?' — '+esc(it.wo_description):'')) : (it.property_address ? esc(it.property_address) : 'Ridge Co expense (no job)');
+    const st = it.status === 'held' ? '<span class="pill warn">On hold</span>' : it.status === 'failed' ? '<span class="pill danger">Send failed</span>' : it.status === 'sending' ? '<span class="pill danger">'+(it.stuck?'Stuck sending':'Sending…')+'</span>' : '<span class="pill suggest">Ready</span>';
+    let btns = '';
+    if (it.status === 'ready') btns += '<button class="btn small secondary" onclick="qbbAct(\''+rid+'\',\'hold\',this)">Hold</button>';
+    if (it.status === 'held' || it.status === 'failed' || it.stuck) btns += '<button class="btn small secondary" onclick="qbbAct(\''+rid+'\',\'release\',this)">'+(it.status==='held'?'Release':'Retry')+'</button>';
+    if (it.stuck) btns += '<button class="btn small secondary" onclick="qbbAct(\''+rid+'\',\'mark_sent\',this)">It did go out</button>';
+    if (it.can_reverse) btns += '<button class="btn small warnbtn" onclick="qbbReverse(\''+esc(it.queue_id)+'\',\''+rid+'\',this)">Reverse</button>';
+    return '<div class="rc-prow" id="qbb-'+rid+'" style="display:block;padding:8px 0;border-top:1px solid var(--border)">'
+      + '<div><b>'+esc(it.store||'(vendor unknown)')+'</b> $'+esc(money(it.amount))+' · '+esc(it.date)+' · receipt #'+esc(it.receipt_number||'—')+' '+st+'</div>'
+      + '<div style="font-size:12px;color:var(--muted)">'+where+' · Hub row '+rid+'</div>'
+      + (it.error ? '<div class="err" style="font-size:12px">'+esc(it.error)+'</div>' : '')
+      + '<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">'+btns+'</div></div>';
+  }).join('');
+  h += '<div style="margin-top:10px"><button class="btn small" id="qbb-sendnow" onclick="qbbSendNow(this)"'+((c.ready||c.failed)?'':' disabled')+'>Send batch now</button> <span id="qbb-status" class="rc-status" style="margin-left:6px">'+qbbStatusHtml+'</span></div>';
+  h += '</details></div>';
+  el.innerHTML = h;
+}
+async function qbbAct(receiptId, action, btn){
+  if (btn) btn.disabled = true;
+  try {
+    const res = await post('/receipts/qb-batch/action', { receipt_id: receiptId, action });
+    if (res.error) throw new Error(res.error);
+    await qbbLoad();
+  } catch(e){ toast('<span class="err">❌ '+esc(e.message)+'</span>'); if (btn) btn.disabled = false; }
+}
+// Reverse = the same server path as "Undo confirmation" (back to Pending, invoice amount and image reversed). Never sent yet, so there is nothing to delete in QuickBooks.
+async function qbbReverse(queueId, receiptId, btn){
+  if (!armed(btn, 'Tap again to reverse')) return;   // back to Pending, will not be sent to QuickBooks
+  if (btn) btn.disabled = true;
+  try {
+    const res = await post('/receipt-recon/undo', { id: queueId });
+    if (res.error) throw new Error(res.error);
+    toast('<span class="ok">↩ Reversed — back in Pending.</span>');
+    if (res.qb_delete_needed) qbbShowDeleteNeeded(res.qb_delete_needed);
+    await qbbLoad(); await loadQueue();
+  } catch(e){ toast('<span class="err">❌ '+esc(e.message)+'</span>'); if (btn) btn.disabled = false; }
+}
+// "Send batch now": the Worker sends a few per call (Cloudflare limit), so this loops until nothing remains, nothing more can be sent, or an error shows.
+async function qbbSendNow(btn){
+  if (qbbBusy) return;
+  if (!armed(btn, 'Tap again to send now')) return;   // sends everything ready now instead of waiting for the daily send; held receipts stay held
+  qbbBusy = true; if (btn) btn.disabled = true;
+  const st = () => document.getElementById('qbb-status');
+  let sent = 0, failed = [], rounds = 0, stalled = 0;
+  try {
+    for (;;) {
+      rounds++; qbbStatusHtml = '<span class="info">Sending… '+sent+' sent so far</span>'; if (st()) st().innerHTML = qbbStatusHtml;
+      const res = await post('/receipts/qb-batch/send-now', {});
+      if (res.error || res.ok === false) throw new Error(res.error || 'the send failed');
+      sent += res.sent || 0; failed = failed.concat(res.failed || []);
+      if (!res.remaining) break;
+      if (!(res.sent > 0)) { if (++stalled >= 2) break; } else stalled = 0;
+      if (rounds >= 60) break;
+    }
+    qbbStatusHtml = failed.length
+      ? '<span class="err">❌ '+sent+' sent, '+failed.length+' failed: '+esc(failed.slice(0,3).map(f => '#'+f.id+' '+f.error).join(' | '))+'</span>'
+      : '<span class="ok">✓ '+sent+' sent to QuickBooks.</span>';
+  } catch(e){ qbbStatusHtml = '<span class="err">❌ '+esc(e.message)+' ('+sent+' sent before it stopped)</span>'; }
+  qbbBusy = false;
+  await qbbLoad();
+}
+// ═══ QB-BATCH-UI-END ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
 renderTabs();
 loadQueue();
+qbbLoad();
 </script>
 </body>
 </html>

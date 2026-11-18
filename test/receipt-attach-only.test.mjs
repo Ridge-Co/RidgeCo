@@ -63,6 +63,7 @@ ok(/async function hubTestWriteAllowed[\s\S]*?if \(path === '\/receipt\/attach-o
   ok(/addReceipt\(env,/.test(body), 'receiptAttachOnly calls addReceipt (the file-attach mechanism)');
   ok(!/appendReceiptToInvoiceReview/.test(body), 'receiptAttachOnly never calls appendReceiptToInvoiceReview (no Invoice_Review write)');
   ok(!/sendReceiptsToQBEmail/.test(body), 'receiptAttachOnly never calls sendReceiptsToQBEmail');
+  ok(!/sendReceiptsToQBEmail\(env, \{ ids:/.test(src), 'no code path asks the QuickBooks sender for an immediate one-receipt email (Nov 17 2026: confirm/attach/reassign only queue; the daily batch is the one sender)');
   ok(!/Vendor_Bills/.test(body), 'receiptAttachOnly never references Vendor_Bills');
   ok(/category: 'attached_only'/.test(body), 'receiptAttachOnly tags the Receipts row with the new attached_only category (checked the existing enum first — none of billable/company/customer_paid/refund fit)');
   ok(/Status: 'attached_only'/.test(body), 'receiptAttachOnly sets the Receipt_Recon_Queue row Status to attached_only (excluded from the default ?status=pending view)');
