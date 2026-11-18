@@ -13125,7 +13125,7 @@ async function ensureLoanLedgerTab(env) {
 // logic below can never create — it stops exactly at 0, see computeLoanDeduction).
 async function getVendorLoanBalance(env, vendorId) {
   let rows = [];
-  try { rows = await fetchTab(env, LOAN_LEDGER_TAB); } catch (e) { return 0; } // tab doesn't exist yet → no loans
+  try { rows = await fetchTab(env, LOAN_LEDGER_TAB); } catch (e) { if (!/unable to parse range|not found|does not exist/i.test(String((e && e.message) || e))) await softFail(env, 'getVendorLoanBalance:Loan_Ledger', e, { severity: 'P1', ref: String(vendorId || ''), source: 'read' }); return 0; } // tab doesn't exist yet → no loans; any other failure is reported
   return rows.filter(r => r.Active !== 'FALSE' && String(r.Vendor_ID) === String(vendorId))
     .reduce((sum, r) => sum + (parseFloat(r.Amount) || 0), 0);
 }
