@@ -14570,7 +14570,7 @@ async function processDepositPaidSweep(env) {
     scopes = (await fetchTab(env, 'Scopes')).filter(x => String(x.Approval_Stage || '') === 'Pre-approved' && x.Active !== 'FALSE');
     out.checked = scopes.length;
     if (!scopes.length) { out.ok = !out.errors.length; return out; }
-    try { await paymentMilestonesTab(env); } catch (_) {}
+    try { await paymentMilestonesTab(env); } catch (e) { await softFail(env, 'processDepositPaidSweep:milestonesTab', e, { severity: 'P1', ref: '', source: 'write', context: 'the milestones tab could not be prepared, so deposits may not be detected this run' }); }
     tabs = { sigs: await fetchTab(env, 'Scope_Signatures'), milestones: await fetchTab(env, 'Payment_Milestones') };
   } catch (e) {
     // Oct 29 2026 (queue 222): Google's shared per-minute READ quota stopped the sweep's reads. Nothing was checked, nothing moved; the next run (the scheduler, or
