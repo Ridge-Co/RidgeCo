@@ -1575,7 +1575,7 @@ function renderWOs(wos, opts) {
   if (_deepLinkWoId && !_deepLinkApplied) {
     _deepLinkApplied = true;
     var searchBox = document.getElementById('woSearch');
-    if (searchBox) { searchBox.value = _deepLinkWoId; filterVendorWOs(); }
+    if (searchBox) { searchBox.value = _deepLinkWoId; filterVendorWOs(); if (window.VendorHome && VendorHome.on() && window._wos && window._wos.length === 1) VendorHome.openCard(0); }
   }
 }
 
