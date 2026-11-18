@@ -5831,7 +5831,7 @@ async function scopeIngest(env, body) {
     return json({ error: 'ingest failed: ' + (e.message || e) }, 500);
   }
   const raw = s.Raw_Input ? (s.Raw_Input + '\n\n' + added) : added;
-  let srcs = []; try { srcs = JSON.parse(s.Source_Refs || '[]'); } catch (_) {}
+  let srcs = parseJsonCell(s.Source_Refs, [], { env, where: 'scopeIngest:Source_Refs', ref: String(s.ID || ''), severity: 'P2' }); if (!Array.isArray(srcs)) srcs = [];
   srcs.push({ type, label, ts: new Date().toISOString(), chars: added.length });
   await updateRow(env, 'Scopes', id, { Raw_Input: raw, Source_Refs: JSON.stringify(srcs).slice(0, 8000), Updated_Date: new Date().toISOString() });
   return json({ success: true, extracted: added, raw_input: raw });
