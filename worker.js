@@ -5802,7 +5802,7 @@ async function scopeGet(env, url) {
 
 // GET /scope/drive-list?folder= — list image/pdf files in the handwriting scan folder to pick from.
 async function scopeDriveList(env, url) {
-  const cfg = await fetchConfig(env).catch(() => ({}));
+  const cfg = await fetchConfig(env).catch(() => ({}));   // silent-ok: fetchConfig never throws, this is a spare fallback
   const folder = (url && url.searchParams.get('folder')) || cfg.scope_scan_folder_id || env.SCOPE_SCAN_FOLDER_ID || SCOPE_SCAN_FOLDER_DEFAULT;
   try {
     const tok = await getAccessToken(env);
