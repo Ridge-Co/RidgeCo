@@ -5796,7 +5796,7 @@ async function scopeGet(env, url) {
   const id = url.searchParams.get('id'); if (!id) return json({ error: 'id required' }, 400);
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
-  let srcs = []; try { srcs = JSON.parse(s.Source_Refs || '[]'); } catch (_) {}
+  let srcs = parseJsonCell(s.Source_Refs, [], { env, where: 'scopeGet:Source_Refs', ref: String(s.ID || ''), severity: 'P2' }); if (!Array.isArray(srcs)) srcs = [];
   return json(Object.assign({}, s, { line_items: scopeParseItems(s), source_refs: srcs }));
 }
 
