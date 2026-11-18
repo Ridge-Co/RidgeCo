@@ -7127,7 +7127,7 @@ async function scopeProposalSign(env, body, ip, ua) {
     IP: String(ip || '').slice(0, 60), User_Agent: String(ua || '').slice(0, 300),
     Status: 'Signed', Created_Date: now.toISOString(), Active: 'TRUE',
   });
-  const sigJson = await sigResp.json().catch(() => ({}));
+  const sigJson = await sigResp.json().catch(async (e) => { await softFail(env, 'scopeProposalSign:sigAnswer', e, { severity: 'P1', ref: String(s.ID || ''), source: 'parse', context: 'the signature saved but its id could not be read back, so milestone rows are not linked to it' }); return {}; });
   const signatureId = sigJson.id;
 
   // Expand the scope's payment schedule (whatever Brett configured on scope-creator.html, or the
