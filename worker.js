@@ -5964,7 +5964,7 @@ async function scopeSplit(env, body) {
   if (!id || !ids.length) return json({ error: 'scope_id and line_item_ids required' }, 400);
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
-  const items = scopeParseItems(s);
+  const items = scopeParseItems(s, env);
   const picked = items.filter(it => ids.includes(it.id));
   if (!picked.length) return json({ error: 'None of the selected items were found' }, 400);
   const now = new Date().toISOString();
