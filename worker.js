@@ -27162,8 +27162,9 @@ async function sendReceiptsToQBEmail(env, opts) {
       warnings.push({ id: r.ID, warning: 'emailed without the receipt image (Drive download failed: ' + String(attachErr && attachErr.message || attachErr).slice(0, 160) + ')' });
     }
     await new Promise(res => setTimeout(res, 400)); // pace Gmail/Drive calls, matches existing convention
+    } finally { __qbBatchInflight.delete(rid); }
   }
-  return json({ ok: true, sent, sent_without_attachment: sentNoFile, blocked, failed, warnings, remaining: pending.length - batch.length, held: heldN, stuck: stuckN });
+  return json({ ok: true, sent, sent_without_attachment: sentNoFile, blocked, failed, warnings, skipped, quarantined, failed_today: failedTodayPrior + quarantined, remaining: pending.length - batch.length, held: heldN, stuck: stuckN });
 }
 
 // ── QB batch: review list, hold/release, "delete it in QuickBooks" tick-list (Nov 17 2026) ──────────────────────────────────────────────────────
