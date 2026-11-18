@@ -1486,6 +1486,7 @@ function renderWOs(wos, opts) {
           '<span class="expand-icon">▾</span>' +
         '</div>' +
       '</div>' +
+      ((window.VendorHome && VendorHome.on()) ? VendorHome.actionHtml(wo, idx) : '') +
       '<div class="wo-detail" id="detail-' + idx + '">' +
         (gated ? '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:8px;padding:12px;margin-bottom:12px">' +
           '<div style="color:var(--warn);font-weight:bold;font-size:12px;letter-spacing:.04em;margin-bottom:4px">🔒 ACCEPT TO UNLOCK</div>' +
