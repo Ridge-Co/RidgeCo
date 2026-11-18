@@ -2212,6 +2212,7 @@ function deleteVendorTime(entryId, woId, idx) {
 function toggleCard(idx) {
   var card = document.getElementById('card-' + idx);
   card.classList.toggle('expanded');
+  if (window.VendorHome && VendorHome.on() && card.classList.contains('expanded')) VendorHome.ensureLoaded(idx);   // new layout: load this card's panels now
 }
 
 // ── Status ───────────────────────────────────────────────────
