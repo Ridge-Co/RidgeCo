@@ -66,6 +66,10 @@ t('invalid date rejected', R.recurParseISO('2026-02-30') === null);
 // targets
 eq('targets parse+dedupe', R.recurTargets({ Targets: '[{"p":"1","u":"2"},{"p":"1","u":"2"},{"p":"3"},{"x":1}]' }), [{ p: '1', u: '2' }, { p: '3', u: '' }]);
 eq('targets bad json', R.recurTargets({ Targets: '{oops' }), []);
+eq('targets bad json is reported once at P1 with the template id', (R.recurTargets({ ID: 'T-9', Targets: '{oops' }, {}), parseNotes.slice(-1)[0]), 'recurTargets:Targets|P1|T-9');
+parseNotes.length = 0;
+eq('targets blank cell: empty, nothing reported', (R.recurTargets({ ID: 'T-1', Targets: '' }, {}), parseNotes.length), 0);
+eq('targets not a list: empty (as before)', R.recurTargets({ Targets: '{"p":"1"}' }), []);
 // open detection
 t('Assigned is open', R.recurWOIsOpen({ Status: 'Assigned' }));
 t('Complete is closed', !R.recurWOIsOpen({ Status: 'Complete' }));
