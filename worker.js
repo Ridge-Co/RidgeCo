@@ -8826,7 +8826,7 @@ function ownerApprovalCards(scopes, props, units, sigs, ownerId, nowMs, env) {
     out.push({
       scope_id: String(s.ID), title: String(s.Title || ''),
       property: String(prop.Address || ('Property ' + s.Property_ID)), unit: unit && unit.Unit_Label ? String(unit.Unit_Label) : '',
-      total: ownerApprovalTotal(s.Proposal_Items_JSON),
+      total: ownerApprovalTotal(s.Proposal_Items_JSON, env),
       state, question_asked: state === 'waiting' && resp === 'question',
       sent_at: String(s.Sent_Date || ''), opened_at: String(s.Page_First_Viewed || ''), answered_at: answeredAt,
       response_text: state === 'declined' ? String(s.Owner_Response_Text || '') : '',
