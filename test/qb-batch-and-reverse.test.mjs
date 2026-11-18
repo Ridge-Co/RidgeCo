@@ -165,7 +165,7 @@ console.log('double-send protection and loud failures');
   ok(job.ok === false && job.errors.some(e => /could not be sent to QuickBooks/.test(e.error)) && job.no_retry === true, 'the daily job reports the failure (ok:false) and is not blindly retried');
   const w4 = world({ driveFails: true }); w4.addRcpt({ Source_File_ID: 'F9' });
   const d = await w4.call('sendReceiptsToQBEmail', { release: true });
-  ok(d.sent === 1 && d.sent_without_attachment === 1 && d.warnings.length === 1 && w4.reports.some(x => x.where === 'qb_batch.attachment'), 'a Drive failure still sends the email but is reported (answer + ledger), not hidden');
+  ok(d.sent === 1 && d.sent_without_attachment === 1 && d.warnings.length === 1 && w4.reports.some(x => x.where === 'sendReceiptsToQB:attachment' && x.severity === 'P1'), 'a Drive failure still sends the email but is reported (answer + ledger), not hidden');
 }
 
 console.log('hold / release / mark-sent actions');
