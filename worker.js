@@ -41435,7 +41435,7 @@ const PROPOSAL_SIG_HEADERS = ['ID','Proposal_ID','Option','Owner_Total','First_P
 // If PROPOSAL_CONFIG is unset the feature is dormant (proposals resolve to "unknown").
 function proposalRegistry(env) {
   try { return env && env.PROPOSAL_CONFIG ? JSON.parse(env.PROPOSAL_CONFIG) : {}; }
-  catch (e) { return {}; }
+  catch (e) { if (!proposalRegistry._noted) { proposalRegistry._noted = true; softNote(env, 'proposalRegistry:PROPOSAL_CONFIG', 'PROPOSAL_CONFIG is not valid JSON, every proposal reads as unknown: ' + String((e && e.message) || e).slice(0, 120), { severity: 'P1', source: 'config' }); } return {}; }
 }
 
 async function ensureProposalTab(env) {
