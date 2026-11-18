@@ -7013,7 +7013,7 @@ function scopeVendorPayableSchedule(milestones) {
   if (carry > 0 && out.length) out[out.length - 1].vendor_payable = +(out[out.length - 1].vendor_payable + carry).toFixed(2);
   return out;
 }
-function scopeParsePaymentSchedule(s) {
+function scopeParsePaymentSchedule(s, env) {
   try { const arr = JSON.parse((s && s.Payment_Schedule_JSON) || 'null'); if (Array.isArray(arr) && arr.length) return arr; } catch (_) {}
   return scopeDefaultPaymentSchedule();
 }
