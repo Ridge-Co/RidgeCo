@@ -26507,7 +26507,7 @@ function gmailRefreshCandidates(cfgToken, envToken) {
 }
 async function gmailAccessToken(env) {
   if (_gmailTokenCache.token && (Date.now() - _gmailTokenCache.at) < 50 * 60 * 1000) return _gmailTokenCache.token;
-  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
+  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}   // silent-ok: falls back to the env token and throws loudly if none
   const candidates = gmailRefreshCandidates(cfg.GMAIL_REFRESH_TOKEN, env.GMAIL_REFRESH_TOKEN);
   if (!env.GMAIL_CLIENT_ID || !env.GMAIL_CLIENT_SECRET || !candidates.length) {
     throw new Error('Gmail not configured — set GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_SENDER in Cloudflare Worker secrets, then use "Reconnect Gmail" (or set GMAIL_REFRESH_TOKEN).');
