@@ -61,7 +61,7 @@ function world() {
     setTimeout: (f) => f(),
   };
   const names = Object.keys(deps);
-  const helperFns = ['qbBatchStatus', 'qbBatchWaiting', 'qbBatchSendable', 'qbBatchSubject', 'qbBatchWrite', 'qbBatchQueuedNote', 'receiptRowIsCustomerCard'];
+  const helperFns = ['qbBatchStatus', 'qbBatchWaiting', 'qbBatchSendable', 'qbBatchSubject', 'qbBatchWrite', 'qbBatchQueuedNote', 'receiptRowIsCustomerCard', 'qbBatchFresh', 'qbBatchStillDue', 'qbBatchClaimHeld'];
   const sendQB = new Function(...names, helperFns.map(extractFn).join('\n') + `\nreturn (${extractFn('sendReceiptsToQBEmail')});`)(...names.map(n => deps[n]));
   deps.sendReceiptsToQBEmail = sendQB;
   helperFns.forEach(f => { deps[f] = new Function(...names, helperFns.map(extractFn).join('\n') + `\nreturn ${f};`)(...names.map(n => deps[n])); });
