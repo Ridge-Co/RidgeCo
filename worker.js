@@ -7130,7 +7130,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   // Vendor cost is looked up from Line_Items (the private source of truth), never from the
   // customer-facing Proposal_Items_JSON/selections payload, and never returned to the client.
   let vendorCostTotal = 0;
-  for (const it of scopeParseItems(s)) {
+  for (const it of scopeParseItems(s, env)) {
     const key = finalSelections[it.id];
     if (key === undefined) continue; // declined optional add-on — not signed, so no vendor cost
     const v = (it.variants || []).find(x => x.key === key) || (it.variants || [])[0];
