@@ -9427,7 +9427,7 @@ async function woTriageSet(env, body) {
 async function woTriagePreview(env, body) {
   const cfg = await fetchConfig(env), kw = triageParseKeywords(triageCfgGet(cfg, 'Triage_Keywords'));
   const r = triageByRules(body && body.text, body && body.trade, new Date(), (kw && !kw.error) ? kw : null);
-  return json({ success: true, ...r, due_in_hours: triageSla(cfg)[r.tier], enabled: triageEnabled(cfg), keywords_error: kw && kw.error ? kw.error : '' });
+  return json({ success: true, ...r, due_in_hours: triageSla(cfg, env)[r.tier], enabled: triageEnabled(cfg), keywords_error: kw && kw.error ? kw.error : '' });
 }
 // ── END SEVERITY TRIAGE ──────────────────────────────────────────────────────────────────────────────────────────────────
 
