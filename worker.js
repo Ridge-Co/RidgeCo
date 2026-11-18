@@ -10507,7 +10507,7 @@ async function woBulkVoid(env, body) {
   // issue at all; it just means the vendor-bill leg of the money check can't run (Customer_Charge
   // / QBO_Invoice_Number still do), same fail-open posture findRecentDuplicate uses.
   let vendorBills = [];
-  try { vendorBills = await fetchTab(env, 'Vendor_Bills'); } catch (e) {}
+  try { vendorBills = await fetchTab(env, 'Vendor_Bills'); } catch (e) { await softFail(env, 'woBulkVoid:Vendor_Bills', e, { severity: 'P1', source: 'read' }); }
 
   const changedBy = body.updated_by || 'admin', changedByRole = body.updated_by_role || 'admin';
   const voided = [], skipped = [];
