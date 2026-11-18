@@ -7247,7 +7247,7 @@ async function scopeProposalSignedList(env, url) {
   // vs actual (Sep 22 2026). null (not []) on a read failure so the page says "couldn't check"
   // instead of a confident $0.
   let allReceipts = null;
-  try { allReceipts = await fetchTab(env, 'Receipts'); } catch (_) {}
+  try { allReceipts = await fetchTab(env, 'Receipts'); } catch (e) { await softFail(env, 'scopeProposalSignedList:receipts', e, { severity: 'P2', ref: '', source: 'read', context: 'receipts could not be read, so the page says it could not check' }); }
   const out = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE').map(r => {
     const sc = scopes.find(x => x.ID === r.Scope_ID) || {};
     const p = props.find(x => x.ID === sc.Property_ID) || {};
