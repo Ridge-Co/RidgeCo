@@ -35647,7 +35647,7 @@ async function receiptCheckDuplicatesOne(env, row, opts) {
         reason: `Same amount ($${(+d.amount || 0).toFixed(2)}), date (${d.date}), and store already logged as a Receipts entry${d.wo_id ? ' on WO ' + d.wo_id : ''} at this property.`,
       });
     }
-  } catch (e) { /* best-effort — a Receipts read failure shouldn't block the QB checks below */ }
+  } catch (e) { await softFail(env, 'receiptCheckDuplicatesOne:receipts', e, { severity: 'P1', ref: String(row.ID || ''), source: 'read', context: 'the Receipts tab could not be read, so a duplicate of an existing receipt may be missed' }); }
 
   // Nov 17 2026 (brief 4c): the other Receipt_Recon_Queue rows, pending ones included (the check used to ignore the queue
   // entirely, which is why two scans of the same $43.23 Home Depot receipt read "no matching entries"). Same amount, date within
