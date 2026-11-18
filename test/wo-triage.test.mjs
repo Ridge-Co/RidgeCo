@@ -97,7 +97,8 @@ eq('bad SLA keeps defaults', m.triageSla({ Triage_SLA_Hours: 'zzz' }).Urgent, 4)
 { const x = make({ cfg: {} }); const r = await x.triageWorkOrder(x.env, 'WO-1', { description: 'flood' }, 'rules');
   eq('OFF skips', r.skipped, 'off'); eq('OFF writes nothing', x.log.writes.length, 0); eq('OFF ensures nothing', x.log.ensured.length, 0); }
 { const x = make({ cfg: { Triage_Enabled: 'TRUE', Triage_Keywords: '{bad' } }); await x.triageWorkOrder(x.env, 'WO-1', { description: 'flood' }, 'rules');
-  t('bad keywords: still triaged with built-ins', x.log.writes[0].f.Triage_Tier === 'Emergency'); t('bad keywords: loud failed telemetry', x.log.tele.some(r => r.Job_Type === 'triage_config_bad' && r.Success === 'FALSE')); }
+  t('bad keywords: still triaged with built-ins', x.log.writes[0].f.Triage_Tier === 'Emergency'); t('bad keywords: loud failed telemetry', x.log.tele.some(r => r.Job_Type === 'triage_config_bad' && r.Success === 'FALSE'));
+  t('bad keywords: reaches the failure ledger as a P2 (Nov 18 audit of #566)', x.log.fails.some(f => f.where === 'triage_config_bad' && f.severity === 'P2')); }
 // fail open + loud
 { const x = make({ writeThrows: true }); const r = await x.triageIntakeSafe(x.env, 'WO-1', { description: 'flood' });
   t('write failure does not throw', !!r.failed); t('failure telemetry row', x.log.tele.some(e => e.Success === 'FALSE' && /could not triage/.test(e.Notes)));

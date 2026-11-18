@@ -3461,7 +3461,8 @@ async function addReceipt(env, body) {
   // which is exactly how Payment_Source went unnoticed for weeks. No swallow needed here
   // anymore; the shared function's own logging covers it.
   try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date', 'Payment_Source', 'Non_Billable', 'Non_Billable_Reason', 'Receipt_Number']); }
-  catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger (rule 174); the write below still proceeds with whatever columns exist. If Non_Billable could not be added, Category (customer_paid / attached_only) still marks the row non-billing via receiptIsNonBilling. */ }
+  catch (e) {   // silent-ok: ensureColumns reports its own failure to the failure ledger (rule 174); the write below still proceeds with whatever columns exist. If Non_Billable could not be added, Category (customer_paid / attached_only) still marks the row non-billing via receiptIsNonBilling.
+  }
 
   const addResp = await addRow(env, 'Receipts', {
     WO_ID: wo_id || '', Property_ID: property_id || '', Amount: amt.toFixed(2), Description: description||'', Store: store||'',
@@ -8880,7 +8881,7 @@ async function ownerApprovalRespond(env, callerRole, callerSessionId, body) {
   const s = scopes.find(r => String(r.ID) === scopeId);
   const prop = s ? props.find(p => String(p.ID) === String(s.Property_ID)) : null;
   const deny = async (status, error, why) => {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_denied', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `owner=${ownerId} scope=${scopeId.slice(0, 40)} ${why}`.slice(0, 480) }); } catch (e) { console.error('owner_approval_denied telemetry failed:', schedErrText(e)); }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_denied', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `owner=${ownerId} scope=${scopeId.slice(0, 40)} ${why}`.slice(0, 480) }); } catch (e) { console.error('owner_approval_denied telemetry failed:', schedErrText(e)); }   // silent-ok: the caller already returns the 403, this is only the audit trail
     return json({ error }, status);
   };
   if (!s || !prop || String(prop.Owner_ID || '') !== String(ownerId) || String(s.Active || '').toUpperCase() === 'FALSE' || !String(s.Sent_Date || '').trim()) return await deny(403, 'Forbidden', 'not this owner\'s sent proposal');
@@ -8899,11 +8900,11 @@ async function ownerApprovalRespond(env, callerRole, callerSessionId, body) {
     await ensureColumns(env, 'Scopes', OWNER_APPROVAL_RESPONSE_COLS);
     await updateRowVerified(env, 'Scopes', scopeId, { Owner_Response: wanted, Owner_Response_At: nowIso, Owner_Response_By: name, Owner_Response_Text: text, Owner_Response_Alerted: '' });
   } catch (e) {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_save_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `owner=${ownerId} scope=${scopeId} ${schedErrText(e)}`.slice(0, 480) }); } catch (te) { console.error('owner_approval_save_failed telemetry failed:', schedErrText(te)); }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_save_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `owner=${ownerId} scope=${scopeId} ${schedErrText(e)}`.slice(0, 480) }); } catch (te) { console.error('owner_approval_save_failed telemetry failed:', schedErrText(te)); }   // silent-ok: the owner is already told it was not saved, this is only the audit trail
     return json({ error: 'Not saved, try again.', saved: false }, 500);   // no text is sent for an answer that was not saved
   }
   // history row (the owner's answer, who typed it, when)
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_' + wanted, Skill_Or_Endpoint: '/owner/approval/respond', Success: 'TRUE', Notes: `owner=${ownerId} scope=${scopeId} by=${name}`.slice(0, 480) }); } catch (e) { console.error('owner_approval history telemetry failed:', schedErrText(e)); }
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_' + wanted, Skill_Or_Endpoint: '/owner/approval/respond', Success: 'TRUE', Notes: `owner=${ownerId} scope=${scopeId} by=${name}`.slice(0, 480) }); } catch (e) { console.error('owner_approval history telemetry failed:', schedErrText(e)); }   // silent-ok: history row only, the answer itself was saved and read back above
   // Now, and only now, tell Brett. The saved response is the flag the Hub shows; it does not depend on this text.
   let alert;
   try {
@@ -8913,8 +8914,14 @@ async function ownerApprovalRespond(env, callerRole, callerSessionId, body) {
     const sent = !!(r && (r.sent || r.held_for_quiet_hours || ((env.__STAGING__ ?? false) && r.send_ok)));
     alert = sent ? { sent: true, held: !!(r && r.held_for_quiet_hours) } : { sent: false, reason: (r && !r.send_ok) ? `blocked: ${r.gate_snapshot}` : 'the text did not go through' };
   } catch (e) { alert = { sent: false, reason: schedErrText(e).slice(0, 200) }; }
-  if (alert.sent) { try { await updateRow(env, 'Scopes', scopeId, { Owner_Response_Alerted: new Date(Date.now()).toISOString() }); } catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_alert_mark_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `scope=${scopeId} ${schedErrText(e)}`.slice(0, 480) }); } catch (_) { console.error('owner_approval_alert_mark_failed telemetry failed:', schedErrText(e)); } } }
-  if (!alert.sent) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_alert_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `scope=${scopeId} ${alert.reason}`.slice(0, 480) }); } catch (e) { console.error('owner_approval_alert_failed telemetry failed:', schedErrText(e)); } }
+  if (alert.sent) { try { await updateRow(env, 'Scopes', scopeId, { Owner_Response_Alerted: new Date(Date.now()).toISOString() }); } catch (e) {
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'owner_approval_alert_mark', ref: 'Scope ' + scopeId, severity: 'P2', message: 'Brett was texted about the owner answer on scope ' + scopeId + ' but the text-sent mark did not save, so a retry could text him again: ' + schedErrText(e) });
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_alert_mark_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `scope=${scopeId} ${schedErrText(e)}`.slice(0, 480) }); } catch (_) { console.error('owner_approval_alert_mark_failed telemetry failed:', schedErrText(e)); }   // silent-ok: already reported to the failure ledger just above
+  } }
+  if (!alert.sent) {
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'owner_approval_alert', ref: 'Scope ' + scopeId, severity: 'P2', message: 'An owner answered an estimate (scope ' + scopeId + ') and it saved, but Brett was not texted: ' + String(alert.reason || 'unknown').slice(0, 200) });
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_alert_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `scope=${scopeId} ${alert.reason}`.slice(0, 480) }); } catch (e) { console.error('owner_approval_alert_failed telemetry failed:', schedErrText(e)); }   // silent-ok: already reported to the failure ledger just above
+  }
   return json({ ok: true, saved: true, state: wanted === 'declined' ? 'declined' : 'waiting', alerted: !!alert.sent });
 }
 
@@ -9375,7 +9382,10 @@ async function triageWorkOrder(env, woId, wo, source) {
   const cfg = await fetchConfig(env);
   if (!triageEnabled(cfg)) return { skipped: 'off' };
   const kw = triageParseKeywords(triageCfgGet(cfg, 'Triage_Keywords'));
-  if (kw && kw.error) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage_config_bad', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'FALSE', Notes: kw.error.slice(0, 300) }); } catch (te) { console.error('triage_config_bad telemetry failed:', schedErrText(te)); } }
+  if (kw && kw.error) {
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'triage_config_bad', ref: 'Config Triage_Keywords', severity: 'P2', message: 'The Triage_Keywords setting could not be read, so the built-in urgent and cosmetic words were used: ' + String(kw.error).slice(0, 200) });
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage_config_bad', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'FALSE', Notes: kw.error.slice(0, 300) }); } catch (te) { console.error('triage_config_bad telemetry failed:', schedErrText(te)); }   // silent-ok: already reported to the failure ledger just above
+  }
   const sla = triageSla(cfg, env);
   const nowMs = Date.now();
   const r = triageByRules(wo.description, wo.trade, new Date(nowMs), (kw && !kw.error) ? kw : null);
@@ -9390,8 +9400,8 @@ async function triageWorkOrder(env, woId, wo, source) {
   if (raise) fields.Priority = 'urgent';   // never lowered; only an Emergency raises it
   await ensureColumns(env, 'Work_Orders', TRIAGE_COLS);
   await updateRowVerified(env, 'Work_Orders', woId, fields);   // writes, re-reads, and throws if the row did not keep it
-  if (raise) { try { await logWOAudit(env, woId, 'triage', 'system', 'Priority', priority, 'urgent', 'Raised by triage (matched: ' + r.matched.join(', ') + ')'); } catch (e) { try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'wo_triage_audit', ref: 'WO ' + woId, severity: 'P2', message: 'Triage raised Priority to urgent on ' + woId + ' but the audit row did not save: ' + schedErrText(e) }); } catch (_) { console.error('triage audit failed:', schedErrText(e)); } } }
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'TRUE', Notes: `wo=${woId} tier=${r.tier} source=${fields.Triage_Source} matched=${r.matched.length}${raise ? ' priority_raised' : ''}`.slice(0, 300) }); } catch (te) { console.error('triage telemetry failed:', schedErrText(te)); }
+  if (raise) { try { await logWOAudit(env, woId, 'triage', 'system', 'Priority', priority, 'urgent', 'Raised by triage (matched: ' + r.matched.join(', ') + ')'); } catch (e) { try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'wo_triage_audit', ref: 'WO ' + woId, severity: 'P2', message: 'Triage raised Priority to urgent on ' + woId + ' but the audit row did not save: ' + schedErrText(e) }); } catch (_) { console.error('triage audit failed:', schedErrText(e)); } } }   // silent-ok: the failure ledger report is the primary path, console is its last resort
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'TRUE', Notes: `wo=${woId} tier=${r.tier} source=${fields.Triage_Source} matched=${r.matched.length}${raise ? ' priority_raised' : ''}`.slice(0, 300) }); } catch (te) { console.error('triage telemetry failed:', schedErrText(te)); }   // silent-ok: success row only, the stamp itself was saved and read back
   return { tier: r.tier, raised: raise, matched: r.matched };
 }
 // What createWorkOrder calls: fail-open, and every failure is visible (failed telemetry row + failure ledger + "Not triaged" in the Hub).
@@ -9399,8 +9409,8 @@ async function triageIntakeSafe(env, woId, wo) {
   try { return await triageWorkOrder(env, woId, wo, 'rules'); }
   catch (e) {
     const why = schedErrText(e).slice(0, 300);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'FALSE', Notes: `wo=${woId} could not triage: ${why}`.slice(0, 480) }); } catch (te) { console.error('triage failure telemetry failed:', schedErrText(te)); }
-    try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'wo_triage', ref: 'WO ' + woId, severity: 'P2', message: 'Work order ' + woId + ' was created but could not be triaged: ' + why }); } catch (re) { console.error('triage reportFailure failed:', schedErrText(re)); }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'FALSE', Notes: `wo=${woId} could not triage: ${why}`.slice(0, 480) }); } catch (te) { console.error('triage failure telemetry failed:', schedErrText(te)); }   // silent-ok: reported to the failure ledger on the next line
+    try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'wo_triage', ref: 'WO ' + woId, severity: 'P2', message: 'Work order ' + woId + ' was created but could not be triaged: ' + why }); } catch (re) { console.error('triage reportFailure failed:', schedErrText(re)); }   // silent-ok: the reporter itself failed, console is the last resort
     return { failed: why };
   }
 }
@@ -9420,7 +9430,7 @@ async function woTriageSet(env, body) {
   if (raise) fields.Priority = 'urgent';
   await ensureColumns(env, 'Work_Orders', TRIAGE_COLS);
   await updateRowVerified(env, 'Work_Orders', woId, fields);
-  try { await logWOAudit(env, woId, 'admin', 'admin', 'Triage_Tier', String(wo.Triage_Tier || ''), tier, 'Tier set by hand' + (reason ? ': ' + reason : '') + (raise ? ' (Priority raised to urgent)' : '')); } catch (e) { try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'wo_triage_audit', ref: 'WO ' + woId, severity: 'P2', message: 'Tier set by hand on ' + woId + ' but the audit row did not save: ' + schedErrText(e) }); } catch (_) { console.error('triage-set audit failed:', schedErrText(e)); } }
+  try { await logWOAudit(env, woId, 'admin', 'admin', 'Triage_Tier', String(wo.Triage_Tier || ''), tier, 'Tier set by hand' + (reason ? ': ' + reason : '') + (raise ? ' (Priority raised to urgent)' : '')); } catch (e) { try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'wo_triage_audit', ref: 'WO ' + woId, severity: 'P2', message: 'Tier set by hand on ' + woId + ' but the audit row did not save: ' + schedErrText(e) }); } catch (_) { console.error('triage-set audit failed:', schedErrText(e)); } }   // silent-ok: the failure ledger report is the primary path, console is its last resort
   return json({ success: true, tier, priority_raised: raise });
 }
 // POST /wo/triage-preview {text, trade} (ADMIN ONLY): shows what the rules would say. Writes nothing.
@@ -27013,7 +27023,7 @@ function qbBatchSubject(r) { return `Receipt — ${r.Store || 'Unknown vendor'} 
 // updateRow does not throw on a missing row / missing column (it returns a JSON error), so a marker write is only believed when it says success.
 async function qbBatchWrite(env, id, fields) {
   const res = await updateRow(env, 'Receipts', id, fields);
-  const j = (res && typeof res.json === 'function') ? await res.json().catch(() => null) : null;
+  const j = (res && typeof res.json === 'function') ? await res.json().catch(() => null) : null;   // silent-ok: a null answer is checked on the next line and throws
   if (!j || j.success !== true || j.message === 'No matching fields') throw new Error('Receipts row ' + id + ' was not updated (' + ((j && (j.error || j.message)) || 'no answer') + ')');
 }
 // Nov 17 2026 (review): the sender re-reads ONE row fresh (cache dropped) right before and right after it claims it. Sheets has no compare-and-set, so this is the

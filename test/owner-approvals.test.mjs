@@ -205,6 +205,9 @@ let link1 = '';
   const r = await call('POST', '/owner/approval/respond', OWN1, { scope_id: 'S1', action: 'question', text: 'Is this covered by warranty?', name: 'Olly' });
   t('text refused (switch off): the answer is still saved and the owner is told it was saved', r.status === 200 && r.json.saved === true && r.json.alerted === false && scopeRow('S1').Owner_Response === 'question' && twilioCalls.length === before, r);
   t('...and the missed text is logged as a FAILED row so it shows up', telem().slice(tb).some(x => x.job === 'owner_approval_alert_failed' && x.ok === 'FALSE'), telem().slice(tb));
+  // Nov 18 2026 (silent-failure audit of #565): a telemetry row alone is not enough; Brett never learned an owner had answered. It must reach the failure ledger.
+  const fev = (store.tabs.get('Failure_Events') || []).slice(1);
+  t('...and it reaches the failure ledger as a P2 (Brett was not told an owner answered)', fev.some(r => r[4] === 'owner_approval_alert' && r[6] === 'P2'), fev);
 }
 
 // 9. wiring tripwires -----------------------------------------------------------------------------------------------------
