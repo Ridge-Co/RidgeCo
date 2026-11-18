@@ -26484,7 +26484,7 @@ async function arReportSetOptIn(env, body) {
   if (!ownerId) return json({ error: 'owner_id required' }, 400);
   const enabled = body && (body.enabled === true || body.enabled === '1' || body.enabled === 'TRUE');
   await ensureTab(env, AR_OPTIN_TAB, AR_OPTIN_COLS);
-  const rows = await fetchTab(env, AR_OPTIN_TAB).catch(() => []);
+  const rows = await fetchTab(env, AR_OPTIN_TAB).catch(e => softFail(env, 'arReportSetOptIn:AR_Report_OptIn', e, { severity: 'P1', source: 'read', ref: ownerId, context: 'the opt-in list read as empty, so a second row may be added for this owner' }).then(() => []));
   const existing = rows.find(r => String(r.Owner_ID) === ownerId);
   const owners = await fetchTab(env, 'Owners');
   const owner = owners.find(o => String(o.ID) === ownerId);
