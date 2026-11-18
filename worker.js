@@ -28459,7 +28459,7 @@ async function woSharedRead(env, url){
   if(!wo) return json({ error:'WO not found' }, 404);
   const vendorRec = vendors.find(v=>v.ID===auth.vid)||{};
   let tradeAccessDefaults = {};
-  try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e){}
+  tradeAccessDefaults = parseJsonCell(config.Access_Trade_Defaults, {}, { env, where: 'woSharedRead:Access_Trade_Defaults', ref: 'Access_Trade_Defaults', severity: 'P1' });
   // NOTE: deliberately NOT passing vendorView:true here — that would also turn on the
   // accept-gate (accessGated), a behavior change to the shared-link flow this task didn't
   // ask for. vendors IS passed so the new per-code "Brett Only" filter (which applies
