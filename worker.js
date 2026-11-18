@@ -28694,7 +28694,7 @@ async function woSharedChecklist(env, body){
   const wos = await fetchTab(env, 'Work_Orders');
   const wo = findWO(wos, auth.wo);
   if(!wo) return json({ error:'WO not found' }, 404);
-  const merged = mergeVendorChecklist(wo.Checklist, body && body.checklist);
+  const merged = mergeVendorChecklist(wo.Checklist, body && body.checklist, env, wo.ID);
   if (!merged.length) return json({ error:'This work order has no checklist.' }, 400);
   const vendors = await fetchTab(env, 'Vendors');
   const vendor = vendors.find(v=>v.ID===auth.vid)||{};
