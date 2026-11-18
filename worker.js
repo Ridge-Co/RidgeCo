@@ -6849,7 +6849,7 @@ async function scopeProposalPhotos(env, s) {
         return { fileId: a.Drive_File_ID || '', url: a.Drive_URL || '', name: a.File_Name || 'photo', isVideo, isViewable: isVideo || isImage };
       })
       .filter(p => p.isViewable && p.fileId);
-  } catch (_) { return []; }
+  } catch (e) { await softFail(env, 'scopeProposalPhotos:Attachments', e, { severity: 'P2', source: 'read', ref: String((s && s.ID) || ''), context: 'the proposal page shows no photos' }); return []; }
 }
 
 // structured per-item/variant view built by scopeProposal() (Proposal_Items_JSON) — HARD RULE:
