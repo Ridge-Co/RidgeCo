@@ -4764,11 +4764,10 @@ async function receiptAttachOnly(env, body) {
   // the QuickBooks receipts inbox like any expense. 'customer_card' (or the older customer_card:true) = the customer's money, never our expense.
   const fixedPrice = String(body.non_billing_reason || '') === 'fixed_price';
   const customerCard = !fixedPrice && (body.customer_card === true || String(body.customer_card).toUpperCase() === 'TRUE' || String(body.non_billing_reason || '') === 'customer_card');
-  if (customerCard) {
-    let _sug = null; try { _sug = JSON.parse(row.Suggestion || 'null'); } catch (e) {} // silent-ok: an unreadable Suggestion just means no scanner category, and the 409 below tells the user
-    const isCcRow = String(row.Manual_Customer_Card || '').toUpperCase() === 'TRUE' || !!(_sug && _sug.category === 'customer_paid');
-    if (!isCcRow) return json({ error: 'This receipt is not marked as paid on a customer\'s card, so it cannot be attached as a customer-card reference.', code: 'not_customer_card' }, 409);
-  }
+  const isCcRow = receiptRowIsCustomerCard(row);
+  if (customerCard && !isCcRow) return json({ error: 'This receipt is not marked as paid on a customer\'s card, so it cannot be attached as a customer-card reference.', code: 'not_customer_card' }, 409);
+  // Review fix (Nov 17): a customer-card row may ONLY be attached as the customer-card reference. Fixed-price or plain attach-only would book the customer's money as a Ridge Co expense (and email it to QuickBooks).
+  if (isCcRow && !customerCard) return json({ error: 'This receipt was paid on a customer\'s card, so it can only be attached as a customer-card reference (not billed, not a Ridge Co expense, not a fixed-price cost).', code: 'customer_card_reference_only', id }, 409);
   const addResp = await addReceipt(env, {
     wo_id, property_id, amount, description, store, date,
     added_by: customerCard ? 'Receipt Reconciler (customer card, reference only)' : fixedPrice ? 'Receipt Reconciler (fixed-price job cost, not billed)' : 'Receipt Reconciler (attach only)', added_by_id: 'receipt-recon-attach-only', role: 'hub',
