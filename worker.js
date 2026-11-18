@@ -12044,7 +12044,7 @@ function woMaxCeiling(wo, estimates, env) {
   const approved = (estimates || [])
     .filter(e => String(e.WO_ID) === String(wo.ID) && ['approved', 'converted'].includes(String(e.Status || '').trim().toLowerCase()))   // 'Converted' = approved and pushed into a proposal
     .sort((a, b) => (parseInt(b.Version || '0') || 0) - (parseInt(a.Version || '0') || 0));
-  return Math.max(max, approved.length ? estimateSubtotalOf(approved[0]) : 0);
+  return Math.max(max, approved.length ? estimateSubtotalOf(approved[0], env) : 0);
 }
 
 function maxPriceMoney(n) { return '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 }); }
