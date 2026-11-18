@@ -9,7 +9,7 @@ Phase 7c, second batch (read fallbacks), of the silent-failure burn-down (`claud
 
 NOT done here (still silent, next batch): `recurTargets` (a corrupt Targets cell on a recurring template reads as "no targets"; five callers need `env` threaded first), `fetchConfig` itself (cannot report a Sheets outage through Sheets; needs a `silent-ok`), the `res.json().catch(() => ({}))` family on money and email sends, and the telemetry sweep.
 
-Tests: new `test/read-fallbacks-failure-reports.test.mjs` (18 checks, source checks plus runs of the real `qbApprovedReceipts`, `scopeProposalPhotos` and `proposalRegistry`). No other test needed a change. Full suite 282 files, 0 failed before the new test was added.
+Tests: new `test/read-fallbacks-failure-reports.test.mjs` (18 checks, source checks plus runs of the real `qbApprovedReceipts`, `scopeProposalPhotos` and `proposalRegistry`). `scope-proposal-photos.test.mjs` gained a `softFail` stub and asserts the failed read is reported at P2 with the scope id. Full suite 285 files, 0 failed.
 
 ## Pre-build gate
 Shapes: `no new surface` (reports go to the existing failure ledger). Defaults taken: C1-C17; no cron; branch from main, PR into main; BUILD_VERSION untouched.
