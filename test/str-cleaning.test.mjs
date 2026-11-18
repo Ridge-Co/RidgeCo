@@ -30,6 +30,7 @@ function makeWorld(opts) {
   const stubs = {
     fetchConfig: async () => Object.assign({}, W.cfg), fetchTab: async (env, tab) => objs(tab), fetchTabs: async (env, ts) => ts.map(x => objs(x)),
     invalidateTabCache: () => {}, json,
+    parseJsonCell: (c, fb) => { if (c === undefined || c === null || String(c).trim() === '') return fb; try { return JSON.parse(c); } catch (e) { return fb; } },   // same contract as the worker helper, minus the report
     sheetsRequest: async (env, method, path, body) => {
       let m;
       if (method === 'GET' && path.startsWith('?fields=')) return { sheets: [...tabs.keys()].map(title => ({ properties: { title } })) };
@@ -66,7 +67,7 @@ function makeWorld(opts) {
   W.stubs = stubs;
   return W;
 }
-const names = ['fetchConfig', 'fetchTab', 'fetchTabs', 'invalidateTabCache', 'json', 'sheetsRequest', 'ensureColumns', 'addRow', 'updateRow', 'setConfigKey', 'logTelemetry', 'getMessageTemplate', 'smsGatedSend', 'sendSMS', 'gmailSendEmail', 'gmailSendEmailWithAttachment', 'inspCalStaged', 'getCalendarAccessToken', 'inspStrReadIcs', 'inspStrReadGoogle', 'schedStep', 'schedErrText', 'isStaging', 'normalizePhone', 'inspRandToken', '_utf8B64url', 'BUILD_VERSION', 'PORTAL_BASE', 'CORS', 'fetch'];
+const names = ['parseJsonCell', 'fetchConfig', 'fetchTab', 'fetchTabs', 'invalidateTabCache', 'json', 'sheetsRequest', 'ensureColumns', 'addRow', 'updateRow', 'setConfigKey', 'logTelemetry', 'getMessageTemplate', 'smsGatedSend', 'sendSMS', 'gmailSendEmail', 'gmailSendEmailWithAttachment', 'inspCalStaged', 'getCalendarAccessToken', 'inspStrReadIcs', 'inspStrReadGoogle', 'schedStep', 'schedErrText', 'isStaging', 'normalizePhone', 'inspRandToken', '_utf8B64url', 'BUILD_VERSION', 'PORTAL_BASE', 'CORS', 'fetch'];
 const exportsList = ['strBuildTasks', 'strReplyWindow', 'strReplyDeadlineMs', 'strInSendWindow', 'strBrettSmsOk', 'strNextCleaner', 'strDesiredCalendar', 'strPlanCalendar', 'strCalBody', 'strIcs', 'strExternalCover', 'strSettings', 'strDaysBetween', 'strFmtDate', 'strNextDate', 'strTick', 'strCleanerPage', 'strOfferRespond', 'strCleanerMark', 'strCleanerCancel', 'strCleanerIcs', 'strAdminState', 'strAdminCleanerSave', 'strAdminAssign', 'strAdminOfferNow', 'strAdminConfig', 'strAdminAlertAck', 'strAdminPreview', 'strRunDigest', 'strBackupLine', 'strBackupPicture', 'schedRunStrCleaning', 'schedRunStrDigest', 'STR_DEFAULT_TEXTS', 'STR_BLOCK_TITLE', 'inspStrCleaningKind', 'inspEtWallToMs', 'inspEtDate', 'inspAddDays', 'strSystemAlert', 'strAdminCancelDecision', 'strPreLookback', 'strIsHeld', 'strWhyGone'];
 function build(W) {
   const F = new Function(...names, realFns + '\n' + realConsts + '\n' + block + '\nreturn {' + exportsList.join(',') + '};');

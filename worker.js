@@ -3963,7 +3963,7 @@ async function receiptCustomerCards(env) {
 // Fail CLOSED: a list that cannot be read comes back empty and is named in `errors`, so card status shows as unknown
 // (never "mine") and the rules path never auto-confirms; the page shows the errors instead of hiding them.
 function receiptCardListFromCfg(v) { return Array.from(new Set(String(v || '').split(',').map(s => s.replace(/\D/g, '').slice(-4)).filter(s => s.length === 4))); }
-function receiptCardLabelsFromCfg(v) { try { const o = JSON.parse(String(v || '{}')); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; } catch (e) { return {}; } }
+function receiptCardLabelsFromCfg(v, env) { const o = parseJsonCell(v, {}, { env, where: 'receiptCardLabelsFromCfg', ref: 'receipt_card_labels', severity: 'P2' }); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; }
 async function receiptAccuracyCtx(env, cfgIn, opts) {
   opts = opts || {};
   const ctx = { units: [], myCards: [], custCards: [], labels: {}, vendorInvoiceNames: RECEIPT_VENDOR_INVOICE_NAMES_DEFAULT, errors: [] };
@@ -3971,7 +3971,7 @@ async function receiptAccuracyCtx(env, cfgIn, opts) {
   if (!cfg) { try { cfg = await fetchConfig(env); } catch (e) { cfg = {}; ctx.errors.push('Config: ' + schedErrText(e)); } }
   ctx.myCards = receiptCardListFromCfg(cfg.receipt_my_cards);
   ctx.custCards = String(env.RECEIPT_CUSTOMER_CARDS || cfg.receipt_customer_cards || '').split(',').map(s => s.replace(/\D/g, '').slice(-4)).filter(Boolean);
-  ctx.labels = receiptCardLabelsFromCfg(cfg.receipt_card_labels);
+  ctx.labels = receiptCardLabelsFromCfg(cfg.receipt_card_labels, env);
   const names = String(cfg.receipt_vendor_invoice_names || '').split(/[,;\n]/).map(s => s.trim()).filter(Boolean);
   if (names.length) ctx.vendorInvoiceNames = names;
   if (!opts.noUnits) { try { ctx.units = await fetchTab(env, 'Units'); } catch (e) { ctx.errors.push('Units: ' + schedErrText(e)); } }
@@ -5292,13 +5292,13 @@ async function receiptCardsChange(env, body) {
   const cust = (owner === 'customer' && custOld.includes(l4)) ? custOld.slice() : custOld.filter(x => x !== l4);
   if (owner === 'mine' && !mine.includes(l4)) mine.push(l4);
   if (owner === 'customer' && !cust.includes(l4)) cust.push(l4);
-  const labels = receiptCardLabelsFromCfg(cfg.receipt_card_labels);
+  const labels = receiptCardLabelsFromCfg(cfg.receipt_card_labels, env);
   if (owner === 'remove') delete labels[l4];
   else if (body.label !== undefined) { const lab = String(body.label || '').trim().slice(0, 40); if (lab) labels[l4] = lab; else delete labels[l4]; }
   const writes = [];
   if (mine.join(',') !== mineOld.join(',')) writes.push(['receipt_my_cards', mine.join(',')]);
   if (cust.join(',') !== custOld.join(',')) writes.push(['receipt_customer_cards', cust.join(',')]);
-  const labOld = JSON.stringify(receiptCardLabelsFromCfg(cfg.receipt_card_labels)), labNew = JSON.stringify(labels);
+  const labOld = JSON.stringify(receiptCardLabelsFromCfg(cfg.receipt_card_labels, env)), labNew = JSON.stringify(labels);
   if (labOld !== labNew) writes.push(['receipt_card_labels', labNew]);
   for (const [key, value] of writes) {
     const r = await setConfigKey(env, { key, value });
@@ -5695,7 +5695,7 @@ async function scopeClaude(env, prompt, media, maxTokens) {
   const { data } = await anthropicMessages(env, { model: 'claude-sonnet-4-6', max_tokens: maxTokens || 1200, messages: [{ role: 'user', content }] }, { source: 'scopeClaude' });   // Oct 16 2026: guarded call (credit pause); throws AiCreditPausedError
   return (data.content && data.content[0] && data.content[0].text || '').trim();
 }
-function scopeParseJSON(txt) { try { return JSON.parse(String(txt).replace(/^```json?/i, '').replace(/```$/, '').trim()); } catch (_) { return null; } }
+function scopeParseJSON(txt) { try { return JSON.parse(String(txt).replace(/^```json?/i, '').replace(/```$/, '').trim()); } catch (_) { return null; } }   // silent-ok: callers treat null as an unreadable model answer and tell the user or keep the original wording
 
 // OCR an uploaded/drive image or PDF of hand-written notes → verbatim transcription text.
 async function scopeOcr(env, bytes, mime) {
@@ -5796,7 +5796,7 @@ async function scopeGet(env, url) {
   const id = url.searchParams.get('id'); if (!id) return json({ error: 'id required' }, 400);
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
-  let srcs = []; try { srcs = JSON.parse(s.Source_Refs || '[]'); } catch (_) {}
+  let srcs = parseJsonCell(s.Source_Refs, [], { env, where: 'scopeGet:Source_Refs', ref: String(s.ID || ''), severity: 'P2' }); if (!Array.isArray(srcs)) srcs = [];
   return json(Object.assign({}, s, { line_items: scopeParseItems(s), source_refs: srcs }));
 }
 
@@ -5831,7 +5831,7 @@ async function scopeIngest(env, body) {
     return json({ error: 'ingest failed: ' + (e.message || e) }, 500);
   }
   const raw = s.Raw_Input ? (s.Raw_Input + '\n\n' + added) : added;
-  let srcs = []; try { srcs = JSON.parse(s.Source_Refs || '[]'); } catch (_) {}
+  let srcs = parseJsonCell(s.Source_Refs, [], { env, where: 'scopeIngest:Source_Refs', ref: String(s.ID || ''), severity: 'P2' }); if (!Array.isArray(srcs)) srcs = [];
   srcs.push({ type, label, ts: new Date().toISOString(), chars: added.length });
   await updateRow(env, 'Scopes', id, { Raw_Input: raw, Source_Refs: JSON.stringify(srcs).slice(0, 8000), Updated_Date: new Date().toISOString() });
   return json({ success: true, extracted: added, raw_input: raw });
@@ -9365,9 +9365,9 @@ function triageParseKeywords(s) {
 }
 function triageCfgGet(cfg, key) { return String((cfg && (cfg[key] !== undefined ? cfg[key] : cfg[key.toLowerCase()])) || '').trim(); }
 function triageEnabled(cfg) { return triageCfgGet(cfg, 'Triage_Enabled').toUpperCase() === 'TRUE'; }
-function triageSla(cfg) {
+function triageSla(cfg, env) {
   const out = { ...TRIAGE_SLA_DEFAULT }; const s = triageCfgGet(cfg, 'Triage_SLA_Hours'); if (!s) return out;
-  try { const j = JSON.parse(s); for (const k of TRIAGE_TIERS) { const v = parseFloat(j && j[k]); if (isFinite(v) && v > 0) out[k] = v; } } catch (_) { /* a bad value keeps the defaults; triageWorkOrder reports it */ }
+  { const j = parseJsonCell(s, null, { env, where: 'triageSla:Triage_SLA_Hours', ref: 'Triage_SLA_Hours', severity: 'P2' }); if (j && typeof j === 'object') for (const k of TRIAGE_TIERS) { const v = parseFloat(j[k]); if (isFinite(v) && v > 0) out[k] = v; } }   // a bad value keeps the defaults and is now reported
   return out;
 }
 // Stamps one NEW work order. Called only from createWorkOrder when body.__triage is set; the caller wraps it so a failure here never fails the work order.
@@ -9376,7 +9376,7 @@ async function triageWorkOrder(env, woId, wo, source) {
   if (!triageEnabled(cfg)) return { skipped: 'off' };
   const kw = triageParseKeywords(triageCfgGet(cfg, 'Triage_Keywords'));
   if (kw && kw.error) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage_config_bad', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'FALSE', Notes: kw.error.slice(0, 300) }); } catch (te) { console.error('triage_config_bad telemetry failed:', schedErrText(te)); } }
-  const sla = triageSla(cfg);
+  const sla = triageSla(cfg, env);
   const nowMs = Date.now();
   const r = triageByRules(wo.description, wo.trade, new Date(nowMs), (kw && !kw.error) ? kw : null);
   const priority = String(wo.priority || 'normal').toLowerCase();
@@ -9411,7 +9411,7 @@ async function woTriageSet(env, body) {
   if (!TRIAGE_TIERS.includes(tier)) return json({ error: 'tier must be one of ' + TRIAGE_TIERS.join(', ') }, 400);
   const wo = findWO(await fetchTab(env, 'Work_Orders'), woId);
   if (!wo) return json({ error: 'Work order not found' }, 404);
-  const cfg = await fetchConfig(env), sla = triageSla(cfg);
+  const cfg = await fetchConfig(env), sla = triageSla(cfg, env);
   const base = Date.parse(wo.Created_Date || '') || Date.now();
   const nowIso = new Date(Date.now()).toISOString();
   const fields = { Triage_Tier: tier, Triage_Emergency: tier === 'Emergency' ? 'TRUE' : 'FALSE', Triage_Source: 'manual', Triage_Set_By: 'admin', Triage_At: nowIso,
@@ -9427,7 +9427,7 @@ async function woTriageSet(env, body) {
 async function woTriagePreview(env, body) {
   const cfg = await fetchConfig(env), kw = triageParseKeywords(triageCfgGet(cfg, 'Triage_Keywords'));
   const r = triageByRules(body && body.text, body && body.trade, new Date(), (kw && !kw.error) ? kw : null);
-  return json({ success: true, ...r, due_in_hours: triageSla(cfg)[r.tier], enabled: triageEnabled(cfg), keywords_error: kw && kw.error ? kw.error : '' });
+  return json({ success: true, ...r, due_in_hours: triageSla(cfg, env)[r.tier], enabled: triageEnabled(cfg), keywords_error: kw && kw.error ? kw.error : '' });
 }
 // ── END SEVERITY TRIAGE ──────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -12271,7 +12271,7 @@ async function vendorWorkorders(env, url, callerRole, callerSessionId) {
     ]);
   }
   let tradeAccessDefaults = {};
-  try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e) {}
+  tradeAccessDefaults = parseJsonCell(config.Access_Trade_Defaults, {}, { env, where: 'vendorWorkorders:Access_Trade_Defaults', ref: 'Access_Trade_Defaults', severity: 'P1' });
   // Voided is never shown to a vendor, regardless of include_closed — it isn't a closed
   // status a vendor should be able to page back to, it's a job that shouldn't have existed.
   const wos = workorders.filter(w => w.Vendor_ID === vendorId && w.Voided !== 'TRUE' && String(w.Addon_Status || '') !== 'Draft' && !(String(w.Type || '') === 'addon' && String(w.Parent_WO_ID || '').trim() && String(w.Approval_Stage || '') !== 'Approved') && (includeClosed || OPEN_WO_STATUSES.includes(w.Status)));
@@ -21840,7 +21840,7 @@ async function processRecurringWorkOrders(env, opts) {
   for (const tpl of templates) {
     const due = recurLatestDue(tpl, today);
     if (!due) continue;
-    let skips = {}; try { skips = JSON.parse(tpl.Last_Skips || '{}') || {}; } catch (_) {}
+    let skips = {}; skips = parseJsonCell(tpl.Last_Skips, {}, { env, where: 'processRecurringWorkOrders:Last_Skips', ref: String(tpl.ID || ''), severity: 'P1' }) || {};
     let skipsChanged = false, postedAny = false;
     for (const target of recurTargets(tpl)) {
       const key = recurTargetKey(target);
@@ -22982,7 +22982,7 @@ async function routeAICall(env, tier, job) {
 // which routes actually need stricter checks (don't over-build ahead of data).
 function routeAIValid(attempt, job) {
   if (!attempt || attempt.error || !attempt.text || !String(attempt.text).trim()) return false;
-  if (job.schema) { try { JSON.parse(String(attempt.text).replace(/^```json?/i, '').replace(/```$/, '').trim()); } catch (_) { return false; } }
+  if (job.schema) { try { JSON.parse(String(attempt.text).replace(/^```json?/i, '').replace(/```$/, '').trim()); } catch (_) { return false; } }   // silent-ok: a model answer that is not valid JSON is the validity result, and routeAI records it and escalates
   return true;
 }
 
@@ -26909,7 +26909,7 @@ async function backfillItemsSummary(env, opts) {
   let updated = 0; const failed = []; let paused = false;
   for (const r of batch) {
     try {
-      let items = []; try { items = JSON.parse(r.Items || '[]'); } catch (e) { /* silent-ok: a row whose Items JSON is unreadable is reported just below as "empty summary returned" */ }
+      const items = parseJsonCell(r.Items, [], { env, where: 'backfillItemsSummary:Items', ref: String(r.ID || ''), severity: 'P2' });
       const summary = await summarizeItemsCheap(env, items);
       if (summary.length) { await updateRow(env, 'Receipt_Recon_Queue', r.ID, { Items_Summary: JSON.stringify(summary) }); updated++; }
       else failed.push({ id: r.ID, error: 'empty summary returned' });
@@ -28277,7 +28277,7 @@ async function approveReceiptQueue(env, body) {
     } catch (e) { /* filing best-effort — still mark reviewed */ }
   }
   await updateRow(env, 'Receipts_Queue', id, { Vendor: vendor, Receipt_Date: date, Total: String(total), Category: category, Suggested_WO_ID: woId, Suggested_Property_ID: propId, Status: 'filed', Filed_File_URL: filedUrl });
-  try { const vk = String(vendor || '').toLowerCase().trim(); if (vk && category) { const d = JSON.parse(cfg.receipt_vendor_defaults || '{}'); d[vk] = category; await setConfigKey(env, { key: 'receipt_vendor_defaults', value: JSON.stringify(d) }); } } catch (e) {}
+  try { const vk = String(vendor || '').toLowerCase().trim(); if (vk && category) { const d = JSON.parse(cfg.receipt_vendor_defaults || '{}'); d[vk] = category; await setConfigKey(env, { key: 'receipt_vendor_defaults', value: JSON.stringify(d) }); } } catch (e) { await softFail(env, 'approveReceiptQueue:learn_vendor_default', e, { severity: 'P2', ref: String(id), source: 'parse' }); }
   return json({ ok: true, id, filed: filedUrl || null, category });
 }
 
@@ -28459,7 +28459,7 @@ async function woSharedRead(env, url){
   if(!wo) return json({ error:'WO not found' }, 404);
   const vendorRec = vendors.find(v=>v.ID===auth.vid)||{};
   let tradeAccessDefaults = {};
-  try { tradeAccessDefaults = JSON.parse(config.Access_Trade_Defaults || '{}'); } catch(e){}
+  tradeAccessDefaults = parseJsonCell(config.Access_Trade_Defaults, {}, { env, where: 'woSharedRead:Access_Trade_Defaults', ref: 'Access_Trade_Defaults', severity: 'P1' });
   // NOTE: deliberately NOT passing vendorView:true here — that would also turn on the
   // accept-gate (accessGated), a behavior change to the shared-link flow this task didn't
   // ask for. vendors IS passed so the new per-code "Brett Only" filter (which applies
@@ -31777,7 +31777,7 @@ async function hubTestWriteAllowed(env, path, body) {
     // Config value outranks the env secret in qbAccessToken. Empty string only - never writes a token.
     if (_k === 'QB_REFRESH_TOKEN') return _b.value === '';
     if (!['pricing_config', 'Access_Trade_Defaults', 'US_HOLIDAYS', 'STR_GUARD_FIXTURE', 'STR_GUARD_NOTIFIED'].includes(_k)) return false;
-    if (_k === 'pricing_config') { try { return !!JSON.parse(String(_b.value || '')); } catch (_) { return false; } }
+    if (_k === 'pricing_config') { try { return !!JSON.parse(String(_b.value || '')); } catch (_) { return false; } }   // silent-ok: an unreadable pricing_config value is refused, which is the intended result of this check
     return typeof _b.value === 'string' && _b.value.length < 5000;
   }
   // Sep 30 2026: staging QuickBooks is an Intuit SANDBOX company (see qbBase), so /qb/* writes can no longer
@@ -42238,7 +42238,7 @@ function inspStrDayText(c, label) {
 }
 function inspStrConfig(env, cfg) {
   const staged = !!(env.__STAGING__ ?? isStaging(env));
-  let fixture = null; if (staged && cfg && cfg.STR_GUARD_FIXTURE) { try { fixture = JSON.parse(cfg.STR_GUARD_FIXTURE); } catch (e) { console.error('insp: STR_GUARD_FIXTURE is not valid JSON:', e && e.message); } }
+  let fixture = null; if (staged && cfg && cfg.STR_GUARD_FIXTURE) { fixture = parseJsonCell(cfg.STR_GUARD_FIXTURE, null, { env, where: 'inspStrConfig:STR_GUARD_FIXTURE', ref: 'STR_GUARD_FIXTURE', severity: 'P2' }); }
   const rawSources = String((cfg && cfg.STR_GUARD_BOOKING_SOURCES) || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
   const cleaningCal = String((cfg && cfg.STR_GUARD_CLEANING_CAL) || '').trim();
   // The cleaning calendar can never be the bookings feed: its "Gina Cleaning" / "Kayla N/A" entries would be read as guest stays and close
@@ -46833,9 +46833,9 @@ function fiNormalizeIssues(arr) {
 }
 function fiExtractJson(text) {
   const s = String(text || '').replace(/^```json?/i, '').replace(/```\s*$/, '').trim();
-  try { return JSON.parse(s); } catch (_) { /* fall through to brace scan */ }
+  try { return JSON.parse(s); } catch (_) { /* fall through to brace scan */ }   // silent-ok: model text is often not pure JSON, so the brace scan below tries next
   const a = s.indexOf('{'), b = s.lastIndexOf('}');
-  if (a >= 0 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; } }
+  if (a >= 0 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; } }   // silent-ok: text from a model or web page that is not JSON is expected, the caller treats null as no data
   return null;
 }
 // Visit details + per-area "No access" (Oct 27 2026). Both are optional and stored on the doc as-is; these only bound their shape/size.
@@ -47825,7 +47825,7 @@ function fiResolveUrl(href, base) { try { const u = new URL(String(href || '').t
 function fiLdNodes(html) {
   const nodes = []; const re = /<script[^>]+type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi; let m;
   const walk = (v, depth) => { if (!v || depth > 6) return; if (Array.isArray(v)) { v.forEach(x => walk(x, depth + 1)); return; } if (typeof v !== 'object') return; nodes.push(v); if (v['@graph']) walk(v['@graph'], depth + 1); };
-  while ((m = re.exec(html))) { try { walk(JSON.parse(m[1].trim()), 0); } catch (_) { /* a malformed JSON-LD block is simply skipped; other signals are still used */ } }
+  while ((m = re.exec(html))) { try { walk(JSON.parse(m[1].trim()), 0); } catch (_) { /* a malformed JSON-LD block is skipped */ } }   // silent-ok: a malformed JSON-LD block on an outside web page is skipped, other signals are still used
   return nodes;
 }
 // Pure: HTML text -> what we could find. No network.
