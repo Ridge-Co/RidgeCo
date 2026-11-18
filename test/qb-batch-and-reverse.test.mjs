@@ -260,6 +260,67 @@ console.log('send time = midnight Eastern (Brett, Nov 17 2026)');
   ok(/function qbbClock\(at\)/.test(readFileSync(join(here, '..', 'receipt-reconciler.html'), 'utf8')) && /\(midnight\)/.test(readFileSync(join(here, '..', 'receipt-reconciler.html'), 'utf8')), 'the page words 00:00 as "12:00 AM (midnight)"');
 }
 
+console.log('review fixes: re-check + claim token, races, quarantine, DST');
+{
+  // reverse / void between the batch read and the claim -> never emailed
+  const w = world(); const a = w.addRcpt({ Store: 'Menards', Amount: '7.00' }), b = w.addRcpt({ Store: 'Lowes', Amount: '8.00' });
+  w.flags.onRead = (n, tabs) => { if (n === 2) { const r = tabs.Receipts.find(x => x.ID === a); r.Active = 'FALSE'; r.QB_Reversed_Date = '2026-11-18'; } };
+  const r = await w.call('sendReceiptsToQBEmail', { release: true });
+  ok(r.sent === 1 && w.sent.length === 1 && /Lowes/.test(w.sent[0].subject), 'a receipt voided/reversed after the batch was read is NOT emailed (the healthy one still goes)');
+  ok(r.skipped.length === 1 && String(r.skipped[0].id) === a && row(w, a).QB_Email_Sent === 'FALSE', 'it is reported as skipped (already handled), never sent');
+}
+{
+  // held in the meantime
+  const w = world(); const a = w.addRcpt({});
+  w.flags.onRead = (n, tabs) => { if (n === 2) tabs.Receipts[0].QB_Batch_Status = 'held'; };
+  const r = await w.call('sendReceiptsToQBEmail', { release: true });
+  ok(r.sent === 0 && w.sent.length === 0 && row(w, a).QB_Batch_Status === 'held', 'a receipt put on hold after the batch was read is not sent');
+}
+{
+  // someone else took the claim (second sender in another isolate): we see their token, we do not email
+  const w = world(); const a = w.addRcpt({});
+  w.flags.onRead = (n, tabs) => { if (n === 3) tabs.Receipts[0].QB_Batch_Error = 'claim:someoneelse'; };
+  const r = await w.call('sendReceiptsToQBEmail', { release: true });
+  ok(r.sent === 0 && w.sent.length === 0 && r.skipped.length === 1 && /lost the claim/.test(r.skipped[0].reason), 'a lost claim (read-back does not show our token) is skipped, never sent');
+  const w2 = world(); w2.addRcpt({});
+  w2.flags.onRead = (n, tabs) => { if (n === 3) tabs.Receipts[0].Active = 'FALSE'; };
+  const r2 = await w2.call('sendReceiptsToQBEmail', { release: true });
+  ok(r2.sent === 0 && w2.sent.length === 0, 'voided between the claim write and the read-back: not sent');
+}
+{
+  // two overlapping sends / double tap on Send batch now -> one email
+  const w = world(); w.addRcpt({ Store: 'Home Depot', Amount: '31.00' });
+  const [x, y] = await Promise.all([w.call('sendReceiptsToQBEmail', { release: true, manual: true }), w.call('sendReceiptsToQBEmail', { release: true, manual: true })]);
+  ok(w.sent.length === 1 && x.sent + y.sent === 1, 'two overlapping Send batch now taps email the receipt exactly once');
+  const w2 = world(); w2.addRcpt({}); w2.addRcpt({ Store: 'Menards' });
+  const rs = await Promise.all([1, 2, 3].map(() => w2.call('sendReceiptsToQBEmail', { release: true })));
+  ok(w2.sent.length === 2 && new Set(w2.sent.map(m => m.subject)).size === 2, 'three overlapping batch runs email each receipt once');
+  ok(w.all.qbBatchClaimHeld({ Active: 'TRUE', QB_Batch_Status: 'sending', QB_Batch_Error: 'claim:a' }, 'claim:a') && !w.all.qbBatchClaimHeld({ Active: 'TRUE', QB_Batch_Status: 'sending', QB_Batch_Error: 'claim:b' }, 'claim:a') && !w.all.qbBatchStillDue({ Active: 'TRUE', QB_Reversed_Date: '2026-11-18' }, {}), 'claim / still-due checks (pure)');
+}
+{
+  // quarantine: failing rows do not stall the healthy ones behind them
+  const w = world(); const bad = ['Bad1', 'Bad2', 'Bad3'].map(n => w.addRcpt({ Store: n, Amount: '1.00' })); const good = w.addRcpt({ Store: 'Good', Amount: '2.00' });
+  for (const n of ['Bad1', 'Bad2', 'Bad3']) w.flags.failSendFor.add('Receipt — ' + n + ' — $1.00');
+  const s1 = await w.call('schedRunDailyReceiptsPost');
+  ok(s1.partial === true && s1.progress_made === true && s1.ok === true && !s1.no_retry, 'a first slice with zero sends and only failures does NOT stall: the failed rows are quarantined for the day and the job continues');
+  ok(bad.every(id => row(w, id).QB_Batch_Status === 'failed') && w.reports.filter(x => x.where === 'qb_batch.send').length === 3, 'each failure is marked failed and in the ledger (P1)');
+  const s2 = await w.call('schedRunDailyReceiptsPost');
+  ok(row(w, good).QB_Email_Sent === 'TRUE' && w.sent.length === 1, 'the next slice sends the healthy receipt behind the failures');
+  ok(s2.ok === false && s2.errors.some(e => /3 receipt\(s\) failed to send/.test(e.error)), 'and the finishing slice still reports the 3 earlier failures (job red, nothing dropped)');
+}
+{
+  // no progress at all (claim cannot be saved) still stops with an error
+  const w = world({ missingCols: true }); for (let i = 0; i < 5; i++) w.addRcpt({ Amount: String(i + 1) + '.00' });
+  const s = await w.call('schedRunDailyReceiptsPost');
+  ok(s.ok === false && !s.partial && s.no_retry === true, 'if nothing can be sent or quarantined the job stops with an error (no endless loop)');
+}
+{
+  const w = world();
+  ok(w.all.qbBatchEtDayMinutes('2026-03-08') === 1380 && w.all.qbBatchEtDayMinutes('2026-11-01') === 1500 && w.all.qbBatchEtDayMinutes('2026-11-18') === 1440, 'ET day length: 23 h on spring-forward, 25 h on fall-back, 24 h otherwise');
+  const hh = w.all.qbBatchHoursUntil;
+  ok(hh({ date: '2026-11-01', minutes: 22 * 60, dayMinutes: 1500 }, '00:00', '2026-11-01') === 3 && hh({ date: '2026-03-08', minutes: 22 * 60, dayMinutes: 1380 }, '00:00', '2026-03-08') === 1, 'hours until the midnight send on a DST day uses the real day length (3 h on fall-back, 1 h on spring-forward)');
+}
+
 console.log('wiring');
 ok(/\/receipts\/qb-batch'\)\s+return await qbBatchList\(env\)/.test(src) && /'\/receipts\/qb-batch\/send-now'\) return await sendReceiptsToQBEmail\(env, \{ limit: body && body.limit, ids: body && body.ids, release: true, manual: true \}\)/.test(src), 'list and send-now are routed (send-now passes release:true)');
 ok(/'\/receipts\/qb-batch\/action'\) return await qbBatchAction/.test(src) && /'\/receipts\/qb-batch\/delete-done'\) return await qbBatchDeleteDone/.test(src), 'action and delete-done are routed');
