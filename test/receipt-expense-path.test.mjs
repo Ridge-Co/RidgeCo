@@ -48,7 +48,7 @@ function world() {
     ensureColumns: async () => {},
     updateRow: async (env, t, id, fields) => { updates.push({ t, id, fields }); const r = (tabs[t] || []).find(x => String(x.ID) === String(id)); if (r) Object.assign(r, fields); return { status: 200, json: async () => ({ success: true }) }; },
     reportFailure: async () => ({ ok: true }),
-    QB_BATCH_COLS: ['QB_Batch_Status', 'QB_Batch_Sent_Date', 'QB_Reversed_Date', 'QB_Email_Subject', 'QB_Batch_Error', 'QB_Delete_Confirmed', 'QB_Delete_Confirmed_Date'], QB_BATCH_MAX_PER_CALL: 8, QB_BATCH_DEFAULT_PER_CALL: 5,
+    QB_BATCH_COLS: ['QB_Batch_Status', 'QB_Batch_Sent_Date', 'QB_Reversed_Date', 'QB_Email_Subject', 'QB_Batch_Error', 'QB_Delete_Confirmed', 'QB_Delete_Confirmed_Date'], QB_BATCH_MAX_PER_CALL: 5, QB_BATCH_DEFAULT_PER_CALL: 3, __qbBatchInflight: new Set(), invalidateTabCache: () => {},
     addReceipt: async (env, body) => { const id = String(nextId++); tabs.Receipts.push({ ID: id, Active: 'TRUE', QB_Email_Sent: 'FALSE', Store: body.store, Amount: String(body.amount), WO_ID: body.wo_id, Property_ID: body.property_id, Category: body.category, Payment_Source: 'company_card', Source_File_ID: body.source_file_id }); return jsonResp({ success: true, id, amount: String(body.amount) }); },
     scopeCoveringSignatureForWO: async () => null,
     appendReceiptToInvoiceReview: async (env, a) => { irCalls.push(a); return { linked: true }; },
