@@ -2288,7 +2288,7 @@ function submitStatus(woId, idx) {
 // lockbox code + tenant contact on the next load. Declining drops it off the open list.
 function acceptWO(woId, idx) {
   showActionMsg(idx, 'Accepting…', '');
-  api('/status', {
+  return api('/status', {   // returns true/false so the new home list can show "Not saved, tap to retry"
     method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ wo_id: woId, status: 'Accepted', updated_by: session.vendor_name, updated_by_role: 'vendor', vendor_id: session.vendor_id }),
   }).then(function(data) {
