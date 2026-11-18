@@ -35621,7 +35621,7 @@ async function qbInvoiceLineDuplicates(env, token, amount, candidates) {
           matches.push({ invoice_id: String(inv.Id), doc: inv.DocNumber || '', date: inv.TxnDate, amount: Number(line.Amount || 0), description: String(line.Description || '').slice(0, 120) });
         }
       }
-    } catch (e) { /* one bad invoice open must not kill the rest of this receipt's check */ }
+    } catch (e) { await softFail(env, 'qbInvoiceLineDuplicates:openInvoice', e, { severity: 'P2', ref: String(cand.Id || ""), source: 'qbo', context: 'one invoice could not be opened, so a duplicate on it may be missed' }); }
   }
   return matches;
 }
