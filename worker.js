@@ -31401,6 +31401,7 @@ async function hubTestWriteAllowed(env, path, body) {
     return true;
   }
   if (path === '/wo-template/preview') return true; // read-only computation, writes nothing
+  if (path === '/wo-template/seed-seasonal') return !!(body && body.dry_run === true); // queue #108: the staging token may only run the DRY run (writes nothing); the real seed needs the admin secret
   if (path === '/wo-snippet/add') return String((body && body.Name) || '').startsWith('TEST-');
   if (path === '/wo-snippet/update') {
     const _sn = (await fetchTab(env, WO_SNIPPETS_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id));
