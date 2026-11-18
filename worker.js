@@ -36690,7 +36690,7 @@ function buildLaborDescription(billRow, timeEntries, wo, env) {
     .forEach(e => parts.push(laborEntryText(e)));
   // Nov 2 2026: the checklist (what was actually done) follows anything the vendor typed, and replaces
   // the generic work-order text. That fallback text never carries access codes onto an invoice.
-  const doneBlock = workDoneBlock(wo);
+  const doneBlock = workDoneBlock(wo, env);
   if (parts.length) return parts.join('; ') + (doneBlock ? '\n' + doneBlock : '');
   if (doneBlock) return doneBlock;
   return sanitizeCustomerText((wo && (wo.Invoice_Memo || wo.Description)) || '');
