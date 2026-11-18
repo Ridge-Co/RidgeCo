@@ -27170,9 +27170,11 @@ async function sendReceiptsToQBEmail(env, opts) {
 // ── QB batch: review list, hold/release, "delete it in QuickBooks" tick-list (Nov 17 2026) ──────────────────────────────────────────────────────
 // PURE. Whole hours from `etNow` ({date, minutes}) until the daily job's slot. lastKey = the ET day the job last finished ('' if never).
 // Not yet run today and the slot is still ahead: hours to the slot today. Slot passed and not run: 0 (next scheduler tick). Already ran today: tomorrow's slot.
+// etNow.dayMinutes (optional) = length of that ET day in minutes: 1380 on the spring-forward day, 1500 on the fall-back day, else 1440.
 function qbBatchHoursUntil(etNow, atHHMM, lastKey) {
   const at = schedAtMinutes(atHHMM);
-  if (lastKey && lastKey === etNow.date) return Math.max(0, Math.round((1440 - etNow.minutes + at) / 60 * 10) / 10);
+  const dayLen = etNow.dayMinutes > 0 ? etNow.dayMinutes : 1440;
+  if (lastKey && lastKey === etNow.date) return Math.max(0, Math.round((dayLen - etNow.minutes + at) / 60 * 10) / 10);
   if (etNow.minutes < at) return Math.round((at - etNow.minutes) / 60 * 10) / 10;
   return 0;
 }
