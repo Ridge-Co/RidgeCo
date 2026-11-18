@@ -21935,7 +21935,7 @@ async function recurLinkTemplate(env, body) {
   const tpl = (await fetchTab(env, 'WO_Templates')).find(t => String(t.ID) === String(body.template_id));
   if (!tpl) return json({ error: 'Template not found' }, 404);
   const t = { p: String(body.property_id), u: body.unit_id ? String(body.unit_id) : '' };
-  let list = recurTargets(tpl).filter(x => recurTargetKey(x) !== recurTargetKey(t));
+  let list = recurTargets(tpl, env).filter(x => recurTargetKey(x) !== recurTargetKey(t));
   if (body.action !== 'remove') list.push(t);
   await updateRow(env, 'WO_Templates', tpl.ID, { Targets: JSON.stringify(list) });
   return json({ success: true, targets: list });
