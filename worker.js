@@ -10850,7 +10850,7 @@ async function findLockedVendorBillForWOs(env, woIds) {
   const relevant = vendorBills.filter(b => ids.has(String(b.WO_ID)) && b.Active !== 'FALSE');
   if (!relevant.length) return null;
   let invoiceReview = [];
-  try { invoiceReview = await fetchTab(env, 'Invoice_Review'); } catch (e) {}
+  try { invoiceReview = await fetchTab(env, 'Invoice_Review'); } catch (e) { await softFail(env, 'findLockedVendorBillForWOs:Invoice_Review', e, { severity: 'P1', source: 'read' }); }
   for (const bill of relevant) {
     if (vendorBillReassignLock(bill, invoiceReview)) return bill;
   }
