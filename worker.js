@@ -35906,7 +35906,7 @@ async function receiptDuplicateAuditBuildIndex(env, body) {
       try {
         const full = await qbApi(env, `invoice/${inv.Id}?minorversion=73`, 'GET', null, token);
         for (const l of qbInvoiceLineCacheRows(full && full.Invoice)) { newRows.push(l); lineCount++; }
-      } catch (e) { /* one bad invoice open must not kill the rest of this batch */ }
+      } catch (e) { await softFail(env, 'receiptDuplicateAuditBuildIndex:openInvoice', e, { severity: 'P2', ref: String(inv.Id || ""), source: 'qbo', context: 'one invoice could not be opened, so its lines are missing from the duplicate index' }); }
     }
     if (newRows.length) {
       const cached = new Date().toISOString();
