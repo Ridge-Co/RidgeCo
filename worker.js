@@ -1480,7 +1480,7 @@ async function checkPinLockout(env, pin) {
     if (lockedUntil && lockedUntil > new Date())
       return { locked: true, minutes_remaining: Math.ceil((lockedUntil - Date.now()) / 60000), fail_count: failCount };
     return { locked: false, fail_count: failCount };
-  } catch(e) { return { locked: false, fail_count: 0 }; }
+  } catch(e) { await softFail(env, 'checkPinLockout', e, { severity: 'P0', ref: '', source: 'read', context: 'the PIN lockout sheet could not be read, so this sign-in was let through without a lockout check' }); return { locked: false, fail_count: 0 }; }
 }
 
 async function recordPinFailure(env, pin) {
@@ -1505,7 +1505,7 @@ async function recordPinFailure(env, pin) {
       await sheetsRequest(env, 'POST', `/values/PIN_Lockout:append?valueInputOption=RAW`, { values: [newRow] });
     }
     return { fail_count: newCount, locked: newCount >= PIN_MAX_ATTEMPTS };
-  } catch(e) { return { fail_count: 0, locked: false }; }
+  } catch(e) { await softFail(env, 'recordPinFailure', e, { severity: 'P0', ref: '', source: 'write', context: 'a wrong PIN could not be counted toward the lockout, so repeated guesses are not being limited' }); return { fail_count: 0, locked: false }; }
 }
 
 async function clearPinLockout(env, pin) {
@@ -1522,7 +1522,7 @@ async function clearPinLockout(env, pin) {
       { range: `PIN_Lockout!${col(iF)}${sr}`, values: [['0']] },
       { range: `PIN_Lockout!${col(iL)}${sr}`, values: [['']] },
     ]});
-  } catch(e) { /* non-fatal */ }
+  } catch(e) { await softFail(env, 'clearPinLockout', e, { severity: 'P1', ref: '', source: 'write', context: 'a correct sign-in could not reset its failed-PIN count, so old failures may lock this person out later' }); }
 }
 
 // ── Portal access tracking (Oct 22 2026, Brett) ──────────────────────────────────────────────────
@@ -6546,7 +6546,7 @@ async function scopeProposal(env, body) {
 // that) — this just gets a real, working, sendable link live for today.
 const SCOPE_PROPOSAL_LINK_TTL = 60 * 60 * 24 * 90; // 90 days — revoke any time via the rev bump
 async function scopeProposalLinkToken(env, scopeId) {
-  try { await ensureColumns(env, 'Scopes', ['Link_Rev']); } catch (e) {}
+  try { await ensureColumns(env, 'Scopes', ['Link_Rev']); } catch (e) {}   // silent-ok: ensureColumns reports its own failure to the failure ledger
   const s = await scopeFind(env, scopeId);
   if (!s) return null;
   const rev = String(s.Link_Rev || '0');
@@ -13406,7 +13406,7 @@ async function vendorRequestPropertyAccess(env, body) {
       await sendSMS(env, config.admin_phone,
         `🔑 ${vendorName} requested billing access to ${prop.Address || ('property ' + propertyId)}. Review in Hub → Dev Log → Vendor Access Requests.`);
     }
-  } catch (e) { /* non-fatal — the request row is already saved */ }
+  } catch (e) { await softFail(env, 'vendorRequestPropertyAccess:adminText', e, { severity: 'P0', ref: String(vendorId), source: 'sms', context: 'the vendor access request was saved but the text telling the admin about it did not send' }); }
   return res;
 }
 
@@ -13461,7 +13461,7 @@ async function vendorAccessRequestApprove(env, body) {
           await updateRow(env, 'Vendors', reqRow.Vendor_ID, { Billing_Property_Access: list.join(',') });
         }
       }
-    } catch (e) { /* the request itself is already resolved; the vendor list append is best-effort */ }
+    } catch (e) { await softFail(env, 'vendorAccessRequestApprove:listAppend', e, { severity: 'P1', ref: String(id), source: 'write', context: 'the request was marked approved but the property was not added to the vendor access list, so the vendor will still be blocked' }); }
   }
   return json({ success: true, id, status: newStatus });
 }
@@ -15194,8 +15194,8 @@ async function addEstimateVersion(env, body) {
 //     "onsiteHourly": <n>, "onsiteMinFee": <n>, "passThroughFlat": <n>, "roundTo": <n> }
 // Unset → null → pricing SUGGESTIONS/estimates are dormant; manual invoicing still works.
 async function getPricingConfig(env) {
-  try { if (env && env.PRICING_CONFIG) return JSON.parse(env.PRICING_CONFIG); } catch(_) {}
-  try { const cfg = await fetchConfig(env); if (cfg && cfg.pricing_config) return JSON.parse(cfg.pricing_config); } catch(_) {}
+  try { if (env && env.PRICING_CONFIG) return JSON.parse(env.PRICING_CONFIG); } catch(e) { await softFail(env, 'getPricingConfig:env', e, { severity: 'P1', ref: '', source: 'parse', context: 'the PRICING_CONFIG setting is not valid JSON, so pricing suggestions are switched off' }); }
+  try { const cfg = await fetchConfig(env); if (cfg && cfg.pricing_config) return JSON.parse(cfg.pricing_config); } catch(e) { await softFail(env, 'getPricingConfig:sheet', e, { severity: 'P1', ref: '', source: 'parse', context: 'the pricing setting could not be read or is not valid JSON, so pricing suggestions are switched off' }); }
   return null;
 }
 // Pure, config-driven — no constants baked in. Returns null if pricing isn't configured.
@@ -25820,7 +25820,7 @@ async function vendorCompleteOnboarding(env, body) {
     }
   } catch (e) {
     qbPush = { ok: false, error: e.message };
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_onboarding_qb_push_failed', Skill_Or_Endpoint: '/vendor/complete-onboarding', Success: 'FALSE', Notes: `vendorId=${vendorId} err=${String((e && e.message) || e)}` }); } catch (_) {}
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_onboarding_qb_push_failed', Skill_Or_Endpoint: '/vendor/complete-onboarding', Success: 'FALSE', Notes: `vendorId=${vendorId} err=${String((e && e.message) || e)}` }); } catch (_) {}   // silent-ok: the push failure is already returned and reported
   }
 
   const status = vendorOnboardingComplete(Object.assign({}, (await fetchTab(env, 'Vendors')).find(v => String(v.ID) === String(vendorId)) || {}));
@@ -26507,7 +26507,7 @@ function gmailRefreshCandidates(cfgToken, envToken) {
 }
 async function gmailAccessToken(env) {
   if (_gmailTokenCache.token && (Date.now() - _gmailTokenCache.at) < 50 * 60 * 1000) return _gmailTokenCache.token;
-  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}
+  let cfg = {}; try { cfg = await fetchConfig(env); } catch (_) {}   // silent-ok: falls back to the env token and throws loudly if none
   const candidates = gmailRefreshCandidates(cfg.GMAIL_REFRESH_TOKEN, env.GMAIL_REFRESH_TOKEN);
   if (!env.GMAIL_CLIENT_ID || !env.GMAIL_CLIENT_SECRET || !candidates.length) {
     throw new Error('Gmail not configured — set GMAIL_CLIENT_ID/GMAIL_CLIENT_SECRET/GMAIL_SENDER in Cloudflare Worker secrets, then use "Reconnect Gmail" (or set GMAIL_REFRESH_TOKEN).');
@@ -26518,7 +26518,7 @@ async function gmailAccessToken(env) {
       method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ client_id: env.GMAIL_CLIENT_ID, client_secret: env.GMAIL_CLIENT_SECRET, refresh_token: c.token, grant_type: 'refresh_token' }),
     });
-    const data = await resp.json().catch(() => null);
+    const data = await resp.json().catch(() => null);   // silent-ok: an unreadable reply is thrown as a refresh failure below
     if (resp.ok && data && data.access_token) {
       _gmailTokenCache = { token: data.access_token, at: Date.now(), source: c.source };
       return data.access_token;
@@ -26556,7 +26556,7 @@ function gmailIdTokenEmail(idToken) {
     const b64 = part.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((part.length + 3) % 4);
     const p = JSON.parse(atob(b64));
     return { email: String(p.email || '').trim().toLowerCase(), verified: p.email_verified === true || p.email_verified === 'true' };
-  } catch (_) { return null; }
+  } catch (_) { return null; }   // silent-ok: an unreadable id token is rejected as the wrong account
 }
 async function gmailConnectUrl(env, url) {
   if (!env.GMAIL_CLIENT_ID || !env.GMAIL_CLIENT_SECRET) return json({ error: 'GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET are not set in Cloudflare Worker secrets.' }, 400);
@@ -26589,7 +26589,7 @@ async function gmailOAuthCallback(env, url) {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ code, client_id: env.GMAIL_CLIENT_ID, client_secret: env.GMAIL_CLIENT_SECRET, redirect_uri: gmailCallbackUrl(url), grant_type: 'authorization_code' }),
   });
-  const data = await resp.json().catch(() => null);
+  const data = await resp.json().catch(() => null);   // silent-ok: an unreadable reply shows Google rejected the sign-in
   if (!resp.ok || !data || !data.access_token) return gmailCallbackPage(false, 'Gmail was not reconnected', 'Google rejected the sign-in: ' + JSON.stringify(data || {}).slice(0, 200) + '. Nothing changed.');
   const who = gmailIdTokenEmail(data.id_token);
   const expected = gmailExpectedSender(env);
@@ -26599,7 +26599,7 @@ async function gmailOAuthCallback(env, url) {
   if (!String(data.scope || '').includes('gmail.send')) return gmailCallbackPage(false, 'Permission not granted', 'Sending email permission was not granted on the Google screen. Nothing changed — try again and leave the "Send email on your behalf" box checked.');
   if (!data.refresh_token) return gmailCallbackPage(false, 'Gmail was not reconnected', 'Google did not return a long-lived token. Nothing changed — try Reconnect Gmail again.');
   await setConfigKey(env, { key: 'GMAIL_REFRESH_TOKEN', value: data.refresh_token });
-  try { await setConfigKey(env, { key: 'GMAIL_TOKEN_UPDATED', value: new Date().toISOString() }); } catch (_) {}
+  try { await setConfigKey(env, { key: 'GMAIL_TOKEN_UPDATED', value: new Date().toISOString() }); } catch (e) { await softFail(env, 'gmailOAuthCallback:tokenUpdated', e, { severity: 'P2', ref: '', source: 'write', context: 'Gmail was reconnected but the reconnect time could not be saved' }); }
   _gmailTokenCache = { token: data.access_token, at: Date.now(), source: 'config' };
   return gmailCallbackPage(true, 'Gmail reconnected', `The Hub can send as ${expected} again. You can close this tab and retry the send.`);
 }
@@ -27512,7 +27512,7 @@ async function ownerOnboardInviteCreate(env, body) {
     Note: ooClean(body.note, 300), Check_Attempts: '0', Needs_Review: 'FALSE', Active: 'TRUE',
   };
   const r = await addRow(env, 'Owner_Invites', row);
-  let id = ''; try { id = (await r.clone().json()).id || ''; } catch (e) {}
+  let id = ''; try { id = (await r.clone().json()).id || ''; } catch (e) { await softFail(env, 'ownerOnboardInviteCreate:newId', e, { severity: 'P2', ref: '', source: 'parse', context: 'the owner invite was saved but its id could not be read back, so the page cannot track it' }); }
   return json({ success: true, id, token, link: `${PORTAL_BASE}/owner-onboard.html?t=${token}`, expires: row.Expires_Date });
 }
 
@@ -27629,7 +27629,7 @@ async function ownerOnboardSubmit(env, body, clientIP) {
     summary.owner_id = ownerId;
   } catch (e) {
     // Nothing usable was written for the owner — release the invite so the owner can retry.
-    await updateRow(env, 'Owner_Invites', inv.ID, { Status: 'pending', Claim_Nonce: '' }).catch(() => {});
+    await updateRow(env, 'Owner_Invites', inv.ID, { Status: 'pending', Claim_Nonce: '' }).catch(async (e2) => { await softFail(env, 'ownerOnboardSubmit:releaseInvite', e2, { severity: 'P1', ref: String(inv.ID || ''), source: 'write', context: 'the owner save failed and the invite could not be released, so the owner link may stay stuck as in use' }); });
     return json({ error: 'We couldn\'t save your information just now. Nothing was submitted — please try again in a minute.' }, 500);
   }
 
@@ -27715,7 +27715,7 @@ async function ownerOnboardSubmit(env, body, clientIP) {
   await updateRow(env, 'Owner_Invites', inv.ID, {
     Status: 'used', Used_Date: nowIso, Owner_ID: ownerId, Needs_Review: needsReview ? 'TRUE' : 'FALSE',
     Result_Summary: JSON.stringify({ ...summary, warnings }).slice(0, 45000),
-  }).catch(() => {});
+  }).catch(async (e) => { await softFail(env, 'ownerOnboardSubmit:markUsed', e, { severity: 'P1', ref: String(inv.ID || ''), source: 'write', context: 'the owner was saved but the invite was not marked used, so the same link could be submitted again' }); });
 
   try {
     const cfg = await fetchConfig(env);
@@ -28394,7 +28394,8 @@ function _b64urlBytes(bytes){ let s=''; for(const b of bytes) s+=String.fromChar
 function _b64urlToBytes(str){ str=str.replace(/-/g,'+').replace(/_/g,'/'); while(str.length%4) str+='='; const bin=atob(str); const out=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i); return out; }
 async function _hmac(data, secret){ const key=await crypto.subtle.importKey('raw', _tenc.encode(secret), {name:'HMAC',hash:'SHA-256'}, false, ['sign']); const sig=await crypto.subtle.sign('HMAC', key, _tenc.encode(data)); return _b64urlBytes(new Uint8Array(sig)); }
 async function makeSessionToken(payloadObj, secret, ttlSeconds){ const now=Math.floor(Date.now()/1000); const payload={...payloadObj, iat:now, exp:now+(ttlSeconds||60*60*24*90)}; const body=_b64urlBytes(_tenc.encode(JSON.stringify(payload))); const sig=await _hmac(body, secret); return `${body}.${sig}`; }
-async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
+async function verifySessionToken(token, secret){ if(typeof token!=='string'||token.indexOf('.')<0) return null; const [body,sig]=token.split('.'); if(!body||!sig) return null; const expected=await _hmac(body, secret); if(sig.length!==expected.length) return null; let diff=0; for(let i=0;i<sig.length;i++) diff|=sig.charCodeAt(i)^expected.charCodeAt(i); if(diff!==0) return null; let payload; try{ payload=JSON.parse(_tdec.decode(_b64urlToBytes(body))); }catch(e){ return null; } // silent-ok: a token that cannot be decoded is rejected as signed out
+  const now=Math.floor(Date.now()/1000); if(!payload.exp||payload.exp<now) return null; return payload; }
 /* FIX_CHECK:START */
 // Work order ids are stored both as '1152' and as 'WO-1152' (WO_ID column); a label must never read 'WO-WO-1152'.
 function fuWoLabel(id) { return 'WO-' + String(id == null ? '' : id).trim().replace(/^WO-/i, ''); }
@@ -35103,7 +35104,7 @@ async function payAuthLog(env, result, detail, amount, by, idem) {
     await ensureColumns(env, PAY_AUTH_LOG_TAB, PAY_AUTH_LOG_COLS);
     await addRow(env, PAY_AUTH_LOG_TAB, { Timestamp: new Date().toISOString(), Result: result, Detail: String(detail || '').slice(0, 300), Amount: amount != null ? String(amount) : '', By: String(by || 'hub'), Idem: String(idem || '').slice(0, 80) });
     return true;
-  } catch (_) { return false; }
+  } catch (e) { await softFail(env, 'payAuthLog', e, { severity: 'P0', ref: String(idem || ''), source: 'write', context: 'a payment or mark-paid event could not be written to the payment log, so there is no durable record of it' }); return false; }
 }
 
 // POST /qb/pay-bills { bill_ids:[qbBillId,...], pay_account_id, passphrase, preview?, by? }
