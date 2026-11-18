@@ -36670,8 +36670,8 @@ async function scopeWorkDoneForInvoice(env, s) {
   try {
     const wo = findWO(await fetchTab(env, 'Work_Orders'), s.WO_ID);
     if (!wo) { out.warnings.push('⚠ The linked work order ' + s.WO_ID + ' was not found, so the final invoice cannot list the work completed.'); return out; }
-    out.block = workDoneBlock(wo);
-    workDoneWarnings(wo).forEach(w => out.warnings.push(w));
+    out.block = workDoneBlock(wo, env);
+    workDoneWarnings(wo, env).forEach(w => out.warnings.push(w));
     if (!out.block) out.warnings.push('⚠ Work order ' + s.WO_ID + ' has no usable checklist items, so the final invoice will not list the work completed. Add them to the checklist first if the customer should read them.');
   } catch (e) {
     out.warnings.push('⚠ Could not read work order ' + s.WO_ID + ' (' + String((e && e.message) || e).slice(0, 120) + '), so the work-completed list is missing from this invoice.');
