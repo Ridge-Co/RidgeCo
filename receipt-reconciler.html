@@ -2045,10 +2045,16 @@ async function confirmDuplicateFromEvidence(id, idx, btn){
 // Nothing here is emailed from the page: it lists what the daily job will send, lets Brett hold / reverse a receipt, send the batch now, and tick off
 // the QuickBooks entries he still has to delete by hand after reversing a receipt that had already been sent.
 let qbbState = null, qbbOpen = false, qbbBusy = false, qbbStatusHtml = '';
+// '00:00' -> '12:00 AM (midnight)', '07:00' -> '7:00 AM'
+function qbbClock(at){
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(at||'')); if (!m) return esc(at||'');
+  const h = +m[1], mm = m[2];
+  return (h % 12 || 12) + ':' + mm + (h < 12 ? ' AM' : ' PM') + (h === 0 && mm === '00' ? ' (midnight)' : '');
+}
 function qbbHoursText(ns){
   if (!ns) return 'send time unknown';
   if (!ns.hours_until) return 'goes out at the next scheduler check (daily send is due)';
-  return 'goes out in about ' + ns.hours_until + ' h (daily at ' + esc(ns.at) + ' ET)';
+  return 'goes out in about ' + ns.hours_until + ' h (daily at ' + qbbClock(ns.at) + ' Eastern)';
 }
 function qbbDeleteBoxHtml(d){
   const id = esc(d.receipt_id);
