@@ -36649,8 +36649,8 @@ function workDoneFromChecklist(raw, env, ref) {
 }
 
 // "Work completed:\n• a\n• b" — '' when no checklist item qualifies.
-function workDoneBlock(wo) {
-  const wd = workDoneFromChecklist(wo && wo.Checklist);
+function workDoneBlock(wo, env) {
+  const wd = workDoneFromChecklist(wo && wo.Checklist, env, wo && wo.ID);
   return wd.lines.length ? ('Work completed:\n' + wd.lines.map(l => '• ' + l).join('\n')) : '';
 }
 
