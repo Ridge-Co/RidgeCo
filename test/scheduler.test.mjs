@@ -138,6 +138,9 @@ t('review_mon EST: 13:29Z not due, 13:30Z due', due('review_mon', {}, '2026-11-0
 // daily 07:00 ET on DST change days
 t('daily_digest on the fall-back day (Nov 1, EST after 2am): 11:59Z = 06:59 EST not due, 12:00Z = 07:00 EST due', due('daily_digest', {}, '2026-11-01T11:59:00Z') === null && !!due('daily_digest', {}, '2026-11-01T12:00:00Z'));
 t('daily_digest on the spring-forward day (Mar 8, EDT): 10:59Z = 06:59 EDT not due, 11:00Z due', due('daily_digest', {}, '2026-03-08T10:59:00Z') === null && !!due('daily_digest', {}, '2026-03-08T11:00:00Z'));
+// Nov 17 2026 (Brett): the daily QuickBooks receipt batch goes out at 00:00 ET (midnight), after the day's receipts are confirmed
+t('daily_receipts_post is a midnight (00:00 ET) job', job('daily_receipts_post').at === '00:00');
+t('daily_receipts_post: due at 00:05 EDT, not due once it already ran that ET day', !!due('daily_receipts_post', {}, '2026-10-14T04:05:00Z') && due('daily_receipts_post', { last_key: '2026-10-14', last_status: 'ok' }, '2026-10-14T04:05:00Z') === null);
 t('daily_digest summer 07:00 EDT = 11:00Z; winter 07:00 EST = 12:00Z', !!due('daily_digest', {}, '2026-07-15T11:00:00Z') && due('daily_digest', {}, '2026-12-15T11:00:00Z') === null && !!due('daily_digest', {}, '2026-12-15T12:00:00Z'));
 // weekday gating
 t('review_mon not due on a Tuesday', due('review_mon', {}, '2026-10-13T15:00:00Z') === null);
