@@ -1565,7 +1565,8 @@ function renderWOs(wos, opts) {
   // Store WOs for status tracking
   window._wos = wos;
   window._pendingStatus = {};
-  wos.forEach(function(wo, idx) { loadPortalAttachments(wo.ID); loadEstimateWidget(wo.ID, idx); loadVendorNearbyWOs(wo.ID, idx); loadVendorTimeTracking(wo.ID, idx); loadVendorReceipts(wo.ID, idx); loadVendorBillSummary(wo.ID, idx); });
+  if (window.VendorHome && VendorHome.on()) VendorHome.resetLoaded();   // new layout: a card's six panels load when it is opened (toggleCard)
+  else wos.forEach(function(wo, idx) { loadPortalAttachments(wo.ID); loadEstimateWidget(wo.ID, idx); loadVendorNearbyWOs(wo.ID, idx); loadVendorTimeTracking(wo.ID, idx); loadVendorReceipts(wo.ID, idx); loadVendorBillSummary(wo.ID, idx); });
   if (wos.some(awEligible)) loadVendorAddons();   // one request for every card's add-on list
   // Deep-link from an SMS ("?wo=WO-1234") — filter straight to that job on first load only,
   // so the vendor doesn't have to search for the job the text was actually about. Applied
