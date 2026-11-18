@@ -1425,6 +1425,8 @@ function rowCard(r){
   html += '<div class="rc-foot">' + fileLink + '<div class="actions">';
   if (isPendingLike) {
     if (!excluded && !isCompany && !isRefund) html += '<button class="btn small" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm</button>';
+    // Nov 17 2026: a customer-card receipt cannot be confirmed (it is the customer's money). The button is shown greyed out with the reason; the server refuses it too (customer_card_needs_wo).
+    if (excluded) html += '<button class="btn small" disabled title="Paid on a customer card: it cannot be confirmed or booked as an expense. Attach it to a work order instead.">✓ Confirm (not available: customer card)</button>';
     if (excluded) html += '<button class="btn small" onclick="attachCustomerCardRow(\''+r.ID+'\', this)">📎 Attach to work order (reference only, not billed)</button>';
     if (isCompany) html += '<button class="btn small" id="'+idAttr+'-bizbtn" onclick="confirmBusinessExpense(\''+r.ID+'\', this)">✓ Confirm as business expense</button>'
       + '<button class="btn small" id="'+idAttr+'-billbtn" style="display:none" onclick="confirmRow(\''+r.ID+'\', this)">✓ Confirm to this work order</button>';
