@@ -1522,7 +1522,7 @@ async function clearPinLockout(env, pin) {
       { range: `PIN_Lockout!${col(iF)}${sr}`, values: [['0']] },
       { range: `PIN_Lockout!${col(iL)}${sr}`, values: [['']] },
     ]});
-  } catch(e) { /* non-fatal */ }
+  } catch(e) { await softFail(env, 'clearPinLockout', e, { severity: 'P1', ref: '', source: 'write', context: 'a correct sign-in could not reset its failed-PIN count, so old failures may lock this person out later' }); }
 }
 
 // ── Portal access tracking (Oct 22 2026, Brett) ──────────────────────────────────────────────────
