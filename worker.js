@@ -36655,8 +36655,8 @@ function workDoneBlock(wo, env) {
 }
 
 // Preview warnings about a checklist-backed invoice (excluded / withheld items).
-function workDoneWarnings(wo) {
-  const wd = workDoneFromChecklist(wo && wo.Checklist);
+function workDoneWarnings(wo, env) {
+  const wd = workDoneFromChecklist(wo && wo.Checklist, env, wo && wo.ID);
   const out = [];
   const label = { na: 'not applicable', separate: 'separate work order', estimate: 'needs estimate', access: "couldn't access", parts: 'needs parts' };
   if (wd.excluded.length) out.push('ℹ ' + wd.excluded.length + ' checklist item' + (wd.excluded.length === 1 ? ' is' : 's are') + ' left OFF the invoice because the vendor gave a reason: ' + wd.excluded.map(e => '"' + e.t + '" (' + (label[e.code] || e.code) + ')').join('; ') + '.');
