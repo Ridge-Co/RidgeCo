@@ -31587,7 +31587,7 @@ async function hubTestWriteAllowed(env, path, body) {
   }
   if (path === '/message-queue/translate') return true;
   if (path === '/scope/payment-schedule') {
-    const _sc = (await fetchTab(env, 'Scopes').catch(() => [])).find(x => String(x.ID) === String(body && body.scope_id));
+    const _sc = (await fetchTab(env, 'Scopes').catch(() => [])).find(x => String(x.ID) === String(body && body.scope_id)); // silent-ok: a failed read makes the test-write guard refuse, the safe side
     if (!_sc) return false;
     return await isTestRecord(env, 'Properties', _sc.Property_ID);
   }
