@@ -4,6 +4,7 @@
 <script src="test-login.js"></script>
 <script src="failure-reporter.js"></script>
 <script src="wo-status.js"></script>
+<script src="vendor-job-order.js"></script>
 <script data-wo-status-guard>if (typeof WOStatus === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div style="background:#b42318;color:#fff;padding:12px;font:14px sans-serif;position:relative;z-index:99999">The status list (wo-status.js) did not load, so work orders will not show correctly. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -2915,7 +2916,7 @@ function openWODetail(woId) {
     '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow-y:auto;color:var(--muted)">' +
     linkify(wo.Notes) + '</div></div>' : '') +
     '<table class="data-table" style="margin-bottom:16px">' +
-    '<tr><td style="color:var(--muted);width:120px">Status</td><td><span class="badge '+sc+'">'+(wo.Status||'New')+'</span>'+(wo.Status==='On Hold'&&wo.Hold_Reason?' <span style="color:var(--muted);font-size:11px">— '+esc(wo.Hold_Reason)+'</span>':'')+'</td></tr>' +
+    '<tr><td style="color:var(--muted);width:120px">Status</td><td><span class="badge '+sc+'">'+(wo.Status||'New')+'</span>'+(wo.Status==='On Hold'&&wo.Hold_Reason?hubHoldBadge(wo.Hold_Reason):'')+'</td></tr>' +
     (wo.Turnover_Group_ID ? '<tr><td style="color:var(--muted)">Turnover</td><td>🔄 '+esc(wo.Turnover_Group_ID)+' · '+esc(wo.Turnover_Role||'')+(wo.Turnover_Release_Date?' · releases by '+esc(wo.Turnover_Release_Date):'')+'</td></tr>' : '') +
     '<tr><td style="color:var(--muted)">Trade</td><td>'+(wo.Trade||'—')+'</td></tr>' +
     (wo.Room ? '<tr><td style="color:var(--muted)">Room / Area</td><td>'+esc(wo.Room)+'</td></tr>' : '') +
@@ -9454,6 +9455,51 @@ function refreshWOStatusBadge(woId, prevStatus) {
 
 var _hubBillSaving = {};
 var _hubBillPrevStatus = {};
+var _hubBillGate = {};
+
+// What a bill still needs before it can be saved (Brett, Nov 17 2026). Rules live in vendor-job-order.js so the portal and the Hub agree.
+// Photos are read from the job's attachments; if they cannot be read the check passes rather than block a real bill on a network blip.
+function hubBillNeeds(k, woId, receiptItems, cb) {
+  var wo = safeArray(state.workorders).find(function(w) { return String(w.ID) === String(woId); }) || {};
+  var done = (typeof WOStatus !== 'undefined') ? WOStatus.inSet('DONE_THROUGH_PAID', wo.Status || '') : true;
+  var desc = (document.getElementById('hb-invdesc-' + k) || {}).value || '';
+  var finish = function(after, hasReceiptFile) {
+    var receipts = receiptItems.map(function(r, i) { return { n: i + 1, amount: r.amount, pay: r.pay, hasImage: hasReceiptFile }; });
+    cb(JobOrder.missingForBill({ jobDone: done, afterPhotos: after, description: desc, receipts: receipts }));
+  };
+  if (typeof JobOrder === 'undefined') { cb([]); return; }
+  api('GET', '/attachments?wo_id=' + woId).then(function(items) {
+    if (!Array.isArray(items)) { finish(null, true); return; }
+    var live = items.filter(function(f) { return f.Active !== 'FALSE'; });
+    var count = function(t) { return live.filter(function(f) { return String(f.File_Type || '').toLowerCase() === t; }).length; };
+    finish(count('after'), count('receipt') > 0);
+  }).catch(function() { finish(null, true); });
+}
+
+function hubBillShowNeeds(k, woId, missing) {
+  var msg = document.getElementById('hb-msg-' + k);
+  if (!msg) return;
+  var line = function(m) {
+    if (m.key === 'complete') return 'Mark the job Complete first. A bill can only be added after the work is done.';
+    if (m.key === 'after') return 'Add at least 1 AFTER photo of the finished work.';
+    if (m.key === 'desc') return 'Write what was done in the invoice description (at least ' + JobOrder.MIN_DESC + ' characters).';
+    return 'Attach the receipt picture for receipt #' + m.n + ' (needed to pay it back).';
+  };
+  var needsComplete = missing.some(function(m) { return m.key === 'complete'; });
+  msg.innerHTML = '<div style="background:#fdecea;border:2px solid #b42318;border-radius:6px;padding:10px 12px;color:#b42318">' +
+    '<div style="font-weight:bold;font-size:13px;margin-bottom:6px">This bill cannot be saved yet. Still needed:</div>' +
+    '<ul style="margin:0 0 0 18px;padding:0;font-weight:bold;font-size:12.5px">' + missing.map(function(m) { return '<li>' + esc(line(m)) + '</li>'; }).join('') + '</ul>' +
+    (needsComplete ? '<button type="button" class="btn small" style="margin-top:8px" onclick="hubBillMarkComplete(\'' + k + '\',\'' + esc(String(woId)) + '\')">Mark complete now</button>' : '') + '</div>';
+}
+
+function hubBillMarkComplete(k, woId) {
+  api('POST', '/status', { wo_id: woId, status: 'Complete', updated_by: 'Admin', updated_by_role: 'admin' }).then(function(res) {
+    if (res && (res.success || res.id)) {
+      toast('Marked complete. Check the list, then save the bill.', 'success');
+      loadAll().then(function() { hubBillSubmit(k, woId); });
+    } else toast('Error: ' + ((res && res.error) || 'unknown'), 'error');
+  });
+}
 
 function hubBillSubmit(k, woId) {
   if (_hubBillSaving[k]) return;                       // double-tap guard, same as the portal
@@ -9487,6 +9533,19 @@ function hubBillSubmit(k, woId) {
   });
   var receiptsTotal = receiptItems.reduce(function(s, r) { return s + r.amount; }, 0);
   var receiptsReimburse = receiptItems.reduce(function(s, r) { return s + (r.pay === 'account' ? 0 : r.amount); }, 0);
+
+  // Nov 17 2026 (Brett): same order as the vendor portal. Job marked Complete first, then a bill; the bill needs a description,
+  // 1 after photo, and a receipt picture on the job when any line is paid back. Checked once; passing sets the flag and re-enters.
+  if (!_hubBillGate[k]) {
+    say('Checking the job…', 'var(--muted)');
+    hubBillNeeds(k, woId, receiptItems, function(missing) {
+      if (missing.length) { hubBillShowNeeds(k, woId, missing); return; }
+      _hubBillGate[k] = true;
+      hubBillSubmit(k, woId);
+    });
+    return;
+  }
+  _hubBillGate[k] = false;
 
   // Field names are the Vendor_Bills column headers, and must match what the portal sends
   // byte for byte — the billing panel reads these by name.
@@ -16690,17 +16749,77 @@ async function submitMoveOut() {
 
 
 // ── Quick status change ────────────────────────────────────────
+// Nov 17 2026 (Brett): a hold needs a reason from the list AND the day work is expected to resume. Same list and same saved text as the
+// vendor portal (vendor-job-order.js), so a hold set here or there reads the same. cb(text) gets the string to save in Hold_Reason.
+function hubHoldDialog(count, cb) {
+  if (typeof JobOrder === 'undefined') { toast('The hold picker did not load. Reload the page and try again.', 'error'); return; }
+  var old = document.getElementById('hub-hold-overlay'); if (old) old.remove();
+  var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+  var d0 = new Date(), today = d0.getFullYear() + '-' + pad(d0.getMonth() + 1) + '-' + pad(d0.getDate());
+  var rows = JobOrder.HOLD_REASONS.map(function(r) {
+    return '<label style="display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px;cursor:pointer;color:var(--text);font-size:13px;letter-spacing:0;text-transform:none">' +
+      '<input type="radio" name="hh-reason" value="' + r.code + '" style="margin:0"><span>' + esc(r.en) + '</span></label>';
+  }).join('');
+  var chips = [[1, 'Tomorrow'], [3, 'In 3 days'], [7, 'In 1 week']].map(function(c) {
+    return '<button type="button" class="btn small hh-chip" data-days="' + c[0] + '">' + c[1] + '</button>';
+  }).join('');
+  var o = document.createElement('div');
+  o.id = 'hub-hold-overlay';
+  o.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:2000;display:flex;align-items:flex-start;justify-content:center;padding:16px;overflow-y:auto';
+  o.innerHTML = '<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:100%;max-width:440px;padding:18px;margin:auto">' +
+    '<div style="font-size:15px;font-weight:bold;margin-bottom:10px">' + (count > 1 ? 'Put ' + count + ' work orders on hold' : 'Put this work order on hold') + '</div>' + rows +
+    '<div style="font-size:12px;color:var(--muted);margin:8px 0 4px">Details (required if Other)</div>' +
+    '<textarea id="hh-detail" style="width:100%;min-height:50px"></textarea>' +
+    '<div style="font-size:12px;color:var(--muted);margin:8px 0 4px">Expected back</div>' +
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">' + chips + '</div>' +
+    '<input type="date" id="hh-back" min="' + today + '" style="width:100%">' +
+    '<div id="hh-msg" style="margin-top:8px"></div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button type="button" class="btn small" id="hh-cancel">Cancel</button><button type="button" class="btn" id="hh-save">Put on hold</button></div></div>';
+  document.body.appendChild(o);
+  Array.prototype.forEach.call(o.querySelectorAll('.hh-chip'), function(b) {
+    b.onclick = function() { document.getElementById('hh-back').value = JobOrder.addDays(today, +b.getAttribute('data-days')); };
+  });
+  document.getElementById('hh-cancel').onclick = function() { o.remove(); };
+  document.getElementById('hh-save').onclick = function() {
+    var picked = o.querySelector('input[name="hh-reason"]:checked');
+    var f = { code: picked ? picked.value : '', detail: document.getElementById('hh-detail').value, back: document.getElementById('hh-back').value };
+    var chk = JobOrder.checkHold(f, today);
+    if (!chk.ok) {
+      var why = { reason: 'Pick a reason.', other: 'Explain the reason in the details box.', date: 'Pick the date work is expected to resume.', past: 'That date has already passed. Pick today or a later day.' }[chk.errors[0]];
+      document.getElementById('hh-msg').innerHTML = '<div style="color:#b42318;font-size:12.5px;font-weight:bold">' + esc(why) + '</div>';
+      return;
+    }
+    o.remove();
+    cb(JobOrder.holdText(f));
+  };
+}
+
+// A hold whose expected-back date has passed shows in red next to the reason, so stale holds are seen instead of forgotten.
+function hubHoldBadge(reason) {
+  var m = /expected back (\d{4}-\d{2}-\d{2})/.exec(reason || ''), over = '';
+  if (m) {
+    var d0 = new Date(), p = function(n) { return (n < 10 ? '0' : '') + n; };
+    var today = d0.getFullYear() + '-' + p(d0.getMonth() + 1) + '-' + p(d0.getDate());
+    if (m[1] < today) over = ' <span style="color:#b42318;font-weight:bold;font-size:12px">⚠ back-date passed (' + m[1] + ') — chase this hold</span>';
+  }
+  return ' <span style="color:var(--muted);font-size:11px">— ' + esc(reason) + '</span>' + over;
+}
+
 function quickStatusChange(woId, newStatus) {
   if (!newStatus) return;
   var payload = { wo_id:woId, status:newStatus, updated_by:'Admin', updated_by_role:'admin' };
   // On Hold requires a reason server-side (Sep 14 2026) — prompt here so the person gets a
   // clear "why" ask instead of a bare 400 back from the API after the fact.
   if (newStatus === 'On Hold') {
-    var reason = prompt('Reason for putting this work order on hold:');
-    if (reason === null) return; // cancelled — don't change status at all
-    reason = reason.trim();
-    if (!reason) { toast('A reason is required to put a work order on hold','error'); return; }
-    payload.hold_reason = reason;
+    // Nov 17 2026: reason from the shared list + expected-back date, both required (same picker as the vendor portal).
+    hubHoldDialog(1, function(text) {
+      payload.hold_reason = text;
+      api('POST','/status',payload).then(function(res){
+        if (res.success||res.id) { toast('Status → On Hold','success'); loadAll().then(function(){ openWODetail(woId); }); }
+        else toast('Error: '+(res.error||'unknown'),'error');
+      });
+    });
+    return;
   }
   api('POST','/status',payload)
     .then(function(res){
@@ -16757,10 +16876,13 @@ function applyBulkStatus() {
   // WO in this batch (e.g. "waiting on a parts delivery"), not a per-WO prompt in a bulk flow.
   var holdReason = '';
   if (status === 'On Hold') {
-    holdReason = prompt('Reason for putting these '+ids.length+' work order'+(ids.length>1?'s':'')+' on hold:');
-    if (holdReason === null) return;
-    holdReason = holdReason.trim();
-    if (!holdReason) { toast('A reason is required to put work orders on hold','error'); return; }
+    // Nov 17 2026: same picker as a single hold; the picker is the confirmation, so no second confirm().
+    hubHoldDialog(ids.length, function(text) {
+      runBulkWOUpdate(ids, function(id){
+        return api('POST','/status',{ wo_id:id, status:status, updated_by:'Admin', updated_by_role:'admin', hold_reason:text });
+      }, document.getElementById('bulk-apply-btn'), 'Updated');
+    });
+    return;
   }
   if (!confirm('Change '+ids.length+' work order'+(ids.length>1?'s':'')+" to '"+status+"'?")) return;
   runBulkWOUpdate(ids, function(id){

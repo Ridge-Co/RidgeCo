@@ -3,6 +3,7 @@
 <head>
 <script src="test-login.js"></script>
 <script src="failure-reporter.js"></script>
+<script src="wo-status.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
@@ -286,6 +287,7 @@ label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font
 </div>
 
 <script src="vendor-i18n.js"></script>
+<script src="vendor-job-order.js"></script>
 <script>
 var WORKER = (function(){
   // Staging deploy gate (Sept 2026): ?api=staging points this page at the isolated
@@ -1960,6 +1962,7 @@ function loadVendorBillSummary(woId, idx) {
       if (btn) btn.textContent = t('💰 Submit Invoice');
       window._vendorBillCache = window._vendorBillCache || {};
       delete window._vendorBillCache[woId];
+      if (window.JobOrder) JobOrder.cardNeeds(woId, idx);   // Nov 17 2026: a Complete job with no invoice yet says so, in red
       return;
     }
     // Persistent confirmation (Sep 20 2026, Brett's ask) — visible on the COLLAPSED card, not
@@ -2196,6 +2199,8 @@ function submitStatus(woId, idx) {
     showActionMsg(idx, 'Select a status first.', 'warn');
     return;
   }
+  // Nov 17 2026 (Brett): On Hold needs a reason from the list and the day the vendor expects to be back.
+  if (status === 'On Hold' && window.JobOrder) { JobOrder.openHold(woId, idx); return; }
   // Checklist gate: can't mark Complete until every item is checked or has a reason.
   if (status === 'Complete') {
     var g = checklistGate(idx);
@@ -2226,8 +2231,10 @@ function submitStatus(woId, idx) {
         }[status] || 'badge-status';
         badge.className = 'badge ' + statusClass;
       }
-      if (status === 'Complete' && currentTab === 'open') {
-        setTimeout(function(){ loadWorkOrders(); }, 1500);
+      if (status === 'Complete') {
+        // Nov 17 2026: gentle nudge - "Send your invoice now?" (Later reloads the list).
+        if (window.JobOrder) JobOrder.nudgeInvoice(woId);
+        else if (currentTab === 'open') setTimeout(function(){ loadWorkOrders(); }, 1500);
       }
     } else {
       showActionMsg(idx, esc((data && data.error) || 'Error saving status.'), 'error');
@@ -2546,6 +2553,7 @@ function loadPortalAttachments(woId, opts) {
       if (!byType[t]) byType[t] = [];
       byType[t].push(f);
     });
+    if (window.JobOrder) JobOrder.setAfter(woId, (byType.after || []).length);   // Nov 17 2026: the bill rules need the real after-photo count
     var TYPE_ORDER = ['before','after','report','receipt','other'];
     var TYPE_LABELS = { before:'Before', after:'After', report:'Report Issue', receipt:t('Purchase receipt'), other:'File' };
     var combined = []; // built once per load, in TYPE_ORDER, for the lightbox to swipe across
@@ -3166,6 +3174,9 @@ function submitVendorSched(modalId) {
       <button onclick="closeBillModal()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px">✕</button>
     </div>
 
+    <!-- Nov 17 2026: bold red list of what is still needed to get paid (vendor-job-order.js fills it) -->
+    <div id="bill-needs-panel"></div>
+
     <!-- Billing type toggle -->
     <div style="display:flex;gap:4px;background:var(--surface2);border-radius:6px;padding:3px;margin-bottom:16px">
       <div id="bill-tab-hourly" onclick="setBillType('hourly', true)" style="flex:1;text-align:center;padding:8px;border-radius:4px;cursor:pointer;font-size:12px;background:var(--accent);color:#fff;font-family:var(--font)">⏱ By the Hour</div>
@@ -3281,7 +3292,7 @@ function submitVendorSched(modalId) {
     <!-- INVOICE DESCRIPTION — this is what the owner reads on their invoice -->
     <div style="margin-bottom:14px">
       <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">WHAT DID YOU DO? <span style="text-transform:none;font-weight:normal">— the owner will see this</span></label>
-      <textarea id="bill-invdesc" placeholder="Describe what was done in as much detail as possible" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px;border-radius:6px;min-height:60px;resize:vertical"></textarea>
+      <textarea id="bill-invdesc" oninput="JobOrder.refreshBillPanel()" placeholder="Describe what was done in as much detail as possible" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px;border-radius:6px;min-height:60px;resize:vertical"></textarea>
     </div>
 
     <!-- NOTES -->
@@ -3470,6 +3481,8 @@ function openBillModal(woId, vendorName) {
 }
 
 function _openBillModalGated(woId, vendorName) {
+  // Nov 17 2026 (Brett): complete first, then bill. Billing opened early asks "Is the job finished?" and offers one-tap Mark Complete.
+  if (window.JobOrder && JobOrder.billNeedsComplete(woId)) { JobOrder.askComplete(woId, vendorName); return; }
   var vendorId = (window.session && session.vendor_id) ? String(session.vendor_id) : '';
   if (!vendorId) { _openBillModalReal(woId, vendorName); return; } // no session — fail open rather than block
   api('/vendor-onboarding-status?vendor_id=' + encodeURIComponent(vendorId)).then(function(res) {
@@ -3554,6 +3567,7 @@ function _openBillModalReal(woId, vendorName) {
   }
 
   document.getElementById('modal-vendor-bill').style.display = 'flex';
+  if (window.JobOrder) JobOrder.refreshBillPanel();
 }
 
 function closeBillModal() {
@@ -3659,6 +3673,7 @@ function uploadReceiptPhoto(n, input) {
     .then(function(res){
       if (res.url) {
         _uploadedPhotos[n] = res.url;
+        if (window.JobOrder) JobOrder.refreshBillPanel();   // this receipt now has its picture
         statusEl.textContent = '✓ Uploaded';
         statusEl.style.color = 'var(--accent2)';
         lblEl.style.borderColor = 'var(--accent2)';
@@ -3899,6 +3914,7 @@ function calcBillTotal() {
   document.getElementById('bill-breakdown').innerHTML = breakdown.join('<br>') || '<span style="color:var(--muted)">Enter hours or items above</span>';
   document.getElementById('bill-grand-total').textContent = '$' + total.toFixed(2);
   recheckReconcileAgainstEntries();
+  if (window.JobOrder) JobOrder.refreshBillPanel();   // receipt amounts / who-paid changes can add or clear a red line
 }
 
 // Brett, Sep 2026: don't submit immediately — walk through a short guided review first (ask
@@ -3910,6 +3926,14 @@ function submitVendorBill() {
   var total = parseFloat(document.getElementById('bill-grand-total').textContent.replace('$','')) || 0;
   var msgEl = document.getElementById('bill-msg');
   if (total <= 0) { msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px">Enter at least one billable item.</div>'; return; }
+  // Nov 17 2026 (Brett): a bill needs what was done, an after photo, and a picture of every receipt to be paid back. The red list above says exactly what is missing.
+  var _need = window.JobOrder ? JobOrder.billMissing() : [];
+  if (_need.length) {
+    JobOrder.refreshBillPanel();
+    msgEl.innerHTML = '<div style="color:#b42318;font-size:13px;font-weight:bold">⚠ ' + esc(t('Your invoice is missing items. Fix the red list above, then tap Submit again.')) + '</div>';
+    var _np = document.getElementById('bill-needs-panel'); if (_np && _np.scrollIntoView) _np.scrollIntoView({block:'center'});
+    return;
+  }
   if (_reconcileState === 'issues' && _reconcileUnmatched.length) {
     msgEl.innerHTML = '<div style="color:var(--danger);font-size:12px;font-weight:bold">⚠ Your invoice photo shows receipts that aren\'t entered yet — add them above before submitting (see the warning by the photo upload).</div>';
     return;
