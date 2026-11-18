@@ -8793,7 +8793,7 @@ function ownerApprovalsEnabled(cfg) { return String((cfg && cfg.owner_approvals_
 // PURE. The customer price of one proposal from its stored Proposal_Items_JSON: the SAME arithmetic scopeProposalView uses for `subtotal`
 // (selected option of every non-optional item). null when there is nothing to total (the card then says "Open to see price").
 function ownerApprovalTotal(itemsJson, env) {
-  let items = []; try { items = JSON.parse(itemsJson || '[]'); } catch (_) { return null; }
+  const items = parseJsonCell(itemsJson, [], { env, where: 'ownerApprovalTotal', ref: 'Proposal_Items_JSON', severity: 'P1' });
   if (!Array.isArray(items) || !items.length) return null;
   let sum = 0;
   for (const it of items) {
