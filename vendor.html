@@ -1419,7 +1419,7 @@ function renderWOs(wos, opts) {
   }
 
   var html = '<div class="wo-count">' + wos.length + ' work order' + (wos.length !== 1 ? 's' : '') + '</div>';
-  var paidHtml = '', cancelledHtml = '';
+  var paidHtml = '', cancelledHtml = '', _lastHeading = '';
   wos.forEach(function(wo, idx) {
     var pri = (wo.Priority || 'normal').toLowerCase();
     var statusClass = {
