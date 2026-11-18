@@ -10315,7 +10315,7 @@ async function addonOwnerNotice(env, body) {
   let lines = [], linesUnreadable = false;
   try { lines = JSON.parse((est && est.Line_Items) || '[]'); } catch (e) { linesUnreadable = true; await softFail(env, 'addonOwnerNotice:lineItems', e, { req, severity: 'P1', ref: childId, source: 'parse', context: 'the owner notice was built without the saved estimate lines' }); }
   const photos = addonPhotosByItem(attachments, childId);
-  const items = addonParseItems(child);
+  const items = addonParseItems(child, env);
   const itemTexts = items.map(it => {
     const line = lines.find(l => l && Number(l.addon_item) === it.index) || {};
     return englishOnly(line.desc_en || it.desc);
