@@ -737,6 +737,7 @@ const _hubWorkerCore = {
         if (path === '/delivery/rsvp')          return await deliveryRsvpGet(env, url, request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown');   // PUBLIC, token-verified (tenant delivery RSVP)
         if (path === '/followup/preview')       return await followupPreview(env, url);        // ADMIN-ONLY: no ROLE_SCOPES entry; read-only, never sends
         if (path === '/followup/list')          return await followupList(env, url);           // ADMIN-ONLY
+        if (path === '/workflow-trial/status')  return await workflowTrialStatus(env, url);    // queue #92 Phase 1: ADMIN-ONLY (no ROLE_SCOPES entry), staging only, read-only
         if (path === '/proposal/signatures')    return await proposalList(env, url);
         if (path === '/scopes')                 return await scopeList(env, url);
         if (path === '/scope')                  return await scopeGet(env, url);
