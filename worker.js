@@ -21759,14 +21759,13 @@ function recurNextOccurrences(tpl, fromISO, count) {
   for (let i = 0; i < 3700 && out.length < (count || 5); i++) { if (recurIsOccurrence(tpl, d)) out.push(d); d = recurAddDays(d, 1); }
   return out;
 }
-function recurTargets(tpl) {
-  try {
-    const a = JSON.parse(String((tpl && tpl.Targets) || '[]') || '[]');
-    if (!Array.isArray(a)) return [];
-    const seen = new Set(), out = [];
-    for (const x of a) { if (!x || !x.p) continue; const t = { p: String(x.p), u: x.u ? String(x.u) : '' }; const k = t.p + '|' + t.u; if (!seen.has(k)) { seen.add(k); out.push(t); } }
-    return out;
-  } catch (_) { return []; }
+// A corrupt Targets cell reads as "no targets" (the template posts nothing), so it is reported at P1 with the template id. A blank cell is not a failure.
+function recurTargets(tpl, env) {
+  const a = parseJsonCell(String((tpl && tpl.Targets) || ''), [], { env, where: 'recurTargets:Targets', ref: String((tpl && tpl.ID) || ''), severity: 'P1' });
+  if (!Array.isArray(a)) return [];
+  const seen = new Set(), out = [];
+  for (const x of a) { if (!x || !x.p) continue; const t = { p: String(x.p), u: x.u ? String(x.u) : '' }; const k = t.p + '|' + t.u; if (!seen.has(k)) { seen.add(k); out.push(t); } }
+  return out;
 }
 function recurTargetKey(t) { return t.p + '|' + (t.u || ''); }
 function recurWOIsOpen(wo) { return !RECUR_CLOSED_STATUSES.includes(wo.Status) && String(wo.Active || '').toUpperCase() !== 'FALSE'; }
