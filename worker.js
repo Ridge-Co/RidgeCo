@@ -12015,7 +12015,7 @@ async function checklistGateResponse(env, wo, vendorId, action, hintLang) {
   if (!open.length) return null;
   let lang = String(hintLang || '').toLowerCase() === 'es' ? 'es' : 'en';
   if (vendorId) {
-    try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (v && String(v.Language || '').toLowerCase() === 'es') lang = 'es'; } catch (_) {}
+    try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (v && String(v.Language || '').toLowerCase() === 'es') lang = 'es'; } catch (e) { await softFail(env, 'checklistGateResponse:Vendors', e, { severity: 'P2', source: 'read' }); }
   }
   return json({ error: checklistGateMessage(open.length, action, lang), code: 'checklist_incomplete', unresolved: open.map(i => i.t), lang }, 409);
 }
