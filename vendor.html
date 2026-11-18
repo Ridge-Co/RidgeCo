@@ -4460,8 +4460,8 @@ function t(key) {
 // Login-screen language (Nov 16 2026). Before sign-in the page does not know the vendor, so it uses the saved choice, else the device language;
 // the EN / ES buttons change it. After sign-in the vendor's profile language takes over (see onLoginSuccess).
 var LANG_PREF_KEY = 'rc_vendor_lang';
-function _savedLang() { try { return localStorage.getItem(LANG_PREF_KEY); } catch (e) { return null; } }
-function _saveLang(l) { try { localStorage.setItem(LANG_PREF_KEY, l); } catch (e) { console.error('language choice not stored', e); } }
+function _savedLang() { try { return localStorage.getItem(LANG_PREF_KEY); } catch (e) { return null; } }   // silent-ok: storage blocked, uses the device language
+function _saveLang(l) { try { localStorage.setItem(LANG_PREF_KEY, l); } catch (e) { console.error('language choice not stored', e); } }   // silent-ok: storage blocked, choice lasts this visit only
 function setLoginLang(l) { _saveLang(l); location.reload(); }
 (function initLoginLang() {
   var pref = _savedLang();
