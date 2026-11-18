@@ -8919,7 +8919,8 @@ async function ownerApprovalRespond(env, callerRole, callerSessionId, body) {
   } }
   if (!alert.sent) {
     await reportFailure(env, { system: 'hub', source: 'worker', where: 'owner_approval_alert', ref: 'Scope ' + scopeId, severity: 'P2', message: 'An owner answered an estimate (scope ' + scopeId + ') and it saved, but Brett was not texted: ' + String(alert.reason || 'unknown').slice(0, 200) });
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_alert_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `scope=${scopeId} ${alert.reason}`.slice(0, 480) }); } catch (e) { console.error('owner_approval_alert_failed telemetry failed:', schedErrText(e)); } }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_alert_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `scope=${scopeId} ${alert.reason}`.slice(0, 480) }); } catch (e) { console.error('owner_approval_alert_failed telemetry failed:', schedErrText(e)); }   // silent-ok: already reported to the failure ledger just above
+  }
   return json({ ok: true, saved: true, state: wanted === 'declined' ? 'declined' : 'waiting', alerted: !!alert.sent });
 }
 
