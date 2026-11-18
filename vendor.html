@@ -1413,7 +1413,7 @@ function renderWOs(wos, opts) {
   wos = parts.active.concat(parts.paid, parts.cancelled);
   var nActive = parts.active.length, nPaid = parts.paid.length;
   if (!wos || !wos.length) {
-    var emptyMsg = currentTab === 'paid' ? (paidRange > 0 ? 'No jobs paid in that time. Tap "All paid jobs" to see every paid job.' : 'No paid jobs yet.') : currentTab === 'open' ? 'No open work orders.' : currentTab === 'due' ? 'Nothing complete and unbilled — you\'re all caught up.' : currentTab === 'invoiced' ? 'No invoiced jobs yet.' : 'No work orders.';
+    var emptyMsg = (window.VendorHome && VendorHome.on()) ? t(VendorHome.emptyMessage(currentTab)) : currentTab === 'paid' ? (paidRange > 0 ? 'No jobs paid in that time. Tap "All paid jobs" to see every paid job.' : 'No paid jobs yet.') : currentTab === 'open' ? 'No open work orders.' : currentTab === 'due' ? 'Nothing complete and unbilled — you\'re all caught up.' : currentTab === 'invoiced' ? 'No invoiced jobs yet.' : 'No work orders.';
     list.innerHTML = '<div class="empty"><div class="icon">✓</div>' + emptyMsg + '</div>';
     return;
   }
