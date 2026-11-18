@@ -5762,7 +5762,7 @@ async function scopeList(env, url) {
     return r.Status;
   }
 
-  return json(rows.map(r => ({ id: r.ID, property_id: r.Property_ID, unit_id: r.Unit_ID, room: r.Room, title: r.Title, status: displayStatus(r), wo_id: r.WO_ID, approval_stage: r.Approval_Stage || '', parent_scope_id: r.Parent_Scope_ID, item_count: scopeParseItems(r).length, estimate_amount: r.Estimate_Amount, has_proposal: !!(r.Proposal_Text || '').trim(), created_date: r.Created_Date, updated_date: r.Updated_Date })));
+  return json(rows.map(r => ({ id: r.ID, property_id: r.Property_ID, unit_id: r.Unit_ID, room: r.Room, title: r.Title, status: displayStatus(r), wo_id: r.WO_ID, approval_stage: r.Approval_Stage || '', parent_scope_id: r.Parent_Scope_ID, item_count: scopeParseItems(r, env).length, estimate_amount: r.Estimate_Amount, has_proposal: !!(r.Proposal_Text || '').trim(), created_date: r.Created_Date, updated_date: r.Updated_Date })));
 }
 
 // Builds a customer-facing "<Address> Unit <Label>" string for a scope — looks up the real
