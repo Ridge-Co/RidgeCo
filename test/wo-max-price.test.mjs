@@ -78,9 +78,10 @@ function mk(tabs, opts = {}) {
   ok(r2.status === 409 && r2.body.ceiling === 450, 'but not above it');
 }
 {
-  const { maxPriceGateResponse: gate } = mk({ Vendors: [] }, { failTab: 'Estimates' });
+  const { maxPriceGateResponse: gate, calls } = mk({ Vendors: [] }, { failTab: 'Estimates' });
   const wo = { ID: 'WO-1', Max_Price: '300.00' };
   ok((await gate({}, wo, '', 301)).status === 409, 'if estimates cannot be read the bill over the max is still held (fails closed)');
+  ok(calls.soft.length === 1 && calls.soft[0] === 'maxPriceGateResponse:Estimates|P1|WO-1', 'and the failed estimates read is reported at P1 with the WO id');
   eq(await gate({}, wo, '', 300), null, 'and a bill within the max still goes through');
 }
 
