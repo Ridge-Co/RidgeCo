@@ -4646,8 +4646,10 @@ async function receiptReconConfirm(env, body) {
   if (!noWo && !wo_id) return json({ error: 'wo_id required (or pass no_wo:true for a business expense)' }, 400);
   // Nov 17 2026 (Brett): a receipt paid on a customer's card is the CUSTOMER's money. It can never be booked as a Ridge Co / property expense (no_wo) or confirmed with no job:
   // it needs a work order, and it is attached there as a reference (Attach to work order). Refused here for every caller (page, bulk, auto rule) with a plain message, never silently.
-  if (receiptRowIsCustomerCard(row) && (noWo || !wo_id)) {
-    return json({ error: 'This receipt was paid on a customer\'s card, so it cannot be recorded as a Ridge Co expense or confirmed without a work order. Pick the work order and use "Attach to work order (reference only, not billed)".', code: 'customer_card_needs_wo', id }, 409);
+  // Review fix (Nov 17): ALSO refused WITH a work order. A confirm writes a billable / expense Receipts row (invoice fold, QuickBooks email); a customer-card receipt may only ever be
+  // attached to the work order as a non-billed reference (receiptAttachOnly, customer_card), so the only way through is the Attach button.
+  if (receiptRowIsCustomerCard(row)) {
+    return json({ error: 'This receipt was paid on a customer\'s card, so it cannot be confirmed as a billable or Ridge Co expense receipt' + ((noWo || !wo_id) ? ' (and not without a work order)' : '') + '. Pick the work order and use "Attach to work order (reference only, not billed)".', code: (noWo || !wo_id) ? 'customer_card_needs_wo' : 'customer_card_attach_only', id }, 409);
   }
   // Validate the WO actually exists BEFORE writing anything. The manual "type a WO number to
   // override" field on the reconciler UI has no way to know if what was typed is real — a typo
