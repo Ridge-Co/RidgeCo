@@ -47314,7 +47314,7 @@ async function assetRows(env) {
 }
 async function assetTelemetry(env, endpoint, ok, notes) {
   try { await logTelemetry(env, { Source: 'worker', Job_Type: 'asset_registry', Skill_Or_Endpoint: endpoint, Success: ok ? 'TRUE' : 'FALSE', Notes: String(notes || '').slice(0, 200) }); }
-  catch (e) { console.error('asset telemetry failed (best-effort):', e && e.message); }
+  catch (e) { console.error('asset telemetry failed (best-effort):', e && e.message); }   // silent-ok: audit trail only, the route already returned the real outcome to the caller
 }
 async function assetReadNameplate(env, body) {
   body = body || {};
