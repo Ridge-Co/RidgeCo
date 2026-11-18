@@ -759,7 +759,7 @@ const drain = async (L, c, extra) => {
   // Monday 06:00 ET (10:00Z): nothing has passed yet -> nothing seeded, everything runs at its slot
   const store = makeStore(), L = load(store), c = clock(Date.parse('2026-10-12T10:00:00Z'));
   const a = await drain(L, c);
-  t('first tick Mon 06:00 ET seeds nothing (seeded is an empty list) and runs the five interval jobs', a.first.body.first_run === true && a.first.body.seeded.length === 0 && a.ran.join() === INTERVAL5.join() && !stateOf(store).seeded, a.first.body);
+  t('first tick Mon 06:00 ET seeds only the midnight job (its 00:00 slot already passed, not re-sent) and runs the interval jobs', a.first.body.first_run === true && a.first.body.seeded.join() === 'daily_receipts_post' && a.ran.join() === INTERVAL5.join(), a.first.body);
   c.v = Date.parse('2026-10-12T10:59:00Z');
   t('06:59 ET: dailies still not due', !(await drain(L, c)).ran.some(n => DAILY5.includes(n)));
   c.v = Date.parse('2026-10-12T11:00:00Z');
