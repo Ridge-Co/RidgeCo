@@ -27225,7 +27225,7 @@ async function qbBatchList(env) {
     const eff = schedEffective(st);
     const job = (eff.jobs || SCHED_JOBS).find(j => j.name === 'daily_receipts_post');
     const js = st && st.jobs && st.jobs.daily_receipts_post;
-    if (job && !job.disabled) nextSend = { at: job.at, hours_until: qbBatchHoursUntil(schedEtParts(new Date()), job.at, js && js.last_key) };
+    if (job && !job.disabled) nextSend = { at: job.at, hours_until: qbBatchHoursUntil((() => { const p = schedEtParts(new Date()); return Object.assign({}, p, { dayMinutes: qbBatchEtDayMinutes(p.date) }); })(), job.at, js && js.last_key) };
     else scheduleNote = 'The daily QuickBooks send is switched off in the scheduler, so nothing goes out until it is switched on or you tap Send batch now.';
     if (eff.schedule_error) scheduleNote = eff.schedule_error;
   } catch (e) { scheduleNote = 'Could not read the scheduler to say when the next send is: ' + String(e && e.message || e).slice(0, 160); }
