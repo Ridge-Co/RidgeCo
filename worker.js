@@ -9365,7 +9365,7 @@ function triageParseKeywords(s) {
 }
 function triageCfgGet(cfg, key) { return String((cfg && (cfg[key] !== undefined ? cfg[key] : cfg[key.toLowerCase()])) || '').trim(); }
 function triageEnabled(cfg) { return triageCfgGet(cfg, 'Triage_Enabled').toUpperCase() === 'TRUE'; }
-function triageSla(cfg) {
+function triageSla(cfg, env) {
   const out = { ...TRIAGE_SLA_DEFAULT }; const s = triageCfgGet(cfg, 'Triage_SLA_Hours'); if (!s) return out;
   try { const j = JSON.parse(s); for (const k of TRIAGE_TIERS) { const v = parseFloat(j && j[k]); if (isFinite(v) && v > 0) out[k] = v; } } catch (_) { /* a bad value keeps the defaults; triageWorkOrder reports it */ }
   return out;
