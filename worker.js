@@ -12011,7 +12011,7 @@ function checklistGateMessage(count, action, lang) {
 
 // Returns null when the vendor may proceed, else a ready-to-send 409 Response.
 async function checklistGateResponse(env, wo, vendorId, action, hintLang) {
-  const open = checklistUnresolvedItems(wo && wo.Checklist);
+  const open = checklistUnresolvedItems(wo && wo.Checklist, env, wo && wo.ID);
   if (!open.length) return null;
   let lang = String(hintLang || '').toLowerCase() === 'es' ? 'es' : 'en';
   if (vendorId) {
