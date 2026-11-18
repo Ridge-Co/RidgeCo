@@ -35633,7 +35633,7 @@ async function qbInvoiceLineDuplicates(env, token, amount, candidates) {
 // row (see receiptReconCheckDuplicatesBulk).
 async function receiptCheckDuplicatesOne(env, row, opts) {
   opts = opts || {};
-  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (_) {}
+  let suggestion = null; try { suggestion = JSON.parse(row.Suggestion || 'null'); } catch (e) { await softFail(env, 'receiptCheckDuplicatesOne:suggestion', e, { severity: 'P2', ref: String(row.ID || ''), source: 'parse', context: 'the saved scanner suggestion is unreadable, so the duplicate check ran without it' }); }
   const amount = row.Total, date = row.Receipt_Date;
   const propertyId = (suggestion && suggestion.property && suggestion.property.id) || '';
   const evidence = [];
