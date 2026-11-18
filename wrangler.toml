@@ -53,6 +53,16 @@ class_name = "ReadMeterStore"
 tag = "v1"
 new_sqlite_classes = ["ReadMeterStore"]
 
+# ── Workflows trial (queue #92 Phase 1 of 3, Nov 18 2026) ──
+# ONE non-money flow (the receipt scan) run as a Cloudflare Workflow to measure the Free-plan limits (10 ms CPU per step, 3,000 steps a day).
+# The routes that start and read a run (/workflow-trial/*) answer 403 on production, so production never starts a run; the binding is harmless there.
+# NOTE: a Workflow name is unique per Cloudflare account. If production and staging are both deployed from this file, the second deploy may be
+# refused for the same name (see the PR). Rollback: delete this block and set main back to "worker.js".
+[[workflows]]
+name = "receipt-scan-trial"
+binding = "RECEIPT_SCAN_TRIAL"
+class_name = "ReceiptScanTrialWorkflow"
+
 # Git auto-deploy connected via Cloudflare Workers Builds (July 19, 2026).
 
 # ── Environment variables & secrets (managed in the Cloudflare dashboard) ──
