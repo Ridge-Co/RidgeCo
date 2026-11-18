@@ -22982,7 +22982,7 @@ async function routeAICall(env, tier, job) {
 // which routes actually need stricter checks (don't over-build ahead of data).
 function routeAIValid(attempt, job) {
   if (!attempt || attempt.error || !attempt.text || !String(attempt.text).trim()) return false;
-  if (job.schema) { try { JSON.parse(String(attempt.text).replace(/^```json?/i, '').replace(/```$/, '').trim()); } catch (_) { return false; } }
+  if (job.schema) { try { JSON.parse(String(attempt.text).replace(/^```json?/i, '').replace(/```$/, '').trim()); } catch (_) { return false; } }   // silent-ok: a model answer that is not valid JSON is the validity result, and routeAI records it and escalates
   return true;
 }
 
