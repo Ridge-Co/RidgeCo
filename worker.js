@@ -4520,7 +4520,7 @@ async function listReceiptReconQueue(env, url) {
       let items = parseJsonCell(r.Items, [], { env, where: 'listReceiptReconQueue:Items', ref: String(r.ID || ''), severity: 'P2' });
       let items_summary = parseJsonCell(r.Items_Summary, [], { env, where: 'listReceiptReconQueue:Items_Summary', ref: String(r.ID || ''), severity: 'P2' });
       let duplicate_evidence = parseJsonCell(r.Duplicate_Evidence_JSON, [], { env, where: 'listReceiptReconQueue:Duplicate_Evidence_JSON', ref: String(r.ID || ''), severity: 'P2' });
-      let rescan_matches = []; try { rescan_matches = JSON.parse(r.Rescan_Match_JSON || '[]'); } catch (e) {}
+      let rescan_matches = parseJsonCell(r.Rescan_Match_JSON, [], { env, where: 'listReceiptReconQueue:Rescan_Match_JSON', ref: String(r.ID || ''), severity: 'P2' });
       // Sep 23 2026 build: Brett's manual "mark as refund" override for a row the automatic
       // refund detection (receiptExtract's refund_signal_text / negative-total check) missed.
       // Only ever flips the category the frontend reads to decide which card to render — never
