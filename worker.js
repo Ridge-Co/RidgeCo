@@ -12087,7 +12087,7 @@ async function setWoMaxPrice(env, body) {
   const after = findWO(await fetchTab(env, 'Work_Orders'), woId);
   const stored = String((after && after.Max_Price) || '');
   if (maxPriceNum(stored) !== maxPriceNum(val)) return json({ error: 'The max price did not save — please try again.', saved: false }, 500);
-  if (old !== stored) { try { await logWOAudit(env, woId, 'admin', 'admin', 'Max_Price', old, stored, val ? 'Max price set (vendor-facing)' : 'Max price cleared'); } catch (_) {} }
+  if (old !== stored) { try { await logWOAudit(env, woId, 'admin', 'admin', 'Max_Price', old, stored, val ? 'Max price set (vendor-facing)' : 'Max price cleared'); } catch (e) { await softFail(env, 'setWoMaxPrice:audit', e, { severity: 'P1', ref: woId, source: 'write' }); } }
   return json({ success: true, saved: true, wo_id: woId, max_price: stored });
 }
 
