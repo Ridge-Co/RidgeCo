@@ -27089,7 +27089,7 @@ async function sendReceiptsToQBEmail(env, opts) {
           const tok = await getAccessToken(env);
           const dl = await driveDownload(tok, src.id);
           attachment = { filename: `receipt_${r.ID}`, mimeType: dl.mime || 'application/octet-stream', base64Data: bytesToB64(dl.bytes) };
-        } catch (e) { attachErr = e; }   // the email still goes (nothing may fall out of reconciliation); the missing image is reported below, not hidden
+        } catch (e) { await softFail(env, 'sendReceiptsToQB:attachment', e, { severity: 'P1', ref: String(r.ID || ""), source: 'drive', context: 'the receipt was forwarded to QuickBooks without its image because the file could not be downloaded' }); }
       }
       const wo = r.WO_ID ? workorders.find(w => String(w.ID) === String(r.WO_ID)) : null;
       const prop = r.Property_ID ? properties.find(p => String(p.ID) === String(r.Property_ID)) : null;
