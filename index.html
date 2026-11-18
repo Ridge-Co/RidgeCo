@@ -8776,8 +8776,10 @@ function openManageTemplatesModal() {
   refreshTemplates();
 }
 
+var _tmplLoadError = '';
 function refreshTemplates() {
   return api('GET','/wo-templates').then(function(items) {
+    _tmplLoadError = Array.isArray(items) ? '' : ((items && items.error) || 'No answer from the Hub');
     _woTemplates = Array.isArray(items) ? items : [];
     renderTemplates();
     renderTemplatePicker(); // keep the New-WO "From Template" picker in sync if it's open
