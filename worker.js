@@ -27033,7 +27033,9 @@ async function sendReceiptsToQBEmail(env, opts) {
   const qbEmail = (cfg.qb_receipts_email || env.QB_RECEIPTS_EMAIL || '').trim();
   if (!qbEmail) return json({ ok: false, error: 'qb_receipts_email is not set — add it as a Config/Settings key (or QB_RECEIPTS_EMAIL secret) first: the email address QuickBooks gave you for forwarding receipts.' }, 400);
 
-  try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date']); } catch (e) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
+  // The batch columns MUST exist before anything is claimed: the 'sending' marker is the double-send guard, and a write to a missing column is silently dropped (rule 174).
+  try { await ensureColumns(env, 'Receipts', ['Property_ID', 'Category', 'Source_File_ID', 'Source_File_URL', 'QB_Email_Sent', 'QB_Email_Sent_Date', 'Payment_Source'].concat(QB_BATCH_COLS)); }
+  catch (e) { return json({ ok: false, error: 'Could not prepare the Receipts columns, so nothing was emailed to QuickBooks: ' + String(e && e.message || e) }, 500); }
 
   let all = []; try { all = await fetchTab(env, 'Receipts'); } catch (e) { return json({ ok: false, error: 'Could not read Receipts: ' + (e.message || e) }, 500); }
   const onlyIds = (opts.ids && Array.isArray(opts.ids) && opts.ids.length) ? new Set(opts.ids.map(String)) : null;
