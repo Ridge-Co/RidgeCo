@@ -1105,6 +1105,7 @@ const _hubWorkerCore = {
         if (path === '/wo-template/update')       { await ensureColumns(env, 'WO_Templates', RECUR_TEMPLATE_COLS); return await updateRow(env, 'WO_Templates', body.id, recurSanitizeTemplateFields(body.fields)); }
         if (path === '/wo-template/post-now')     return await recurPostNow(env, body);
         if (path === '/wo-template/copy')         return await recurCopyTemplate(env, body);
+        if (path === '/wo-template/seed-seasonal') return await recurSeedSeasonalPack(env, body);   // queue #108: ADMIN-ONLY (not in PUBLIC_PATHS, not in HUB_PROD_WRITE_PATHS); dry run by default
         if (path === '/wo-template/link')         return await recurLinkTemplate(env, body);
         if (path === '/wo-template/preview')      return await recurPreview(env, body);
         if (path === '/wo-snippet/add')           { await ensureTab(env, WO_SNIPPETS_TAB, WO_SNIPPETS_COLS); return await addRow(env, WO_SNIPPETS_TAB, body); }
