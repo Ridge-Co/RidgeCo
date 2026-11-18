@@ -47,7 +47,7 @@ const call = async (w, b) => { const r = await w.api.recurSeedSeasonalPack({}, b
   for (const p of P) {
     const row = w.api.recurPackRow(p);
     t(p.Name + ': survives the sanitizer unchanged (no field dropped or clamped)', ['Freq_Type', 'Freq_Interval', 'Freq_Day_Of_Month', 'Start_Date', 'Lead_Days', 'Name', 'Description', 'Trade'].every(k => String(row[k]) === String(({ ...p, Freq_Type: 'monthly_date', Lead_Days: '14' })[k])), row);
-    t(p.Name + ': seeded OFF, no property, no vendor, no tenant notice, no max price, global, active', row.Recurrence_Enabled === 'FALSE' && row.Targets === '[]' && row.Default_Vendor_ID === '' && row.Notify_Tenant === 'FALSE' && row.Max_Price === '' && row.Owner_ID === '' && row.Active === 'TRUE' && row.Season_Enabled === 'FALSE');
+    t(p.Name + ': seeded OFF, no property, no vendor, no tenant notice, no max price, global, active', row.Recurrence_Enabled === 'FALSE' && row.Targets === '[]' && row.Default_Vendor_ID === '' && row.Notify_Tenant === 'FALSE' && !row.Max_Price && row.Owner_ID === '' && row.Active === 'TRUE' && row.Season_Enabled === 'FALSE');
     t(p.Name + ': helper text field is not written', !('_due' in row));
     t(p.Name + ': no private data in the description (no digits runs of 4+, no $, no @)', !/\d{4,}|\$|@/.test(p.Description), p.Description);
     t(p.Name + ': first due date is next year or later (the engine never posts more than 3 days late)', p.Start_Date >= '2027-01-01');
