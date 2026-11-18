@@ -7014,7 +7014,7 @@ function scopeVendorPayableSchedule(milestones) {
   return out;
 }
 function scopeParsePaymentSchedule(s, env) {
-  try { const arr = JSON.parse((s && s.Payment_Schedule_JSON) || 'null'); if (Array.isArray(arr) && arr.length) return arr; } catch (_) {}
+  { const arr = parseJsonCell(s && s.Payment_Schedule_JSON, null, { env, where: 'scopeParsePaymentSchedule', ref: String((s && s.ID) || ''), severity: 'P1' }); if (Array.isArray(arr) && arr.length) return arr; }   // an unreadable schedule falls back to the default split and is reported
   return scopeDefaultPaymentSchedule();
 }
 
