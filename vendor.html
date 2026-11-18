@@ -492,7 +492,7 @@ function onLoginSuccess(data, persist) {
   var _newLang = (data.language === 'es') ? 'es' : 'en';
   _saveLang(_newLang);
   if (_esObs && _newLang !== 'es') {
-    if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){ console.error('session not stored before redraw', e); } }
+    if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){ console.error('session not stored before redraw', e); } } // silent-ok: storage blocked, vendor just logs in again
     location.reload(); return;
   }
   LANG = _newLang;
