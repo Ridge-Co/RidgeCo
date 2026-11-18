@@ -10151,7 +10151,7 @@ async function addonSubmit(env, body, callerRole, callerSessionId) {
   if (status === 'Withdrawn') return json({ error: 'This additional work was withdrawn' }, 400);
   if (status !== 'Draft' && status !== 'Submitted') return json({ error: 'This job is not an additional-work draft' }, 400);
 
-  const items = addonParseItems(child);
+  const items = addonParseItems(child, env);
   if (!items.length) return json({ error: 'Draft has no items' }, 400);
   const missing = addonMissingPhotoItems(items, attachments.filter(a => a.WO_ID === childId));
   if (missing.length) return json({ error: 'Every item needs at least one photo', missing_items: missing }, 400);
