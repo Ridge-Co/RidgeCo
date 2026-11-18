@@ -8843,7 +8843,7 @@ async function ownerApprovals(env, callerRole, callerSessionId, url) {
   if (!ownerApprovalsEnabled(cfg)) return json({ ok: true, enabled: false, message: 'not available', cards: [] });
   await scopesTab(env); await scopeSigTab(env);
   const [scopes, props, units, sigs] = await fetchTabs(env, ['Scopes', 'Properties', 'Units', 'Scope_Signatures']);
-  const cards = ownerApprovalCards(scopes, props, units, sigs, ownerId, Date.now());
+  const cards = ownerApprovalCards(scopes, props, units, sigs, ownerId, Date.now(), env);
   for (const c of cards) {
     if (c.state !== 'waiting') continue;
     const row = scopes.find(s => String(s.ID) === c.scope_id);
