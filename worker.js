@@ -27136,7 +27136,7 @@ async function sendReceiptsToQBEmail(env, opts) {
       const msg = String(e && e.message || e);
       failed.push({ id: r.ID, error: msg });
       await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.send', ref: String(r.ID), err: e, message: 'Receipt ' + r.ID + ' could not be emailed to QuickBooks: ' + msg, severity: 'P1' });
-      try { await qbBatchWrite(env, r.ID, { QB_Batch_Status: 'failed', QB_Batch_Error: msg.slice(0, 300) }); }
+      try { await qbBatchWrite(env, r.ID, { QB_Batch_Status: 'failed', QB_Batch_Error: msg.slice(0, 300) }); quarantined++; }   // failed for today: not picked again by this run's later slices
       catch (e2) { await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.mark_failed', ref: String(r.ID), err: e2, message: 'Receipt ' + r.ID + ' failed to send AND the failed flag could not be saved (it stays "sending" and will not be re-sent by itself)', severity: 'P1' }); }
       await new Promise(res => setTimeout(res, 400));
       continue;
