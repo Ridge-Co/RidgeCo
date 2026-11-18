@@ -6546,7 +6546,7 @@ async function scopeProposal(env, body) {
 // that) — this just gets a real, working, sendable link live for today.
 const SCOPE_PROPOSAL_LINK_TTL = 60 * 60 * 24 * 90; // 90 days — revoke any time via the rev bump
 async function scopeProposalLinkToken(env, scopeId) {
-  try { await ensureColumns(env, 'Scopes', ['Link_Rev']); } catch (e) {}
+  try { await ensureColumns(env, 'Scopes', ['Link_Rev']); } catch (e) {}   // silent-ok: ensureColumns reports its own failure to the failure ledger
   const s = await scopeFind(env, scopeId);
   if (!s) return null;
   const rev = String(s.Link_Rev || '0');
