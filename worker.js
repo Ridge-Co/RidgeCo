@@ -36836,7 +36836,7 @@ function buildInvoiceLines(ir, billRow, trade, tradeName, wo, itemRefOverride, o
   // Landscaping" tells them nothing about the job.
   // Slice the description, not the joined string — otherwise a long one takes the
   // "— WO 1062" reference off the end with it.
-  const workDesc = buildLaborDescription(billRow, timeEntries, wo).slice(0, 3800);
+  const workDesc = buildLaborDescription(billRow, timeEntries, wo, env).slice(0, 3800);
   const labelParts = [tradeName];
   if (workDesc) labelParts.push(workDesc);
   labelParts.push('WO ' + (ir.WO_ID || ''));
