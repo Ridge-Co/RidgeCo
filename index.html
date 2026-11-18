@@ -15565,9 +15565,10 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   <div class="modal" style="max-width:700px">
     <div class="modal-header"><div class="modal-title">WO TEMPLATES — MANAGE</div><button class="modal-close" onclick="closeModal('modal-manage-templates')">✕</button></div>
     <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Custom templates pre-fill new WO forms — including a link to a Google Sheet, document, or checklist. These show up under "Your Templates" in the "📋 From Template" picker when creating a work order, alongside the built-in ones.</p>
-    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
-      <button class="btn small" onclick="openAddTemplateModal()">+ Add Template</button>
-      <button class="btn secondary small" onclick="refreshTemplates()">↻ Refresh</button>
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+      <button class="btn small" style="min-height:44px" onclick="openAddTemplateModal()">+ Add Template</button>
+      <button class="btn secondary small" style="min-height:44px" id="pack-open-btn" onclick="openSeasonalPackModal()">Add seasonal starter pack</button>
+      <button class="btn secondary small" style="min-height:44px" onclick="refreshTemplates()">↻ Refresh</button>
     </div>
     <div id="templates-list"><div class="loading">Loading…</div></div>
     <div class="modal-actions">
