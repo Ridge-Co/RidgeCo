@@ -115,7 +115,7 @@ console.log('paging: nothing silently dropped');
 {
   const w = world(); const ids = []; for (let i = 0; i < 12; i++) ids.push(w.addRcpt({ Amount: String(10 + i) + '.00' }));
   const r1 = await w.call('sendReceiptsToQBEmail', { release: true });
-  ok(r1.sent === 5 && r1.remaining === 7, 'first call sends the per-call cap (5) and says 7 remain');
+  ok(r1.sent === 3 && r1.remaining === 9, 'first call sends the default per-call count (3) and says 9 remain');
   const job = await w.call('schedRunDailyReceiptsPost');
   ok(job.partial === true && job.progress_made === true && job.ok === true, 'the daily job returns partial + progress_made so the scheduler resumes it');
   const r3 = await w.call('sendReceiptsToQBEmail', { release: true, limit: 50 });
