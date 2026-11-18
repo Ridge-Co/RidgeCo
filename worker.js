@@ -26933,7 +26933,7 @@ async function backfillItemsSummary(env, opts) {
 // heuristic) versus genuinely no trace anywhere (never scanned through the Reconciler at all).
 async function receiptsImageCheck(env) {
   const [receipts, queueRows] = await Promise.all([
-    fetchTab(env, 'Receipts').catch(() => []),
+    fetchTab(env, 'Receipts').catch(e => softFail(env, 'receiptsImageCheck:Receipts', e, { severity: 'P2', source: 'read' }).then(() => [])),
     fetchTab(env, 'Receipt_Recon_Queue').catch(() => []),
   ]);
   const active = receipts.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE');
