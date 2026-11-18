@@ -5,6 +5,7 @@
 // "all options" doc, plus scope-proposal.html's checkbox/total logic and the Message Queue English view.
 import fs from 'fs';
 import assert from 'node:assert';
+globalThis.parseJsonCell = globalThis.parseJsonCell || ((c, fb) => { if (c === undefined || c === null || String(c).trim() === '') return fb; try { return JSON.parse(c); } catch (e) { return fb; } });   // fake of the worker helper (the report itself is covered by json-cells-money-failure-reports.test.mjs)
 const src = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 const proposalHtml = fs.readFileSync(new URL('../scope-proposal.html', import.meta.url), 'utf8');
 const mqHtml = fs.readFileSync(new URL('../message-queue.html', import.meta.url), 'utf8');
