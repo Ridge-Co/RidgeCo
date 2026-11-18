@@ -30,6 +30,7 @@ function makeWorld(opts) {
   const stubs = {
     fetchConfig: async () => Object.assign({}, W.cfg), fetchTab: async (env, tab) => objs(tab), fetchTabs: async (env, ts) => ts.map(x => objs(x)),
     invalidateTabCache: () => {}, json,
+    parseJsonCell: (c, fb) => { if (c === undefined || c === null || String(c).trim() === '') return fb; try { return JSON.parse(c); } catch (e) { return fb; } },   // same contract as the worker helper, minus the report
     sheetsRequest: async (env, method, path, body) => {
       let m;
       if (method === 'GET' && path.startsWith('?fields=')) return { sheets: [...tabs.keys()].map(title => ({ properties: { title } })) };
