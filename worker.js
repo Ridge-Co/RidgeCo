@@ -9411,7 +9411,7 @@ async function woTriageSet(env, body) {
   if (!TRIAGE_TIERS.includes(tier)) return json({ error: 'tier must be one of ' + TRIAGE_TIERS.join(', ') }, 400);
   const wo = findWO(await fetchTab(env, 'Work_Orders'), woId);
   if (!wo) return json({ error: 'Work order not found' }, 404);
-  const cfg = await fetchConfig(env), sla = triageSla(cfg);
+  const cfg = await fetchConfig(env), sla = triageSla(cfg, env);
   const base = Date.parse(wo.Created_Date || '') || Date.now();
   const nowIso = new Date(Date.now()).toISOString();
   const fields = { Triage_Tier: tier, Triage_Emergency: tier === 'Emergency' ? 'TRUE' : 'FALSE', Triage_Source: 'manual', Triage_Set_By: 'admin', Triage_At: nowIso,
