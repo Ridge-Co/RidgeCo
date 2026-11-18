@@ -27715,7 +27715,7 @@ async function ownerOnboardSubmit(env, body, clientIP) {
   await updateRow(env, 'Owner_Invites', inv.ID, {
     Status: 'used', Used_Date: nowIso, Owner_ID: ownerId, Needs_Review: needsReview ? 'TRUE' : 'FALSE',
     Result_Summary: JSON.stringify({ ...summary, warnings }).slice(0, 45000),
-  }).catch(() => {});
+  }).catch(async (e) => { await softFail(env, 'ownerOnboardSubmit:markUsed', e, { severity: 'P1', ref: String(inv.ID || ''), source: 'write', context: 'the owner was saved but the invite was not marked used, so the same link could be submitted again' }); });
 
   try {
     const cfg = await fetchConfig(env);
