@@ -6897,7 +6897,7 @@ async function scopeProposalView(env, url, ua, ctx) {
     const sigs = await fetchTab(env, 'Scope_Signatures');
     const row = sigs.find(r => r.Scope_ID === String(s.ID) && String(r.Active || '').toUpperCase() !== 'FALSE');
     if (row) {
-      let sel = {}; try { sel = JSON.parse(row.Selections_JSON || '{}'); } catch (_) {}
+      let sel = parseJsonCell(row.Selections_JSON, {}, { env, where: 'scopeProposalView:Selections_JSON', ref: String(s.ID || ''), severity: 'P1' });
       let signedSchedule = schedule; // fallback: unsigned live schedule, shown against the locked subtotal below
       try {
         await paymentMilestonesTab(env);
