@@ -243,6 +243,21 @@ console.log('review list pieces');
   ok(h({ date: '2026-11-18', minutes: 60 }, '07:00', '2026-11-17') === 6 && h({ date: '2026-11-18', minutes: 8 * 60 }, '07:00', '2026-11-17') === 0 && h({ date: '2026-11-18', minutes: 8 * 60 }, '07:00', '2026-11-18') === 23, 'hours until the send: before the slot, overdue, already ran today');
 }
 
+console.log('send time = midnight Eastern (Brett, Nov 17 2026)');
+{
+  const gs = readFileSync(join(here, '..', 'apps-script', 'hub-scheduler', 'HubScheduler.gs'), 'utf8');
+  ok(/\{ name: 'daily_receipts_post', run: 'hub', at: '00:00',\s+enabled: true/.test(gs), 'the Apps Script JOBS table sends the QuickBooks batch at 00:00 (midnight Eastern)');
+  ok(/\{ name: 'daily_receipts',\s+run: 'hub', at: '07:00'/.test(gs), 'the receipt inbox scan keeps its 07:00 slot');
+  ok(/"timeZone": "America\/New_York"/.test(readFileSync(join(here, '..', 'apps-script', 'hub-scheduler', 'appsscript.json'), 'utf8')), 'the Apps Script project time zone is already America/New_York (no change needed)');
+  const apply = new Function('SCHED_OVERRIDE_FIELDS', 'SCHED_EVERY_MIN_MAX', 'schedHumanEvery', extractFn('schedApplyOverrides') + '\nreturn schedApplyOverrides;')(['enabled', 'every_min', 'at', 'dow'], 1440, () => 15);
+  const r = apply([{ name: 'daily_receipts_post', kind: 'daily', at: '07:00' }], { daily_receipts_post: { at: '00:00' } });
+  ok(!r.errors.length && r.applied.daily_receipts_post && r.applied.daily_receipts_post.at === '00:00' && r.jobs[0].at === '00:00', 'the Hub accepts and applies a 00:00 override for the daily job');
+  const hh = world().all.qbBatchHoursUntil;
+  ok(hh({ date: '2026-11-18', minutes: 22 * 60 }, '00:00', '2026-11-18') === 2 && hh({ date: '2026-11-18', minutes: 60 }, '00:00', '2026-11-18') === 23, 'hours until the midnight send, once it has run today: 2 h at 10 PM, 23 h at 1 AM');
+  ok(hh({ date: '2026-11-18', minutes: 5 }, '00:00', '2026-11-17') === 0, 'just after midnight and not yet run today: due now (next scheduler check)');
+  ok(/function qbbClock\(at\)/.test(readFileSync(join(here, '..', 'receipt-reconciler.html'), 'utf8')) && /\(midnight\)/.test(readFileSync(join(here, '..', 'receipt-reconciler.html'), 'utf8')), 'the page words 00:00 as "12:00 AM (midnight)"');
+}
+
 console.log('wiring');
 ok(/\/receipts\/qb-batch'\)\s+return await qbBatchList\(env\)/.test(src) && /'\/receipts\/qb-batch\/send-now'\) return await sendReceiptsToQBEmail\(env, \{ limit: body && body.limit, ids: body && body.ids, release: true, manual: true \}\)/.test(src), 'list and send-now are routed (send-now passes release:true)');
 ok(/'\/receipts\/qb-batch\/action'\) return await qbBatchAction/.test(src) && /'\/receipts\/qb-batch\/delete-done'\) return await qbBatchDeleteDone/.test(src), 'action and delete-done are routed');
