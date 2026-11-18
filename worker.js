@@ -7140,7 +7140,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   if (signatureId) {
     try {
       const maxUpfront = await scopeMaxUpfrontPct(env);
-      const rawSchedule = scopeParsePaymentSchedule(s);
+      const rawSchedule = scopeParsePaymentSchedule(s, env);
       const { schedule } = scopeValidatePaymentSchedule(rawSchedule, maxUpfront);
       const clean = schedule || scopeDefaultPaymentSchedule();
       const amounts = scopeComputeMilestoneAmounts(clean, subtotal, vendorCostTotal);
