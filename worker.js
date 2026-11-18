@@ -7175,7 +7175,7 @@ async function scopeProposalSign(env, body, ip, ua) {
     const job = s.WO_ID ? ('work order ' + s.WO_ID) : ('proposal #' + s.ID);
     await sendTemplatedSms(env, { type: 'admin_proposal_signed', kind: 'admin', wo_id: s.WO_ID || '', unit_id: s.Unit_ID || '', property: c.property, tokens: { Signer: signer, Job: job, Address: c.address } });
     if (c.vendor && c.vendor.Phone) await sendTemplatedSms(env, { type: 'vendor_proposal_signed', kind: 'vendor', vendor: c.vendor, wo_id: s.WO_ID || '', unit_id: s.Unit_ID || '', property: c.property, tokens: { FirstName: vendorFirstName(c.vendor), Job: job } });
-  } catch (_) {}
+  } catch (e) { await softFail(env, 'scopeProposalSign:texts', e, { severity: 'P0', ref: String(s.ID || ''), source: 'sms', context: 'the proposal was signed but the admin or vendor text was not sent' }); }
   return json({ ok: true, subtotal, deposit, schedule: milestones });
 }
 
