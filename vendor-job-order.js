@@ -96,7 +96,7 @@ var JobOrder = (function () {
       var n = items.filter(function (f) { return f.Active !== 'FALSE' && String(f.File_Type || '').toLowerCase() === 'after'; }).length;
       _after[woId] = n;
       return n;
-    }).catch(function () { return null; });
+    }).catch(function () { return null; });   // silent-ok: unknown photo count leaves the bill panel unchecked
   }
   // loadPortalAttachments tells us the real count whenever the card's photo section refreshes.
   function setAfter(woId, n) { _after[woId] = n; refreshBillPanel(); }
