@@ -34868,7 +34868,7 @@ async function qbFindOrCreateVendor(env, vendor, displayName, token) {
   const r = await qbApi(env, 'vendor?minorversion=73', 'POST', payload, token);
   const id = r?.Vendor?.Id || qbDupId(r);
   if (!id) throw new Error(qbFault(r) || 'could not create QB vendor');
-  if (vendor.ID) { try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: id }); } catch (e) {} }
+  if (vendor.ID) { try { await updateRow(env, 'Vendors', vendor.ID, { QBO_Vendor_ID: id }); } catch (e) { await softFail(env, 'qbFindOrCreateVendor:linkCreated', e, { severity: 'P1', ref: String(vendor.ID), source: 'write', context: 'the QuickBooks vendor was created but the vendor row was not linked to it, so the next bill may create another' }); } }
   return id;
 }
 
