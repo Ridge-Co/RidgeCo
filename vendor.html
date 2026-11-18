@@ -2240,7 +2240,7 @@ function submitStatus(woId, idx) {
   // Checklist gate: can't mark Complete until every item is checked or has a reason.
   if (status === 'Complete') {
     var g = checklistGate(idx);
-    if (!g.ok) { showActionMsg(idx, g.msg, 'warn'); return; }
+    if (!g.ok) { showActionMsg(idx, g.msg, 'warn'); return false; }
   }
   // Save the checklist FIRST (the server re-checks it before accepting Complete), then post the status.
   showActionMsg(idx, 'Saving…', '');
