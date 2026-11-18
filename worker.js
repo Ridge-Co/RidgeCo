@@ -12031,7 +12031,7 @@ function maxPriceNum(v) {
   return Number.isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : 0;
 }
 
-function estimateSubtotalOf(e) {
+function estimateSubtotalOf(e, env) {
   const s = parseFloat(String((e && e.Subtotal) == null ? '' : e.Subtotal).replace(/[$,\s]/g, ''));
   if (Number.isFinite(s)) return s;
   try { return (JSON.parse((e && e.Line_Items) || '[]') || []).reduce((t, li) => t + (parseFloat(li && li.amount) || 0), 0); } catch (_) { return 0; }
