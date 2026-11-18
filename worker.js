@@ -9376,7 +9376,7 @@ async function triageWorkOrder(env, woId, wo, source) {
   if (!triageEnabled(cfg)) return { skipped: 'off' };
   const kw = triageParseKeywords(triageCfgGet(cfg, 'Triage_Keywords'));
   if (kw && kw.error) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage_config_bad', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'FALSE', Notes: kw.error.slice(0, 300) }); } catch (te) { console.error('triage_config_bad telemetry failed:', schedErrText(te)); } }
-  const sla = triageSla(cfg);
+  const sla = triageSla(cfg, env);
   const nowMs = Date.now();
   const r = triageByRules(wo.description, wo.trade, new Date(nowMs), (kw && !kw.error) ? kw : null);
   const priority = String(wo.priority || 'normal').toLowerCase();
