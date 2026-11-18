@@ -3954,7 +3954,7 @@ function receiptSuggestCore(input, properties, workorders, receipts, custCards, 
 // never has to touch the Cloudflare dashboard, a Config sheet row 'receipt_customer_cards' —
 // either works, comma-separated last-4s.
 async function receiptCustomerCards(env) {
-  const cfg = await fetchConfig(env).catch(() => ({}));
+  const cfg = await fetchConfig(env).catch(() => ({}));   // silent-ok: fetchConfig never throws, this is a spare fallback
   return String(env.RECEIPT_CUSTOMER_CARDS || cfg.receipt_customer_cards || '').split(',').map(s => s.replace(/\D/g,'').slice(-4)).filter(Boolean);
 }
 
@@ -4815,7 +4815,7 @@ function receiptCutoffNote(receiptDate, cutoff) {
 // predate the cutoff (they were queued before the cutoff existed). Skips only; writes nothing
 // else, and every row it touches can be moved back with /receipt-recon/unskip.
 async function receiptReconSkipBeforeCutoff(env, body) {
-  const cfg = await fetchConfig(env).catch(() => ({}));
+  const cfg = await fetchConfig(env).catch(() => ({}));   // silent-ok: fetchConfig never throws, this is a spare fallback
   const cutoff = receiptReconCutoff(cfg);
   const rows = await fetchTab(env, 'Receipt_Recon_Queue');
   const hits = rows.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE' && (r.Status || 'pending') === 'pending' && receiptBeforeCutoff(r.Receipt_Date, cutoff));
@@ -5802,7 +5802,7 @@ async function scopeGet(env, url) {
 
 // GET /scope/drive-list?folder= — list image/pdf files in the handwriting scan folder to pick from.
 async function scopeDriveList(env, url) {
-  const cfg = await fetchConfig(env).catch(() => ({}));
+  const cfg = await fetchConfig(env).catch(() => ({}));   // silent-ok: fetchConfig never throws, this is a spare fallback
   const folder = (url && url.searchParams.get('folder')) || cfg.scope_scan_folder_id || env.SCOPE_SCAN_FOLDER_ID || SCOPE_SCAN_FOLDER_DEFAULT;
   try {
     const tok = await getAccessToken(env);
@@ -6293,8 +6293,8 @@ async function adminGeminiContextUpdate(env, body) {
 
 async function backfillScopeWOVendor(env) {
   const [scopes, workorders] = await Promise.all([
-    fetchTab(env, 'Scopes').catch(() => []),
-    fetchTab(env, 'Work_Orders').catch(() => []),
+    fetchTab(env, 'Scopes').catch(e => softFail(env, 'backfillScopeWOVendor:Scopes', e, { severity: 'P2', source: 'read' }).then(() => [])),
+    fetchTab(env, 'Work_Orders').catch(e => softFail(env, 'backfillScopeWOVendor:Work_Orders', e, { severity: 'P2', source: 'read' }).then(() => [])),
   ]);
   const woById = new Map(workorders.map(w => [String(w.ID), w]));
   let scopesChecked = 0, updated = 0; const details = [];
@@ -6325,8 +6325,8 @@ async function backfillScopeWOVendor(env) {
 async function backfillReceiptAttachments(env, body) {
   const apply = !!(body && body.apply === true);
   const [receipts, attachments] = await Promise.all([
-    fetchTab(env, 'Receipts').catch(() => []),
-    fetchTab(env, 'Attachments').catch(() => []),
+    fetchTab(env, 'Receipts').catch(e => softFail(env, 'backfillReceiptAttachments:Receipts', e, { severity: 'P2', source: 'read' }).then(() => [])),
+    fetchTab(env, 'Attachments').catch(e => softFail(env, 'backfillReceiptAttachments:Attachments', e, { severity: 'P1', source: 'read', context: 'the already-linked list is empty, so a backfill run could add duplicate gallery rows' }).then(() => [])),
   ]);
   const alreadyLinked = new Set(
     attachments.filter(a => String(a.File_Type || '').toLowerCase() === 'receipt' && a.Receipt_ID)
@@ -6849,7 +6849,7 @@ async function scopeProposalPhotos(env, s) {
         return { fileId: a.Drive_File_ID || '', url: a.Drive_URL || '', name: a.File_Name || 'photo', isVideo, isViewable: isVideo || isImage };
       })
       .filter(p => p.isViewable && p.fileId);
-  } catch (_) { return []; }
+  } catch (e) { await softFail(env, 'scopeProposalPhotos:Attachments', e, { severity: 'P2', source: 'read', ref: String((s && s.ID) || ''), context: 'the proposal page shows no photos' }); return []; }
 }
 
 // structured per-item/variant view built by scopeProposal() (Proposal_Items_JSON) — HARD RULE:
@@ -26484,7 +26484,7 @@ async function arReportSetOptIn(env, body) {
   if (!ownerId) return json({ error: 'owner_id required' }, 400);
   const enabled = body && (body.enabled === true || body.enabled === '1' || body.enabled === 'TRUE');
   await ensureTab(env, AR_OPTIN_TAB, AR_OPTIN_COLS);
-  const rows = await fetchTab(env, AR_OPTIN_TAB).catch(() => []);
+  const rows = await fetchTab(env, AR_OPTIN_TAB).catch(e => softFail(env, 'arReportSetOptIn:AR_Report_OptIn', e, { severity: 'P1', source: 'read', ref: ownerId, context: 'the opt-in list read as empty, so a second row may be added for this owner' }).then(() => []));
   const existing = rows.find(r => String(r.Owner_ID) === ownerId);
   const owners = await fetchTab(env, 'Owners');
   const owner = owners.find(o => String(o.ID) === ownerId);
@@ -26933,8 +26933,8 @@ async function backfillItemsSummary(env, opts) {
 // heuristic) versus genuinely no trace anywhere (never scanned through the Reconciler at all).
 async function receiptsImageCheck(env) {
   const [receipts, queueRows] = await Promise.all([
-    fetchTab(env, 'Receipts').catch(() => []),
-    fetchTab(env, 'Receipt_Recon_Queue').catch(() => []),
+    fetchTab(env, 'Receipts').catch(e => softFail(env, 'receiptsImageCheck:Receipts', e, { severity: 'P2', source: 'read' }).then(() => [])),
+    fetchTab(env, 'Receipt_Recon_Queue').catch(e => softFail(env, 'receiptsImageCheck:Receipt_Recon_Queue', e, { severity: 'P2', source: 'read' }).then(() => [])),
   ]);
   const active = receipts.filter(r => String(r.Active || '').toUpperCase() !== 'FALSE');
   let hasOwnFile = 0, recoveredExact = 0, nearMissSameWO = 0, noTraceAtAll = 0;
@@ -32346,7 +32346,7 @@ async function qbApprovedReceipts(env, ir) {
   try {
     const rows = await fetchTab(env, 'Receipts');
     return rows.filter(r => ids.includes(String(r.ID)) && r.Active !== 'FALSE');
-  } catch (e) { return []; }
+  } catch (e) { await softFail(env, 'qbApprovedReceipts:Receipts', e, { severity: 'P1', source: 'read', ref: String((ir && ir.ID) || ''), context: 'the invoice repair rebuilds its lines without the approved receipts' }); return []; }
 }
 
 // The item an invoice was originally posted against. Reused when repairing so the wording
@@ -41435,7 +41435,7 @@ const PROPOSAL_SIG_HEADERS = ['ID','Proposal_ID','Option','Owner_Total','First_P
 // If PROPOSAL_CONFIG is unset the feature is dormant (proposals resolve to "unknown").
 function proposalRegistry(env) {
   try { return env && env.PROPOSAL_CONFIG ? JSON.parse(env.PROPOSAL_CONFIG) : {}; }
-  catch (e) { return {}; }
+  catch (e) { if (!proposalRegistry._noted) { proposalRegistry._noted = true; softNote(env, 'proposalRegistry:PROPOSAL_CONFIG', 'PROPOSAL_CONFIG is not valid JSON, every proposal reads as unknown: ' + String((e && e.message) || e).slice(0, 120), { severity: 'P1', source: 'config' }); } return {}; }
 }
 
 async function ensureProposalTab(env) {
