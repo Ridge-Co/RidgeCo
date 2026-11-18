@@ -6132,7 +6132,7 @@ async function woPushToScope(env, body) {
     willCreate = true;
   }
 
-  const existingItems = targetScope ? scopeParseItems(targetScope) : [];
+  const existingItems = targetScope ? scopeParseItems(targetScope, env) : [];
   const mappedItems = scopeItemsFromEstimate(lineItems, existingItems);
   if (!mappedItems.length) return json({ error: `Estimate ${estimate.ID}'s line items all have blank descriptions — nothing to convert.` }, 400);
 
