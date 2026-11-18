@@ -27023,7 +27023,7 @@ function qbBatchSubject(r) { return `Receipt — ${r.Store || 'Unknown vendor'} 
 // updateRow does not throw on a missing row / missing column (it returns a JSON error), so a marker write is only believed when it says success.
 async function qbBatchWrite(env, id, fields) {
   const res = await updateRow(env, 'Receipts', id, fields);
-  const j = (res && typeof res.json === 'function') ? await res.json().catch(() => null) : null;
+  const j = (res && typeof res.json === 'function') ? await res.json().catch(() => null) : null;   // silent-ok: a null answer is checked on the next line and throws
   if (!j || j.success !== true || j.message === 'No matching fields') throw new Error('Receipts row ' + id + ' was not updated (' + ((j && (j.error || j.message)) || 'no answer') + ')');
 }
 // Nov 17 2026 (review): the sender re-reads ONE row fresh (cache dropped) right before and right after it claims it. Sheets has no compare-and-set, so this is the
