@@ -8833,7 +8833,7 @@ function recurDescribe(t) {
   return s;
 }
 function recurSummaryHtml(t) {
-  if (!recurIsOn(t.Recurrence_Enabled)) return '<span style="color:var(--muted)">Manual only</span>';
+  if (!recurIsOn(t.Recurrence_Enabled)) return '<span style="color:var(--muted)">Manual only</span>' + ((t.Freq_Type && !recurTargetsOf(t).length) ? '<div style="color:var(--muted);font-size:13px">Starter - not switched on yet</div>' : '');
   var tg = recurTargetsOf(t), v = safeArray(state.vendors).find(function(x){ return x.ID===t.Default_Vendor_ID; });
   return '<div><b>🔁 ' + esc(recurDescribe(t)) + '</b></div>' +
     '<div style="color:var(--muted)">' + (tg.length ? tg.length+' linked location'+(tg.length>1?'s':'') : '<span style="color:#b42318">not linked to any property yet</span>') +
