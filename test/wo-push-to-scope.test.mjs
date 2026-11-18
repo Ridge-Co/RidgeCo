@@ -4,6 +4,7 @@
 // test/wo-deposit.test.mjs — this proves the actual shipped logic, not a re-implementation.
 import fs from 'fs';
 import { aiCreditGuardPrelude } from './_ai-credit-guard.mjs';   // the REAL AI-credit-pause block (anthropicMessages, aiCreditIsPausedError, ...) for translateBatchToEnglish
+globalThis.parseJsonCell = globalThis.parseJsonCell || ((c, fb) => { if (c === undefined || c === null || String(c).trim() === '') return fb; try { return JSON.parse(c); } catch (e) { return fb; } });   // fake of the worker helper (the report itself is covered by json-cells-money-failure-reports.test.mjs)
 const wsrc = fs.readFileSync(new URL('../worker.js', import.meta.url), 'utf8');
 
 function grab(sig) {
