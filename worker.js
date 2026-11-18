@@ -13406,7 +13406,7 @@ async function vendorRequestPropertyAccess(env, body) {
       await sendSMS(env, config.admin_phone,
         `🔑 ${vendorName} requested billing access to ${prop.Address || ('property ' + propertyId)}. Review in Hub → Dev Log → Vendor Access Requests.`);
     }
-  } catch (e) { /* non-fatal — the request row is already saved */ }
+  } catch (e) { await softFail(env, 'vendorRequestPropertyAccess:adminText', e, { severity: 'P0', ref: String(vendorId), source: 'sms', context: 'the vendor access request was saved but the text telling the admin about it did not send' }); }
   return res;
 }
 
