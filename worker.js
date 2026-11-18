@@ -5859,7 +5859,7 @@ async function scopeCommand(env, body) {
   if (!id || !command) return json({ error: 'scope_id and command required' }, 400);
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
-  const items = scopeParseItems(s);
+  const items = scopeParseItems(s, env);
   const prompt = `You are editing a property-maintenance scope of work. Current line items as JSON:\n${JSON.stringify(items)}\n\nApply this instruction from the contractor:\n"""${command}"""\n\nReturn ONLY strict minified JSON: {"items":[...],"summary":"<one short sentence describing exactly what changed>"}. Each item keeps the shape {"id","area","trade","description","qty","note"}. Preserve the id of any item you keep; assign a fresh id (continue the li# numbering) to any new item. Remove items the instruction says to remove. Never add prices. JSON only.`;
   const txt = await scopeClaude(env, prompt, null, 2000);
   const parsed = scopeParseJSON(txt);
