@@ -13713,7 +13713,7 @@ async function moveVendorBillToNewWO(env, body) {
   const movedAttachmentIds = [];
   for (const a of moving) {
     try { await updateRow(env, 'Attachments', a.ID, { WO_ID: newWoId }); movedAttachmentIds.push(a.ID); }
-    catch (e) { /* best-effort — report what didn't move below rather than losing the whole apply over one row */ }
+    catch (e) { await softFail(env, 'moveVendorBillToNewWO:attachment', e, { severity: 'P1', ref: String(a.ID || ""), source: 'write', context: 'a photo did not move to the new work order' }); }
   }
   const failedAttachmentIds = moving.map(a => a.ID).filter(id => !movedAttachmentIds.includes(id));
 
