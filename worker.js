@@ -9408,7 +9408,7 @@ async function triageIntakeSafe(env, woId, wo) {
   try { return await triageWorkOrder(env, woId, wo, 'rules'); }
   catch (e) {
     const why = schedErrText(e).slice(0, 300);
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'FALSE', Notes: `wo=${woId} could not triage: ${why}`.slice(0, 480) }); } catch (te) { console.error('triage failure telemetry failed:', schedErrText(te)); }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'FALSE', Notes: `wo=${woId} could not triage: ${why}`.slice(0, 480) }); } catch (te) { console.error('triage failure telemetry failed:', schedErrText(te)); }   // silent-ok: reported to the failure ledger on the next line
     try { await reportFailure(env, { system: 'hub', source: 'worker', where: 'wo_triage', ref: 'WO ' + woId, severity: 'P2', message: 'Work order ' + woId + ' was created but could not be triaged: ' + why }); } catch (re) { console.error('triage reportFailure failed:', schedErrText(re)); }
     return { failed: why };
   }
