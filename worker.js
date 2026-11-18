@@ -12038,7 +12038,7 @@ function estimateSubtotalOf(e, env) {
 }
 
 // What the vendor may bill: the max price, or the latest APPROVED estimate for this WO if that is higher. 0 = no max set.
-function woMaxCeiling(wo, estimates) {
+function woMaxCeiling(wo, estimates, env) {
   const max = maxPriceNum(wo && wo.Max_Price);
   if (!max) return 0;
   const approved = (estimates || [])
