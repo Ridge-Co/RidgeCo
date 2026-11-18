@@ -2236,7 +2236,7 @@ function submitStatus(woId, idx) {
     return false;
   }
   // Nov 17 2026 (Brett): On Hold needs a reason from the list and the day the vendor expects to be back.
-  if (status === 'On Hold' && window.JobOrder) { JobOrder.openHold(woId, idx); return; }
+  if (status === 'On Hold' && window.JobOrder) { JobOrder.openHold(woId, idx); return false; }
   // Checklist gate: can't mark Complete until every item is checked or has a reason.
   if (status === 'Complete') {
     var g = checklistGate(idx);
