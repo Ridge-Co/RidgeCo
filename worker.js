@@ -12056,7 +12056,7 @@ async function maxPriceGateResponse(env, wo, vendorId, total, hintLang) {
   const amt = parseFloat(String(total == null ? '' : total).replace(/[$,\s]/g, ''));
   if (!Number.isFinite(amt) || amt <= max + 0.004) return null;
   let ceiling = max;
-  try { ceiling = woMaxCeiling(wo, await fetchTab(env, 'Estimates'), env); } catch (_) { ceiling = max; }
+  try { ceiling = woMaxCeiling(wo, await fetchTab(env, 'Estimates'), env); } catch (e) { await softFail(env, 'maxPriceGateResponse:Estimates', e, { severity: 'P1', ref: String((wo && wo.ID) || ''), source: 'read' }); ceiling = max; }
   if (amt <= ceiling + 0.004) return null;
   let lang = String(hintLang || '').toLowerCase() === 'es' ? 'es' : 'en';
   if (vendorId) { try { const v = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(vendorId)); if (vendorWantsSpanish(v)) lang = 'es'; } catch (_) {} }
