@@ -30868,11 +30868,18 @@ async function uiTestWindowHandler(env, url, request, body) {
 function configFromValues(values) {
   const config={}; (values||[]).forEach(([k,v])=>{if(k)config[k]=v||'';}); return config;
 }
+// A failed Config read makes every setting read as unset until the next good read, so it is reported (P1). At most once per isolate per 5 minutes:
+// during a Sheets outage every call fails, and the report itself is a Sheets write.
+let _cfgFailAt = 0;
 async function fetchConfig(env) {
   try {
     const data=await sheetsRequest(env,'GET',`/values/Config`); if(!data.values) return {};
     const config={}; data.values.forEach(([k,v])=>{if(k)config[k]=v||'';}); return config;
-  } catch(e){return {};}
+  } catch(e){
+    const n = Date.now();
+    if (n - _cfgFailAt > 300000) { _cfgFailAt = n; await softFail(env, 'fetchConfig:Config', e, { severity: 'P1', source: 'read', context: 'every Config setting reads as unset until the next good read' }); }
+    return {};
+  }
 }
 
 async function setConfigKey(env, body) {
