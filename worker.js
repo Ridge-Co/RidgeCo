@@ -10239,7 +10239,7 @@ async function addonList(env, url, callerRole, callerSessionId) {
     const est = addonLatestEstimate(estimates, c.ID);
     const photos = addonPhotosByItem(attachments, c.ID);
     let lines = parseJsonCell(est && est.Line_Items, [], { env, where: 'addonList:Line_Items', ref: String(c.ID || ''), severity: 'P1' });
-    const items = addonParseItems(c).map(it => {
+    const items = addonParseItems(c, env).map(it => {
       const line = lines.find(l => l && Number(l.addon_item) === it.index) || {};
       const ph = photos[String(it.index)] || [];
       return { index: it.index, desc: it.desc, desc_en: line.desc_en || '', photo_count: ph.length, photos: ph };
