@@ -6488,7 +6488,7 @@ async function scopeProposal(env, body) {
   const id = body.scope_id || body.id; if (!id) return json({ error: 'scope_id required' }, 400);
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
-  const items = scopeParseItems(s); if (!items.length) return json({ error: 'Scope has no line items' }, 400);
+  const items = scopeParseItems(s, env); if (!items.length) return json({ error: 'Scope has no line items' }, 400);
   // An item is priced once ANY option carries a vendor cost OR a Ridge Co materials cost — a
   // materials-only item (Ridge Co buys it, no vendor labor) is legitimately $0 vendor cost
   // (Sep 22 2026; before this, Brett had to type a fake $1 vendor cost, which then got paid to
