@@ -57,6 +57,8 @@ function world(opts = {}) {
     bytesToB64: () => 'AA==',
     gmailSendEmailWithAttachment: async (env, m) => { if (flags.failSendFor.has(m.subject) || opts.gmailFails) throw new Error('Gmail send failed (HTTP 500)'); sent.push(m); return { sent: true }; },
     reportFailure: async (env, f) => { reports.push(f); return { ok: true }; },
+    softFail: async (env, where, err, o) => { reports.push({ where, severity: (o && o.severity) || 'P2', ref: o && o.ref, err }); return { ok: false }; },
+    fetchTabSoft: async (env, t) => ({ rows: (tabs[t] || []).map(r => ({ ...r })) }),
     _escHtml: (s) => String(s),
     setTimeout: (f) => f(),
     // scheduler pieces used by the daily job
