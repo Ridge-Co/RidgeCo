@@ -8880,7 +8880,7 @@ async function ownerApprovalRespond(env, callerRole, callerSessionId, body) {
   const s = scopes.find(r => String(r.ID) === scopeId);
   const prop = s ? props.find(p => String(p.ID) === String(s.Property_ID)) : null;
   const deny = async (status, error, why) => {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_denied', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `owner=${ownerId} scope=${scopeId.slice(0, 40)} ${why}`.slice(0, 480) }); } catch (e) { console.error('owner_approval_denied telemetry failed:', schedErrText(e)); }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_denied', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `owner=${ownerId} scope=${scopeId.slice(0, 40)} ${why}`.slice(0, 480) }); } catch (e) { console.error('owner_approval_denied telemetry failed:', schedErrText(e)); }   // silent-ok: the caller already returns the 403, this is only the audit trail
     return json({ error }, status);
   };
   if (!s || !prop || String(prop.Owner_ID || '') !== String(ownerId) || String(s.Active || '').toUpperCase() === 'FALSE' || !String(s.Sent_Date || '').trim()) return await deny(403, 'Forbidden', 'not this owner\'s sent proposal');
