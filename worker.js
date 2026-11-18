@@ -7115,7 +7115,7 @@ async function scopeProposalSign(env, body, ip, ua) {
   }
   const now = new Date();
   if (rcMaterialsCost > 0 || rcMaterialsPrice > 0) {
-    try { await ensureColumns(env, 'Scope_Signatures', ['RC_Materials_Cost', 'RC_Materials_Price']); } catch (_) { /* logged centrally by ensureColumns */ }
+    try { await ensureColumns(env, 'Scope_Signatures', ['RC_Materials_Cost', 'RC_Materials_Price']); } catch (_) { /* silent-ok: ensureColumns reports its own failure to the failure ledger */ }
   }
   const sigResp = await addRow(env, 'Scope_Signatures', {
     RC_Materials_Cost: rcMaterialsCost ? String(rcMaterialsCost) : '', RC_Materials_Price: rcMaterialsPrice ? String(rcMaterialsPrice) : '',
