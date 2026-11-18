@@ -27629,7 +27629,7 @@ async function ownerOnboardSubmit(env, body, clientIP) {
     summary.owner_id = ownerId;
   } catch (e) {
     // Nothing usable was written for the owner — release the invite so the owner can retry.
-    await updateRow(env, 'Owner_Invites', inv.ID, { Status: 'pending', Claim_Nonce: '' }).catch(() => {});
+    await updateRow(env, 'Owner_Invites', inv.ID, { Status: 'pending', Claim_Nonce: '' }).catch(async (e2) => { await softFail(env, 'ownerOnboardSubmit:releaseInvite', e2, { severity: 'P1', ref: String(inv.ID || ''), source: 'write', context: 'the owner save failed and the invite could not be released, so the owner link may stay stuck as in use' }); });
     return json({ error: 'We couldn\'t save your information just now. Nothing was submitted — please try again in a minute.' }, 500);
   }
 
