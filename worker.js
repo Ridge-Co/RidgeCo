@@ -27072,15 +27072,40 @@ async function sendReceiptsToQBEmail(env, opts) {
     fetchTabSoft(env, 'Properties', { where: 'sendReceiptsToQB:Properties', severity: 'P2' }).then(r => r.rows), fetchTabSoft(env, 'Work_Orders', { where: 'sendReceiptsToQB:Work_Orders', severity: 'P2' }).then(r => r.rows),
   ]);
 
-  let sent = 0, sentNoFile = 0, blocked = 0; const failed = [], warnings = [];
+  let sent = 0, sentNoFile = 0, blocked = 0, quarantined = 0; const failed = [], warnings = [], skipped = [];
+  const failedTodayPrior = waiting.filter(r => qbBatchStatus(r) === 'failed' && String(r.QB_Batch_Sent_Date || '').slice(0, 10) === today).length;
   for (const r of batch) {
     const subject = qbBatchSubject(r);
-    // 1. CLAIM. Written (and checked) BEFORE the email. If this cannot be saved the receipt is NOT emailed: better one waiting receipt than a double send.
-    try { await qbBatchWrite(env, r.ID, { QB_Batch_Status: 'sending', QB_Batch_Sent_Date: new Date().toISOString(), QB_Email_Subject: subject, QB_Batch_Error: '' }); }
+    const rid = String(r.ID);
+    if (__qbBatchInflight.has(rid)) { skipped.push({ id: r.ID, reason: 'already being sent by another call' }); continue; }
+    __qbBatchInflight.add(rid);
+    try {
+    // 0. RE-CHECK the single row fresh. Held / sent / reversed / voided / claimed since the batch was read = skipped, never emailed.
+    try {
+      const cur = await qbBatchFresh(env, rid);
+      if (!qbBatchStillDue(cur, { manual: opts.manual === true, today })) { skipped.push({ id: r.ID, reason: 'already handled (held, sent, reversed or claimed since the batch was read)' }); continue; }
+    } catch (e) {
+      const msg = 'could not re-check the row, so it was NOT emailed: ' + String(e && e.message || e);
+      failed.push({ id: r.ID, error: msg });
+      await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.recheck', ref: rid, err: e, message: 'Receipt ' + r.ID + ' ' + msg, severity: 'P1' });
+      continue;
+    }
+    // 1. CLAIM. Written (and checked) BEFORE the email, with a token only this call knows. If this cannot be saved, or the read-back does not show OUR claim, the receipt is NOT emailed.
+    const token = 'claim:' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    try { await qbBatchWrite(env, r.ID, { QB_Batch_Status: 'sending', QB_Batch_Sent_Date: new Date().toISOString(), QB_Email_Subject: subject, QB_Batch_Error: token }); }
     catch (e) {
       const msg = 'could not mark it as sending, so it was NOT emailed: ' + String(e && e.message || e);
       failed.push({ id: r.ID, error: msg });
       await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.claim', ref: String(r.ID), err: e, message: 'Receipt ' + r.ID + ' ' + msg, severity: 'P1' });
+      continue;
+    }
+    try {
+      const mine = await qbBatchFresh(env, rid);
+      if (!qbBatchClaimHeld(mine, token)) { skipped.push({ id: r.ID, reason: 'lost the claim (another sender, reverse or void got there first)' }); continue; }
+    } catch (e) {
+      const msg = 'could not confirm its claim, so it was NOT emailed (it stays "sending": release it on the review list): ' + String(e && e.message || e);
+      failed.push({ id: r.ID, error: msg });
+      await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.claim_check', ref: rid, err: e, message: 'Receipt ' + r.ID + ' ' + msg, severity: 'P1' });
       continue;
     }
     // 2. SEND.
