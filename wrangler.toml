@@ -5,7 +5,9 @@
 # WORKER_SECRET, SHEET_ID, etc.) so a deploy never wipes them.
 
 name = "maintenance-hub-staging"
-main = "worker.js"
+# Nov 18 2026 (queue #92): the entry is a thin wrapper. src/workflows-entry.js re-exports worker.js's handler and ReadMeterStore unchanged and adds the
+# trial Workflow class (the only file that imports "cloudflare:workers", so node tests that load worker.js are unaffected).
+main = "src/workflows-entry.js"
 compatibility_date = "2026-06-08"
 # Required so this Worker can fetch() the str-automation Worker (same account/workers.dev subdomain) for the
 # door-code watchdog: without it Cloudflare answers error 1042 (HTTP 404) to any Worker-to-Worker fetch on the
