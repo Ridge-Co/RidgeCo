@@ -27853,7 +27853,7 @@ async function receiptIntake(env, body) {
   else return json({ error: 'need file_id, file_url, or image_b64' }, 400);
   const ex = await receiptExtract(env, bytes, mime);
   const cfg = await fetchConfig(env);
-  let defaults = {}; try { defaults = JSON.parse(cfg.receipt_vendor_defaults || '{}'); } catch (e) {}
+  let defaults = {}; try { defaults = JSON.parse(cfg.receipt_vendor_defaults || '{}'); } catch (e) { await softFail(env, 'receiptIntake:vendorDefaults', e, { severity: 'P2', ref: '', source: 'parse', context: 'the saved vendor defaults are unreadable, so none were applied' }); }
   const vkey = String(ex.vendor || '').toLowerCase().trim();
   let category = ex.suggested_category || '';
   for (const k in defaults) { if (k && vkey && vkey.includes(k)) { category = defaults[k]; break; } }
