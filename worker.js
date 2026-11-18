@@ -6457,7 +6457,7 @@ async function scopeProposal(env, body) {
   const materialsPricing = scopeParseMaterialsPricing(s);
   const priced = scopeItemsPricing(items, _pc, materialsPricing); // markup applied here, server-side, per item
   const maxUpfront = await scopeMaxUpfrontPct(env);
-  const rawSchedule = scopeParsePaymentSchedule(s);
+  const rawSchedule = scopeParsePaymentSchedule(s, env);
   const scheduleCheck = scopeValidatePaymentSchedule(rawSchedule, maxUpfront);
   // rawSchedule was already validated when it was saved (scopeSetPaymentSchedule) or is the
   // built-in default, so scheduleCheck.error should never fire here — but if a schedule was
