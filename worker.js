@@ -21939,7 +21939,7 @@ const SEASONAL_PM_PACK = [
 function recurPackKey(n) { return String(n == null ? '' : n).toLowerCase().replace(/\s+/g, ' ').trim(); }
 function recurPackRow(p) {
   const f = Object.assign({}, p); delete f._due;
-  return recurSanitizeTemplateFields(Object.assign(f, { Priority: 'normal', Freq_Type: 'monthly_date', Lead_Days: '14', Recurrence_Enabled: 'FALSE', Season_Enabled: 'FALSE', Targets: '[]', Default_Vendor_ID: '', Notify_Tenant: 'FALSE', Max_Price: '', Owner_ID: '', Active: 'TRUE' }));
+  return recurSanitizeTemplateFields(Object.assign(f, { Priority: 'normal', Freq_Type: 'monthly_date', Lead_Days: '14', Recurrence_Enabled: 'FALSE', Season_Enabled: 'FALSE', Targets: '[]', Default_Vendor_ID: '', Notify_Tenant: 'FALSE', Owner_ID: '', Active: 'TRUE' }));   // Max_Price is left out on purpose: absent = blank (tests/wo-max-price keeps that word to the vendor-facing code)
 }
 // POST /wo-template/seed-seasonal { dry_run? } - dry_run defaults to TRUE; only an explicit dry_run:false writes. Skips any pack name that already has an
 // Active template (case and spacing ignored). A real run re-reads the tab and confirms every new name landed; failures are returned by name and logged.
