@@ -14318,7 +14318,7 @@ async function retranslateEstimate(env, body) {
   else if (body && body.wo_id && body.version != null) est = all.find(e => e.WO_ID === String(body.wo_id) && String(e.Version) === String(body.version) && e.Active !== 'FALSE');
   else return json({ error: 'estimate_id, or wo_id + version, required' }, 400);
   if (!est) return json({ error: 'Estimate not found' }, 404);
-  let lines = []; try { lines = JSON.parse(est.Line_Items || '[]'); } catch (_) {}
+  const lines = parseJsonCell(est.Line_Items, [], { env, where: 'retranslateEstimate:Line_Items', ref: String(est.ID || ''), severity: 'P1' });
   if (!Array.isArray(lines) || !lines.length) return json({ error: 'Estimate has no line items' }, 400);
   const en = await estimateEnglishFields(env, lines, est.Change_Reason || '', { force: true });
   if (!en.ok) return json({ ok: false, success: false, error: 'Translation is unavailable right now (' + (en.error || 'unknown') + ') — nothing was changed. Try again in a minute.' }, 502);
