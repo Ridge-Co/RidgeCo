@@ -7235,7 +7235,7 @@ async function scopeProposalSignedList(env, url) {
   await scopeSigTab(env);
   const rows = await fetchTab(env, 'Scope_Signatures');
   const scopes = (await fetchTabSoft(env, 'Scopes', { where: 'scopeProposalSignedList:Scopes', severity: 'P1' })).rows;
-  const props = await fetchTab(env, 'Properties').catch(() => []);
+  const props = (await fetchTabSoft(env, 'Properties', { where: 'scopeProposalSignedList:Properties', severity: 'P2' })).rows;
   // Vendors is read only to re-derive the in-house case for legacy rows (see scopeSigBillGap).
   const vendors = await fetchTab(env, 'Vendors').catch(() => []);
   // Payment_Milestones (Sep 14 2026): rows signed under the new milestone system carry these;
