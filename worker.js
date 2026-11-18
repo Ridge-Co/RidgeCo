@@ -20876,12 +20876,15 @@ async function schedRunDailyReceiptsPost(env) {
   detail.qb_email = await schedStep('send_receipts_to_qb_email', () => sendReceiptsToQBEmail(env, { release: true }), errors);
   const q = detail.qb_email || {};
   const failN = Array.isArray(q.failed) ? q.failed.length : 0;
-  const failText = failN ? `${failN} receipt(s) could not be sent to QuickBooks (receipt ${q.failed.slice(0, 3).map(f => f.id).join(', ')}): ${String(q.failed[0].error || '').slice(0, 160)}` : '';
-  if (errors.length === before && q.remaining > 0 && (q.sent || 0) > 0) {
-    // More are waiting: resume on the next slice. A receipt that failed in this slice is already in the failure ledger (P1, one row per receipt) and shown as "failed" on the review list.
-    return { ok: true, errors, detail, partial: true, progress_made: true, warnings: failN ? [failText + ' (more are still being sent)'] : undefined };
+  const failToday = Math.max(failN, q.failed_today || 0);   // failures of EARLIER slices today count too: they are 'failed' on the review list and in the ledger, and must still turn the job red at the end
+  const failText = failN ? `${failN} receipt(s) could not be sent to QuickBooks (receipt ${q.failed.slice(0, 3).map(f => f.id).join(', ')}): ${String(q.failed[0].error || '').slice(0, 160)}`
+    : failToday ? `${failToday} receipt(s) failed to send to QuickBooks today (open Waiting to send to QuickBooks; each is in the failure ledger)` : '';
+  if (errors.length === before && q.remaining > 0 && ((q.sent || 0) > 0 || (q.quarantined || 0) > 0)) {
+    // More are waiting: resume on the next slice. A receipt that failed is marked failed for the day (not picked again today), already in the failure ledger (P1, one row per receipt)
+    // and shown as "failed" on the review list, so one bad receipt can never stall the healthy ones behind it. Progress = something was sent OR something was quarantined.
+    return { ok: true, errors, detail, partial: true, progress_made: true, warnings: failToday ? [failText + ' (more are still being sent)'] : undefined };
   }
-  if (failN) errors.push({ step: 'send_receipts_to_qb_email', error: failText });
+  if (failToday) errors.push({ step: 'send_receipts_to_qb_email', error: failText });
   if (errors.length === before && q.remaining > 0) errors.push({ step: 'send_receipts_to_qb_email', error: `${q.remaining} receipt(s) are still waiting but none could be sent in this run` });
   const qbFailed = errors.length > before;
   detail.items_summary = await schedAiStep('backfill_items_summary', () => backfillItemsSummary(env, {}), errors, flags);   // Oct 16 2026: AI paused -> this one step waits (idempotent, retried tomorrow); the QB email above does not need AI
