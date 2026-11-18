@@ -5298,7 +5298,7 @@ async function receiptCardsChange(env, body) {
   const writes = [];
   if (mine.join(',') !== mineOld.join(',')) writes.push(['receipt_my_cards', mine.join(',')]);
   if (cust.join(',') !== custOld.join(',')) writes.push(['receipt_customer_cards', cust.join(',')]);
-  const labOld = JSON.stringify(receiptCardLabelsFromCfg(cfg.receipt_card_labels)), labNew = JSON.stringify(labels);
+  const labOld = JSON.stringify(receiptCardLabelsFromCfg(cfg.receipt_card_labels, env)), labNew = JSON.stringify(labels);
   if (labOld !== labNew) writes.push(['receipt_card_labels', labNew]);
   for (const [key, value] of writes) {
     const r = await setConfigKey(env, { key, value });
