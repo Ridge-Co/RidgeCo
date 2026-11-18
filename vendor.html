@@ -2233,7 +2233,7 @@ function submitStatus(woId, idx) {
   var notes = document.getElementById('notes-' + idx).value.trim();
   if (!status) {
     showActionMsg(idx, 'Select a status first.', 'warn');
-    return;
+    return false;
   }
   // Nov 17 2026 (Brett): On Hold needs a reason from the list and the day the vendor expects to be back.
   if (status === 'On Hold' && window.JobOrder) { JobOrder.openHold(woId, idx); return; }
