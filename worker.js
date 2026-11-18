@@ -5988,7 +5988,7 @@ async function scopeApprove(env, body) {
   const id = body.scope_id || body.id; if (!id) return json({ error: 'scope_id required' }, 400);
   await scopesTab(env);
   const s = await scopeFind(env, id); if (!s) return json({ error: 'Scope not found' }, 404);
-  if (!scopeParseItems(s).length) return json({ error: 'Scope has no line items to approve' }, 400);
+  if (!scopeParseItems(s, env).length) return json({ error: 'Scope has no line items to approve' }, 400);
   await updateRow(env, 'Scopes', id, { Status: 'approved', Updated_Date: new Date().toISOString() });
   return json({ success: true });
 }
