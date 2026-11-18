@@ -4,6 +4,8 @@
 // against fake Sheets/Drive/Gmail. Checks: a no-work-order confirm is always recorded as an
 // expense (category 'company', even when the scanner said 'billable'), goes to QuickBooks right
 // away (only that one receipt), never touches an invoice; a work-order confirm is unchanged.
+// Nov 17 2026: UPDATED for the daily QuickBooks batch - confirm no longer emails anything; the expense waits and goes out in the batch (release:true).
+// Full batch / hold / reverse coverage lives in test/qb-batch-and-reverse.test.mjs.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -13,7 +15,8 @@ const src = readFileSync(join(here, '..', 'worker.js'), 'utf8');
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; console.log('  ✗ FAIL: ' + m); } };
 function extractFn(name) {
-  const start = src.indexOf(`async function ${name}(`);
+  let start = src.indexOf(`async function ${name}(`);
+  if (start === -1) start = src.indexOf(`function ${name}(`);
   if (start === -1) throw new Error(name + ' not found');
   let i = src.indexOf('{', start), d = 0;
   for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}') { d--; if (d === 0) { i++; break; } } }
@@ -43,7 +46,9 @@ function world() {
     fetchTabSoft: async (env, t) => ({ rows: (tabs[t] || []).map(r => ({ ...r })), error: null }),
     fetchConfig: async () => ({ qb_receipts_email: 'qb@example.com' }),
     ensureColumns: async () => {},
-    updateRow: async (env, t, id, fields) => { updates.push({ t, id, fields }); const r = (tabs[t] || []).find(x => String(x.ID) === String(id)); if (r) Object.assign(r, fields); },
+    updateRow: async (env, t, id, fields) => { updates.push({ t, id, fields }); const r = (tabs[t] || []).find(x => String(x.ID) === String(id)); if (r) Object.assign(r, fields); return { status: 200, json: async () => ({ success: true }) }; },
+    reportFailure: async () => ({ ok: true }),
+    QB_BATCH_COLS: ['QB_Batch_Status', 'QB_Batch_Sent_Date', 'QB_Reversed_Date', 'QB_Email_Subject', 'QB_Batch_Error', 'QB_Delete_Confirmed', 'QB_Delete_Confirmed_Date'], QB_BATCH_MAX_PER_CALL: 5, QB_BATCH_DEFAULT_PER_CALL: 3, __qbBatchInflight: new Set(), invalidateTabCache: () => {},
     addReceipt: async (env, body) => { const id = String(nextId++); tabs.Receipts.push({ ID: id, Active: 'TRUE', QB_Email_Sent: 'FALSE', Store: body.store, Amount: String(body.amount), WO_ID: body.wo_id, Property_ID: body.property_id, Category: body.category, Payment_Source: 'company_card', Source_File_ID: body.source_file_id }); return jsonResp({ success: true, id, amount: String(body.amount) }); },
     scopeCoveringSignatureForWO: async () => null,
     appendReceiptToInvoiceReview: async (env, a) => { irCalls.push(a); return { linked: true }; },
@@ -56,11 +61,13 @@ function world() {
     setTimeout: (f) => f(),
   };
   const names = Object.keys(deps);
-  const sendQB = new Function(...names, `return (${extractFn('sendReceiptsToQBEmail')});`)(...names.map(n => deps[n]));
+  const helperFns = ['qbBatchStatus', 'qbBatchWaiting', 'qbBatchSendable', 'qbBatchSubject', 'qbBatchWrite', 'qbBatchQueuedNote', 'receiptRowIsCustomerCard', 'qbBatchFresh', 'qbBatchStillDue', 'qbBatchClaimHeld'];
+  const sendQB = new Function(...names, helperFns.map(extractFn).join('\n') + `\nreturn (${extractFn('sendReceiptsToQBEmail')});`)(...names.map(n => deps[n]));
   deps.sendReceiptsToQBEmail = sendQB;
+  helperFns.forEach(f => { deps[f] = new Function(...names, helperFns.map(extractFn).join('\n') + `\nreturn ${f};`)(...names.map(n => deps[n])); });
   const names2 = Object.keys(deps);
   const confirm = new Function(...names2, `return (${extractFn('receiptReconConfirm')});`)(...names2.map(n => deps[n]));
-  return { tabs, sent, irCalls, confirm: async (b) => (await confirm({}, b)).json() };
+  return { tabs, sent, irCalls, confirm: async (b) => (await confirm({}, b)).json(), batch: async (o) => (await sendQB({}, Object.assign({ release: true }, o || {}))).json() };
 }
 
 {
@@ -70,9 +77,11 @@ function world() {
   ok(r.ok && row && row.Category === 'company', 'Ridge Co expense on a scanner-"billable" receipt is recorded as category company (expense), not billable');
   ok(row.WO_ID === '' && row.Property_ID === '', 'no work order, no property');
   ok(w.irCalls.length === 0, 'never touches an invoice');
-  ok(r.qb_email && r.qb_email.sent === true && w.sent.length === 1, 'sent to QuickBooks right away');
+  ok(w.sent.length === 0 && r.qb_email && r.qb_email.queued === true && r.qb_email.sent === false, 'NOT emailed at confirm: it waits in the daily QuickBooks batch');
+  const b = await w.batch({ ids: [r.id] });
+  ok(b.sent === 1 && w.sent.length === 1, 'the batch sends it (only the receipt asked for when ids are given)');
   ok(/General Ridge Co expense/.test(w.sent[0].html) && w.sent[0].attachment, 'QB email says Ridge Co expense and carries the receipt file');
-  ok(w.tabs.Receipts.find(x => x.ID === '900').QB_Email_Sent === 'FALSE', 'an older unsent receipt was NOT sent by this tap (only the one just recorded)');
+  ok(w.tabs.Receipts.find(x => x.ID === '900').QB_Email_Sent === 'FALSE', 'an older unsent receipt was NOT sent when ids were named');
   ok(w.tabs.Receipt_Recon_Queue.find(x => x.ID === '1').Status === 'confirmed', 'queue row marked confirmed');
 }
 {
@@ -80,7 +89,9 @@ function world() {
   const r = await w.confirm({ id: '2', no_wo: true, property_id: '85', amount: '18.13' });
   const row = w.tabs.Receipts.find(x => x.ID === r.id);
   ok(row.Property_ID === '85' && row.Category === 'company', 'Kerns School Rd expense: property 85, category company');
-  ok(/Expense — property: 1864 Kerns School Rd/.test(w.sent[0].html), 'QB email names 1864 Kerns School Rd as an expense');
+  ok(w.sent.length === 0, 'Kerns expense is not emailed at confirm');
+  await w.batch({ ids: [r.id] });
+  ok(/Expense — property: 1864 Kerns School Rd/.test(w.sent[0].html), 'QB email (in the batch) names 1864 Kerns School Rd as an expense');
 }
 {
   const w = world();
@@ -88,18 +99,19 @@ function world() {
   const row = w.tabs.Receipts.find(x => x.ID === r.id);
   ok(row.Category === 'billable' && row.WO_ID === 'WO-1200', 'work-order confirm unchanged: billable on the WO');
   ok(w.irCalls.length === 1, 'work-order confirm still folds into the invoice');
-  ok(w.sent.length === 0 && r.qb_email === null, 'work-order confirm is NOT sent to QB immediately (daily sweep, as before)');
+  ok(w.sent.length === 0 && r.qb_email && r.qb_email.queued === true, 'work-order confirm is NOT sent to QB immediately (daily batch)');
 }
 {
   const w = world();
   const r = await w.confirm({ id: '3', no_wo: true, amount: '56.04' });
-  ok(w.tabs.Receipts.find(x => x.ID === r.id).Category === 'company' && r.qb_email.sent, 'existing company-expense ("bmore") path still works and now goes to QB right away');
+  ok(w.tabs.Receipts.find(x => x.ID === r.id).Category === 'company' && r.qb_email.queued && w.sent.length === 0, 'existing company-expense ("bmore") path still works and waits for the daily batch');
 }
 {
   const w = world();
   const r = await w.confirm({ id: '1', no_wo: true, amount: '50.22' });
   const again = await w.confirm({ id: '1', no_wo: true, amount: '50.22' });
-  ok(again.error === 'already confirmed' && w.sent.length === 1, 'double tap: second confirm refused, QB email sent once');
+  await w.batch({ ids: [r.id] });
+  ok(again.error === 'already confirmed' && w.sent.length === 1 && w.tabs.Receipts.filter(x => x.Store === 'Home Depot' && x.ID !== '900').length === 1, 'double tap: second confirm refused, one receipt row, one QB email once the batch runs');
 }
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

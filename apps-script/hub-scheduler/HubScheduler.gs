@@ -91,7 +91,7 @@ var JOBS = [
   { name: 'queue_sync',          run: 'hub', every_min: 15,                    enabled: true, what: 'Build queue: checks the pull request behind every build in flight and moves the row on (PR open, merged, live once the Hub has deployed). Files a Needs Attention row if a merge has no deploy after 30 minutes.' },
   { name: 'daily_digest',        run: 'hub', at: '07:00',                      enabled: true, what: 'Builds the morning digest and texts it to the admin phone.' },
   { name: 'daily_receipts',      run: 'hub', at: '07:00',                      enabled: true, what: 'Scans the receipt inbox.' },
-  { name: 'daily_receipts_post', run: 'hub', at: '07:00',                      enabled: true, what: 'Emails newly scanned receipts to QuickBooks.' },
+  { name: 'daily_receipts_post', run: 'hub', at: '00:00',                      enabled: true, what: 'Midnight (12:00 AM Eastern): emails the day\'s batch of confirmed receipts to QuickBooks (held ones wait).' },
   { name: 'daily_turnover',      run: 'hub', at: '07:00',                      enabled: true, what: 'Releases turnover work orders due today.' },
   { name: 'daily_qb_sync',       run: 'hub', at: '07:00',                      enabled: true, what: 'Syncs QuickBooks payments and runs the deposit-paid sweep.' },
   { name: 'sms_delivery_check',  run: 'hub', at: '07:00',                      enabled: true, what: 'Reads the last day of outbound texts from Twilio, flags carrier-filtered or failing link texts, and emails Brett the result (set enabled:false once it is proven clean).' },
