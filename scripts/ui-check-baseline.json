@@ -58,7 +58,7 @@
   "trash.html": {"static":{"small_font":2,"native_dialog":1,"fixed_column":1},"detector":{},"overflow":[]},
   "vendor-reconcile.html": {"static":{"small_font":12,"native_dialog":1,"nowrap_chip":1},"detector":{"low-contrast":1,"tiny-text":4,"undersized-ui-text":3},"overflow":[]},
   "vendor-setup.html": {"static":{"small_font":8},"detector":{"wide-tracking":1},"overflow":[]},
-  "vendor.html": {"static":{"small_font":280,"native_dialog":4,"label_file_input":2},"detector":{"low-contrast":2,"tiny-text":11,"wide-tracking":2},"overflow":[]},
+  "vendor.html": {"static":{"small_font":280,"native_dialog":4},"detector":{"low-contrast":2,"tiny-text":11,"wide-tracking":2},"overflow":[]},
   "wo-bulk-fix.html": {"static":{"small_font":15},"detector":{"low-contrast":3,"tiny-text":2,"undersized-ui-text":3},"overflow":[]},
   "wo.html": {"static":{"small_font":23,"native_dialog":1,"fixed_column":1},"detector":{"tiny-text":1},"overflow":[]}
  }

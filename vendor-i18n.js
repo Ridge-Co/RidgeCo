@@ -9,6 +9,33 @@
 // later (cards, modals, toasts). alert/confirm/prompt are translated too. Only exact dictionary
 // matches are touched, so work-order text, names and addresses are never altered.
 var ES_EXTRA = {
+// ── New vendor home list (Nov 18 2026, vendor-home.js) ──
+"To do": "Por hacer",
+"Waiting to be paid": "Esperando el pago",
+"New: please accept or decline": "Nuevos: acepte o rechace",
+"Scheduled and in progress": "Programados y en curso",
+"Finished: send your invoice": "Terminados: envíe su factura",
+"Accept job": "Aceptar trabajo",
+"Pick a day": "Elegir un día",
+"Start job": "Empezar trabajo",
+"Mark complete": "Marcar como completo",
+"Resume job": "Reanudar trabajo",
+"Send invoice": "Enviar factura",
+"See what is needed": "Ver qué se necesita",
+"Not saved, tap to retry": "No se guardó, toque para reintentar",
+"Saved": "Guardado",
+"Undo": "Deshacer",
+"Sending… the owner or tenant may be told.": "Enviando… se puede avisar al dueño o al inquilino.",
+"Accepting… the tenant may be told.": "Aceptando… se puede avisar al inquilino.",
+"Filters": "Filtros",
+"Nothing is waiting on you. You are all caught up.": "Nada espera por usted. Está al día.",
+"No invoices are waiting to be paid.": "No hay facturas esperando pago.",
+"Something is needed before this can be paid.": "Se necesita algo antes de poder pagar esto.",
+"Invoice sent. Waiting for review.": "Factura enviada. Esperando revisión.",
+"Not saved. Check your signal, then tap the button again.": "No se guardó. Revise su señal y toque el botón otra vez.",
+"Something without a work order?": "¿Algo sin orden de trabajo?",
+"Bill for work that has no work order": "Facturar un trabajo sin orden de trabajo",
+"Log a job I did without a work order": "Registrar un trabajo que hice sin orden de trabajo",
 // ── Job order (Nov 17 2026): complete first, what a bill needs, On Hold with a reason and a return date (vendor-job-order.js) ──
 "To get paid, you still need:": "Para cobrar, todavía necesita:",
 "Mark the job Complete first": "Marque primero el trabajo como Completo",

@@ -12,7 +12,7 @@ import vm from 'node:vm';
 const root = new URL('../', import.meta.url);
 const read = (p) => fs.readFileSync(new URL(p, root), 'utf8');
 // vendor-job-order.js holds vendor-facing text too (Nov 17 2026), so it is scanned exactly like an inline <script>.
-const html = read('vendor.html') + '\n<script>\n' + read('vendor-job-order.js') + '\n</script>';
+const html = read('vendor.html') + '\n<script>\n' + read('vendor-job-order.js') + '\n</script>\n<script>\n' + read('vendor-home.js') + '\n</script>';
 const i18n = read('vendor-i18n.js');
 const allow = new Set(JSON.parse(read('test/vendor-spanish-allow.json')));
 

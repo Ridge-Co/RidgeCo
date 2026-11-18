@@ -216,6 +216,30 @@ body{font-size:15px}
 label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font-size:13px}
 @media (hover:hover){textarea{font-size:13px !important}}
 </style>
+<style id="vh-style">
+/* New vendor home list (vendor-home.js, Nov 18 2026). Only used when the new layout is switched on. Tokens only; 13/15/17px; 44px targets. */
+.vh-tabs{display:flex;gap:4px;background:var(--surface2);border-radius:var(--radius);padding:4px;margin-bottom:12px}
+.vh-tab{flex:1;min-height:44px;border:0;border-radius:var(--radius);background:transparent;color:var(--muted);font:600 15px var(--font);cursor:pointer;padding:6px 4px;line-height:1.2}
+.vh-tab.active{background:var(--surface);color:var(--accent)}
+.vh-count{font-weight:600}
+.vh-count-red{color:var(--danger)}
+.vh-filter-btn{min-height:44px;margin:0 0 10px;padding:0 16px;border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);color:var(--text);font:600 15px var(--font);cursor:pointer}
+.vh-group{font:600 15px var(--font);color:var(--text);margin:16px 0 8px}
+.vh-act{background:var(--surface);border:1px solid var(--border);border-top:0;border-radius:0 0 var(--radius) var(--radius);margin:-8px 0 12px;padding:12px}
+.vh-line{font-size:15px;color:var(--text);margin-bottom:8px}
+.vh-red{color:var(--danger);font-weight:600}
+.vh-btns{display:flex;gap:8px;flex-wrap:wrap}
+.vh-btn{flex:1;min-width:160px;min-height:52px;border:0;border-radius:var(--radius);background:var(--accent2);color:var(--surface);font:600 17px var(--font);cursor:pointer;padding:0 16px}
+.vh-btn:disabled{opacity:.6}
+.vh-btn-retry{background:var(--danger)}
+.vh-btn-2{min-height:52px;padding:0 16px;border:1px solid var(--danger);border-radius:var(--radius);background:var(--surface);color:var(--danger);font:600 15px var(--font);cursor:pointer}
+.vh-note{font-size:13px;margin-top:6px;min-height:0}
+.vh-ok{color:var(--accent2)} .vh-err{color:var(--danger)} .vh-warn{color:var(--warn)}
+.vh-undo{position:fixed;left:12px;right:12px;bottom:16px;z-index:9000;display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--text);color:var(--surface);border-radius:var(--radius);padding:12px 16px;font:600 15px var(--font)}
+.vh-undo-btn{min-height:44px;min-width:88px;border:2px solid var(--surface);border-radius:var(--radius);background:transparent;color:var(--surface);font:600 15px var(--font);cursor:pointer}
+.vh-nowo{margin-top:24px}
+.vh-nowo-row{display:flex;gap:8px;flex-wrap:wrap}
+</style>
 <link rel="manifest" href="manifest-vendor.webmanifest"><script src="push-client.js" defer></script></head>
 <body>
 
@@ -288,6 +312,7 @@ label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font
 
 <script src="vendor-i18n.js"></script>
 <script src="vendor-job-order.js"></script>
+<script src="vendor-home.js"></script>
 <script>
 var WORKER = (function(){
   // Staging deploy gate (Sept 2026): ?api=staging points this page at the isolated
@@ -467,7 +492,7 @@ function onLoginSuccess(data, persist) {
   var _newLang = (data.language === 'es') ? 'es' : 'en';
   _saveLang(_newLang);
   if (_esObs && _newLang !== 'es') {
-    if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){ console.error('session not stored before redraw', e); } }
+    if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){ console.error('session not stored before redraw', e); } } // silent-ok: storage blocked, vendor just logs in again
     location.reload(); return;
   }
   LANG = _newLang;
@@ -483,6 +508,7 @@ function onLoginSuccess(data, persist) {
   if (billBtn) billBtn.style.display = (data.can_bill_no_wo === true || String(data.can_bill_no_wo).toUpperCase() === 'TRUE') ? '' : 'none';
   var oneOffBtn = document.getElementById('btnLogOneOffJob');
   if (oneOffBtn) oneOffBtn.style.display = (data.can_create_own_wo === true || String(data.can_create_own_wo).toUpperCase() === 'TRUE') ? '' : 'none';
+  if (window.VendorHome) VendorHome.init(data);   // Nov 18 2026: new vendor home list, only when switched on for this vendor (vendor-home.js)
   loadWorkOrders();
   loadVendorTaskAlerts();
   if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
@@ -1228,6 +1254,7 @@ function filterVendorWOs() {
     var pa=(PRI[(a.Priority||'normal').toLowerCase()]??2), pb=(PRI[(b.Priority||'normal').toLowerCase()]??2);
     return pa!==pb?pa-pb:(a.property_address||'').localeCompare(b.property_address||'');
   });
+  if (window.VendorHome && VendorHome.on()) filtered = VendorHome.regroup(filtered);   // new layout: groups stay together whatever the sort
   renderWOs(filtered, { filtered: true });
 }
 
@@ -1333,6 +1360,7 @@ function syncPaidQuickButtons() {
   Array.prototype.forEach.call(bar.querySelectorAll('button'), function(b) { b.className = (+b.getAttribute('data-days') === paidRange) ? 'active' : ''; });
 }
 function loadWOsForCurrentTab() {
+  if (window.VendorHome && VendorHome.on()) return VendorHome.listFor(currentTab);   // new layout: one load feeds To do / Waiting / Paid
   if (currentTab === 'paid') return fetchPaidWOs();
   if (currentTab === 'due') return fetchDueWOs();
   if (currentTab === 'invoiced') return fetchInvoicedWOs();
@@ -1351,6 +1379,7 @@ function switchTab(tab) {
   var sortSel = document.getElementById('vSort');
   if (sortSel) { if (tab === 'paid') sortSel.value = 'paid-desc'; else if (/^paid-/.test(sortSel.value)) sortSel.value = 'priority'; }
   syncPaidQuickButtons();
+  if (window.VendorHome && VendorHome.on()) VendorHome.syncTabs();
   loadWorkOrders();
 }
 
@@ -1384,13 +1413,13 @@ function renderWOs(wos, opts) {
   wos = parts.active.concat(parts.paid, parts.cancelled);
   var nActive = parts.active.length, nPaid = parts.paid.length;
   if (!wos || !wos.length) {
-    var emptyMsg = currentTab === 'paid' ? (paidRange > 0 ? 'No jobs paid in that time. Tap "All paid jobs" to see every paid job.' : 'No paid jobs yet.') : currentTab === 'open' ? 'No open work orders.' : currentTab === 'due' ? 'Nothing complete and unbilled — you\'re all caught up.' : currentTab === 'invoiced' ? 'No invoiced jobs yet.' : 'No work orders.';
+    var emptyMsg = (window.VendorHome && VendorHome.on()) ? t(VendorHome.emptyMessage(currentTab)) : currentTab === 'paid' ? (paidRange > 0 ? 'No jobs paid in that time. Tap "All paid jobs" to see every paid job.' : 'No paid jobs yet.') : currentTab === 'open' ? 'No open work orders.' : currentTab === 'due' ? 'Nothing complete and unbilled — you\'re all caught up.' : currentTab === 'invoiced' ? 'No invoiced jobs yet.' : 'No work orders.';
     list.innerHTML = '<div class="empty"><div class="icon">✓</div>' + emptyMsg + '</div>';
     return;
   }
 
   var html = '<div class="wo-count">' + wos.length + ' work order' + (wos.length !== 1 ? 's' : '') + '</div>';
-  var paidHtml = '', cancelledHtml = '';
+  var paidHtml = '', cancelledHtml = '', _lastHeading = '';
   wos.forEach(function(wo, idx) {
     var pri = (wo.Priority || 'normal').toLowerCase();
     var statusClass = {
@@ -1457,6 +1486,7 @@ function renderWOs(wos, opts) {
           '<span class="expand-icon">▾</span>' +
         '</div>' +
       '</div>' +
+      ((window.VendorHome && VendorHome.on()) ? VendorHome.actionHtml(wo, idx) : '') +
       '<div class="wo-detail" id="detail-' + idx + '">' +
         (gated ? '<div style="background:#fdf2e2;border:1px solid var(--warn);border-radius:8px;padding:12px;margin-bottom:12px">' +
           '<div style="color:var(--warn);font-weight:bold;font-size:12px;letter-spacing:.04em;margin-bottom:4px">🔒 ACCEPT TO UNLOCK</div>' +
@@ -1511,6 +1541,10 @@ function renderWOs(wos, opts) {
         '</div>' +
       '</div>' +
     '</div>';
+    if (window.VendorHome && VendorHome.on() && currentTab === 'todo') {   // plain headings between the groups (plan 4.1)
+      var _hg = VendorHome.groupForWO(wo), _ht = VendorHome.headingFor(_hg);
+      if (_ht && _ht !== _lastHeading) { cardHtml = VendorHome.headingHtml(_hg) + cardHtml; _lastHeading = _ht; }
+    }
     if (currentTab !== 'paid' && idx >= nActive + nPaid) cancelledHtml += cardHtml;
     else if (currentTab !== 'paid' && idx >= nActive) paidHtml += cardHtml;
     else html += cardHtml;
@@ -1531,7 +1565,8 @@ function renderWOs(wos, opts) {
   // Store WOs for status tracking
   window._wos = wos;
   window._pendingStatus = {};
-  wos.forEach(function(wo, idx) { loadPortalAttachments(wo.ID); loadEstimateWidget(wo.ID, idx); loadVendorNearbyWOs(wo.ID, idx); loadVendorTimeTracking(wo.ID, idx); loadVendorReceipts(wo.ID, idx); loadVendorBillSummary(wo.ID, idx); });
+  if (window.VendorHome && VendorHome.on()) VendorHome.resetLoaded();   // new layout: a card's six panels load when it is opened (toggleCard)
+  else wos.forEach(function(wo, idx) { loadPortalAttachments(wo.ID); loadEstimateWidget(wo.ID, idx); loadVendorNearbyWOs(wo.ID, idx); loadVendorTimeTracking(wo.ID, idx); loadVendorReceipts(wo.ID, idx); loadVendorBillSummary(wo.ID, idx); });
   if (wos.some(awEligible)) loadVendorAddons();   // one request for every card's add-on list
   // Deep-link from an SMS ("?wo=WO-1234") — filter straight to that job on first load only,
   // so the vendor doesn't have to search for the job the text was actually about. Applied
@@ -1540,7 +1575,7 @@ function renderWOs(wos, opts) {
   if (_deepLinkWoId && !_deepLinkApplied) {
     _deepLinkApplied = true;
     var searchBox = document.getElementById('woSearch');
-    if (searchBox) { searchBox.value = _deepLinkWoId; filterVendorWOs(); }
+    if (searchBox) { searchBox.value = _deepLinkWoId; filterVendorWOs(); if (window.VendorHome && VendorHome.on() && window._wos && window._wos.length === 1) VendorHome.openCard(0); }
   }
 }
 
@@ -2177,6 +2212,7 @@ function deleteVendorTime(entryId, woId, idx) {
 function toggleCard(idx) {
   var card = document.getElementById('card-' + idx);
   card.classList.toggle('expanded');
+  if (window.VendorHome && VendorHome.on() && card.classList.contains('expanded')) VendorHome.ensureLoaded(idx);   // new layout: load this card's panels now
 }
 
 // ── Status ───────────────────────────────────────────────────
@@ -2197,18 +2233,18 @@ function submitStatus(woId, idx) {
   var notes = document.getElementById('notes-' + idx).value.trim();
   if (!status) {
     showActionMsg(idx, 'Select a status first.', 'warn');
-    return;
+    return false;
   }
   // Nov 17 2026 (Brett): On Hold needs a reason from the list and the day the vendor expects to be back.
-  if (status === 'On Hold' && window.JobOrder) { JobOrder.openHold(woId, idx); return; }
+  if (status === 'On Hold' && window.JobOrder) { JobOrder.openHold(woId, idx); return false; }
   // Checklist gate: can't mark Complete until every item is checked or has a reason.
   if (status === 'Complete') {
     var g = checklistGate(idx);
-    if (!g.ok) { showActionMsg(idx, g.msg, 'warn'); return; }
+    if (!g.ok) { showActionMsg(idx, g.msg, 'warn'); return false; }
   }
   // Save the checklist FIRST (the server re-checks it before accepting Complete), then post the status.
   showActionMsg(idx, 'Saving…', '');
-  persistChecklist(idx).then(function(saved) {
+  return persistChecklist(idx).then(function(saved) {   // returns true when the status saved, false when it did not (the new home list needs to know)
     if (!saved && status === 'Complete') { showActionMsg(idx, esc(t('Could not save the checklist. Try again.')), 'error'); return null; }
     return api('/status', {
       method: 'POST',
@@ -2216,7 +2252,7 @@ function submitStatus(woId, idx) {
       body: JSON.stringify({ wo_id: woId, status: status, notes: notes, updated_by: session.vendor_name, updated_by_role: 'vendor', vendor_id: session.vendor_id, lang: LANG }),
     });
   }).then(function(data) {
-    if (data === null || data === undefined) return;
+    if (data === null || data === undefined) return false;
     if (data.success) {
       showActionMsg(idx, '✓ Status updated to ' + status, 'success');
       // Update badge in card header
@@ -2236,11 +2272,14 @@ function submitStatus(woId, idx) {
         if (window.JobOrder) JobOrder.nudgeInvoice(woId);
         else if (currentTab === 'open') setTimeout(function(){ loadWorkOrders(); }, 1500);
       }
+      return true;
     } else {
       showActionMsg(idx, esc((data && data.error) || 'Error saving status.'), 'error');
+      return false;
     }
   }).catch(function() {
     showActionMsg(idx, 'Connection error.', 'error');
+    return false;
   });
 }
 
@@ -2249,13 +2288,13 @@ function submitStatus(woId, idx) {
 // lockbox code + tenant contact on the next load. Declining drops it off the open list.
 function acceptWO(woId, idx) {
   showActionMsg(idx, 'Accepting…', '');
-  api('/status', {
+  return api('/status', {   // returns true/false so the new home list can show "Not saved, tap to retry"
     method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ wo_id: woId, status: 'Accepted', updated_by: session.vendor_name, updated_by_role: 'vendor', vendor_id: session.vendor_id }),
   }).then(function(data) {
-    if (data && data.success) { showActionMsg(idx, '✓ Accepted — unlocking details…', 'success'); setTimeout(loadWorkOrders, 900); }
-    else { showActionMsg(idx, 'Could not accept. Try again.', 'error'); }
-  }).catch(function() { showActionMsg(idx, 'Connection error.', 'error'); });
+    if (data && data.success) { showActionMsg(idx, '✓ Accepted — unlocking details…', 'success'); if (!(window.VendorHome && VendorHome.on())) setTimeout(loadWorkOrders, 900); return true; }
+    else { showActionMsg(idx, 'Could not accept. Try again.', 'error'); return false; }
+  }).catch(function() { showActionMsg(idx, 'Connection error.', 'error'); return false; });
 }
 function declineWO(woId, idx) {
   var reason = (prompt('Optional — a quick reason helps us reassign fast:') || '').trim();
@@ -4421,8 +4460,8 @@ function t(key) {
 // Login-screen language (Nov 16 2026). Before sign-in the page does not know the vendor, so it uses the saved choice, else the device language;
 // the EN / ES buttons change it. After sign-in the vendor's profile language takes over (see onLoginSuccess).
 var LANG_PREF_KEY = 'rc_vendor_lang';
-function _savedLang() { try { return localStorage.getItem(LANG_PREF_KEY); } catch (e) { return null; } }
-function _saveLang(l) { try { localStorage.setItem(LANG_PREF_KEY, l); } catch (e) { console.error('language choice not stored', e); } }
+function _savedLang() { try { return localStorage.getItem(LANG_PREF_KEY); } catch (e) { return null; } }   // silent-ok: storage blocked, uses the device language
+function _saveLang(l) { try { localStorage.setItem(LANG_PREF_KEY, l); } catch (e) { console.error('language choice not stored', e); } }   // silent-ok: storage blocked, choice lasts this visit only
 function setLoginLang(l) { _saveLang(l); location.reload(); }
 (function initLoginLang() {
   var pref = _savedLang();
