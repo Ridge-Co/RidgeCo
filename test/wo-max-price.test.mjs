@@ -16,7 +16,8 @@ const src = [
 
 const json = (b, s = 200) => ({ body: b, status: s });
 function mk(tabs, opts = {}) {
-  const calls = { updates: [], audits: [], ensured: [] };
+  const calls = { updates: [], audits: [], ensured: [], soft: [] };
+  const softFail = async (env, where, err, o) => { calls.soft.push(where + '|' + ((o && o.severity) || '') + '|' + ((o && o.ref) || '')); };
   const fetchTab = async (env, tab) => { if (opts.failTab === tab) throw new Error('sheet read failed'); return tabs[tab] || []; };
   const findWO = (rows, id) => rows.find(r => String(r.ID) === String(id));
   const ensureColumns = async (env, tab, cols) => { calls.ensured.push(tab + ':' + cols.join()); };
