@@ -15668,6 +15668,16 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
   </div>
 </div>
 
+<!-- SEASONAL STARTER PACK MODAL (queue #108, Nov 18 2026): preview first (dry run), then add. Admin only. -->
+<div class="modal-overlay" id="modal-seasonal-pack">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-header"><div class="modal-title">SEASONAL STARTER PACK</div><button class="modal-close" onclick="closeModal('modal-seasonal-pack')">✕</button></div>
+    <div id="pack-body" style="font-size:15px"><div class="loading">Checking what is already there…</div></div>
+    <p id="pack-note" style="color:var(--muted);font-size:13px;margin:12px 0 0">These are added switched OFF and linked to no property. Nothing is posted and nobody is texted until you open one, pick properties and turn it on.</p>
+    <div class="modal-actions"><button class="btn secondary" style="min-height:44px" onclick="closeModal('modal-seasonal-pack')">Close</button><button class="btn" style="min-height:44px;display:none" id="pack-add-btn" onclick="confirmSeasonalPack()">Add these templates</button></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-post-now">
   <div class="modal" style="max-width:520px">
     <div class="modal-header"><div class="modal-title">POST WORK ORDER NOW</div><button class="modal-close" onclick="closeModal('modal-post-now')">✕</button></div>
