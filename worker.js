@@ -27115,7 +27115,6 @@ async function sendReceiptsToQBEmail(env, opts) {
     sent++; if (!attachment) sentNoFile++;
     if (attachErr) {
       warnings.push({ id: r.ID, warning: 'emailed without the receipt image (Drive download failed: ' + String(attachErr && attachErr.message || attachErr).slice(0, 160) + ')' });
-      await reportFailure(env, { system: 'hub', source: 'receipt', where: 'qb_batch.attachment', ref: String(r.ID), err: attachErr, message: 'Receipt ' + r.ID + ' went to QuickBooks without its image', severity: 'P2' });
     }
     await new Promise(res => setTimeout(res, 400)); // pace Gmail/Drive calls, matches existing convention
   }
