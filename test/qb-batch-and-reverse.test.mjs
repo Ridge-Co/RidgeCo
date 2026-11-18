@@ -31,7 +31,7 @@ function world(opts = {}) {
   const flags = { failSendFor: new Set(), failSentWrite: false };
   const deps = {
     QB_BATCH_COLS: ['QB_Batch_Status', 'QB_Batch_Sent_Date', 'QB_Reversed_Date', 'QB_Email_Subject', 'QB_Batch_Error', 'QB_Delete_Confirmed', 'QB_Delete_Confirmed_Date'],
-    QB_BATCH_MAX_PER_CALL: 8, QB_BATCH_DEFAULT_PER_CALL: 5,
+    QB_BATCH_MAX_PER_CALL: 5, QB_BATCH_DEFAULT_PER_CALL: 3, __qbBatchInflight: new Set(), invalidateTabCache: () => {},
     json: (o, s) => jsonResp(o, s),
     fetchTab: async (env, t) => (tabs[t] || []).map(r => ({ ...r })),
     fetchConfig: async () => ({ qb_receipts_email: 'qb@example.com' }),
