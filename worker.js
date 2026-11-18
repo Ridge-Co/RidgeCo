@@ -9383,7 +9383,8 @@ async function triageWorkOrder(env, woId, wo, source) {
   const kw = triageParseKeywords(triageCfgGet(cfg, 'Triage_Keywords'));
   if (kw && kw.error) {
     await reportFailure(env, { system: 'hub', source: 'worker', where: 'triage_config_bad', ref: 'Config Triage_Keywords', severity: 'P2', message: 'The Triage_Keywords setting could not be read, so the built-in urgent and cosmetic words were used: ' + String(kw.error).slice(0, 200) });
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage_config_bad', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'FALSE', Notes: kw.error.slice(0, 300) }); } catch (te) { console.error('triage_config_bad telemetry failed:', schedErrText(te)); } }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'triage_config_bad', Skill_Or_Endpoint: 'triageWorkOrder', Success: 'FALSE', Notes: kw.error.slice(0, 300) }); } catch (te) { console.error('triage_config_bad telemetry failed:', schedErrText(te)); }   // silent-ok: already reported to the failure ledger just above
+  }
   const sla = triageSla(cfg, env);
   const nowMs = Date.now();
   const r = triageByRules(wo.description, wo.trade, new Date(nowMs), (kw && !kw.error) ? kw : null);
