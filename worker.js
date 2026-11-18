@@ -46835,7 +46835,7 @@ function fiExtractJson(text) {
   const s = String(text || '').replace(/^```json?/i, '').replace(/```\s*$/, '').trim();
   try { return JSON.parse(s); } catch (_) { /* fall through to brace scan */ }   // silent-ok: model text is often not pure JSON, so the brace scan below tries next
   const a = s.indexOf('{'), b = s.lastIndexOf('}');
-  if (a >= 0 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; } }
+  if (a >= 0 && b > a) { try { return JSON.parse(s.slice(a, b + 1)); } catch (_) { return null; } }   // silent-ok: text from a model or web page that is not JSON is expected, the caller treats null as no data
   return null;
 }
 // Visit details + per-area "No access" (Oct 27 2026). Both are optional and stored on the doc as-is; these only bound their shape/size.
