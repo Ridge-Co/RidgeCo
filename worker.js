@@ -5225,8 +5225,16 @@ async function receiptReconReassign(env, body) {
     else invoiceLink = await appendReceiptToInvoiceReview(env, { wo_id, receipt_id: addJson.id, amount });
   }
 
-  // Nov 17 2026: the replacement row waits in the daily QuickBooks batch like every other confirmed receipt (no immediate send).
-  const qbEmail = (addJson && addJson.success && !addJson.duplicate && addJson.id) ? qbBatchQueuedNote() : null;
+  // Same "expense goes to QuickBooks right away" behavior receiptReconConfirm already uses for a
+  // no-WO receipt (Sep 22 2026) — a WO-bound reassign follows the normal daily sweep instead.
+  let qbEmail = null;
+  if (!wo_id && addJson && addJson.success && !addJson.duplicate && addJson.id) {
+    try {
+      const r = await sendReceiptsToQBEmail(env, { ids: [String(addJson.id)], limit: 1 });
+      const j = await r.json().catch(() => ({}));   // silent-ok: an unreadable answer shows as not sent just below
+      qbEmail = { sent: (j.sent || 0) > 0, error: j.error || (j.failed && j.failed[0] && j.failed[0].error) || null };
+    } catch (e) { qbEmail = { sent: false, error: String(e && e.message || e) }; }
+  }
 
   if (addJson && addJson.success) {
     await updateRow(env, 'Receipt_Recon_Queue', id, {
