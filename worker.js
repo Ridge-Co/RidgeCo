@@ -27065,7 +27065,7 @@ async function sendReceiptsToQBEmail(env, opts) {
   const stuckN = waiting.filter(r => qbBatchStatus(r) === 'sending').length;
   const pending = waiting.filter(r => qbBatchSendable(r, { manual: opts.manual === true, today }) && (!onlyIds || onlyIds.has(String(r.ID))));
   const batch = pending.slice(0, limit);
-  if (!batch.length) return json({ ok: true, sent: 0, remaining: 0, held: heldN, stuck: stuckN, failed: [], note: 'nothing pending' });
+  if (!batch.length) return json({ ok: true, sent: 0, remaining: 0, held: heldN, stuck: stuckN, failed: [], quarantined: 0, failed_today: waiting.filter(r => qbBatchStatus(r) === 'failed' && String(r.QB_Batch_Sent_Date || '').slice(0, 10) === today).length, note: 'nothing pending' });
 
   let queueRows = []; try { queueRows = await fetchTab(env, 'Receipt_Recon_Queue'); } catch (e) { await softFail(env, 'sendReceiptsToQB:queueRead', e, { severity: 'P2', ref: '', source: 'read', context: 'the receipt queue could not be read, so forwarded receipts may be missing queue details' }); }
   const [properties, workorders] = await Promise.all([
