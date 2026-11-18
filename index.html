@@ -8947,6 +8947,39 @@ function saveDescAsSnippet() {
   var name = prompt('Name this snippet (uses the highlighted text, or the whole description):'); if (!name) return;
   api('POST','/wo-snippet/add',{Name:name.trim(),Text:txt,Active:'TRUE'}).then(function(r){ if (r && r.id) { toast('Snippet saved','success'); loadSnippets(); } else toast('Could not save snippet','error'); });
 }
+// Seasonal starter pack (queue #108): dry run first, then add. Every template is added OFF, with no property, vendor or tenant notice.
+function packListHtml(rows, label) {
+  return rows.map(function(r){ return '<div style="padding:8px 0;border-bottom:1px solid var(--border)"><div style="font-weight:bold">' + esc(r.name) + '</div><div style="color:var(--muted);font-size:13px">' + esc(r.trade||'') + ' · ' + esc(r.due||'') + ' · ' + label + '</div></div>'; }).join('');
+}
+function openSeasonalPackModal() {
+  openModal('modal-seasonal-pack');
+  var body = document.getElementById('pack-body'), btn = document.getElementById('pack-add-btn');
+  btn.style.display = 'none'; btn.disabled = false;
+  document.getElementById('pack-note').style.display = '';
+  body.innerHTML = '<div class="loading">Checking what is already there…</div>';
+  function fail(msg) { body.innerHTML = '<div style="color:var(--danger)">Could not check your templates: ' + esc(msg) + '. Nothing was added.</div><button class="btn secondary" style="min-height:44px;margin-top:8px" onclick="openSeasonalPackModal()">Retry</button>'; }
+  api('POST','/wo-template/seed-seasonal',{dry_run:true}).then(function(r){
+    if (!r || r.ok !== true) { fail((r && r.error) || 'no answer from the Hub'); return; }
+    var add = r.would_add || [], there = r.already_there || [];
+    if (!add.length) { body.innerHTML = '<div>All five are already in your templates. Nothing to add.</div>' + packListHtml(there, 'already there'); document.getElementById('pack-note').style.display = 'none'; return; }
+    body.innerHTML = packListHtml(add, 'will be added') + packListHtml(there, 'already there - skipped');
+    btn.style.display = '';
+  }).catch(function(e){ fail((e && e.message) || 'network problem'); });
+}
+function confirmSeasonalPack() {
+  var btn = document.getElementById('pack-add-btn'); btn.disabled = true;   // double-tap guard: first line, before any await
+  var body = document.getElementById('pack-body');
+  api('POST','/wo-template/seed-seasonal',{dry_run:false}).then(function(r){
+    if (!r || typeof r.ok !== 'boolean') { btn.disabled = false; body.insertAdjacentHTML('afterbegin','<div style="color:var(--danger);margin-bottom:8px">Could not add the pack: ' + esc((r && r.error) || 'no answer from the Hub') + '. Check the list before trying again.</div>'); return; }
+    var added = r.added || [], failed = r.failed || [];
+    var msg = '<div style="margin-bottom:8px;font-weight:bold">Added ' + added.length + '. Open each one to pick properties and switch it on.</div>';
+    if (failed.length) msg += '<div style="color:var(--danger);margin-bottom:8px">Could not add: ' + failed.map(function(f){ return esc(f.name) + ' (' + esc(f.error) + ')'; }).join('; ') + '</div>';
+    body.innerHTML = msg;
+    document.getElementById('pack-note').style.display = 'none';
+    if (failed.length) { btn.disabled = false; btn.textContent = 'Try the rest again'; } else { btn.style.display = 'none'; }
+    refreshTemplates();
+  }).catch(function(e){ btn.disabled = false; body.insertAdjacentHTML('afterbegin','<div style="color:var(--danger);margin-bottom:8px">Could not add the pack: ' + esc((e && e.message) || 'network problem') + '. Check the list before trying again.</div>'); });
+}
 function copyTemplate(id) {
   var t = _woTemplates.find(function(x){ return x.ID===id; }); if (!t) return;
   var name = prompt('Name for the copy:', (t.Name||'Template')+' (copy)'); if (!name) return;
