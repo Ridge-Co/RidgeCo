@@ -3963,7 +3963,7 @@ async function receiptCustomerCards(env) {
 // Fail CLOSED: a list that cannot be read comes back empty and is named in `errors`, so card status shows as unknown
 // (never "mine") and the rules path never auto-confirms; the page shows the errors instead of hiding them.
 function receiptCardListFromCfg(v) { return Array.from(new Set(String(v || '').split(',').map(s => s.replace(/\D/g, '').slice(-4)).filter(s => s.length === 4))); }
-function receiptCardLabelsFromCfg(v) { try { const o = JSON.parse(String(v || '{}')); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; } catch (e) { return {}; } }
+function receiptCardLabelsFromCfg(v, env) { const o = parseJsonCell(v, {}, { env, where: 'receiptCardLabelsFromCfg', ref: 'receipt_card_labels', severity: 'P2' }); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; }
 async function receiptAccuracyCtx(env, cfgIn, opts) {
   opts = opts || {};
   const ctx = { units: [], myCards: [], custCards: [], labels: {}, vendorInvoiceNames: RECEIPT_VENDOR_INVOICE_NAMES_DEFAULT, errors: [] };
