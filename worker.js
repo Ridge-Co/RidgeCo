@@ -28676,7 +28676,7 @@ async function woSharedReceipt(env, body){
 // A share-link vendor can only tick items / pick reasons on the checklist that already exists — never add,
 // rename or remove items, and never touch the generated-wording field. Matches items by text.
 function mergeVendorChecklist(existingRaw, incomingRaw, env, ref) {
-  const existing = parseChecklistItems(existingRaw), incoming = parseChecklistItems(incomingRaw);
+  const existing = parseChecklistItems(existingRaw, env, ref), incoming = parseChecklistItems(incomingRaw, env, ref);
   const byText = {}; incoming.forEach(it => { byText[it.t] = it; });
   const valid = ['', 'na', 'separate', 'estimate', 'access', 'parts'];
   return existing.map(it => {
