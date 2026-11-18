@@ -81,9 +81,12 @@ ok(Array.isArray(photos3) && photos3.length === 0, 'no matching attachments → 
 
 // ---- 5. fetchTab throwing (e.g. Sheets hiccup) fails open to an empty array, never breaks the proposal ----
 const badFetchTab = async () => { throw new Error('Sheets API down'); };
-const scopeProposalPhotosFailOpen = new Function('fetchTab', `${extractConst('SCOPE_PROPOSAL_PHOTO_TYPES')}\nreturn (${extractFn('scopeProposalPhotos')});`)(badFetchTab);
+const softFails = [];
+const softFailStub = async (env, where, e, o) => { softFails.push(where + '|' + o.severity + '|' + o.ref); return { ok: false }; };
+const scopeProposalPhotosFailOpen = new Function('fetchTab', 'softFail', `${extractConst('SCOPE_PROPOSAL_PHOTO_TYPES')}\nreturn (${extractFn('scopeProposalPhotos')});`)(badFetchTab, softFailStub);
 const photos4 = await scopeProposalPhotosFailOpen({}, s1);
 ok(Array.isArray(photos4) && photos4.length === 0, 'a Sheets read failure fails open (empty photos) rather than breaking the whole proposal load');
+ok(softFails.length === 1 && softFails[0] === 'scopeProposalPhotos:Attachments|P2|' + s1.ID, 'the failed read is also reported to the failure ledger at P2 with the scope id');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
