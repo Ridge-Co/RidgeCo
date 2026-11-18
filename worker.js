@@ -11999,7 +11999,7 @@ async function assignVendor(env, body, internal) {
 // A vendor cannot mark a job Complete or submit an invoice until every checklist item is ticked or has a
 // reason code. Enforced here (the portal also checks first) so a stale page, a share link, or a direct
 // call cannot get around it. Hub/admin callers are not gated. Message is in the vendor's chosen language.
-function checklistUnresolvedItems(raw) { return parseChecklistItems(raw).filter(it => !it.done && !it.code); }
+function checklistUnresolvedItems(raw, env, ref) { return parseChecklistItems(raw, env, ref).filter(it => !it.done && !it.code); }
 
 function checklistGateMessage(count, action, lang) {
   const n = Number(count) || 0;
