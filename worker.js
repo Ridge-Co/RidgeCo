@@ -8899,7 +8899,7 @@ async function ownerApprovalRespond(env, callerRole, callerSessionId, body) {
     await ensureColumns(env, 'Scopes', OWNER_APPROVAL_RESPONSE_COLS);
     await updateRowVerified(env, 'Scopes', scopeId, { Owner_Response: wanted, Owner_Response_At: nowIso, Owner_Response_By: name, Owner_Response_Text: text, Owner_Response_Alerted: '' });
   } catch (e) {
-    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_save_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `owner=${ownerId} scope=${scopeId} ${schedErrText(e)}`.slice(0, 480) }); } catch (te) { console.error('owner_approval_save_failed telemetry failed:', schedErrText(te)); }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_approval_save_failed', Skill_Or_Endpoint: '/owner/approval/respond', Success: 'FALSE', Notes: `owner=${ownerId} scope=${scopeId} ${schedErrText(e)}`.slice(0, 480) }); } catch (te) { console.error('owner_approval_save_failed telemetry failed:', schedErrText(te)); }   // silent-ok: the owner is already told it was not saved, this is only the audit trail
     return json({ error: 'Not saved, try again.', saved: false }, 500);   // no text is sent for an answer that was not saved
   }
   // history row (the owner's answer, who typed it, when)
