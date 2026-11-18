@@ -26980,8 +26980,8 @@ function _recoverReceiptSourceFile(receiptRow, queueRows) {
 // QB_Email_Sent stays the long-standing "emailed" flag and is never cleared. A receipt reversed after it was sent keeps its sent history and gets
 // QB_Reversed_Date; the Receipts row is voided (Active FALSE) so a corrected re-confirm writes a NEW row that sends normally.
 const QB_BATCH_COLS = ['QB_Batch_Status', 'QB_Batch_Sent_Date', 'QB_Reversed_Date', 'QB_Email_Subject', 'QB_Batch_Error', 'QB_Delete_Confirmed', 'QB_Delete_Confirmed_Date'];
-const QB_BATCH_MAX_PER_CALL = 8;       // Cloudflare subrequest budget: ~6-8 subrequests per receipt (claim write, Drive, Gmail, final write) + a few reads. Bigger backlogs page across scheduler slices.
-const QB_BATCH_DEFAULT_PER_CALL = 5;
+const QB_BATCH_MAX_PER_CALL = 5;       // Cloudflare subrequest budget: ~10 subrequests per receipt now (re-check read, claim write, claim read-back, Drive, Gmail, final write) + a few reads. Bigger backlogs page across scheduler slices.
+const QB_BATCH_DEFAULT_PER_CALL = 3;
 // PURE. 'sent' | 'held' | 'sending' | 'failed' | 'ready' (blank counts as ready: every row written before this build was already waiting for the daily sweep).
 function qbBatchStatus(r) {
   if (!r) return 'ready';
