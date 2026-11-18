@@ -12034,7 +12034,7 @@ function maxPriceNum(v) {
 function estimateSubtotalOf(e, env) {
   const s = parseFloat(String((e && e.Subtotal) == null ? '' : e.Subtotal).replace(/[$,\s]/g, ''));
   if (Number.isFinite(s)) return s;
-  try { return (JSON.parse((e && e.Line_Items) || '[]') || []).reduce((t, li) => t + (parseFloat(li && li.amount) || 0), 0); } catch (_) { return 0; }
+  { const li = parseJsonCell(e && e.Line_Items, [], { env, where: 'estimateSubtotalOf', ref: String((e && e.ID) || ''), severity: 'P1' }); return Array.isArray(li) ? li.reduce((t, x) => t + (parseFloat(x && x.amount) || 0), 0) : 0; }
 }
 
 // What the vendor may bill: the max price, or the latest APPROVED estimate for this WO if that is higher. 0 = no max set.
