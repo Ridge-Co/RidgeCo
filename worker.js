@@ -8792,7 +8792,7 @@ const OWNER_APPROVAL_DOUBLE_TAP_MS = 2 * 60 * 1000;
 function ownerApprovalsEnabled(cfg) { return String((cfg && cfg.owner_approvals_enabled) || '').trim().toUpperCase() === 'TRUE'; }
 // PURE. The customer price of one proposal from its stored Proposal_Items_JSON: the SAME arithmetic scopeProposalView uses for `subtotal`
 // (selected option of every non-optional item). null when there is nothing to total (the card then says "Open to see price").
-function ownerApprovalTotal(itemsJson) {
+function ownerApprovalTotal(itemsJson, env) {
   let items = []; try { items = JSON.parse(itemsJson || '[]'); } catch (_) { return null; }
   if (!Array.isArray(items) || !items.length) return null;
   let sum = 0;
