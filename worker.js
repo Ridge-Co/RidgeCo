@@ -14505,7 +14505,7 @@ async function scopeDepositInvoiceId(env, scopeId, tabs) {
   if (tabs) { sigs = tabs.sigs; milestones = tabs.milestones; }
   else {
     sigs = await fetchTab(env, 'Scope_Signatures');
-    try { await paymentMilestonesTab(env); } catch (_) {}
+    try { await paymentMilestonesTab(env); } catch (_) {}   // silent-ok: the Payment_Milestones read right after fails loudly if the tab is missing
     milestones = await fetchTab(env, 'Payment_Milestones');
   }
   return resolveScopeDepositInvoice(sigs, milestones, scopeId);
