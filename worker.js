@@ -7481,7 +7481,7 @@ function computeStandaloneBillTotals(lineItems) {
 
 async function scopeSigResolveParties(env, s, row) {
   let selections = parseJsonCell(row.Selections_JSON, {}, { env, where: 'scopeSigResolveParties:Selections_JSON', ref: String(s.ID || ''), severity: 'P1' });
-  const items = scopeParseItems(s);
+  const items = scopeParseItems(s, env);
   const tradeName = scopeSigTrade(items, selections);
   const trade = QB_TRADE_MAP[tradeName] || QB_TRADE_MAP.General;
 
