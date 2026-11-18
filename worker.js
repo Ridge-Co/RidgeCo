@@ -30730,7 +30730,7 @@ async function findRecentDuplicate(env, tab, signature, windowSeconds, match) {
       if (ts >= cutoff) return r;
     }
     return null;
-  } catch (e) { return null; }
+  } catch (e) { await softFail(env, 'findRecentDuplicate', e, { severity: 'P1', ref: String(tab || ''), source: 'read', context: 'the recent-duplicate check could not read the tab, so a duplicate may be created' }); return null; }
 }
 
 // Duplicate-guard for /property/add and /unit/add (Sep 24 2026, Brett's ask): both handlers
