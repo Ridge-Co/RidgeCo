@@ -94,6 +94,14 @@ console.log('queue sync vs GitHub 403 — offline tests\n');
   t('GitHub 500: no "blocked by rate limit" row', st.failures.length === 0);
 }
 
+// 5b. HTTP 401 (revoked/expired GITHUB_READ_TOKEN, Nov 19 2026) is calm too: one P2 row, not a failing job.
+{
+  const st = mkSt({ ghFail: (p) => 'GitHub ' + p + ' → HTTP 401' });
+  const r = await build(st).opsQueueSync({}, {}, {});
+  t('GitHub 401: no job error, reported as rate_limited', r.ok === true && r.errors.length === 0 && r.rate_limited.length === 2, r);
+  t('GitHub 401: one calm blocked row filed', st.failures.length === 1, st.failures);
+}
+
 // 6. If the failure row itself cannot be filed, that is surfaced as a job error (never swallowed).
 {
   const st = mkSt({ ghFail: RL, reportResult: { ok: false, dropped: true } });
