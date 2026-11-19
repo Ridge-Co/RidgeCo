@@ -69,5 +69,12 @@ let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
   ok(gate.includes("callWithFailureAlert(env, 'wo_create', '/workorder', () => createWorkOrder(env, body));"),
     'admin/owner callers still fall straight through to createWorkOrder (now wrapped for failure alerting) with their own body untouched');
 }
+{
+  // queue #116 (Nov 19 2026): the guided flow is an add-on; the old path above must stay exactly as it was.
+  ok(html.includes("onclick=\"submitNewRequest()\"") && html.includes("api('/workorder'"), 'queue #116: the old SUBMIT button and the old /workorder call are untouched');
+  ok(html.includes('session.intake_guided') && html.includes('RCIntake.mount('), 'queue #116: the guided flow starts only from the server flag');
+  const fnG = html.slice(html.indexOf('function fileGuidedRequest'), html.indexOf('function fileGuidedRequest') + 900);
+  ok(fnG.includes("type: 'tenant'") && fnG.includes('session.property_id') && fnG.includes('session.tenant_id'), 'queue #116: guided requests are also type tenant, filed against the logged-in tenant\'s own ids');
+}
 
 console.log(`tenant-submit-request: ${n}/${n} passing`);

@@ -3,6 +3,7 @@
 <head>
 <script src="test-login.js"></script>
 <script src="failure-reporter.js"></script>
+<script src="intake-flow.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ridge Co — Submit Maintenance Request</title>
@@ -85,17 +86,18 @@
       <div class="name" id="tc-name"></div>
       <div class="addr" id="tc-addr"></div>
     </div>
-    <div class="field">
+    <div id="intake-root"></div>
+    <div class="field" id="f-trade">
       <label>Type of Issue</label>
       <select id="trade-select">
         <option value="">Select...</option>
         <option>Plumbing</option><option>Electrical</option><option>HVAC</option><option>Appliance</option><option>General</option><option>Carpentry</option><option>Painting</option><option>Flooring</option><option>Roofing</option><option>Windows</option><option>Locks</option><option>Landscaping</option><option>Cleaning</option><option>Pest Control</option></select>
     </div>
-    <div class="field">
+    <div class="field" id="f-desc">
       <label>Describe the Issue</label>
       <textarea id="description" placeholder="What is happening? When did it start? Is it getting worse?"></textarea>
     </div>
-    <div class="field">
+    <div class="field" id="photo-field">
       <label>Photos / Video (strongly recommended)</label>
       <div class="upload-zone" id="upload-zone">
         <input type="file" id="file-input" accept="image/*,video/*" multiple onchange="handleFiles(this.files)">
@@ -104,7 +106,7 @@
       </div>
       <div class="preview-grid" id="preview-grid"></div>
     </div>
-    <div class="field">
+    <div class="field" id="f-pri">
       <label>How urgent is this?</label>
       <select id="priority-select">
         <option value="normal">Normal — schedule when available</option>
@@ -114,8 +116,8 @@
     </div>
     <div class="form-error" id="form-error"></div>
     <button class="btn" id="submit-btn" onclick="submitRequest()">Submit Request</button>
-    <button class="btn secondary" onclick="resetToPin()" style="margin-top:8px">Not you? Go back</button>
-    <p style="color:var(--muted);font-size:10px;text-align:center;margin-top:12px">Your coordinator is notified immediately.</p>
+    <button class="btn secondary" id="back-btn" onclick="resetToPin()" style="margin-top:8px">Not you? Go back</button>
+    <p style="color:var(--muted);font-size:10px;text-align:center;margin-top:12px" id="notified-note">Your coordinator is notified immediately.</p>
   </div>
 
   <div class="success-screen" id="success-screen">
@@ -188,11 +190,60 @@ function lookupPin() {
       (res.unit_label ? ' · ' + res.unit_label : '') +
       (res.property_city ? ', ' + res.property_city : '');
     document.getElementById('form-screen').style.display = 'block';
+    mountGuided(res);
   })
   .catch(function(e) {
     hideLoading();
     errEl.textContent = 'Connection error. Please try again.';
     errEl.style.display = 'block';
+  });
+}
+
+// Guided request (queue #116). Only when the server says intake_guided (Config intake_guided_enabled, starts OFF) AND intake-flow.js loaded
+// and mounts cleanly. Anything else leaves the old single form in place, so a request can always be filed.
+function mountGuided(res) {
+  var root = document.getElementById('intake-root');
+  root.innerHTML = '';
+  if (!res.intake_guided) return;
+  if (!window.RCIntake) { reportGuidedFailure('intake_flow_missing', new Error('intake-flow.js did not load')); return; }
+  try {
+    var hide = ['f-trade', 'f-desc', 'f-pri', 'submit-btn', 'back-btn', 'notified-note'].map(function (id) { return document.getElementById(id); });
+    RCIntake.mount({
+      root: root, phone: res.emergency_phone, lang: (res.language || '').toLowerCase().indexOf('es') === 0 ? 'es' : '',
+      hide: hide, photoSlot: document.getElementById('photo-field'), file: fileGuided, report: reportGuidedFailure,
+      deflected: function (info) {
+        return fetch(WORKER + '/intake/deflected', { method: 'POST', headers: { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(info) })
+          .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); });
+      },
+      reset: function () { selectedFiles = []; renderPreviews(); }
+    });
+  } catch (e) {
+    root.innerHTML = '';
+    ['f-trade', 'f-desc', 'f-pri', 'submit-btn', 'back-btn', 'notified-note', 'photo-field'].forEach(function (id) { var el = document.getElementById(id); if (el) el.style.display = ''; });
+    reportGuidedFailure('intake_flow_mount', e);
+  }
+}
+function reportGuidedFailure(where, err) {
+  console.error(where, err);
+  if (window.hubReportFailure) window.hubReportFailure(where, String((err && err.message) || err));
+}
+// Files the request for the guided flow. Resolves {id, intake, photoFailures}; rejects with a readable message so the flow can show Retry (answers are kept).
+function fileGuided(body) {
+  return fetch(WORKER + '/workorder', {
+    method: 'POST', headers: { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ property_id: tenantData.property_id, unit_id: tenantData.unit_id, tenant_id: tenantData.tenant_id, trade: body.trade, priority: body.priority,
+      description: body.description, type: 'tenant', created_by: tenantData.tenant_name, notes: '', intake: body.intake })
+  }).then(function (r) { return r.json().then(function (j) { return j; }, function () { throw new Error('The server answered HTTP ' + r.status + ' with nothing readable'); }); })
+  .then(function (wo) {
+    if (!wo.id) throw new Error(wo.error || 'Failed to create work order');
+    var files = selectedFiles.slice(), failed = 0;
+    var next = function (i) {
+      if (i >= files.length) { selectedFiles = []; renderPreviews(); return Promise.resolve({ id: wo.id, intake: wo.intake, photoFailures: failed }); }
+      var fd = new FormData(); fd.append('file', files[i]); fd.append('wo_id', wo.id);
+      return fetch(WORKER + '/upload-photo', { method: 'POST', headers: { 'X-Auth-Token': TOKEN }, body: fd })
+        .then(function (r) { if (!r.ok) failed++; }, function (e) { failed++; reportGuidedFailure('intake_photo_upload', e); }).then(function () { return next(i + 1); });
+    };
+    return next(0);
   });
 }
 

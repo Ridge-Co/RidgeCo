@@ -2567,7 +2567,33 @@ function renderDashboard() {
 // ── Severity triage (queue #142 Phase 1). Only shows when the server stamped a Triage_Tier; nothing appears while Config Triage_Enabled is off.
 var TRI_ORDER = {Emergency:0, Urgent:1, Routine:2, Low:3};
 var TRI_STYLE = {Emergency:'background:#fdecea;border:1px solid var(--danger);color:var(--danger)', Urgent:'background:#fdf2e2;border:1px solid var(--warn);color:var(--warn)', Routine:'background:var(--surface2);border:1px solid var(--border);color:var(--muted)', Low:'background:var(--surface2);border:1px solid var(--border);color:var(--muted)'};
-function triRank(w){ var r = TRI_ORDER[w && w.Triage_Tier]; return r === undefined ? 2 : r; }
+function triRank(w){ if (w && w.Intake_Emergency === 'TRUE') return -1; var r = TRI_ORDER[w && w.Triage_Tier]; return r === undefined ? 2 : r; }   // queue #116: a guided-intake emergency sorts above every tier
+// ── Guided request emergency (queue #116 Phase 1). Intake_* columns exist only after the first guided request; blank everywhere else.
+function intakeAlertInfo(w){
+  var st = String((w && w.Intake_Alert_State) || ''), first = st.split(';')[0].split('|');
+  var when = first[1] ? new Date(first[1]).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}) : '';
+  if (first[0] === 'sent') return { ok:true, text:'Alert text sent ' + when + (st.indexOf(';recheck|sent') >= 0 ? ', second text sent' : '') + (st.indexOf(';ack|') >= 0 ? ', opened' : '') };
+  if (first[0] === 'FAILED') return { ok:false, text:'ALERT NOT DELIVERED' + (when ? ' (' + when + ')' : '') + (st.indexOf(';recheck|sent') >= 0 ? ', second text sent' : '') };
+  return { ok:false, text:'ALERT NOT SENT' };
+}
+function intakeChip(w){
+  if (!w || w.Intake_Emergency !== 'TRUE') return '';
+  var a = intakeAlertInfo(w);
+  return ' <span class="badge" style="background:var(--danger);color:#fff;margin-left:4px">EMERGENCY</span>' + (a.ok ? '' : ' <span class="badge" style="background:var(--danger-bg);border:1px solid var(--danger);color:var(--danger);margin-left:4px">'+esc(a.text)+'</span>');
+}
+function intakeDetailHTML(wo){
+  if (!wo.Intake_Channel && wo.Intake_Emergency !== 'TRUE') return '';
+  var a = intakeAlertInfo(wo), em = wo.Intake_Emergency === 'TRUE', lang = '';
+  try { lang = (JSON.parse(wo.Intake_Answers || '{}').lang === 'es') ? ' (tenant used Spanish)' : ''; } catch (e) { hubReportFailure('intake_answers_parse', String((e && e.message) || e)); }
+  return '<div id="intake-box" style="margin-bottom:10px;padding:10px 12px;border:'+(em?'2px solid var(--danger)':'1px solid var(--border)')+';border-radius:var(--radius);background:'+(em?'var(--danger-bg)':'var(--surface2)')+';font-size:13px;line-height:1.5">' +
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:13px;letter-spacing:.06em">INTAKE'+esc(lang)+'</b>' + (em ? '<span class="badge" style="background:var(--danger);color:#fff">EMERGENCY</span>' : '') +
+    (em ? '<span style="font-weight:600;color:'+(a.ok?'var(--success)':'var(--danger)')+'">'+esc(a.text)+'</span>' : '') + '</div>' +
+    (wo.Intake_Summary ? '<div style="white-space:pre-wrap;margin-top:6px">'+esc(wo.Intake_Summary)+'</div>' : '') + '</div>';
+}
+function intakeAckOpen(woId){
+  api('POST','/intake/ack',{wo_id:woId},30000).then(function(r){ if (!r || r.error) throw new Error((r && r.error) || 'no answer'); })
+    .catch(function(e){ hubReportFailure('intake_ack', String((e && e.message) || e)); toast('Could not mark the emergency as opened: '+((e && e.message)||'try again'),'error'); });
+}
 function triAnyStamped(){ return safeArray(state.workorders).some(function(x){ return !!x.Triage_Tier; }); }
 function triChipHTML(w){
   if (w.Triage_Tier) return ' <span class="badge" title="'+esc(w.Triage_Summary||'')+'" style="'+(TRI_STYLE[w.Triage_Tier]||'')+';margin-left:4px">'+esc(String(w.Triage_Tier).toUpperCase())+'</span>';
@@ -2610,7 +2636,7 @@ function woCard(w) {
   return '<div class="wo-card priority-'+(w.Priority||'normal')+(w.Triage_Tier==='Emergency'?' tri-emergency':'')+'" data-woid="'+w.ID+'" onclick="woCk(this)">' +
     (_bulkWOMode ? '<input type="checkbox" class="wo-bulk-check" data-woid="'+w.ID+'"' +
     ' onclick="event.stopPropagation();var n=document.querySelectorAll(\'.wo-bulk-check:checked\').length;document.getElementById(\'bulk-count\').textContent=n+\' selected\';updateBulkCombineBtn();updateBulkVoidBtn()" style="width:auto;flex:none;cursor:pointer" />' : '') +
-    '<div class="wo-id">'+w.ID+(w.Voided==='TRUE'?' <span style="background:#eee;border:1px solid #999;color:#666;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">VOIDED — '+esc(w.Void_Reason||'')+'</span>':'')+(w.Priority==='urgent'?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">URGENT</span>':'')+(w.Priority==='high'?' <span style="background:#fdf2e2;color:#fdba74;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">HIGH</span>':'')+(daysOpen>14?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">'+daysOpen+'d</span>':(daysOpen>7?' <span style="color:var(--warn);font-size:9px;margin-left:4px">'+daysOpen+'d</span>':''))+'</div>' +
+    '<div class="wo-id">'+w.ID+intakeChip(w)+(w.Voided==='TRUE'?' <span style="background:#eee;border:1px solid #999;color:#666;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">VOIDED — '+esc(w.Void_Reason||'')+'</span>':'')+(w.Priority==='urgent'?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px;letter-spacing:.05em">URGENT</span>':'')+(w.Priority==='high'?' <span style="background:#fdf2e2;color:#fdba74;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">HIGH</span>':'')+(daysOpen>14?' <span style="background:#fdecea;color:#b42318;font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">'+daysOpen+'d</span>':(daysOpen>7?' <span style="color:var(--warn);font-size:9px;margin-left:4px">'+daysOpen+'d</span>':''))+'</div>' +
     '<div class="wo-info"><div class="wo-addr">'+addr+(unit?' · Unit '+unit.Unit_Label:'')+'</div>' +
     '<div class="wo-desc">'+(w.Trade||'')+(w.Description?' · '+w.Description.substring(0,60):'')+(w.Owner_WO_Ref?' <span style="color:var(--muted);font-size:10px">[Ref: '+w.Owner_WO_Ref+']</span>':'')+(w.Turnover_Group_ID?' <span style="background:#e8f0fb;color:var(--accent);font-size:9px;padding:1px 5px;border-radius:3px;margin-left:4px">🔄 '+esc(w.Turnover_Group_ID)+' · '+esc(w.Turnover_Role||'')+'</span>':'')+'</div></div>' +
     '<div class="wo-right"><span class="badge '+sc+'">'+(w.Status||'New')+'</span>' +
@@ -2861,6 +2887,7 @@ function openWODetail(woId) {
   var wo = state.workorders.find(function(w){return w.ID===woId;});
   console.log('[openWODetail] wo found=', !!wo);
   if(!wo) { console.warn('[openWODetail] WO not found in state for id:', woId); return; }
+  if (wo.Intake_Emergency === 'TRUE' && !/ack\|/.test(wo.Intake_Alert_State || '')) intakeAckOpen(woId);   // queue #116: opening an emergency stops the second text
   var prop = state.properties.find(function(p){return String(p.ID)===String(wo.Property_ID);});
   var unit = state.units.find(function(u){return u.ID===wo.Unit_ID;});
   var vendor = state.vendors.find(function(v){return v.ID===wo.Vendor_ID;});
@@ -2905,7 +2932,7 @@ function openWODetail(woId) {
     _stStatuses.map(function(s){ return '<option value="'+s+'"'+(s===wo.Status?' selected':'')+'>→ '+s+'</option>'; }).join('') +
     '</select>' +
     '</div>';
-  document.getElementById('detail-body').innerHTML = stickyBar + '<div id="fu-card" style="margin-bottom:6px"></div>' + triageDetailHTML(wo) + propHtml +
+  document.getElementById('detail-body').innerHTML = stickyBar + '<div id="fu-card" style="margin-bottom:6px"></div>' + intakeDetailHTML(wo) + triageDetailHTML(wo) + propHtml +
     '<div style="margin-bottom:14px">' +
     '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">DESCRIPTION</div>' +
     '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:13px;line-height:1.7;white-space:pre-wrap;word-break:break-word" class="wo-detail-desc">' +

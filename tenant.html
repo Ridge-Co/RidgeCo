@@ -3,6 +3,7 @@
 <head>
 <script src="test-login.js"></script>
 <script src="failure-reporter.js"></script>
+<script src="intake-flow.js"></script>
 <script src="wo-status.js"></script>
 <script data-wo-status-guard>if (typeof WOStatus === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div style="background:#b42318;color:#fff;padding:12px;font:14px sans-serif;position:relative;z-index:99999">The status list (wo-status.js) did not load, so work orders will not show correctly. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
 <meta charset="UTF-8">
@@ -235,19 +236,20 @@ label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font
 <div class="modal-overlay" id="modalSubmitRequest">
   <div class="modal">
     <div class="modal-title">SUBMIT A NEW REQUEST</div>
-    <p style="color:var(--muted);font-size:11px;margin-bottom:10px">This is for issues Ridge Co handles at your property. Your property manager is notified as soon as you submit.</p>
-    <div style="margin-bottom:12px">
+    <p style="color:var(--muted);font-size:11px;margin-bottom:10px" id="srIntro">This is for issues Ridge Co handles at your property. Your property manager is notified as soon as you submit.</p>
+    <div id="srIntakeRoot"></div>
+    <div style="margin-bottom:12px" id="srTradeField">
       <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">Type of Issue</label>
       <select id="srTrade" style="width:100%">
         <option value="">Select…</option>
         <option>Plumbing</option><option>Electrical</option><option>HVAC</option><option>Appliance</option><option>General</option><option>Carpentry</option><option>Painting</option><option>Flooring</option><option>Roofing</option><option>Windows</option><option>Locks</option><option>Landscaping</option><option>Cleaning</option><option>Pest Control</option>
       </select>
     </div>
-    <div style="margin-bottom:12px">
+    <div style="margin-bottom:12px" id="srDescField">
       <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">Describe the Issue</label>
       <textarea id="srDesc" placeholder="What's happening? When did it start? Is it getting worse?" style="min-height:90px"></textarea>
     </div>
-    <div style="margin-bottom:12px">
+    <div style="margin-bottom:12px" id="srPriField">
       <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">How Urgent Is This?</label>
       <select id="srPriority" style="width:100%">
         <option value="normal">Normal — schedule when available</option>
@@ -255,7 +257,7 @@ label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font
         <option value="low">Low — no rush</option>
       </select>
     </div>
-    <div style="margin-bottom:8px">
+    <div style="margin-bottom:8px" id="srPhotoField">
       <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">Photos / Video <span style="font-weight:normal;text-transform:none">(optional — helps us fix it faster)</span></label>
       <input type="file" id="srFiles" accept="image/*,video/*" multiple onchange="srHandleFiles(this.files)">
       <div id="srPreview" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
@@ -824,6 +826,48 @@ function openSubmitRequest() {
   document.getElementById('srSubmitBtn').disabled = false;
   srFiles = [];
   openModal('modalSubmitRequest');
+  mountGuidedRequest();
+}
+// Guided request (queue #116). Only when the server said intake_guided at login (Config intake_guided_enabled, starts OFF) AND intake-flow.js mounts cleanly.
+// Anything else leaves the old single form, so a request can always be filed.
+function mountGuidedRequest() {
+  var root = document.getElementById('srIntakeRoot'); root.innerHTML = '';
+  var ids = ['srIntro', 'srTradeField', 'srDescField', 'srPriField', 'srSubmitBtn'];
+  ids.forEach(function (id) { var e = document.getElementById(id); if (e) e.style.display = ''; });
+  document.getElementById('srPhotoField').style.display = '';
+  if (!session || !session.intake_guided) return;
+  if (!window.RCIntake) { guidedFailure('intake_flow_missing', new Error('intake-flow.js did not load')); return; }
+  try {
+    RCIntake.mount({
+      root: root, phone: session.emergency_phone, lang: String(session.language || '').toLowerCase().indexOf('es') === 0 ? 'es' : '',
+      hide: ids.map(function (id) { return document.getElementById(id); }), photoSlot: document.getElementById('srPhotoField'), file: fileGuidedRequest, report: guidedFailure,
+      deflected: function (info) { return api('/intake/deflected', { method: 'POST', body: info }).then(function (r) { if (!r || r.error) throw new Error((r && r.error) || 'no answer'); }); },
+      reset: function () { srFiles = []; renderSrPreview(); loadWOs(); }
+    });
+  } catch (e) {
+    root.innerHTML = '';
+    ids.forEach(function (id) { var el = document.getElementById(id); if (el) el.style.display = ''; });
+    document.getElementById('srPhotoField').style.display = '';
+    guidedFailure('intake_flow_mount', e);
+  }
+}
+function guidedFailure(where, err) {
+  console.error(where, err);
+  if (window.hubReportFailure) window.hubReportFailure(where, String((err && err.message) || err));
+}
+function fileGuidedRequest(body) {
+  return api('/workorder', { method: 'POST', body: {
+    property_id: session.property_id, unit_id: session.unit_id, tenant_id: session.tenant_id, trade: body.trade, priority: body.priority,
+    description: body.description, type: 'tenant', created_by: session.tenant_name, intake: body.intake
+  } }).then(function (res) {
+    if (!res || !res.id) throw new Error((res && res.error) || 'Failed to create work order');
+    var files = srFiles.slice(), failed = 0;
+    var next = function (i) {
+      if (i >= files.length) { srFiles = []; renderSrPreview(); loadWOs(); return Promise.resolve({ id: res.id, intake: res.intake, photoFailures: failed }); }
+      return uploadTenantPhoto(files[i], res.id).then(function (ok) { if (!ok) failed++; return next(i + 1); });
+    };
+    return next(0);
+  });
 }
 function srHandleFiles(fileList) {
   Array.from(fileList).forEach(function(f) { if (srFiles.length < 6) srFiles.push(f); });
@@ -1214,6 +1258,9 @@ function buildPhotoSection(woId, propAddr, opts) {
     session.unit_label       = d.unit_label;
     session.owner_id         = d.owner_id;
     session.can_submit_wo    = d.can_submit_wo;
+    session.intake_guided    = d.intake_guided;      // queue #116
+    session.emergency_phone  = d.emergency_phone;
+    if (d.language) session.language = d.language;
     try { localStorage.setItem(SESS_KEY, JSON.stringify(session)); } catch(e){}
     if (buttonChanged) {
       var nr = document.getElementById('newRequestBtn');

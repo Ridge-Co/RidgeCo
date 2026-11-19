@@ -910,6 +910,8 @@ const _hubWorkerCore = {
         }
         if (path === '/intake/email')             return await intakeEmail(env, body);
         if (path === '/intake/retry')             return await intakeRetry(env, body);
+        if (path === '/intake/ack')               return await intakeAck(env, body);              // ADMIN-ONLY: opening an emergency work order stops the second text (queue #116)
+        if (path === '/intake/deflected')         return await intakeDeflected(env, body, callerRole, callerSessionId);   // tenant or admin: "That fixed it" on a self-check (queue #116)
         if (path === '/intake/delivery-email')    return await deliveryEmailIntake(env, _idEmail ? Object.assign({}, body, { mailbox: _idEmail, mailbox_claimed: String(body && body.mailbox || '').slice(0, 120) }) : body);   // a verified identity replaces whatever mailbox the body claims   // Oct 23 2026: store delivery emails (INTAKE_TOKEN or WORKER_SECRET)
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/wo/max-price')             return await setWoMaxPrice(env, body);   // ADMIN-ONLY (not in ROLE_SCOPES): set / clear the vendor max price
@@ -2400,6 +2402,7 @@ async function tenantByPin(env, url) {
     const unit = units.find(u => u.ID === tenant.Unit_ID) || {};
     const prop = props.find(pr => pr.ID === (tenant.Property_ID || unit.Property_ID)) || {};
     const owner = prop.Owner_ID ? owners.find(o => o.ID === prop.Owner_ID) : null;
+    const _icfg = await fetchConfig(env);   // queue #116: guided request switch + the number the emergency screen tells tenants to call
     return json({
       tenant_id:        tenant.ID,
       tenant_name:      `${tenant.First_Name} ${tenant.Last_Name||''}`.trim(),
@@ -2413,6 +2416,9 @@ async function tenantByPin(env, url) {
       // the request form; POST /workorder re-checks this same resolver server-side so the
       // gate can't be bypassed by skipping the UI.
       can_submit_wo:    resolveTenantWOAccess(prop, owner, tenant.Unit_ID||''),
+      intake_guided:    intakeOn(_icfg),   // queue #116: the guided request flow, starts OFF
+      emergency_phone:  intakeOn(_icfg) ? String(_icfg.admin_phone || '') : '',
+      language:         tenant.Language||'',
       token:            await makeSessionToken({ role: 'tenant', id: tenant.ID, ...demoTokenClaim(tenant) }, env.WORKER_SECRET),
       ...(demoTrue(tenant.Is_Demo) ? { demo: true } : {}),   // the tenant page shows its DEMO banner from this
     });
@@ -2440,6 +2446,7 @@ async function tenantSessionRefresh(env, callerRole, callerSessionId) {
   const unit = units.find(u => u.ID === tenant.Unit_ID) || {};
   const prop = props.find(pr => pr.ID === (tenant.Property_ID || unit.Property_ID)) || {};
   const owner = prop.Owner_ID ? owners.find(o => o.ID === prop.Owner_ID) : null;
+  const _icfg = await fetchConfig(env);
   return json({
     tenant_name:      `${tenant.First_Name} ${tenant.Last_Name||''}`.trim(),
     property_id:      prop.ID||'',
@@ -2448,6 +2455,9 @@ async function tenantSessionRefresh(env, callerRole, callerSessionId) {
     unit_label:       unit.Unit_Label||'',
     owner_id:         prop.Owner_ID||'',
     can_submit_wo:    resolveTenantWOAccess(prop, owner, tenant.Unit_ID||''),
+    intake_guided:    intakeOn(_icfg),
+    emergency_phone:  intakeOn(_icfg) ? String(_icfg.admin_phone || '') : '',
+    language:         tenant.Language||'',
   });
 }
 
@@ -9441,6 +9451,152 @@ async function woTriagePreview(env, body) {
 }
 // ── END SEVERITY TRIAGE ──────────────────────────────────────────────────────────────────────────────────────────────────
 
+// ── Guided request with emergency catch, Phase 1 of 5 (queue #116, Nov 19 2026) ──────────────────────────────────────
+// The tenant forms (submit.html, tenant.html) can send `intake` {answers, emergency, kind, lang, channel, self_check, summary}. It is read ONLY while Config
+// intake_guided_enabled is TRUE (starts OFF: with it off a request files exactly as before). The SERVER decides "emergency" again from the answers and from words
+// in the description (Config intake_emergency_words, comma list; fixed default when blank), so the alert never depends on the page. Additive Work_Orders
+// columns (ensureColumns): Intake_Channel, Intake_Answers (JSON), Intake_Summary, Intake_Emergency, Intake_Alert_State.
+// Order matters (silent-failure rules): write the row, RE-READ it, and only then text Brett (type admin_intake_emergency, ignores quiet hours). The
+// 14-minute sweep (schedRunSweepWork -> processIntakeEmergencyRecheck) sends ONE second text if the work order was not opened. No AI. No new scheduled job.
+const GUIDED_INTAKE_COLS = ['Intake_Channel', 'Intake_Answers', 'Intake_Summary', 'Intake_Emergency', 'Intake_Alert_State'];
+const INTAKE_EMERGENCY_WORDS_DEFAULT = ['gas smell', 'smell gas', 'smells like gas', 'carbon monoxide', 'co alarm', 'fire', 'smoke', 'burst pipe', 'flooding', 'flooded', 'water everywhere', 'sewage', 'sewer backup', 'no heat', 'no power', 'sparking', 'sparks', 'will not lock', 'wont lock', 'cannot lock', 'cant lock'];
+function intakeOn(cfg) { return String((cfg && cfg.intake_guided_enabled) || '').trim().toUpperCase() === 'TRUE'; }
+function intakeEmergencyWords(cfg) {
+  const raw = String((cfg && cfg.intake_emergency_words) || '').trim();
+  const list = raw ? raw.split(/[,;\n]/).map(s => s.trim().toLowerCase().replace(/[’']/g, '')).filter(Boolean) : INTAKE_EMERGENCY_WORDS_DEFAULT;
+  return list.length ? list : INTAKE_EMERGENCY_WORDS_DEFAULT;
+}
+function intakeWordHit(text, words) {
+  const t = ' ' + String(text || '').toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9]+/g, ' ') + ' ';
+  for (const w of words) { const x = ' ' + String(w).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() + ' '; if (x.trim() && t.includes(x)) return String(w); }
+  return '';
+}
+// Clean what the page sent: plain strings only, capped, never trusted for "emergency" (the decision below re-derives it).
+function intakeClean(raw) {
+  const r = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : null;
+  if (!r) return null;
+  const answers = {};
+  if (r.answers && typeof r.answers === 'object' && !Array.isArray(r.answers)) for (const k of Object.keys(r.answers).slice(0, 12)) answers[String(k).slice(0, 40)] = String(r.answers[k] == null ? '' : r.answers[k]).slice(0, 120);
+  return { answers, summary: String(r.summary || '').slice(0, 900), tappedEmergency: r.emergency === true, kind: String(r.kind || '').slice(0, 60), lang: r.lang === 'es' ? 'es' : 'en', channel: 'web', self_check: String(r.self_check || '').slice(0, 80) };
+}
+function intakeDecide(clean, description, words) {
+  if (!clean) return { emergency: false, reason: '' };
+  if (clean.tappedEmergency) return { emergency: true, reason: 'tenant tapped an emergency' + (clean.kind ? ': ' + clean.kind : '') };
+  const hit = intakeWordHit(String(description || '') + ' ' + Object.values(clean.answers).join(' ') + ' ' + clean.summary, words);
+  return hit ? { emergency: true, reason: 'words in the request: ' + hit } : { emergency: false, reason: '' };
+}
+// One SMS piece, plain ASCII only, with a short link (index.html?wo= opens that work order).
+function intakeAlertText(o) {
+  const clean = s => String(s || '').replace(/[^\x20-\x7E]/g, '').replace(/\s+/g, ' ').trim();
+  const head = (o.again ? 'REMINDER ' : '') + 'EMERGENCY ' + clean(o.woId) + ': ';
+  const link = ' https://ridge-co.github.io/RidgeCo/?wo=' + encodeURIComponent(clean(o.woId));
+  const what = clean(o.what).split(' ').slice(0, 6).join(' ');
+  const body = (clean(o.where) + (what ? ' - ' + what : '')).slice(0, Math.max(10, 160 - head.length - link.length - 1));
+  return head + body + '.' + link;
+}
+async function intakeTextAdmin(env, message, woId) {
+  try {
+    const cfg = await fetchConfig(env);
+    if (!cfg.admin_phone) return 'FAILED: Config admin_phone not set';
+    const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'admin_intake_emergency', recipient_type: 'admin', admin: { Name: 'Admin', Phone: cfg.admin_phone }, message_body: message, bypassQuietHours: true, allowRepeat: true });
+    if (r && r.sent) return 'sent';
+    if (r && r.send_ok === false) return 'BLOCKED: ' + r.gate_snapshot;
+    if (env.__STAGING__ ?? isStaging(env)) return 'sent (staging stub, logged only)';
+    return 'FAILED: not sent (' + ((r && r.gate_snapshot) || 'unknown') + ')';
+  } catch (e) { return 'FAILED: ' + String((e && e.message) || e).slice(0, 150); }
+}
+async function intakeReadRow(env, woId) {
+  const data = await sheetsRequest(env, 'GET', '/values/Work_Orders');
+  const [headers, ...rows] = (data && data.values) || [[]];
+  const idc = idColIndex(headers); const r = rows.find(x => String(x[idc]) === String(woId));
+  if (!r) return null;
+  const o = {}; headers.forEach((h, i) => { o[h] = r[i] == null ? '' : String(r[i]); }); return o;
+}
+// After the work order row is written: confirm it, then alert. Never throws; every failure is reported and returned.
+async function intakeAfterCreate(env, woId, prep) {
+  const out = { emergency: !!prep.emergency, alert: 'not needed', warnings: [] };
+  if (!prep.emergency) return out;
+  try {
+    let row = await intakeReadRow(env, woId);
+    const good = r => r && r.Intake_Emergency === 'TRUE' && r.Priority === 'urgent';
+    if (!good(row)) { await updateWOFields(env, woId, { Priority: 'urgent', Intake_Emergency: 'TRUE' }); row = await intakeReadRow(env, woId); }
+    if (!good(row)) {
+      out.alert = 'NOT SENT: the emergency flag did not read back'; out.warnings.push(out.alert);
+      await reportFailure(env, { system: 'hub', source: 'worker', where: 'intake_emergency_write', ref: woId, severity: 'P0', message: 'emergency work order ' + woId + ' did not read back as an emergency, so the alert text was NOT sent. Look at it now.' });
+      return out;
+    }
+    const [props, units] = await fetchTabs(env, ['Properties', 'Units']);
+    const prop = props.find(p => String(p.ID) === String(row.Property_ID)) || {}; const unit = units.find(u => u.ID === row.Unit_ID) || {};
+    const where = (prop.Address || 'address unknown') + (unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '');
+    const what = prep.kind || String(row.Description || '');
+    const sms = await intakeTextAdmin(env, intakeAlertText({ woId, where, what }), woId);
+    let push = 'not tried';
+    try { const p = await pushNotify(env, { recipient_type: 'admin', recipient_id: 'brett', title: 'EMERGENCY ' + woId, body: where + ' - ' + String(what).slice(0, 120), url: '/?wo=' + encodeURIComponent(woId), tag: 'intake-' + woId, urgency: 'high' }); push = p && p.ok ? (p.sent + ' sent') : ('failed: ' + ((p && p.error) || 'no result')); }
+    catch (e) { push = 'failed: ' + String((e && e.message) || e).slice(0, 100); out.warnings.push('push: ' + push); }
+    const okSms = /^sent/.test(sms);
+    out.alert = okSms ? 'sent' : sms;
+    await updateWOFields(env, woId, { Intake_Alert_State: (okSms ? 'sent|' : 'FAILED|') + new Date().toISOString() + '|' + sms.slice(0, 120) + '|push ' + push });
+    if (!okSms) {
+      out.warnings.push('alert text: ' + sms);
+      await reportFailure(env, { system: 'hub', source: 'worker', where: 'intake_emergency_alert', ref: woId, severity: 'P0', message: 'emergency text to Brett NOT delivered for ' + woId + ': ' + sms });
+    }
+  } catch (e) {
+    out.alert = 'FAILED: ' + String((e && e.message) || e).slice(0, 150); out.warnings.push(out.alert);
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'intake_emergency_alert', ref: woId, severity: 'P0', err: e });
+  }
+  return out;
+}
+// 14-minute sweep: one second text if an emergency work order is still New and unopened after intake_emergency_recheck_min (default 10), or retry a refused first text once.
+async function processIntakeEmergencyRecheck(env) {
+  const cfg = await fetchConfig(env);
+  if (!intakeOn(cfg)) return { skipped: 'intake_guided_enabled is not TRUE' };
+  const mins = Math.max(1, Number(cfg.intake_emergency_recheck_min) || 10);
+  const data = await sheetsRequest(env, 'GET', '/values/Work_Orders');
+  const [headers, ...rows] = (data && data.values) || [[]];
+  if (headers.indexOf('Intake_Emergency') < 0) return { checked: 0 };
+  const g = (r, h) => { const i = headers.indexOf(h); return i < 0 ? '' : String(r[i] == null ? '' : r[i]); };
+  const out = { checked: 0, resent: 0, errors: [] }; const now = Date.now();
+  for (const r of rows) {
+    if (g(r, 'Intake_Emergency') !== 'TRUE') continue;
+    const st = g(r, 'Intake_Alert_State'); const age = now - Date.parse(g(r, 'Created_Date') || '');
+    if (!(age >= mins * 60000) || age > 6 * 3600000) continue;
+    if (/ack\||recheck\|/.test(st) || (g(r, 'Status') || 'New') !== 'New') continue;
+    out.checked++;
+    const woId = g(r, 'ID');
+    try {
+      const sms = await intakeTextAdmin(env, intakeAlertText({ woId, where: 'still not opened', what: '', again: true }), woId);
+      const ok = /^sent/.test(sms);
+      await updateWOFields(env, woId, { Intake_Alert_State: st + ';recheck|' + (ok ? 'sent' : 'FAILED') + '|' + new Date().toISOString() + '|' + sms.slice(0, 100) });
+      if (ok) out.resent++; else { out.errors.push(woId + ': ' + sms); await reportFailure(env, { system: 'hub', source: 'worker', where: 'intake_emergency_alert', ref: woId, severity: 'P0', message: 'second emergency text NOT delivered for ' + woId + ': ' + sms }); }
+    } catch (e) { out.errors.push(woId + ': ' + String((e && e.message) || e).slice(0, 120)); await reportFailure(env, { system: 'hub', source: 'worker', where: 'intake_emergency_recheck', ref: woId, severity: 'P0', err: e }); }
+  }
+  if (out.errors.length) throw new Error('intake recheck: ' + out.errors.join(' | ').slice(0, 300));
+  return out;
+}
+// POST /intake/ack (admin): opening an emergency work order in the Hub stops the second text.
+async function intakeAck(env, body) {
+  const woId = String((body && body.wo_id) || '').trim(); if (!woId) return json({ error: 'wo_id required' }, 400);
+  const row = await intakeReadRow(env, woId);
+  if (!row) return json({ error: 'work order not found' }, 404);
+  if (row.Intake_Emergency !== 'TRUE' || /ack\|/.test(row.Intake_Alert_State)) return json({ ok: true, changed: false });
+  await updateWOFields(env, woId, { Intake_Alert_State: row.Intake_Alert_State + ';ack|' + new Date().toISOString() });
+  const back = await intakeReadRow(env, woId);
+  if (!back || !/ack\|/.test(back.Intake_Alert_State)) return json({ error: 'the acknowledgement did not save' }, 500);
+  return json({ ok: true, changed: true });
+}
+// POST /intake/deflected (tenant session): "That fixed it" on a self-check. Logs one telemetry row, creates no work order.
+async function intakeDeflected(env, body, callerRole, callerSessionId) {
+  try {
+    let prop = '';
+    if (callerRole === 'tenant') { const t = (await fetchTab(env, 'Tenants')).find(x => x.ID === callerSessionId); prop = t ? String(t.Property_ID || '') : ''; }
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'intake_deflected', Skill_Or_Endpoint: '/intake/deflected', Success: 'TRUE', Notes: `trade=${String((body && body.trade) || '').slice(0, 40)} check=${String((body && body.check) || '').slice(0, 60)} property=${prop}` });
+    return json({ ok: true });
+  } catch (e) {
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'intake_deflected_log', ref: String(callerSessionId || ''), severity: 'P2', err: e });
+    return json({ error: 'could not log the self-check result' }, 500);
+  }
+}
+
 async function createWorkOrder(env, body) {
   const _t0 = Date.now();
   // Same property/unit/tenant, same trade/description, seconds apart = a double-tap on
@@ -9511,6 +9667,19 @@ async function createWorkOrder(env, body) {
   const _mpRaw = parseFloat(String(body.max_price == null ? '' : body.max_price).replace(/[$,\s]/g, ''));
   const _maxPrice = Number.isFinite(_mpRaw) && _mpRaw > 0 ? Math.round(_mpRaw * 100) / 100 : 0;
   if (_maxPrice) { try { await ensureColumns(env, 'Work_Orders', ['Max_Price']); } catch(_){} } // silent-ok: ensureColumns reports its own failure to the ledger
+  // Guided intake (queue #116): read only while Config intake_guided_enabled is TRUE; otherwise the request files exactly as before.
+  let _intake = null, _intakeDecision = { emergency: false, reason: '' };
+  if (body.intake && typeof body.intake === 'object') {
+    const _icfg = await fetchConfig(env);
+    if (intakeOn(_icfg)) {
+      _intake = intakeClean(body.intake);
+      if (_intake) {
+        _intakeDecision = intakeDecide(_intake, body.description, intakeEmergencyWords(_icfg));
+        await ensureColumns(env, 'Work_Orders', GUIDED_INTAKE_COLS);   // throws (and reports) when the columns cannot be added: the request then fails where the tenant sees it, never loses the answers
+        if (_intakeDecision.emergency) body.priority = 'urgent';
+      }
+    }
+  }
   const data = await sheetsRequest(env, 'GET', `/values/Work_Orders`);
   const rows = data.values || [];
   if (!rows.length) throw new Error('Work_Orders tab has no headers');
@@ -9537,11 +9706,16 @@ async function createWorkOrder(env, body) {
     // Vendor Additional Work (Sep 30 2026) — only /wo/additional-work/start sends this, after ensureColumns.
     Parent_WO_ID: body.parent_wo_id||'',
     // Max price (Nov 5 2026) — vendor-facing ceiling, never printed on a description or invoice.
-    Max_Price: _maxPrice ? _maxPrice.toFixed(2) : ''
+    Max_Price: _maxPrice ? _maxPrice.toFixed(2) : '',
+    // Guided intake (queue #116): blank for every request that did not use it.
+    Intake_Channel: _intake ? _intake.channel : '', Intake_Answers: _intake ? JSON.stringify({ answers: _intake.answers, lang: _intake.lang, self_check: _intake.self_check }).slice(0, 1500) : '',
+    Intake_Summary: _intake ? _intake.summary : '', Intake_Emergency: _intake ? (_intakeDecision.emergency ? 'TRUE' : 'FALSE') : '', Intake_Alert_State: ''
   }[h] ?? ''));
   const _woAppend = await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   // Oct 16 2026: if another request took the same WO number in the gap, give THIS row the next free number (and say so in telemetry).
   woId = (await guardAppendedIds(env, 'Work_Orders', _woAppend, rows.length, idCol, [woId], (v, c) => 'WO-' + mintNextNumericId(v, c))).ids[0];
+  // Emergency: confirm the row, THEN alert Brett (intakeAfterCreate never throws; it reports every failure and returns it).
+  const _intakeOut = (_intake && _intakeDecision.emergency) ? await intakeAfterCreate(env, woId, { emergency: true, kind: _intake.kind || _intakeDecision.reason.replace(/^words in the request: /, '') }) : null;
   try {
     const tenants = await fetchTab(env, 'Tenants');
     const activeTenants = tenants.filter(t => { if (t.Active === 'FALSE') return false; if (body.unit_id) return t.Unit_ID === body.unit_id; if (body.property_id) return !t.Unit_ID && String(t.Property_ID) === String(body.property_id); return false; });
@@ -9591,7 +9765,7 @@ async function createWorkOrder(env, body) {
   } catch (e) { /* non-fatal */ }
   if (body.__triage === true) await triageIntakeSafe(env, woId, { description: body.description, trade: body.trade, priority: body.priority });   // queue #142: fail-open, never throws
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_create', Skill_Or_Endpoint:'/workorder', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${body.trade||''} type=${body.type||'manual'}` }); } catch(_){} // silent-ok: telemetry is best effort, a logging miss must not fail the request
-  return json({ success: true, id: woId });
+  return json({ success: true, id: woId, ...(_intakeOut ? { intake: _intakeOut } : {}) });
 }
 
 // ── Buildium email → Work Order intake (B-103, Oct 12 2026) ──────────────────────────────────
@@ -20822,6 +20996,7 @@ async function schedRunSweepWork(env) {
   const errors = [], detail = {};
   detail.recurring_wos = await schedStep('recurring_wos', () => processRecurringWorkOrders(env), errors);
   detail.estimate_reminders = await schedStep('estimate_reminders', () => processEstimateReminders(env), errors);
+  detail.intake_recheck = await schedStep('intake_recheck', () => processIntakeEmergencyRecheck(env), errors);   // queue #116: one second text for an unopened emergency
   detail.deposit_paid = await schedStep('deposit_paid', async () => {
     try { return await processDepositPaidSweep(env); }
     catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_cron', Skill_Or_Endpoint: 'scheduler/sweep_work', Success: 'FALSE', Notes: schedErrText(e) }); } catch (e2) { console.error('deposit_sweep_cron telemetry failed:', schedErrText(e2)); } throw e; }   // silent-ok: the sweep error is rethrown and recorded by schedStep
@@ -29894,7 +30069,7 @@ const ROLE_SCOPES = {
     '/vendor-bill/add-standalone','/vendor/request-property-access','/workorder/self-serve','/properties',
     // Web push (Nov 5 2026): a session manages only ITS OWN devices (identity comes from the session inside pushRoute). /push/send is admin-only and is in no role scope.
     '/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
-  tenant: ['/demo/test-send','/demo/test-status','/tenant-by-pin','/tenant-session-refresh','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo','/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
+  tenant: ['/demo/test-send','/demo/test-status','/tenant-by-pin','/tenant-session-refresh','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/intake/deflected','/upload-photo','/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
   owner:  ['/demo/test-send','/demo/test-status','/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo','/owner-file/view','/owner/tenant-roster','/owner/tenant-roster/preview','/owner/tenant-roster/apply','/owner/approvals','/owner/approval/respond','/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
 };
 function isPathAllowedForRole(path, role){ const s = ROLE_SCOPES[role]; return !!(s && s.includes(path)); }
