@@ -24166,10 +24166,52 @@ function cleanPrNumber(v) {
 }
 
 const QUEUE_REPO = 'Ridge-Co/RidgeCo';
+// Nov 19 2026 (Needs Attention F-1795027659213-1oyy P0 + F-c1795030305235-0 overdue P0): the Hub's GitHub read token was REJECTED (HTTP 401 = a bad, expired or
+// mis-pasted token; NOT a rate limit). Only 403/429 were soft, so a 401 failed every queue_sync tick and kept the whole job red for 17+ hours (it also failed
+// hub_impr_daily and hub_impr_thu), although the repo is public and the token is optional. Now a rejected token is dropped for 10 minutes, the call is retried
+// once WITHOUT it, and ONE calm P2 (github_read_token_rejected) says the token is bad and what the Worker actually holds (kind, length, a short one-way
+// fingerprint, obvious paste mistakes; never the value), so a rotation that did not reach the Worker shows up as an unchanged fingerprint.
+const _ghTok = { bad: '', until: 0, pending: null };   // per isolate: the token GitHub refused, until when to skip it, and the report still to file
+const GH_TOKEN_SKIP_MS = 10 * 60 * 1000;
+// Describes a GitHub token WITHOUT revealing it: kind, length, 8 hex of a one-way hash, and the usual paste mistakes.
+async function githubTokenShape(tok) {
+  const raw = String(tok == null ? '' : tok), t = raw.trim();
+  const kind = !t ? 'empty' : /^ghp_/.test(t) ? 'classic token (ghp_)' : /^github_pat_/.test(t) ? 'fine-grained token (github_pat_)' : /^gh[ousr]_/.test(t) ? 'app or OAuth token (' + t.slice(0, 4) + ')' : 'unrecognised format';
+  const flags = [];
+  if (raw !== t) flags.push('spaces or a line break at the ends');
+  if (/^["'`]|["'`]$/.test(t)) flags.push('wrapped in quote marks');
+  if (/^(bearer|token)\s/i.test(t)) flags.push('starts with the word Bearer or token');
+  if (/\s/.test(t)) flags.push('a space or line break inside');
+  if (/[^\x20-\x7e]/.test(t)) flags.push('characters that are not plain keyboard characters');
+  if (/^ghp_/.test(t) && t.length !== 40) flags.push('classic tokens are 40 characters');
+  if (/^github_pat_/.test(t) && (t.length < 80 || t.length > 100)) flags.push('fine-grained tokens are about 93 characters');
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t));
+  const fp = Array.from(new Uint8Array(digest)).slice(0, 4).map(b => b.toString(16).padStart(2, '0')).join('');
+  return { kind, length: t.length, fp, flags };
+}
+// GitHub's own words for an error ("Bad credentials"), from its JSON body or the raw text. A body that cannot be read throws to the caller (never swallowed).
+async function ghErrText(r) {
+  const txt = String(await r.text());
+  const m = /"message"\s*:\s*"([^"]{1,120})/.exec(txt);
+  return (m ? m[1] : txt.replace(/\s+/g, ' ')).slice(0, 120);
+}
+async function ghTokenRejected(tok, status, why, reqId) {
+  _ghTok.bad = tok; _ghTok.until = Date.now() + GH_TOKEN_SKIP_MS;
+  _ghTok.pending = { status, why: String(why || '').slice(0, 120), reqId: String(reqId || ''), shape: await githubTokenShape(tok) };
+}
 async function ghPublicJson(path, env) {
   const hdrs = { 'User-Agent': 'ridgeco-hub', 'Accept': 'application/vnd.github+json' };
-  if (env && env.GITHUB_READ_TOKEN) hdrs['Authorization'] = 'Bearer ' + env.GITHUB_READ_TOKEN; // optional read-only token; works without it
-  const r = await fetch('https://api.github.com/repos/' + QUEUE_REPO + path, { headers: hdrs });
+  const url = 'https://api.github.com/repos/' + QUEUE_REPO + path;
+  const tok = env && env.GITHUB_READ_TOKEN ? String(env.GITHUB_READ_TOKEN).trim() : '';   // optional read-only token; works without it
+  let r = null;
+  if (tok && !(_ghTok.bad === tok && Date.now() < _ghTok.until)) {
+    if (/[^\x21-\x7e]/.test(tok)) await ghTokenRejected(tok, 0, 'the token has a space, a line break or an odd character in it, so it was not sent', '');   // fetch would throw before sending
+    else {
+      r = await fetch(url, { headers: Object.assign({ 'Authorization': 'Bearer ' + tok }, hdrs) });
+      if (r.status === 401) { await ghTokenRejected(tok, 401, await ghErrText(r), r.headers.get('x-github-request-id')); r = null; }
+    }
+  }
+  if (!r) r = await fetch(url, { headers: hdrs });   // no token, or GitHub refused it: the repo is public, so ask without it
   if (!r.ok) throw new Error('GitHub ' + path + ' → HTTP ' + r.status + (r.status === 403 || r.status === 429 ? ' (GitHub rate-limits the Hub\'s shared address; open the Proposals page to sync from your browser)' : ''));
   return await r.json();
 }
