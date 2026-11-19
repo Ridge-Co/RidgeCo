@@ -2446,6 +2446,7 @@ async function tenantSessionRefresh(env, callerRole, callerSessionId) {
   const unit = units.find(u => u.ID === tenant.Unit_ID) || {};
   const prop = props.find(pr => pr.ID === (tenant.Property_ID || unit.Property_ID)) || {};
   const owner = prop.Owner_ID ? owners.find(o => o.ID === prop.Owner_ID) : null;
+  const _icfg = await fetchConfig(env);
   return json({
     tenant_name:      `${tenant.First_Name} ${tenant.Last_Name||''}`.trim(),
     property_id:      prop.ID||'',
