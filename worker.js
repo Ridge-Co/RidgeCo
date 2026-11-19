@@ -2455,7 +2455,9 @@ async function tenantSessionRefresh(env, callerRole, callerSessionId) {
     unit_label:       unit.Unit_Label||'',
     owner_id:         prop.Owner_ID||'',
     can_submit_wo:    resolveTenantWOAccess(prop, owner, tenant.Unit_ID||''),
-    intake_guided:    intakeOn(await fetchConfig(env)),
+    intake_guided:    intakeOn(_icfg),
+    emergency_phone:  intakeOn(_icfg) ? String(_icfg.admin_phone || '') : '',
+    language:         tenant.Language||'',
   });
 }
 
