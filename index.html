@@ -2567,7 +2567,33 @@ function renderDashboard() {
 // ── Severity triage (queue #142 Phase 1). Only shows when the server stamped a Triage_Tier; nothing appears while Config Triage_Enabled is off.
 var TRI_ORDER = {Emergency:0, Urgent:1, Routine:2, Low:3};
 var TRI_STYLE = {Emergency:'background:#fdecea;border:1px solid var(--danger);color:var(--danger)', Urgent:'background:#fdf2e2;border:1px solid var(--warn);color:var(--warn)', Routine:'background:var(--surface2);border:1px solid var(--border);color:var(--muted)', Low:'background:var(--surface2);border:1px solid var(--border);color:var(--muted)'};
-function triRank(w){ var r = TRI_ORDER[w && w.Triage_Tier]; return r === undefined ? 2 : r; }
+function triRank(w){ if (w && w.Intake_Emergency === 'TRUE') return -1; var r = TRI_ORDER[w && w.Triage_Tier]; return r === undefined ? 2 : r; }   // queue #116: a guided-intake emergency sorts above every tier
+// ── Guided request emergency (queue #116 Phase 1). Intake_* columns exist only after the first guided request; blank everywhere else.
+function intakeAlertInfo(w){
+  var st = String((w && w.Intake_Alert_State) || ''), first = st.split(';')[0].split('|');
+  var when = first[1] ? new Date(first[1]).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'}) : '';
+  if (first[0] === 'sent') return { ok:true, text:'Alert text sent ' + when + (st.indexOf(';recheck|sent') >= 0 ? ', second text sent' : '') + (st.indexOf(';ack|') >= 0 ? ', opened' : '') };
+  if (first[0] === 'FAILED') return { ok:false, text:'ALERT NOT DELIVERED' + (when ? ' (' + when + ')' : '') + (st.indexOf(';recheck|sent') >= 0 ? ', second text sent' : '') };
+  return { ok:false, text:'ALERT NOT SENT' };
+}
+function intakeChip(w){
+  if (!w || w.Intake_Emergency !== 'TRUE') return '';
+  var a = intakeAlertInfo(w);
+  return ' <span class="badge" style="background:var(--danger);color:#fff;margin-left:4px">EMERGENCY</span>' + (a.ok ? '' : ' <span class="badge" style="background:var(--danger-bg);border:1px solid var(--danger);color:var(--danger);margin-left:4px">'+esc(a.text)+'</span>');
+}
+function intakeDetailHTML(wo){
+  if (!wo.Intake_Channel && wo.Intake_Emergency !== 'TRUE') return '';
+  var a = intakeAlertInfo(wo), em = wo.Intake_Emergency === 'TRUE', lang = '';
+  try { lang = (JSON.parse(wo.Intake_Answers || '{}').lang === 'es') ? ' (tenant used Spanish)' : ''; } catch (e) { hubReportFailure('intake_answers_parse', String((e && e.message) || e)); }
+  return '<div id="intake-box" style="margin-bottom:10px;padding:10px 12px;border:'+(em?'2px solid var(--danger)':'1px solid var(--border)')+';border-radius:var(--radius);background:'+(em?'var(--danger-bg)':'var(--surface2)')+';font-size:13px;line-height:1.5">' +
+    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><b style="font-size:13px;letter-spacing:.06em">INTAKE'+esc(lang)+'</b>' + (em ? '<span class="badge" style="background:var(--danger);color:#fff">EMERGENCY</span>' : '') +
+    (em ? '<span style="font-weight:600;color:'+(a.ok?'var(--success)':'var(--danger)')+'">'+esc(a.text)+'</span>' : '') + '</div>' +
+    (wo.Intake_Summary ? '<div style="white-space:pre-wrap;margin-top:6px">'+esc(wo.Intake_Summary)+'</div>' : '') + '</div>';
+}
+function intakeAckOpen(woId){
+  api('POST','/intake/ack',{wo_id:woId},30000).then(function(r){ if (!r || r.error) throw new Error((r && r.error) || 'no answer'); })
+    .catch(function(e){ hubReportFailure('intake_ack', String((e && e.message) || e)); toast('Could not mark the emergency as opened: '+((e && e.message)||'try again'),'error'); });
+}
 function triAnyStamped(){ return safeArray(state.workorders).some(function(x){ return !!x.Triage_Tier; }); }
 function triChipHTML(w){
   if (w.Triage_Tier) return ' <span class="badge" title="'+esc(w.Triage_Summary||'')+'" style="'+(TRI_STYLE[w.Triage_Tier]||'')+';margin-left:4px">'+esc(String(w.Triage_Tier).toUpperCase())+'</span>';
