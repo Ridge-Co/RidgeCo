@@ -826,6 +826,48 @@ function openSubmitRequest() {
   document.getElementById('srSubmitBtn').disabled = false;
   srFiles = [];
   openModal('modalSubmitRequest');
+  mountGuidedRequest();
+}
+// Guided request (queue #116). Only when the server said intake_guided at login (Config intake_guided_enabled, starts OFF) AND intake-flow.js mounts cleanly.
+// Anything else leaves the old single form, so a request can always be filed.
+function mountGuidedRequest() {
+  var root = document.getElementById('srIntakeRoot'); root.innerHTML = '';
+  var ids = ['srIntro', 'srTradeField', 'srDescField', 'srPriField', 'srSubmitBtn'];
+  ids.forEach(function (id) { var e = document.getElementById(id); if (e) e.style.display = ''; });
+  document.getElementById('srPhotoField').style.display = '';
+  if (!session || !session.intake_guided) return;
+  if (!window.RCIntake) { guidedFailure('intake_flow_missing', new Error('intake-flow.js did not load')); return; }
+  try {
+    RCIntake.mount({
+      root: root, phone: session.emergency_phone, lang: String(session.language || '').toLowerCase().indexOf('es') === 0 ? 'es' : '',
+      hide: ids.map(function (id) { return document.getElementById(id); }), photoSlot: document.getElementById('srPhotoField'), file: fileGuidedRequest, report: guidedFailure,
+      deflected: function (info) { return api('/intake/deflected', { method: 'POST', body: info }).then(function (r) { if (!r || r.error) throw new Error((r && r.error) || 'no answer'); }); },
+      reset: function () { srFiles = []; renderSrPreview(); loadWOs(); }
+    });
+  } catch (e) {
+    root.innerHTML = '';
+    ids.forEach(function (id) { var el = document.getElementById(id); if (el) el.style.display = ''; });
+    document.getElementById('srPhotoField').style.display = '';
+    guidedFailure('intake_flow_mount', e);
+  }
+}
+function guidedFailure(where, err) {
+  console.error(where, err);
+  if (window.hubReportFailure) window.hubReportFailure(where, String((err && err.message) || err));
+}
+function fileGuidedRequest(body) {
+  return api('/workorder', { method: 'POST', body: {
+    property_id: session.property_id, unit_id: session.unit_id, tenant_id: session.tenant_id, trade: body.trade, priority: body.priority,
+    description: body.description, type: 'tenant', created_by: session.tenant_name, intake: body.intake
+  } }).then(function (res) {
+    if (!res || !res.id) throw new Error((res && res.error) || 'Failed to create work order');
+    var files = srFiles.slice(), failed = 0;
+    var next = function (i) {
+      if (i >= files.length) { srFiles = []; renderSrPreview(); loadWOs(); return Promise.resolve({ id: res.id, intake: res.intake, photoFailures: failed }); }
+      return uploadTenantPhoto(files[i], res.id).then(function (ok) { if (!ok) failed++; return next(i + 1); });
+    };
+    return next(0);
+  });
 }
 function srHandleFiles(fileList) {
   Array.from(fileList).forEach(function(f) { if (srFiles.length < 6) srFiles.push(f); });
