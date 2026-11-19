@@ -35,6 +35,7 @@ function build(st) {
     'async function ghPublicJson(path) { st.gh.push(path); const e = st.ghFail(path); if (e) throw new Error(e); return st.ghData(path); }',
     'async function reportFailure(env, f) { st.failures.push(f); return st.reportResult; }',
     'function json(o) { return o; }',
+    'const _ghTok = { bad: \'\', until: 0, pending: null };',   // Nov 19 2026: opsQueueSync also reports a REJECTED token (401); this fake GitHub never does
     cleanSrc, syncSrc,
     'return { opsQueueSync };',
   ].join('\n');
