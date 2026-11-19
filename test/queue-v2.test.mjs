@@ -29,7 +29,7 @@ const ok = (c, m) => { assert.ok(c, m); n++; };
 const eq = (a, b, m) => { assert.deepStrictEqual(a, b, m); n++; };
 
 // ── fake sheet ──────────────────────────────────────────────────────────────────────────────
-const CONSTS = ['OPS_QUEUE_COLS', 'QUEUE_STAGES', 'QUEUE_SHIPPED_STAGES', 'QUEUE_STAGE_FAMILY', 'QUEUE_STUCK_MS', 'QUEUE_DEPLOY_GRACE_MS', 'QUEUE_DEPLOY_MARK',
+const CONSTS = ['_ghTok', 'OPS_QUEUE_COLS', 'QUEUE_STAGES', 'QUEUE_SHIPPED_STAGES', 'QUEUE_STAGE_FAMILY', 'QUEUE_STUCK_MS', 'QUEUE_DEPLOY_GRACE_MS', 'QUEUE_DEPLOY_MARK',
   'QUEUE_STAGE_LOG_MAX', 'QUEUE_BULK_MAX', 'QUEUE_STAGE_FIELDS', 'QUEUE_STAGE_ADMIN_FIELDS', 'QUEUE_BLOCKED_ON', 'QUEUE_TOKEN_FROM', 'QUEUE_TOKEN_TO', 'QUEUE_RISK_RULES'];
 const FNS = ['isSnoozed', 'snoozeUntilFromDays', 'cleanPrNumber', 'prStateToBuildState', 'matchPrToItem', 'queueLegacyStage', 'queueStageOf', 'queueStuckInfo',
   'queueLogAppend', 'queueRiskGuard', 'queueRiskGuardText', 'queueRowText', 'queueResolveRisk', 'queueStagePlan', 'queueActorOf', 'opsQueueStage',
