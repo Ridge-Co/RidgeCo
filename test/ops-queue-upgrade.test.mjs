@@ -58,7 +58,7 @@ const names = ['QUEUE_STOPWORDS', 'QUEUE_STANDING_RULES', 'QUEUE_REPO', '_ghTok'
   'QUEUE_STAGES', 'QUEUE_SHIPPED_STAGES', 'QUEUE_STAGE_FAMILY', 'QUEUE_STUCK_MS', 'QUEUE_DEPLOY_GRACE_MS', 'QUEUE_DEPLOY_MARK', 'QUEUE_STAGE_LOG_MAX', 'QUEUE_RISK_RULES'];
 const code = names.map(grabConst).join('\n') + '\n' + [
   'queueTokens', 'queueDice', 'queueSimilarity', 'findQueueMatch', 'isSnoozed', 'snoozeUntilFromDays',
-  'buildShippedIndex', 'findShippedMatch', 'prStateToBuildState', 'matchPrToItem', 'cleanPrNumber', 'ghPublicJson',
+  'buildShippedIndex', 'findShippedMatch', 'prStateToBuildState', 'matchPrToItem', 'cleanPrNumber', 'githubTokenShape', 'ghErrText', 'ghTokenRejected', 'ghPublicJson',
   'opsApprove', 'opsQueueUpdate', 'opsQueueStatus', 'validateQueueStatusReport', 'opsQueueSync', 'updateQueueRowOrThrow',
   'validateScoutSubmitItems', 'buildScoutQueueRow', 'opsQueueScoutSubmit', 'buildStartBuildRoutineText',
   'queueLegacyStage', 'queueStageOf', 'queueStuckInfo', 'queueLogAppend', 'queueRiskGuardText', 'queueRowText', 'queueResolveRisk',
