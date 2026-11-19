@@ -2887,6 +2887,7 @@ function openWODetail(woId) {
   var wo = state.workorders.find(function(w){return w.ID===woId;});
   console.log('[openWODetail] wo found=', !!wo);
   if(!wo) { console.warn('[openWODetail] WO not found in state for id:', woId); return; }
+  if (wo.Intake_Emergency === 'TRUE' && !/ack\|/.test(wo.Intake_Alert_State || '')) intakeAckOpen(woId);   // queue #116: opening an emergency stops the second text
   var prop = state.properties.find(function(p){return String(p.ID)===String(wo.Property_ID);});
   var unit = state.units.find(function(u){return u.ID===wo.Unit_ID;});
   var vendor = state.vendors.find(function(v){return v.ID===wo.Vendor_ID;});
