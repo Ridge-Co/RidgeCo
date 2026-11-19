@@ -199,6 +199,54 @@ function lookupPin() {
   });
 }
 
+// Guided request (queue #116). Only when the server says intake_guided (Config intake_guided_enabled, starts OFF) AND intake-flow.js loaded
+// and mounts cleanly. Anything else leaves the old single form in place, so a request can always be filed.
+function mountGuided(res) {
+  var root = document.getElementById('intake-root');
+  root.innerHTML = '';
+  if (!res.intake_guided) return;
+  if (!window.RCIntake) { reportGuidedFailure('intake_flow_missing', new Error('intake-flow.js did not load')); return; }
+  try {
+    var hide = ['f-trade', 'f-desc', 'f-pri', 'submit-btn', 'back-btn', 'notified-note'].map(function (id) { return document.getElementById(id); });
+    RCIntake.mount({
+      root: root, phone: res.emergency_phone, lang: (res.language || '').toLowerCase().indexOf('es') === 0 ? 'es' : '',
+      hide: hide, photoSlot: document.getElementById('photo-field'), file: fileGuided, report: reportGuidedFailure,
+      deflected: function (info) {
+        return fetch(WORKER + '/intake/deflected', { method: 'POST', headers: { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json' }, body: JSON.stringify(info) })
+          .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); });
+      },
+      reset: function () { selectedFiles = []; renderPreviews(); }
+    });
+  } catch (e) {
+    root.innerHTML = '';
+    ['f-trade', 'f-desc', 'f-pri', 'submit-btn', 'back-btn', 'notified-note', 'photo-field'].forEach(function (id) { var el = document.getElementById(id); if (el) el.style.display = ''; });
+    reportGuidedFailure('intake_flow_mount', e);
+  }
+}
+function reportGuidedFailure(where, err) {
+  console.error(where, err);
+  if (window.hubReportFailure) window.hubReportFailure(where, String((err && err.message) || err));
+}
+// Files the request for the guided flow. Resolves {id, intake, photoFailures}; rejects with a readable message so the flow can show Retry (answers are kept).
+function fileGuided(body) {
+  return fetch(WORKER + '/workorder', {
+    method: 'POST', headers: { 'X-Auth-Token': TOKEN, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ property_id: tenantData.property_id, unit_id: tenantData.unit_id, tenant_id: tenantData.tenant_id, trade: body.trade, priority: body.priority,
+      description: body.description, type: 'tenant', created_by: tenantData.tenant_name, notes: '', intake: body.intake })
+  }).then(function (r) { return r.json().then(function (j) { return j; }, function () { throw new Error('The server answered HTTP ' + r.status + ' with nothing readable'); }); })
+  .then(function (wo) {
+    if (!wo.id) throw new Error(wo.error || 'Failed to create work order');
+    var files = selectedFiles.slice(), failed = 0;
+    var next = function (i) {
+      if (i >= files.length) { selectedFiles = []; renderPreviews(); return Promise.resolve({ id: wo.id, intake: wo.intake, photoFailures: failed }); }
+      var fd = new FormData(); fd.append('file', files[i]); fd.append('wo_id', wo.id);
+      return fetch(WORKER + '/upload-photo', { method: 'POST', headers: { 'X-Auth-Token': TOKEN }, body: fd })
+        .then(function (r) { if (!r.ok) failed++; }, function (e) { failed++; reportGuidedFailure('intake_photo_upload', e); }).then(function () { return next(i + 1); });
+    };
+    return next(0);
+  });
+}
+
 function handleFiles(files) {
   Array.from(files).forEach(function(f) { if (selectedFiles.length < 6) selectedFiles.push(f); });
   renderPreviews();
