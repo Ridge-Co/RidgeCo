@@ -9755,7 +9755,7 @@ async function createWorkOrder(env, body) {
   } catch (e) { /* non-fatal */ }
   if (body.__triage === true) await triageIntakeSafe(env, woId, { description: body.description, trade: body.trade, priority: body.priority });   // queue #142: fail-open, never throws
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_create', Skill_Or_Endpoint:'/workorder', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`trade=${body.trade||''} type=${body.type||'manual'}` }); } catch(_){} // silent-ok: telemetry is best effort, a logging miss must not fail the request
-  return json({ success: true, id: woId });
+  return json({ success: true, id: woId, ...(_intakeOut ? { intake: _intakeOut } : {}) });
 }
 
 // ── Buildium email → Work Order intake (B-103, Oct 12 2026) ──────────────────────────────────
