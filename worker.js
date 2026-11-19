@@ -910,6 +910,8 @@ const _hubWorkerCore = {
         }
         if (path === '/intake/email')             return await intakeEmail(env, body);
         if (path === '/intake/retry')             return await intakeRetry(env, body);
+        if (path === '/intake/ack')               return await intakeAck(env, body);              // ADMIN-ONLY: opening an emergency work order stops the second text (queue #116)
+        if (path === '/intake/deflected')         return await intakeDeflected(env, body, callerRole, callerSessionId);   // tenant or admin: "That fixed it" on a self-check (queue #116)
         if (path === '/intake/delivery-email')    return await deliveryEmailIntake(env, _idEmail ? Object.assign({}, body, { mailbox: _idEmail, mailbox_claimed: String(body && body.mailbox || '').slice(0, 120) }) : body);   // a verified identity replaces whatever mailbox the body claims   // Oct 23 2026: store delivery emails (INTAKE_TOKEN or WORKER_SECRET)
         if (path === '/workorder/update')         return await updateRow(env, 'Work_Orders', body.id, body.fields);
         if (path === '/wo/max-price')             return await setWoMaxPrice(env, body);   // ADMIN-ONLY (not in ROLE_SCOPES): set / clear the vendor max price
