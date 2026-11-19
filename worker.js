@@ -24249,7 +24249,7 @@ async function opsQueueSync(env, body, opts) {
       // instead of failing the job. Nov 17 2026 (Needs Attention F-1794918668628-m9oi): this used to apply to the 15-minute tick only, and the
       // strict daily run (hub_impr_daily, 07:30 ET) filed a P0 every morning for the same refusal. Every mode now treats it the same, and the
       // "GitHub refused every lookup" case below files ONE calm P2 so a permanently blocked sync can never go unseen.
-      if (/HTTP (403|429)/.test(_msg)) rateLimited.push({ id: r.ID, error: _msg }); else errors.push({ id: r.ID, error: _msg });
+      if (/HTTP (401|403|429)/.test(_msg)) rateLimited.push({ id: r.ID, error: _msg }); else errors.push({ id: r.ID, error: _msg });
     }
   }
   if (rateLimited.length && ghTried > 0 && rateLimited.length >= ghTried && !changed.length) {
