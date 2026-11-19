@@ -9553,7 +9553,7 @@ async function processIntakeEmergencyRecheck(env) {
   const mins = Math.max(1, Number(cfg.intake_emergency_recheck_min) || 10);
   const data = await sheetsRequest(env, 'GET', '/values/Work_Orders');
   const [headers, ...rows] = (data && data.values) || [[]];
-  const ci = headers.indexOf('Intake_Emergency'); if (ci < 0) return { checked: 0 };
+  if (headers.indexOf('Intake_Emergency') < 0) return { checked: 0 };
   const g = (r, h) => { const i = headers.indexOf(h); return i < 0 ? '' : String(r[i] == null ? '' : r[i]); };
   const out = { checked: 0, resent: 0, errors: [] }; const now = Date.now();
   for (const r of rows) {
