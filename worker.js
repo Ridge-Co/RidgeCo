@@ -2416,7 +2416,8 @@ async function tenantByPin(env, url) {
       // the request form; POST /workorder re-checks this same resolver server-side so the
       // gate can't be bypassed by skipping the UI.
       can_submit_wo:    resolveTenantWOAccess(prop, owner, tenant.Unit_ID||''),
-      intake_guided:    intakeOn(await fetchConfig(env)),   // queue #116: the guided request flow, starts OFF
+      intake_guided:    intakeOn(_icfg),   // queue #116: the guided request flow, starts OFF
+      emergency_phone:  intakeOn(_icfg) ? String(_icfg.admin_phone || '') : '',
       language:         tenant.Language||'',
       token:            await makeSessionToken({ role: 'tenant', id: tenant.ID, ...demoTokenClaim(tenant) }, env.WORKER_SECRET),
       ...(demoTrue(tenant.Is_Demo) ? { demo: true } : {}),   // the tenant page shows its DEMO banner from this
