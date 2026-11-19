@@ -2450,6 +2450,7 @@ async function tenantSessionRefresh(env, callerRole, callerSessionId) {
     unit_label:       unit.Unit_Label||'',
     owner_id:         prop.Owner_ID||'',
     can_submit_wo:    resolveTenantWOAccess(prop, owner, tenant.Unit_ID||''),
+    intake_guided:    intakeOn(await fetchConfig(env)),
   });
 }
 
