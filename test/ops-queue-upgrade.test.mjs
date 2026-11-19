@@ -53,7 +53,7 @@ const helpers = {
     Object.assign(r, f); return json({ success: true });
   },
 };
-const names = ['QUEUE_STOPWORDS', 'QUEUE_STANDING_RULES', 'QUEUE_REPO',
+const names = ['QUEUE_STOPWORDS', 'QUEUE_STANDING_RULES', 'QUEUE_REPO', '_ghTok', 'GH_TOKEN_SKIP_MS',   // _ghTok / GH_TOKEN_SKIP_MS: Nov 19 2026, ghPublicJson drops a rejected (401) token
   // Queue v2 (Nov 16 2026): opsApprove / opsQueueSync now lean on the lifecycle + risk helpers
   'QUEUE_STAGES', 'QUEUE_SHIPPED_STAGES', 'QUEUE_STAGE_FAMILY', 'QUEUE_STUCK_MS', 'QUEUE_DEPLOY_GRACE_MS', 'QUEUE_DEPLOY_MARK', 'QUEUE_STAGE_LOG_MAX', 'QUEUE_RISK_RULES'];
 const code = names.map(grabConst).join('\n') + '\n' + [
