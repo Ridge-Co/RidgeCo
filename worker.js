@@ -9704,6 +9704,8 @@ async function createWorkOrder(env, body) {
   const _woAppend = await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   // Oct 16 2026: if another request took the same WO number in the gap, give THIS row the next free number (and say so in telemetry).
   woId = (await guardAppendedIds(env, 'Work_Orders', _woAppend, rows.length, idCol, [woId], (v, c) => 'WO-' + mintNextNumericId(v, c))).ids[0];
+  // Emergency: confirm the row, THEN alert Brett (intakeAfterCreate never throws; it reports every failure and returns it).
+  const _intakeOut = (_intake && _intakeDecision.emergency) ? await intakeAfterCreate(env, woId, { emergency: true, kind: _intake.kind || _intakeDecision.reason.replace(/^words in the request: /, '') }) : null;
   try {
     const tenants = await fetchTab(env, 'Tenants');
     const activeTenants = tenants.filter(t => { if (t.Active === 'FALSE') return false; if (body.unit_id) return t.Unit_ID === body.unit_id; if (body.property_id) return !t.Unit_ID && String(t.Property_ID) === String(body.property_id); return false; });
