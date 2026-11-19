@@ -190,6 +190,7 @@ function lookupPin() {
       (res.unit_label ? ' · ' + res.unit_label : '') +
       (res.property_city ? ', ' + res.property_city : '');
     document.getElementById('form-screen').style.display = 'block';
+    mountGuided(res);
   })
   .catch(function(e) {
     hideLoading();
