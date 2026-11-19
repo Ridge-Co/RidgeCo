@@ -9657,6 +9657,19 @@ async function createWorkOrder(env, body) {
   const _mpRaw = parseFloat(String(body.max_price == null ? '' : body.max_price).replace(/[$,\s]/g, ''));
   const _maxPrice = Number.isFinite(_mpRaw) && _mpRaw > 0 ? Math.round(_mpRaw * 100) / 100 : 0;
   if (_maxPrice) { try { await ensureColumns(env, 'Work_Orders', ['Max_Price']); } catch(_){} } // silent-ok: ensureColumns reports its own failure to the ledger
+  // Guided intake (queue #116): read only while Config intake_guided_enabled is TRUE; otherwise the request files exactly as before.
+  let _intake = null, _intakeDecision = { emergency: false, reason: '' };
+  if (body.intake && typeof body.intake === 'object') {
+    const _icfg = await fetchConfig(env);
+    if (intakeOn(_icfg)) {
+      _intake = intakeClean(body.intake);
+      if (_intake) {
+        _intakeDecision = intakeDecide(_intake, body.description, intakeEmergencyWords(_icfg));
+        await ensureColumns(env, 'Work_Orders', INTAKE_COLS);   // throws (and reports) when the columns cannot be added: the request then fails where the tenant sees it, never loses the answers
+        if (_intakeDecision.emergency) body.priority = 'urgent';
+      }
+    }
+  }
   const data = await sheetsRequest(env, 'GET', `/values/Work_Orders`);
   const rows = data.values || [];
   if (!rows.length) throw new Error('Work_Orders tab has no headers');
