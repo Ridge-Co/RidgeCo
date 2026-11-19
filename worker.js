@@ -9675,7 +9675,7 @@ async function createWorkOrder(env, body) {
       _intake = intakeClean(body.intake);
       if (_intake) {
         _intakeDecision = intakeDecide(_intake, body.description, intakeEmergencyWords(_icfg));
-        await ensureColumns(env, 'Work_Orders', INTAKE_COLS);   // throws (and reports) when the columns cannot be added: the request then fails where the tenant sees it, never loses the answers
+        await ensureColumns(env, 'Work_Orders', GUIDED_INTAKE_COLS);   // throws (and reports) when the columns cannot be added: the request then fails where the tenant sees it, never loses the answers
         if (_intakeDecision.emergency) body.priority = 'urgent';
       }
     }
