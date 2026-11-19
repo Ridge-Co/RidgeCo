@@ -9441,6 +9441,152 @@ async function woTriagePreview(env, body) {
 }
 // ── END SEVERITY TRIAGE ──────────────────────────────────────────────────────────────────────────────────────────────────
 
+// ── Guided request with emergency catch, Phase 1 of 5 (queue #116, Nov 19 2026) ──────────────────────────────────────
+// The tenant forms (submit.html, tenant.html) can send `intake` {answers, emergency, kind, lang, channel, self_check, summary}. It is read ONLY while Config
+// intake_guided_enabled is TRUE (starts OFF: with it off a request files exactly as before). The SERVER decides "emergency" again from the answers and from words
+// in the description (Config intake_emergency_words, comma list; fixed default when blank), so the alert never depends on the page. Additive Work_Orders
+// columns (ensureColumns): Intake_Channel, Intake_Answers (JSON), Intake_Summary, Intake_Emergency, Intake_Alert_State.
+// Order matters (silent-failure rules): write the row, RE-READ it, and only then text Brett (type admin_intake_emergency, ignores quiet hours). The
+// 14-minute sweep (schedRunSweepWork -> processIntakeEmergencyRecheck) sends ONE second text if the work order was not opened. No AI. No new scheduled job.
+const INTAKE_COLS = ['Intake_Channel', 'Intake_Answers', 'Intake_Summary', 'Intake_Emergency', 'Intake_Alert_State'];
+const INTAKE_EMERGENCY_WORDS_DEFAULT = ['gas smell', 'smell gas', 'smells like gas', 'carbon monoxide', 'co alarm', 'fire', 'smoke', 'burst pipe', 'flooding', 'flooded', 'water everywhere', 'sewage', 'sewer backup', 'no heat', 'no power', 'sparking', 'sparks', 'will not lock', 'wont lock', 'cannot lock', 'cant lock'];
+function intakeOn(cfg) { return String((cfg && cfg.intake_guided_enabled) || '').trim().toUpperCase() === 'TRUE'; }
+function intakeEmergencyWords(cfg) {
+  const raw = String((cfg && cfg.intake_emergency_words) || '').trim();
+  const list = raw ? raw.split(/[,;\n]/).map(s => s.trim().toLowerCase().replace(/[’']/g, '')).filter(Boolean) : INTAKE_EMERGENCY_WORDS_DEFAULT;
+  return list.length ? list : INTAKE_EMERGENCY_WORDS_DEFAULT;
+}
+function intakeWordHit(text, words) {
+  const t = ' ' + String(text || '').toLowerCase().replace(/[’']/g, '').replace(/[^a-z0-9]+/g, ' ') + ' ';
+  for (const w of words) { const x = ' ' + String(w).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() + ' '; if (x.trim() && t.includes(x)) return String(w); }
+  return '';
+}
+// Clean what the page sent: plain strings only, capped, never trusted for "emergency" (the decision below re-derives it).
+function intakeClean(raw) {
+  const r = (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : null;
+  if (!r) return null;
+  const answers = {};
+  if (r.answers && typeof r.answers === 'object' && !Array.isArray(r.answers)) for (const k of Object.keys(r.answers).slice(0, 12)) answers[String(k).slice(0, 40)] = String(r.answers[k] == null ? '' : r.answers[k]).slice(0, 120);
+  return { answers, summary: String(r.summary || '').slice(0, 900), tappedEmergency: r.emergency === true, kind: String(r.kind || '').slice(0, 60), lang: r.lang === 'es' ? 'es' : 'en', channel: 'web', self_check: String(r.self_check || '').slice(0, 80) };
+}
+function intakeDecide(clean, description, words) {
+  if (!clean) return { emergency: false, reason: '' };
+  if (clean.tappedEmergency) return { emergency: true, reason: 'tenant tapped an emergency' + (clean.kind ? ': ' + clean.kind : '') };
+  const hit = intakeWordHit(String(description || '') + ' ' + Object.values(clean.answers).join(' ') + ' ' + clean.summary, words);
+  return hit ? { emergency: true, reason: 'words in the request: ' + hit } : { emergency: false, reason: '' };
+}
+// One SMS piece, plain ASCII only, with a short link (index.html?wo= opens that work order).
+function intakeAlertText(o) {
+  const clean = s => String(s || '').replace(/[^\x20-\x7E]/g, '').replace(/\s+/g, ' ').trim();
+  const head = (o.again ? 'REMINDER ' : '') + 'EMERGENCY ' + clean(o.woId) + ': ';
+  const link = ' https://ridge-co.github.io/RidgeCo/?wo=' + encodeURIComponent(clean(o.woId));
+  const what = clean(o.what).split(' ').slice(0, 6).join(' ');
+  const body = (clean(o.where) + (what ? ' - ' + what : '')).slice(0, Math.max(10, 160 - head.length - link.length - 1));
+  return head + body + '.' + link;
+}
+async function intakeTextAdmin(env, message, woId) {
+  try {
+    const cfg = await fetchConfig(env);
+    if (!cfg.admin_phone) return 'FAILED: Config admin_phone not set';
+    const r = await smsGatedSend(env, { wo_id: woId || '', message_type: 'admin_intake_emergency', recipient_type: 'admin', admin: { Name: 'Admin', Phone: cfg.admin_phone }, message_body: message, bypassQuietHours: true, allowRepeat: true });
+    if (r && r.sent) return 'sent';
+    if (r && r.send_ok === false) return 'BLOCKED: ' + r.gate_snapshot;
+    if (env.__STAGING__ ?? isStaging(env)) return 'sent (staging stub, logged only)';
+    return 'FAILED: not sent (' + ((r && r.gate_snapshot) || 'unknown') + ')';
+  } catch (e) { return 'FAILED: ' + String((e && e.message) || e).slice(0, 150); }
+}
+async function intakeReadRow(env, woId) {
+  const data = await sheetsRequest(env, 'GET', '/values/Work_Orders');
+  const [headers, ...rows] = (data && data.values) || [[]];
+  const idc = idColIndex(headers); const r = rows.find(x => String(x[idc]) === String(woId));
+  if (!r) return null;
+  const o = {}; headers.forEach((h, i) => { o[h] = r[i] == null ? '' : String(r[i]); }); return o;
+}
+// After the work order row is written: confirm it, then alert. Never throws; every failure is reported and returned.
+async function intakeAfterCreate(env, woId, prep) {
+  const out = { emergency: !!prep.emergency, alert: 'not needed', warnings: [] };
+  if (!prep.emergency) return out;
+  try {
+    let row = await intakeReadRow(env, woId);
+    const good = r => r && r.Intake_Emergency === 'TRUE' && r.Priority === 'urgent';
+    if (!good(row)) { await updateWOFields(env, woId, { Priority: 'urgent', Intake_Emergency: 'TRUE' }); row = await intakeReadRow(env, woId); }
+    if (!good(row)) {
+      out.alert = 'NOT SENT: the emergency flag did not read back'; out.warnings.push(out.alert);
+      await reportFailure(env, { system: 'hub', source: 'worker', where: 'intake_emergency_write', ref: woId, severity: 'P0', message: 'emergency work order ' + woId + ' did not read back as an emergency, so the alert text was NOT sent. Look at it now.' });
+      return out;
+    }
+    const [props, units] = await fetchTabs(env, ['Properties', 'Units']);
+    const prop = props.find(p => String(p.ID) === String(row.Property_ID)) || {}; const unit = units.find(u => u.ID === row.Unit_ID) || {};
+    const where = (prop.Address || 'address unknown') + (unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '');
+    const what = prep.kind || String(row.Description || '');
+    const sms = await intakeTextAdmin(env, intakeAlertText({ woId, where, what }), woId);
+    let push = 'not tried';
+    try { const p = await pushNotify(env, { recipient_type: 'admin', recipient_id: 'brett', title: 'EMERGENCY ' + woId, body: where + ' - ' + String(what).slice(0, 120), url: '/?wo=' + encodeURIComponent(woId), tag: 'intake-' + woId, urgency: 'high' }); push = p && p.ok ? (p.sent + ' sent') : ('failed: ' + ((p && p.error) || 'no result')); }
+    catch (e) { push = 'failed: ' + String((e && e.message) || e).slice(0, 100); out.warnings.push('push: ' + push); }
+    const okSms = /^sent/.test(sms);
+    out.alert = okSms ? 'sent' : sms;
+    await updateWOFields(env, woId, { Intake_Alert_State: (okSms ? 'sent|' : 'FAILED|') + new Date().toISOString() + '|' + sms.slice(0, 120) + '|push ' + push });
+    if (!okSms) {
+      out.warnings.push('alert text: ' + sms);
+      await reportFailure(env, { system: 'hub', source: 'worker', where: 'intake_emergency_alert', ref: woId, severity: 'P0', message: 'emergency text to Brett NOT delivered for ' + woId + ': ' + sms });
+    }
+  } catch (e) {
+    out.alert = 'FAILED: ' + String((e && e.message) || e).slice(0, 150); out.warnings.push(out.alert);
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'intake_emergency_alert', ref: woId, severity: 'P0', err: e });
+  }
+  return out;
+}
+// 14-minute sweep: one second text if an emergency work order is still New and unopened after intake_emergency_recheck_min (default 10), or retry a refused first text once.
+async function processIntakeEmergencyRecheck(env) {
+  const cfg = await fetchConfig(env);
+  if (!intakeOn(cfg)) return { skipped: 'intake_guided_enabled is not TRUE' };
+  const mins = Math.max(1, Number(cfg.intake_emergency_recheck_min) || 10);
+  const data = await sheetsRequest(env, 'GET', '/values/Work_Orders');
+  const [headers, ...rows] = (data && data.values) || [[]];
+  const ci = headers.indexOf('Intake_Emergency'); if (ci < 0) return { checked: 0 };
+  const g = (r, h) => { const i = headers.indexOf(h); return i < 0 ? '' : String(r[i] == null ? '' : r[i]); };
+  const out = { checked: 0, resent: 0, errors: [] }; const now = Date.now();
+  for (const r of rows) {
+    if (g(r, 'Intake_Emergency') !== 'TRUE') continue;
+    const st = g(r, 'Intake_Alert_State'); const age = now - Date.parse(g(r, 'Created_Date') || '');
+    if (!(age >= mins * 60000) || age > 6 * 3600000) continue;
+    if (/ack\||recheck\|/.test(st) || (g(r, 'Status') || 'New') !== 'New') continue;
+    out.checked++;
+    const woId = g(r, 'ID');
+    try {
+      const sms = await intakeTextAdmin(env, intakeAlertText({ woId, where: 'still not opened', what: '', again: true }), woId);
+      const ok = /^sent/.test(sms);
+      await updateWOFields(env, woId, { Intake_Alert_State: st + ';recheck|' + (ok ? 'sent' : 'FAILED') + '|' + new Date().toISOString() + '|' + sms.slice(0, 100) });
+      if (ok) out.resent++; else { out.errors.push(woId + ': ' + sms); await reportFailure(env, { system: 'hub', source: 'worker', where: 'intake_emergency_alert', ref: woId, severity: 'P0', message: 'second emergency text NOT delivered for ' + woId + ': ' + sms }); }
+    } catch (e) { out.errors.push(woId + ': ' + String((e && e.message) || e).slice(0, 120)); await reportFailure(env, { system: 'hub', source: 'worker', where: 'intake_emergency_recheck', ref: woId, severity: 'P0', err: e }); }
+  }
+  if (out.errors.length) throw new Error('intake recheck: ' + out.errors.join(' | ').slice(0, 300));
+  return out;
+}
+// POST /intake/ack (admin): opening an emergency work order in the Hub stops the second text.
+async function intakeAck(env, body) {
+  const woId = String((body && body.wo_id) || '').trim(); if (!woId) return json({ error: 'wo_id required' }, 400);
+  const row = await intakeReadRow(env, woId);
+  if (!row) return json({ error: 'work order not found' }, 404);
+  if (row.Intake_Emergency !== 'TRUE' || /ack\|/.test(row.Intake_Alert_State)) return json({ ok: true, changed: false });
+  await updateWOFields(env, woId, { Intake_Alert_State: row.Intake_Alert_State + ';ack|' + new Date().toISOString() });
+  const back = await intakeReadRow(env, woId);
+  if (!back || !/ack\|/.test(back.Intake_Alert_State)) return json({ error: 'the acknowledgement did not save' }, 500);
+  return json({ ok: true, changed: true });
+}
+// POST /intake/deflected (tenant session): "That fixed it" on a self-check. Logs one telemetry row, creates no work order.
+async function intakeDeflected(env, body, callerRole, callerSessionId) {
+  try {
+    let prop = '';
+    if (callerRole === 'tenant') { const t = (await fetchTab(env, 'Tenants')).find(x => x.ID === callerSessionId); prop = t ? String(t.Property_ID || '') : ''; }
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'intake_deflected', Skill_Or_Endpoint: '/intake/deflected', Success: 'TRUE', Notes: `trade=${String((body && body.trade) || '').slice(0, 40)} check=${String((body && body.check) || '').slice(0, 60)} property=${prop}` });
+    return json({ ok: true });
+  } catch (e) {
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'intake_deflected_log', ref: String(callerSessionId || ''), severity: 'P2', err: e });
+    return json({ error: 'could not log the self-check result' }, 500);
+  }
+}
+
 async function createWorkOrder(env, body) {
   const _t0 = Date.now();
   // Same property/unit/tenant, same trade/description, seconds apart = a double-tap on
