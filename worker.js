@@ -9696,7 +9696,10 @@ async function createWorkOrder(env, body) {
     // Vendor Additional Work (Sep 30 2026) — only /wo/additional-work/start sends this, after ensureColumns.
     Parent_WO_ID: body.parent_wo_id||'',
     // Max price (Nov 5 2026) — vendor-facing ceiling, never printed on a description or invoice.
-    Max_Price: _maxPrice ? _maxPrice.toFixed(2) : ''
+    Max_Price: _maxPrice ? _maxPrice.toFixed(2) : '',
+    // Guided intake (queue #116): blank for every request that did not use it.
+    Intake_Channel: _intake ? _intake.channel : '', Intake_Answers: _intake ? JSON.stringify({ answers: _intake.answers, lang: _intake.lang, self_check: _intake.self_check }).slice(0, 1500) : '',
+    Intake_Summary: _intake ? _intake.summary : '', Intake_Emergency: _intake ? (_intakeDecision.emergency ? 'TRUE' : 'FALSE') : '', Intake_Alert_State: ''
   }[h] ?? ''));
   const _woAppend = await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   // Oct 16 2026: if another request took the same WO number in the gap, give THIS row the next free number (and say so in telemetry).
