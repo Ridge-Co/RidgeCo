@@ -24294,6 +24294,17 @@ async function opsQueueSync(env, body, opts) {
       if (/HTTP (403|429)/.test(_msg)) rateLimited.push({ id: r.ID, error: _msg }); else errors.push({ id: r.ID, error: _msg });
     }
   }
+  // Nov 19 2026: GitHub REJECTED the Hub's token (HTTP 401). ghPublicJson already carried on without it, so the pass worked; this files the ONE calm P2 that
+  // says so and shows what the Worker holds (never the value). The row is capped at 400 characters by the ledger, so the diagnosis comes first and the fix last.
+  if (_ghTok.pending) {
+    const p = _ghTok.pending; _ghTok.pending = null;
+    const sh = p.shape || {};
+    const rep = await reportFailure(env, { system: 'hub', source: 'worker', where: 'github_read_token_rejected', ref: 'GITHUB_READ_TOKEN', severity: 'P2',
+      message: 'GitHub rejected the Hub\'s GITHUB_READ_TOKEN (' + (p.status ? 'HTTP ' + p.status + ': ' : '') + p.why + '). The sync carried on without it. The Worker holds: ' + sh.kind + ', ' + sh.length + ' characters, fingerprint ' + sh.fp
+        + (sh.flags && sh.flags.length ? ', problems: ' + sh.flags.join('; ') : '') + '. Fix: set a new read-only token as the secret GITHUB_READ_TOKEN on the maintenance-hub Worker and Deploy (never in chat). Same fingerprint afterwards = the new value did not reach this Worker.',
+      context: { github_request_id: p.reqId || '' } });
+    if (!rep || rep.ok !== true) errors.push({ id: '', error: 'could not file the GitHub-token-rejected failure row: ' + ((rep && rep.error) || (rep && rep.dropped ? 'rate-capped' : 'unknown')) });
+  }
   if (rateLimited.length && ghTried > 0 && rateLimited.length >= ghTried && !changed.length) {
     const rep = await reportFailure(env, { system: 'hub', source: 'worker', where: 'queue_sync_github_blocked', ref: 'queue_sync', severity: 'P2',
       message: 'The queue sync could not read GitHub: it refused ' + rateLimited.length + ' of ' + ghTried + ' lookups (HTTP 403/429, GitHub rate-limits the Hub\'s shared address). Build progress on the Proposals page may be out of date. '
