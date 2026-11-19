@@ -9458,7 +9458,7 @@ async function woTriagePreview(env, body) {
 // columns (ensureColumns): Intake_Channel, Intake_Answers (JSON), Intake_Summary, Intake_Emergency, Intake_Alert_State.
 // Order matters (silent-failure rules): write the row, RE-READ it, and only then text Brett (type admin_intake_emergency, ignores quiet hours). The
 // 14-minute sweep (schedRunSweepWork -> processIntakeEmergencyRecheck) sends ONE second text if the work order was not opened. No AI. No new scheduled job.
-const INTAKE_COLS = ['Intake_Channel', 'Intake_Answers', 'Intake_Summary', 'Intake_Emergency', 'Intake_Alert_State'];
+const GUIDED_INTAKE_COLS = ['Intake_Channel', 'Intake_Answers', 'Intake_Summary', 'Intake_Emergency', 'Intake_Alert_State'];
 const INTAKE_EMERGENCY_WORDS_DEFAULT = ['gas smell', 'smell gas', 'smells like gas', 'carbon monoxide', 'co alarm', 'fire', 'smoke', 'burst pipe', 'flooding', 'flooded', 'water everywhere', 'sewage', 'sewer backup', 'no heat', 'no power', 'sparking', 'sparks', 'will not lock', 'wont lock', 'cannot lock', 'cant lock'];
 function intakeOn(cfg) { return String((cfg && cfg.intake_guided_enabled) || '').trim().toUpperCase() === 'TRUE'; }
 function intakeEmergencyWords(cfg) {
