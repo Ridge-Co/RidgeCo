@@ -236,8 +236,9 @@ label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font
 <div class="modal-overlay" id="modalSubmitRequest">
   <div class="modal">
     <div class="modal-title">SUBMIT A NEW REQUEST</div>
-    <p style="color:var(--muted);font-size:11px;margin-bottom:10px">This is for issues Ridge Co handles at your property. Your property manager is notified as soon as you submit.</p>
-    <div style="margin-bottom:12px">
+    <p style="color:var(--muted);font-size:11px;margin-bottom:10px" id="srIntro">This is for issues Ridge Co handles at your property. Your property manager is notified as soon as you submit.</p>
+    <div id="srIntakeRoot"></div>
+    <div style="margin-bottom:12px" id="srTradeField">
       <label style="display:block;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:6px">Type of Issue</label>
       <select id="srTrade" style="width:100%">
         <option value="">Select…</option>
