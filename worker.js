@@ -20991,6 +20991,7 @@ async function schedRunSweepWork(env) {
   const errors = [], detail = {};
   detail.recurring_wos = await schedStep('recurring_wos', () => processRecurringWorkOrders(env), errors);
   detail.estimate_reminders = await schedStep('estimate_reminders', () => processEstimateReminders(env), errors);
+  detail.intake_recheck = await schedStep('intake_recheck', () => processIntakeEmergencyRecheck(env), errors);   // queue #116: one second text for an unopened emergency
   detail.deposit_paid = await schedStep('deposit_paid', async () => {
     try { return await processDepositPaidSweep(env); }
     catch (e) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'deposit_sweep_cron', Skill_Or_Endpoint: 'scheduler/sweep_work', Success: 'FALSE', Notes: schedErrText(e) }); } catch (e2) { console.error('deposit_sweep_cron telemetry failed:', schedErrText(e2)); } throw e; }   // silent-ok: the sweep error is rethrown and recorded by schedStep
