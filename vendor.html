@@ -3180,6 +3180,61 @@ function submitSchedModal(modalId, updatedBy, updatedByRole, apiFn) {
     }
   });
 }
+// ── One-tap "On my way" (queue #131). Asks the Hub for the exact text first (dry run, sends nothing), you confirm, then it sends
+// through the same gated text sender as the Schedule box. Shows what really happened, never a silent success.
+function enRouteShows(wo) {
+  var st = String(wo.Status || '');
+  if (WOStatus.sets.CLOSED_FINAL.indexOf(st) >= 0 || WOStatus.sets.DONE_THROUGH_PAID.indexOf(st) >= 0 || WOStatus.sets.DEAD.indexOf(st) >= 0) return false;
+  var d = String(wo.Scheduled_Date || '');
+  return !d || d === todayStr();
+}
+function enRouteSay(idx, text, bad) {
+  var el = document.getElementById('enroute-msg-' + idx);
+  if (el) { el.textContent = text; el.style.color = bad ? 'var(--danger)' : 'var(--accent2)'; }
+}
+function enRouteCall(woId, dry) {
+  return fetch(WORKER + '/wo/en-route', { method:'POST', headers:{'X-Auth-Token':SECRET,'Content-Type':'application/json'},
+    body: JSON.stringify({ wo_id: woId, dry_run: !!dry, updated_by: session.vendor_name, updated_by_role: 'vendor' }) })
+    .then(function(r){ return r.json().then(function(j){ return { ok: r.ok, body: j || {} }; }); });
+}
+function enRouteResultText(b) {
+  var rs = b.tenant_results || [];
+  if (!rs.length) return b.note || 'Nobody was texted.';
+  var sent = rs.filter(function(x){ return x.sent; }).length;
+  if (sent === rs.length) return 'Tenant texted';
+  if (!sent) return 'Not sent: ' + (rs[0].why || 'held by the text gate');
+  return sent + ' of ' + rs.length + ' tenants texted';
+}
+function vendorEnRoute(woId, idx) {
+  var btn = document.getElementById('enroute-btn-' + idx);
+  var release = claimSubmit('enroute-' + woId, btn, 'Sending…');
+  if (!release) return;
+  enRouteSay(idx, '', false);
+  enRouteCall(woId, true).then(function(pre) {
+    release();
+    if (!pre.ok) { enRouteSay(idx, pre.body.error || 'Could not send. Try again.', true); return; }
+    var who = (pre.body.recipients || []).join(', ');
+    if (pre.body.tenant_notify_off || !who) { enRouteSay(idx, pre.body.tenant_notify_off ? 'Not sent: tenant texts are turned off for this job' : 'Nobody on this job can be texted', true); return; }
+    // Inline check, not a browser pop-up: the exact text and who gets it, then Send or Cancel.
+    var box = document.getElementById('enroute-msg-' + idx); if (!box) return;
+    box.textContent = ''; box.style.color = 'var(--text)';
+    var q = document.createElement('div'); q.style.cssText = 'font-weight:bold;margin-bottom:4px'; var ql = document.createElement('span'); ql.textContent = 'Send this text to:'; var qw = document.createElement('span'); qw.textContent = ' ' + who; q.appendChild(ql); q.appendChild(qw);
+    var tx = document.createElement('div'); tx.textContent = pre.body.text; tx.style.cssText = 'background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px;margin-bottom:8px';
+    var go = document.createElement('button'); go.className = 'btn btn-sm'; go.textContent = 'Send'; go.style.cssText = 'background:var(--accent2);color:#fff;min-height:44px;margin-right:8px';
+    var no = document.createElement('button'); no.className = 'btn btn-sm'; no.textContent = 'Cancel'; no.style.cssText = 'min-height:44px';
+    no.onclick = function() { box.textContent = ''; };
+    go.onclick = function() { vendorEnRouteSend(woId, idx, go); };
+    box.appendChild(q); box.appendChild(tx); box.appendChild(go); box.appendChild(no);
+  }).catch(function() { release(); enRouteSay(idx, 'Could not send. Try again.', true); });
+}
+function vendorEnRouteSend(woId, idx, goBtn) {
+  var release = claimSubmit('enroute-send-' + woId, goBtn, 'Sending…');
+  if (!release) return;
+  enRouteCall(woId, false).then(function(res) {
+    if (!res.ok) { enRouteSay(idx, res.body.error || 'Could not send. Try again.', true); release(); return; }
+    enRouteSay(idx, enRouteResultText(res.body), !res.body.sent);
+  }).catch(function() { enRouteSay(idx, 'Could not send. Try again.', true); release(); });
+}
 function submitVendorSched(modalId) {
   var date    = document.getElementById(modalId+'-date').value;
   var winEl   = document.getElementById(modalId+'-window');
