@@ -3261,6 +3261,7 @@ function openWODetail(woId) {
   addBtn('Close','secondary',function(){closeModal('modal-wo-detail');});
   addBtn('Edit','secondary',function(){openEditWOModal(woId);});
   addBtn('📅 Schedule','secondary',function(){openSchedModal('modalSchedAdmin',woId);});
+  if (!(WOStatus.sets.CLOSED_FINAL.indexOf(wo.Status) >= 0 || WOStatus.sets.DONE_THROUGH_PAID.indexOf(wo.Status) >= 0 || WOStatus.sets.DEAD.indexOf(wo.Status) >= 0)) addBtn('🚗 On my way','secondary',function(ev){hubEnRoute(woId,ev.currentTarget);});
   // Quick status change select
   var qsDiv = document.createElement('div');
   qsDiv.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:8px';
