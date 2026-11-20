@@ -1024,6 +1024,7 @@ const _hubWorkerCore = {
         if (path === '/turnover/start')           return await startTurnoverManual(env, body);
         if (path === '/tenant/schedule-move-out') return await scheduleMoveOutWithTurnover(env, body);
         if (path === '/schedule')                 return await scheduleWO(env, body);
+        if (path === '/wo/en-route')              return await woEnRoute(env, body);   // queue #131: one-tap 'On my way' (admin, or the assigned vendor)
         if (path === '/owner/notifications')      return await saveOwnerNotifications(env, body);
         if (path === '/owner-user/add')           return await addRow(env, 'Owner_Users', body);
         if (path === '/owner-user/update')        return await updateRow(env, 'Owner_Users', body.id, body.fields);
