@@ -29936,7 +29936,7 @@ async function smsGatePreviewHandler(env, url) {
 }
 
 const ROLE_SCOPES = {
-  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact','/vendor-task-requests','/vendor-task-request/mark-done',
+  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/wo/en-route','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact','/vendor-task-requests','/vendor-task-request/mark-done',
     // Vendor Additional Work (Sep 30 2026): ownership of the parent / child WO is re-checked server-side in each handler.
     '/wo/additional-work','/wo/additional-work/start','/wo/additional-work/submit','/wo/additional-work/withdraw',
     // Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §2-4):
