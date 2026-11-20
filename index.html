@@ -6694,6 +6694,25 @@ var _schedWOId = null;
 function todayStr() {
   return new Date().toISOString().split('T')[0];
 }
+// ── One-tap "On my way" (queue #131): dry run shows the exact text and who gets it, then one confirmed send through the gated sender. ──
+async function hubEnRoute(woId, btn) {
+  if (btn && btn.disabled) return;
+  var label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+  var done = function(msg, bad) { if (btn) { btn.disabled = false; btn.textContent = label; } if (msg) toast(msg, bad ? 'error' : 'success'); };
+  try {
+    var pre = await api('POST', '/wo/en-route', { wo_id: woId, dry_run: true, updated_by: 'Admin', updated_by_role: 'admin' });
+    if (!pre || pre.error) { done((pre && pre.error) || 'Could not check. Try again.', true); return; }
+    var who = (pre.recipients || []).join(', ');
+    if (pre.tenant_notify_off || !who) { done(pre.tenant_notify_off ? 'Not sent: tenant texts are turned off for this job.' : 'Nobody on this job can be texted.', true); return; }
+    if (!confirm('Send this text to ' + who + '?\n\n' + pre.text)) { done(''); return; }
+    if (btn) btn.textContent = 'Sending…';
+    var res = await api('POST', '/wo/en-route', { wo_id: woId, updated_by: 'Admin', updated_by_role: 'admin' });
+    if (!res || res.error) { done((res && res.error) || 'Could not send. Try again.', true); return; }
+    var rs = res.tenant_results || [], sent = rs.filter(function(x){return x.sent;}).length;
+    done(!rs.length ? (res.note || 'Nobody was texted.') : sent === rs.length ? 'Tenant texted.' : sent ? sent + ' of ' + rs.length + ' tenants texted.' : 'Not sent: ' + (rs[0].why || 'held by the text gate'), !sent);
+  } catch (e) { done('Could not send: ' + (e && e.message || e), true); }
+}
 function openSchedModal(modalId, woId) {
   _schedWOId = woId;
   document.getElementById(modalId+'-date').value = todayStr();
