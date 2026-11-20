@@ -16894,7 +16894,7 @@ async function scheduleWO(env, body) {
   await logWOAudit(env,body.wo_id,body.updated_by||'admin',body.updated_by_role||'admin','Scheduled',wo.Scheduled_Date||'',schedDate+' '+(body.window||''),isWithinHour?'On my way notification':'Appointment scheduled');
   // Vendor nudge clock reset (Sep 14 2026) — a vendor setting a schedule is real activity.
   if (body.updated_by_role === 'vendor') { await resetVendorNudgeClock(env, body.wo_id, body.vendor_id || wo.Vendor_ID); }
-  let tenantSMSSent=false, notifyQueued=false;
+  let tenantSMSSent=false, notifyQueued=false; const tenantResults=[]; // queue #131: one line per tenant so the one-tap 'On my way' screen can say what really happened
   const [units,tenants,properties,owners]=await fetchTabs(env, ['Units','Tenants','Properties','Owners']);
   const unit=units.find(u=>u.ID===wo.Unit_ID), property=properties.find(p=>p.ID===wo.Property_ID);
   const owner=property?owners.find(o=>o.ID===property.Owner_ID):null;
