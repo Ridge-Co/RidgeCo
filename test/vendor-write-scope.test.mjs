@@ -138,6 +138,7 @@ const BODIES = {
   '/status': (wo) => ({ wo_id: wo, status: 'Accepted', notes: '', updated_by: 'Vee One', updated_by_role: 'vendor', lang: 'en' }),
   '/wo/checklist': (wo) => ({ wo_id: wo, checklist: [{ text: 'TEST item', done: true }], updated_by: 'Vee One', updated_by_role: 'vendor' }),
   '/schedule': (wo) => ({ wo_id: wo, date: '2026-12-01', window: '8am-12pm', notify_tenant: false, updated_by: 'Vee One', updated_by_role: 'vendor' }),
+  '/wo/en-route': (wo) => ({ wo_id: wo, dry_run: true, updated_by: 'Vee One', updated_by_role: 'vendor' }),
   '/time-entry/add': (wo) => ({ wo_id: wo, entered_by: 'Vee One', entered_by_id: 'V1', role: 'vendor', entry_type: 'Labor', duration_minutes_raw: '45', notes: 'TEST', billable: 'TRUE', hourly_rate: '50' }),
   '/receipt/add': (wo) => ({ wo_id: wo, amount: 12.5, description: 'TEST part', store: 'TEST store', date: '2026-11-16', added_by: 'Vee One', added_by_id: 'V1', role: 'vendor', payment_source: 'company_card' }),
   '/vendor-bill/add': (wo) => ({ WO_ID: wo, Vendor_ID: 'V1', Vendor_Name: 'Vee One', Bill_Type: 'flat', Hours: '0', Rate: '0', Labor_Total: '0.00', Receipts_JSON: '[]', Receipts_Total: '0.00', Flat_Rate: '200.00', Total: '200.00', Status: 'submitted', Created_Date: '2026-11-16', Notes: 'TEST', Active: 'TRUE', lang: 'en' }),
