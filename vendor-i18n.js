@@ -9,6 +9,19 @@
 // later (cards, modals, toasts). alert/confirm/prompt are translated too. Only exact dictionary
 // matches are touched, so work-order text, names and addresses are never altered.
 var ES_EXTRA = {
+// ── One-tap "On my way" (queue #131) ──
+"🚗 On my way": "🚗 Voy en camino",
+"Sending…": "Enviando…",
+"Tenant texted": "Se avisó al inquilino",
+"Send this text to:": "Enviar este mensaje a:",
+"Send": "Enviar",
+"On my way": "Voy en camino",
+"Not sent:": "No enviado:",
+"held by the text gate": "retenido por el filtro de mensajes",
+"Could not send. Try again.": "No se pudo enviar. Intente de nuevo.",
+"Not sent: tenant texts are turned off for this job": "No enviado: los mensajes al inquilino están apagados para este trabajo",
+"Nobody on this job can be texted": "No se puede enviar mensaje a nadie en este trabajo",
+"Nobody was texted.": "No se envió mensaje a nadie.",
 // ── New vendor home list (Nov 18 2026, vendor-home.js) ──
 "To do": "Por hacer",
 "Waiting to be paid": "Esperando el pago",
