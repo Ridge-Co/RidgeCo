@@ -16948,7 +16948,7 @@ async function scheduleWO(env, body) {
     }
   }
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_schedule', Skill_Or_Endpoint:'/schedule', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`window=${body.window||''} new_status=${updates.Status||wo.Status||''}` }); } catch(_){} // silent-ok: telemetry is best effort, a logging miss must not fail the request
-  return json({success:true,tenant_sms:tenantSMSSent,notify_queued:notifyQueued,owner_sms:ownerSMSSent,new_status:updates.Status||wo.Status});
+  return json({success:true,tenant_sms:tenantSMSSent,notify_queued:notifyQueued,owner_sms:ownerSMSSent,new_status:updates.Status||wo.Status,tenant_results:tenantResults});
 }
 
 // Notification_Queue — a send-TIMING defer (day-before-5pm / day-of-8am cutoff so a schedule
