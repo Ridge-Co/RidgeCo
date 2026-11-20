@@ -2891,7 +2891,7 @@ async function ownerWriteScopeDenied(env, path, body, ownerId) {
 // Every refusal is a 4xx with a plain reason (English / Spanish, the portal shows it as is) plus a FAILED Ops_Telemetry row
 // (`vendor_write_scope_denied`) - never silent. Routes that check the vendor themselves are left alone: additional work,
 // /vendor-task-request/mark-done, /vendor/update-contact, bill-with-no-job, self-serve work orders, property-access requests.
-const VENDOR_WO_WRITE_PATHS = ['/estimate', '/status', '/wo/checklist', '/schedule', '/time-entry/add', '/receipt/add', '/vendor-bill/add'];   // a work order is REQUIRED
+const VENDOR_WO_WRITE_PATHS = ['/estimate', '/status', '/wo/checklist', '/schedule', '/wo/en-route', '/time-entry/add', '/receipt/add', '/vendor-bill/add'];   // a work order is REQUIRED
 const VENDOR_WO_OPTIONAL_PATHS = ['/upload-photo', '/create-upload-session', '/log-attachment', '/vendor-bill/reconcile-receipts'];          // checked when a work order is named
 const VENDOR_OWN_ROW_DELETE_PATHS = { '/time-entry/delete': { tab: 'Time_Entries', by: 'Entered_By_ID', what: 'time entry' }, '/receipt/delete': { tab: 'Receipts', by: 'Added_By_ID', what: 'receipt' } };
 const VENDOR_NOT_YOURS_MSG = 'This work order is not assigned to you, so nothing was saved. Contact Ridge Co if this is a mistake. / Esta orden de trabajo no está asignada a usted, así que no se guardó nada. Comuníquese con Ridge Co si es un error.';
