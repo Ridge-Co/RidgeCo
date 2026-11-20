@@ -16937,7 +16937,7 @@ async function scheduleWO(env, body) {
   // the tenant toggle happens to be on) and independent of isWithinHour (Brett's own event set
   // — Received/Scheduled/Complete/On_Hold — doesn't have a distinct "technician en route" tier).
   let ownerSMSSent=false;
-  if (property && owner?.Phone) {
+  if (property && owner?.Phone && !body.skip_owner) { // queue #131: the one-tap 'On my way' must not text the owner a second 'scheduled' message
     const notify = await shouldNotifyOwner(env, wo, 'Scheduled');
     if (notify) {
       const dateStr = new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
