@@ -16922,6 +16922,7 @@ async function scheduleWO(env, body) {
         let sendAfter;if(schedDate===tomorrowStr){sendAfter=new Date(now.getTime()+3600000).toISOString();}else{const fivePM=new Date(now);fivePM.setUTCHours(21,0,0,0);if(now<fivePM){sendAfter=fivePM.toISOString();}else{const eightAM=new Date(tomorrow);eightAM.setUTCHours(13,0,0,0);sendAfter=eightAM.toISOString();}}
         await queueNotification(env,body.wo_id,'tenant_schedule',tenant.Phone,msg,sendAfter,{ message_type: 'tenant_job_scheduled', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
         notifyQueued=true;
+        tenantResults.push({ first: tenant.First_Name || '', sent: false, why: 'queued for a reasonable hour' });
       }
     }
     }
