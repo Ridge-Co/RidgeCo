@@ -2932,7 +2932,7 @@ async function vendorWriteScopeDenied(env, path, body, vendorId) {
   if (b.Vendor_ID !== undefined && b.Vendor_ID !== null && b.Vendor_ID !== '' && String(b.Vendor_ID) !== sid) return await vendorWriteDeny(env, path, sid, 403, 'Forbidden', `sent Vendor_ID=${String(b.Vendor_ID).slice(0, 40)}`);
   if (path === '/vendor-bill/add') { b.Vendor_ID = sid; if (String(b.Entered_By || '').toLowerCase() === 'hub') delete b.Entered_By; }   // 'hub' is how the Hub marks its own bills (it skips the vendor checklist gate); a vendor session cannot claim it
   if (path === '/estimate' || path === '/status' || path === '/schedule' || path === '/wo/en-route') b.vendor_id = sid;
-  if (path === '/status' || path === '/schedule' || path === '/wo/checklist') b.updated_by_role = 'vendor';
+  if (path === '/status' || path === '/schedule' || path === '/wo/checklist' || path === '/wo/en-route') b.updated_by_role = 'vendor';
   if (path === '/time-entry/add') { b.role = 'vendor'; b.entered_by_id = sid; }
   if (path === '/receipt/add') { b.role = 'vendor'; b.added_by_id = sid; }
   return null;
