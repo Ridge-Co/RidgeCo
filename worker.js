@@ -31587,7 +31587,7 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
-  if (path === '/schedule') {
+  if (path === '/schedule' || path === '/wo/en-route') {
     // Same gate as /status: /schedule only ever touches an existing Work_Orders row (never
     // creates one), so the only thing to check is that the WO it's targeting is itself a
     // TEST- record via its linked Property.
