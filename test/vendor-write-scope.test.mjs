@@ -146,7 +146,7 @@ const BODIES = {
   '/log-attachment': (wo) => ({ wo_id: wo, file_id: 'F-TEST', file_url: 'https://d/F-TEST', file_name: 'TEST.jpg', file_type: 'before', mime_type: 'image/jpeg' }),
   '/vendor-bill/reconcile-receipts': (wo) => ({ wo_id: wo, image_b64: 'AAAA', mime: 'image/jpeg' }),
 };
-const REQUIRED = ['/estimate', '/status', '/wo/checklist', '/schedule', '/time-entry/add', '/receipt/add', '/vendor-bill/add'];
+const REQUIRED = ['/estimate', '/status', '/wo/checklist', '/schedule', '/wo/en-route', '/time-entry/add', '/receipt/add', '/vendor-bill/add'];
 const OPTIONAL = ['/create-upload-session', '/log-attachment', '/vendor-bill/reconcile-receipts'];
 const upload = async (token, woId) => {
   skew += 10000;
