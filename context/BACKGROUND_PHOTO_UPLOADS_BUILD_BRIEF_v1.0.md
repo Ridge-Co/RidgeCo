@@ -20,7 +20,7 @@ Wanted: pick any number of photos, keep working (Save, Next, Close, another scre
 | D7 | No texts for any of this (standing rule R-1). Ledger rows are P2. |
 | D8 | PR #623 (merged Nov 21) made trash Save wait for uploads. Phase 4 replaces that lock with "safe to leave". Keep 623's Add-photos-from-preview. |
 
-Default applied without asking (Brett may override): the D6 rule also applies to **Brett's own customer invoice** for that WO / trash visit. Same resolve buttons, so a missing receipt or before/after photo can't slip out on an invoice either. For the customer invoice, **any** uploader's open issue or pending upload on that record blocks it. For a vendor bill, only that vendor's own issues and pending uploads block it (D6).
+| D9 | **Open warnings block vendors only** (Brett, Nov 21 15:45 ET: "I can fix my own"). Brett's customer invoice (Hub WO invoice, trash Send) is **never blocked** by an open warning; it shows the open warnings for that record next to Send, with Replace / Not needed buttons, and sends when he taps Send. D2 still applies: Send waits for photos that are still uploading. |
 
 **Canonical `file_type` values:** `photo, before, after, receipt, report, video, document`. Map each page's existing values onto these in Phase 0; add a new value only with the strong reviewer's OK.
 
