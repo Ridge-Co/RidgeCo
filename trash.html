@@ -572,6 +572,9 @@ function pickPhotos(input){
   files.forEach(function(file){
     var chip=document.createElement('span'); chip.className='thumb'; chip.innerHTML='<span class="spin"></span> '+esc(file.name.slice(0,14));
     cont.appendChild(chip);
+    uploadsInFlight++; updateSaveState();
+    var settled=false;
+    var done=function(){ if(settled) return; settled=true; uploadsInFlight=Math.max(0,uploadsInFlight-1); updateSaveState(); };
     var reqBody={ wo_id:'TRASH-'+pid, property:p.label, file_name:file.name, file_type:'photo', mime_type:file.type||'application/octet-stream', origin:window.location.origin };
     if(pendingFolder){ reqBody.folder_id=pendingFolder.id; reqBody.folder_url=pendingFolder.url; }
     api('POST','/create-upload-session',reqBody).then(function(res){
