@@ -746,6 +746,7 @@ const _hubWorkerCore = {
         if (path === '/scope-proposal/signed')  return await scopeProposalSignedList(env, url);
         if (path === '/insp/customers')         return await inspCustomersList(env);
         if (path === '/fi/list')                return await fiRoute(env, 'list', () => fiList(env));
+        if (path === '/fi/wo/vendors')          return await fiRoute(env, 'wo-vendors', () => fiWoVendors(env));
         if (path === '/fi/inspection')          return await fiRoute(env, 'inspection', () => fiGetInspection(env, url));
         if (path === '/fi/photo-sizes')         return await fiRoute(env, 'photo-sizes', () => fiPhotoSizes(env, url));
         if (path === '/fi/report')              return await fiRoute(env, 'report', () => fiReport(env, request, url));
@@ -1255,6 +1256,8 @@ const _hubWorkerCore = {
         if (path === '/fi/brand/save')            return await fiRoute(env, 'brand-save', () => fiBrandSave(env, body));
         if (path === '/fi/email-report')          return await fiRoute(env, 'email-report', () => fiEmailReport(env, request, body));
         if (path === '/fi/urgent-send')           return await fiRoute(env, 'urgent-send', () => fiUrgentSend(env, body));
+        if (path === '/fi/wo/plan')               return await fiRoute(env, 'wo-plan', () => fiWoPlan(env, body));
+        if (path === '/fi/wo/create')             return await fiRoute(env, 'wo-create', () => fiWoCreate(env, body));
         if (path === '/fi/route')                 return await fiRoute(env, 'route', () => fiRouteNotes(env, body));
         if (path === '/fi/brand/scrape')          return await fiRoute(env, 'brand-scrape', () => fiBrandScrape(env, body));
         if (path === '/fi/read-label')            return await fiRoute(env, 'read-label', () => fiReadLabel(env, body));
@@ -31340,7 +31343,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/owner/tenant-roster/preview') return true;
   if (path === '/owner/tenant-roster/apply') return !!(body && body.owner_id) && await isTestRecord(env, 'Owners', body.owner_id);
   // Oct 15 2026 (field inspection): the staging token may only write inspections whose id starts TEST-, brands named TEST- (never default, never a non-TEST brand); structure/summarize write nothing.
-  if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report' || path === '/fi/urgent-send') return String((body && body.id) || '').startsWith('TEST-');
+  if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report' || path === '/fi/urgent-send' || path === '/fi/wo/plan' || path === '/fi/wo/create') return String((body && body.id) || '').startsWith('TEST-');
   if (path === '/fi/structure' || path === '/fi/summarize' || path === '/fi/route' || path === '/fi/brand/scrape' || path === '/fi/transcribe/json') return true; // AI / read-only: no sheet writes
   if (path === '/fi/reword') return true; // AI only: writes nothing
   if (path === '/admin/fi-originals-bridge') return String((body && body.inspection_id) || '').startsWith('TEST-'); // Nov 2 2026: staging may only read/attach photos of a TEST- inspection
@@ -46844,9 +46847,11 @@ function fiClean(v, max) { return fiContractorize(fiStr(v, max)); }
 // Report-serve scrub: only AI-written text (issues flagged ai:true, suggested fixes, and the AI summary). Text the inspector typed or dictated verbatim is left untouched.
 function fiScrubDocForReport(doc) {
   if (!doc || typeof doc !== 'object') return doc;
+  delete doc.wo_groups;
   for (const a of (doc.areas || [])) if (a && Array.isArray(a.equipment)) { a.equipment = a.equipment.filter(e => fiEquipHasInfo(e)); for (const e of a.equipment) delete e.auto; }   // Nov 13 2026: an empty pre-attached card is not a finding
   for (const a of (doc.areas || [])) for (const is of (a.issues || [])) {
     if (!is) continue;
+    delete is.wo_id; delete is.wo_group;   // queue #261: work order numbers and groupings are internal, never on the customer's report
     delete is.flag_send; delete is.sent;   // 'send to the requester' flags and sent marks are for the phone only (Oct 28 2026), never on the public report
     if (is.ai === true) { for (const k of ['title', 'detail', 'likely_cause', 'recommended_fix']) if (typeof is[k] === 'string') is[k] = fiContractorize(is[k]); }
     else if (is.fix_source === 'suggested' && typeof is.recommended_fix === 'string') is.recommended_fix = fiContractorize(is.recommended_fix);   // catalog / AI-suggested fix text the inspector did not write (older inspections kept the old "Have an electrician" wording)
@@ -46964,6 +46969,8 @@ function fiValidateDoc(doc) {
       else (a.issues || []).forEach((is, j) => {
         if (!is || typeof is !== 'object' || !is.id || !is.title) errors.push(`areas[${i}].issues[${j}] needs id and title`);
         else { if (!FI_TRADES.includes(is.trade)) errors.push(`areas[${i}].issues[${j}].trade invalid`); if (!FI_SEVERITIES.includes(is.severity)) errors.push(`areas[${i}].issues[${j}].severity invalid`);
+          if (is.wo_id !== undefined && (typeof is.wo_id !== 'string' || is.wo_id.length > 20)) errors.push(`areas[${i}].issues[${j}].wo_id invalid`);
+          if (is.wo_group !== undefined && (typeof is.wo_group !== 'string' || is.wo_group.length > 40)) errors.push(`areas[${i}].issues[${j}].wo_group invalid`);
           if (is.flag_send !== undefined && typeof is.flag_send !== 'boolean') errors.push(`areas[${i}].issues[${j}].flag_send must be true or false`);
           if (is.sent !== undefined && (!is.sent || typeof is.sent !== 'object' || Array.isArray(is.sent) || typeof is.sent.at !== 'string' || String(is.sent.at).length > 40 || String(is.sent.to || '').length > 120)) errors.push(`areas[${i}].issues[${j}].sent invalid`);
         }
@@ -46982,6 +46989,7 @@ function fiValidateDoc(doc) {
   fiValidateVoiceNotes(doc.voice_notes, errors);
   fiValidateVisit(doc.visit, errors);
   fiValidateLayout(doc.layout, errors);
+  fiWoValidateGroups(doc.wo_groups, errors);
   if (doc.booking !== undefined && (!doc.booking || typeof doc.booking !== 'object' || Array.isArray(doc.booking))) errors.push('doc.booking must be an object');
   if (!doc.property || typeof doc.property !== 'object' || !String(doc.property.address || '').trim()) errors.push('doc.property.address required');
   if (doc.owner !== undefined && (!doc.owner || typeof doc.owner !== 'object' || Array.isArray(doc.owner) || String(doc.owner.name || '').length > 160)) errors.push('doc.owner must be an object with a name under 160 characters');
@@ -47218,7 +47226,7 @@ async function fiGetInspection(env, url) {
 }
 // True when the two saved docs differ ONLY in phone-only fields (the 'send to requester' flag / sent mark, and the touch timestamp).
 function fiPublicDocKey(serialized) {
-  try { const d = JSON.parse(serialized); delete d.updated; for (const a of (d.areas || [])) for (const is of (a.issues || [])) { delete is.flag_send; delete is.sent; } return JSON.stringify(d); }
+  try { const d = JSON.parse(serialized); delete d.updated; delete d.wo_groups; for (const a of (d.areas || [])) for (const is of (a.issues || [])) { delete is.flag_send; delete is.sent; delete is.wo_id; delete is.wo_group; } return JSON.stringify(d); }
   catch (e) { return null; }
 }
 function fiOnlyPhoneMarksChanged(prevSerialized, nextSerialized) {
@@ -48947,6 +48955,202 @@ async function fiFolderOrganize(env, body) {
   return json({ ok: failed.length === 0, done, moved, already, remaining, failed: failed.slice(0, 10), failed_count: failed.length, folder, message: failed.length ? `${failed.length} photo(s) could not be moved. Retry; if it repeats, tell Brett.` : (remaining ? `${remaining} photo(s) still to move — run it again.` : 'All photos are in the property’s Drive folder.') }, failed.length ? 502 : 200);
 }
 
+// ── Convert inspection findings into work orders (queue #261, Phase 1 of 4, Nov 20 2026) ─────────────────────
+// Nothing here runs on its own: Brett taps "Create work orders" on the Review screen, arranges items into draft groups, previews, then confirms.
+// A group is {key, title, vendor_id, issue_ids[], wo_id?, created_at?} kept in doc.wo_groups (ids only, no copied text). Creating a work order NEVER texts or emails
+// anyone: tenant_visible / tenant_notify_* are FALSE, Owner_Notify_Override is 'off', and the vendor (when chosen) is assigned with notify:false + notify_tenant:false.
+const FI_WO_MAX_GROUPS = 60, FI_WO_MAX_PHOTOS = 6;
+const FI_WO_HUB_TRADE = { plumbing: 'Plumbing', electrical: 'Electrical', hvac: 'HVAC', roofing: 'Roofing', structural: 'Carpentry', carpentry: 'Carpentry', drywall_paint: 'Painting', flooring: 'Flooring', windows_doors: 'Windows', appliances: 'Appliance', pest: 'Pest Control', safety: 'General', exterior_site: 'General', cleaning: 'Cleaning', general: 'General', tenant_action: 'General' };
+const FI_WO_TRADE_WORD = { plumbing: 'Plumbing', electrical: 'Electrical', hvac: 'HVAC', roofing: 'Roofing', structural: 'Structural', carpentry: 'Carpentry', drywall_paint: 'Drywall and paint', flooring: 'Flooring', windows_doors: 'Windows and doors', appliances: 'Appliances', pest: 'Pest', safety: 'Safety', exterior_site: 'Exterior', cleaning: 'Cleaning', general: 'General', tenant_action: 'Tenant action' };
+function fiWoValidateGroups(gs, errors) {
+  if (gs === undefined || gs === null) return;
+  if (!Array.isArray(gs)) { errors.push('doc.wo_groups must be an array'); return; }
+  if (gs.length > FI_WO_MAX_GROUPS) { errors.push(`too many work-order groups (max ${FI_WO_MAX_GROUPS})`); return; }
+  const keys = new Set();
+  gs.forEach((g, i) => {
+    if (!g || typeof g !== 'object' || Array.isArray(g)) { errors.push(`wo_groups[${i}] invalid`); return; }
+    if (!/^[A-Za-z0-9_-]{1,24}$/.test(String(g.key || ''))) errors.push(`wo_groups[${i}].key invalid`); else { if (keys.has(g.key)) errors.push(`duplicate wo group key ${g.key}`); keys.add(g.key); }
+    if (g.title !== undefined && (typeof g.title !== 'string' || g.title.length > 120)) errors.push(`wo_groups[${i}].title invalid (max 120)`);
+    if (g.vendor_id !== undefined && (typeof g.vendor_id !== 'string' || g.vendor_id.length > 40)) errors.push(`wo_groups[${i}].vendor_id invalid`);
+    if (g.wo_id !== undefined && (typeof g.wo_id !== 'string' || g.wo_id.length > 20)) errors.push(`wo_groups[${i}].wo_id invalid`);
+    if (g.created_at !== undefined && (typeof g.created_at !== 'string' || g.created_at.length > 40)) errors.push(`wo_groups[${i}].created_at invalid`);
+    if (!Array.isArray(g.issue_ids) || g.issue_ids.length > 60 || g.issue_ids.some(x => typeof x !== 'string' || x.length > 64)) errors.push(`wo_groups[${i}].issue_ids must be a list of up to 60 ids`);
+  });
+}
+// All the issues that can be converted, in report order, flagged ones first. Excluded areas and tenant-action items are not "convertible" but are returned in `tray`
+// so the screen can show them under "Not converting" and he can still move one in by hand.
+function fiWoCollect(doc) {
+  const items = [], tray = [];
+  for (const a of (doc.areas || [])) for (const is of (a.issues || [])) {
+    const it = { id: String(is.id), area: String(a.name || ''), section: String(a.section || ''), title: String(is.title || ''), trade: String(is.trade || 'general'), severity: String(is.severity || 'medium'),
+      detail: String(is.detail || ''), fix: String(is.recommended_fix || ''), photo_ids: (is.photo_ids || []).map(String), wo_id: is.wo_id ? String(is.wo_id) : '', flagged: !!is.wo };
+    if (a.excluded || is.trade === 'tenant_action' || is.tenant_action) { it.tray_reason = a.excluded ? 'area_excluded' : 'tenant_action'; tray.push(it); } else items.push(it);
+  }
+  const flagged = items.filter(i => i.flagged), rest = items.filter(i => !i.flagged);
+  return { items: flagged.concat(rest), tray };
+}
+function fiWoUniqueTitle(title, used) {
+  let t = fiStr(title, 110).trim() || 'Inspection repairs', n = 1, out = t;
+  while (used.has(out.toLowerCase())) { n++; out = t + ' (' + n + ')'; }
+  used.add(out.toLowerCase()); return out;
+}
+// Arrange only: returns draft groups, creates nothing. 'one' = everything on one work order; 'related' = same trade in the same unit/section together, every other item alone;
+// 'pick' = nothing grouped yet. (Phase 3 adds his learned groupings to 'related'.)
+function fiWoAutoGroups(items, mode, doc) {
+  const used = new Set(), groups = [];
+  const mk = (title, ids, vendor) => ({ key: 'g' + (groups.length + 1), title: fiWoUniqueTitle(title, used), vendor_id: vendor || '', issue_ids: ids.slice(0, 60) });
+  if (mode === 'one') {
+    if (items.length) groups.push(mk('Inspection repairs - ' + String(((doc && doc.property && doc.property.address) || '').split(',')[0]).trim(), items.map(i => i.id)));
+  } else if (mode === 'related') {
+    const by = new Map();
+    for (const i of items) { const k = i.trade + '|' + i.section; if (!by.has(k)) by.set(k, []); by.get(k).push(i); }
+    for (const [, list] of by) {
+      if (list.length > 1) groups.push(mk((FI_WO_TRADE_WORD[list[0].trade] || 'General') + (list[0].section && list[0].section !== 'building' ? ' - ' + list[0].area : ' repairs'), list.map(i => i.id)));
+      else groups.push(mk(list[0].title, [list[0].id]));
+    }
+  } else if (mode !== 'pick') return null;
+  return groups;
+}
+function fiWoSevPriority(sevs) { return sevs.some(s => s === 'urgent' || s === 'high') ? 'high' : 'normal'; }
+// The exact work order a group would become. Pure; the plan screen shows this and create sends this.
+function fiWoBuildPayload(doc, group, byId, insp) {
+  const items = (group.issue_ids || []).map(id => byId.get(String(id))).filter(Boolean), warnings = [];
+  const prop = doc.property || {};
+  const secs = Array.from(new Set(items.map(i => i.section).filter(s => s && s !== 'building' && s !== 'common')));
+  const allSame = items.length > 0 && items.every(i => i.section === items[0].section);
+  let unit_id = '';
+  if (allSame && items[0].section && !['building', 'common'].includes(items[0].section)) unit_id = items[0].section;
+  else if (secs.length > 1) warnings.push('These items are in more than one unit, so this work order is made for the building and each line names its area.');
+  if (!unit_id && prop.unit_id) unit_id = String(prop.unit_id);
+  const tcount = {}; for (const i of items) tcount[i.trade] = (tcount[i.trade] || 0) + 1;
+  const top = Object.keys(tcount).sort((a, b) => tcount[b] - tcount[a] || a.localeCompare(b))[0] || 'general';
+  const when = String((insp && insp.date) || doc.date || '').slice(0, 10);
+  const lines = items.map(i => {
+    let line = `${i.area}: ${i.title}` + (i.fix ? ' - ' + i.fix : '');
+    if (looksLikeAccessDetail(line)) { line = `${i.area}: ${i.title}`; if (looksLikeAccessDetail(line)) { line = `${i.area}: see the inspection report`; warnings.push('One line looked like an access code and was replaced.'); } }
+    return { t: fiStr(line, 300), done: false };
+  });
+  const already = items.filter(i => i.wo_id && i.wo_id !== group.wo_id);
+  if (already.length) warnings.push(already.length + ' item' + (already.length === 1 ? ' is' : 's are') + ' already on another work order (' + Array.from(new Set(already.map(i => i.wo_id))).join(', ') + ').');
+  return {
+    payload: { property_id: String(prop.id || ''), unit_id, trade: FI_WO_HUB_TRADE[top] || 'General', description: fiStr((group.title || 'Inspection repairs') + (when ? ' (from inspection ' + when + ')' : ' (from inspection)'), 300),
+      priority: fiWoSevPriority(items.map(i => i.severity)), type: 'inspection', notes: fiStr('Created from the inspection of ' + String(prop.address || '') + (when ? ' on ' + when : '') + '. Inspection id ' + String((insp && insp.id) || ''), 400),
+      checklist: JSON.stringify(lines), tenant_visible: false, tenant_notify_created: false, tenant_notify_updates: false, owner_notify_override: 'off' },
+    items, lines, warnings, photo_ids: Array.from(new Set(items.flatMap(i => i.photo_ids))),
+  };
+}
+// Active vendors for the picker: id, name and trade only (nothing else about a vendor leaves the Worker through this route).
+async function fiWoVendors(env) {
+  const vs = await fetchTab(env, 'Vendors');
+  return json({ ok: true, vendors: vs.filter(v => v.Active !== 'FALSE' && v.ID).map(v => ({ id: String(v.ID), name: String(v.Name || v.Company || v.ID).slice(0, 80), trade: String(v.Trade || '').slice(0, 40) })).sort((a, b) => a.name.localeCompare(b.name)) });
+}
+async function fiWoLoad(env, body) {
+  body = body || {};
+  const id = String(body.id || '');
+  if (!FI_ID_RE.test(id)) return { err: fiErr(400, 'bad_id', 'Inspection id is missing or malformed.') };
+  await fiEnsureTabs(env);
+  const { row, dupes } = await fiFindInspection(env, id);
+  if (dupes > 1) return { err: fiErr(500, 'duplicate_rows', 'Duplicate saved rows exist for this inspection; refusing to continue. Contact Brett.') };
+  if (!row) return { err: fiErr(404, 'not_found', 'Inspection not found on the server. Wait for "Saved to server" and try again.') };
+  if (Number(body.rev) !== Number(row.o.Rev)) return { err: fiErr(409, 'not_saved', 'This inspection has changes that have not finished saving. Wait for "Saved to server" and try again.', { server_rev: Number(row.o.Rev) || 0 }) };
+  let doc; try { doc = JSON.parse(fiJoinRow(row.o)); } catch (e) { return { err: fiErr(500, 'corrupt_doc', 'The saved inspection could not be read.') }; }
+  if (!doc.property || !String(doc.property.id || '').trim()) return { err: fiErr(400, 'no_property', 'Link this inspection to a Hub property first, then create work orders.') };
+  return { id, row, doc, insp: { id, date: row.o.Inspection_Date } };
+}
+async function fiWoReadJson(r) { try { return r && typeof r.json === 'function' ? await r.json() : (r && r.body) || {}; } catch (e) { return {}; } }   // silent-ok: an unreadable answer is treated as a failure by every caller
+async function fiWoPlan(env, body) {
+  const L = await fiWoLoad(env, body); if (L.err) return L.err;
+  const col0 = fiWoCollect(L.doc);
+  if (body.arrange !== undefined && body.arrange !== null && body.arrange !== '') {
+    const groups = fiWoAutoGroups(col0.items, String(body.arrange), L.doc);
+    if (!groups) return fiErr(400, 'bad_mode', 'Unknown arrangement.');
+    return json({ ok: true, arranged: true, mode: String(body.arrange), groups, convertible: col0.items.length, tray: col0.tray.length });
+  }
+  const groups = Array.isArray(L.doc.wo_groups) ? L.doc.wo_groups : [];
+  if (!groups.length) return fiErr(400, 'no_groups', 'Arrange at least one work order first.');
+  const byId = new Map(col0.items.concat(col0.tray).map(i => [i.id, i]));
+  const vendors = await fetchTab(env, 'Vendors'), pt = await fiReadFresh(env, 'FI_Photos');
+  const wt = await fetchTab(env, 'Work_Orders');
+  const vname = new Map(vendors.filter(v => v.Active !== 'FALSE').map(v => [String(v.ID), String(v.Name || v.Company || v.ID)]));
+  const have = new Set(pt.rows.filter(r => r.o.Inspection_ID === L.id && r.o.Active !== 'FALSE').map(r => r.o.ID));
+  const plan = [], top = [];
+  for (const g of groups) {
+    const b = fiWoBuildPayload(L.doc, g, byId, L.insp), w = b.warnings.slice();
+    const sref = 'fi:' + L.id + ':' + g.key, ex = wt.find(r => r.Source_Ref === sref);
+    if (!b.items.length) w.push('This work order has no items left, so it will be skipped.');
+    if ((g.issue_ids || []).length !== b.items.length) w.push('Some items in this group are no longer in the inspection.');
+    if (g.vendor_id && !vname.has(String(g.vendor_id))) w.push('The chosen vendor is not active, so no vendor will be assigned.');
+    const missingPh = b.photo_ids.filter(p => !have.has(p)).length;
+    if (missingPh) w.push(missingPh + ' photo' + (missingPh === 1 ? ' has' : 's have') + ' not finished uploading and will not be attached.');
+    if (b.photo_ids.length > FI_WO_MAX_PHOTOS) w.push('Only the first ' + FI_WO_MAX_PHOTOS + ' photos are attached.');
+    plan.push({ key: g.key, title: g.title, trade: b.payload.trade, priority: b.payload.priority, unit_id: b.payload.unit_id, description: b.payload.description, checklist: b.lines.map(l => l.t),
+      vendor_id: g.vendor_id || '', vendor_name: g.vendor_id ? (vname.get(String(g.vendor_id)) || '') : '', photo_count: Math.min(FI_WO_MAX_PHOTOS, b.photo_ids.filter(p => have.has(p)).length), existing_wo_id: (g.wo_id || (ex && ex.ID) || ''), warnings: w, skip: !b.items.length });
+  }
+  return json({ ok: true, plan, address: String(L.doc.property.address || ''), no_texts: true, will_create: plan.filter(p => !p.skip && !p.existing_wo_id).length, note: 'No texts or emails are sent. Dispatch each work order from the Hub when ready.' });
+}
+async function fiWoCreate(env, body) {
+  const L = await fiWoLoad(env, body); if (L.err) return L.err;
+  const col0 = fiWoCollect(L.doc), byId = new Map(col0.items.concat(col0.tray).map(i => [i.id, i]));
+  const groups = Array.isArray(L.doc.wo_groups) ? L.doc.wo_groups : [];
+  const onlyKeys = Array.isArray(body.keys) ? new Set(body.keys.map(String)) : null;
+  if (!groups.length) return fiErr(400, 'no_groups', 'Arrange at least one work order first.');
+  await ensureColumns(env, 'Work_Orders', ['Source_Ref']);
+  const wt0 = await fetchTab(env, 'Work_Orders'), vendors = await fetchTab(env, 'Vendors'), pt = await fiReadFresh(env, 'FI_Photos');
+  const vactive = new Set(vendors.filter(v => v.Active !== 'FALSE').map(v => String(v.ID)));
+  const prow = new Map(pt.rows.filter(r => r.o.Inspection_ID === L.id && r.o.Active !== 'FALSE').map(r => [r.o.ID, r.o]));
+  const results = [];
+  for (const g of groups) {   // one at a time, never in parallel (WO number append race, rule 219)
+    if (onlyKeys && !onlyKeys.has(g.key)) continue;
+    const sref = 'fi:' + L.id + ':' + g.key, r = { key: g.key, title: g.title, wo_id: '', status: '', warnings: [] };
+    const b = fiWoBuildPayload(L.doc, g, byId, L.insp);
+    if (!b.items.length) { r.status = 'skipped'; r.warnings.push('No items left in this group.'); results.push(r); continue; }
+    const ex = wt0.find(x => x.Source_Ref === sref);
+    if (ex) { r.wo_id = ex.ID; r.status = 'existing'; results.push(r); continue; }
+    try {
+      const cr = await fiWoReadJson(await createWorkOrder(env, b.payload));
+      if (!cr || !cr.success || !cr.id) { r.status = 'failed'; r.error = String((cr && (cr.error || cr.message)) || 'The Hub did not create the work order.').slice(0, 160); results.push(r); continue; }
+      if (cr.duplicate) { r.status = 'failed'; r.error = 'A work order with the same title was just created (' + cr.id + '). Rename this group and try again; nothing was changed on ' + cr.id + '.'; results.push(r); continue; }
+      r.wo_id = String(cr.id); r.status = 'created';
+      await updateWOFields(env, r.wo_id, { Source_Ref: sref });
+      if (g.vendor_id) {
+        if (!vactive.has(String(g.vendor_id))) r.warnings.push('The chosen vendor is not active, so none was assigned.');
+        else { const av = await assignVendor(env, { wo_id: r.wo_id, vendor_id: g.vendor_id, notify: false, notify_tenant: false }); const aj = await fiWoReadJson(av); if (!av || av.status >= 400 || (aj && aj.error)) r.warnings.push('Vendor not assigned: ' + String((aj && aj.error) || 'unknown error').slice(0, 100)); else r.vendor_assigned = true; }
+      }
+      let att = 0, lost = 0;
+      for (const p of b.photo_ids.slice(0, FI_WO_MAX_PHOTOS)) {
+        const ph = prow.get(p); if (!ph) { lost++; continue; }
+        const fid = ph.Orig_Drive_File_ID || ph.Drive_File_ID;
+        const lr = await fiWoReadJson(await logAttachment(env, { wo_id: r.wo_id, file_name: 'inspection-photo-' + (att + 1) + '.jpg', file_type: 'photo', file_id: fid, file_url: 'https://drive.google.com/file/d/' + fid + '/view', mime_type: ph.Mime || 'image/jpeg' }));
+        if (lr && lr.success) att++; else lost++;
+      }
+      r.photos = att; if (lost) r.warnings.push(lost + ' photo' + (lost === 1 ? '' : 's') + ' could not be attached.');
+    } catch (e) {
+      if (sheetsQuotaBusyError(e)) { r.status = r.wo_id ? 'created' : 'failed'; r.error = 'Google is busy. Press Create again in a minute; nothing is duplicated.'; r.warnings.push('Busy: some steps may be unfinished.'); }
+      else { r.status = r.wo_id ? 'created' : 'failed'; r.error = String((e && e.message) || e).slice(0, 160); if (r.wo_id) r.warnings.push('Created, but a later step failed: ' + r.error); }
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_wo_create_error', Skill_Or_Endpoint: '/fi/wo/create', Success: 'FALSE', Notes: (L.id + ' ' + g.key + ' ' + String((e && e.message) || e)).slice(0, 200) }); } catch (e3) { console.error('fi/wo/create telemetry failed:', e3 && e3.message); }   // silent-ok: telemetry is best-effort, the result already shows the failure
+    }
+    results.push(r);
+  }
+  // Verify (C4): one fresh read; a work order only counts as created when its Source_Ref landed.
+  const wt1 = await fetchTab(env, 'Work_Orders');
+  for (const r of results) if (r.status === 'created') { const hit = wt1.find(x => x.ID === r.wo_id && x.Source_Ref === 'fi:' + L.id + ':' + r.key); if (!hit) { r.warnings.push('Created as ' + r.wo_id + ' but its link back to this inspection did not save. Do not press Create again; tell Brett.'); r.unlinked = true; } }
+  // Record the work order numbers on the inspection (phone-only fields: this never un-publishes the report).
+  const done = results.filter(r => r.wo_id && !r.unlinked);
+  let recorded = false, recordError = '';
+  if (done.length) {
+    const doc2 = JSON.parse(JSON.stringify(L.doc)), idsOf = new Map(done.map(r => [r.key, r.wo_id])), now = new Date().toISOString();
+    for (const g of (doc2.wo_groups || [])) if (idsOf.has(g.key)) { g.wo_id = idsOf.get(g.key); g.created_at = g.created_at || now; }
+    for (const a of (doc2.areas || [])) for (const is of (a.issues || [])) for (const g of (doc2.wo_groups || [])) if (idsOf.has(g.key) && (g.issue_ids || []).includes(is.id)) { is.wo_id = g.wo_id; is.wo_group = g.key; }
+    try {
+      const sr = await fiSave(env, { id: L.id, base_rev: Number(L.row.o.Rev), doc: doc2, meta: {} }), sj = await fiWoReadJson(sr);
+      if (sj && sj.ok) { recorded = true; var newRev = sj.rev; } else recordError = String((sj && (sj.message || sj.error)) || 'The inspection could not be saved.').slice(0, 160);
+    } catch (e) { recordError = String((e && e.message) || e).slice(0, 160); }
+    if (!recorded) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_wo_record_error', Skill_Or_Endpoint: '/fi/wo/create', Success: 'FALSE', Notes: (L.id + ' ' + recordError).slice(0, 200) }); } catch (e3) { console.error('fi/wo/create telemetry failed:', e3 && e3.message); } }   // silent-ok: telemetry is best-effort, the result already shows the failure
+  }
+  const failed = results.filter(r => r.status === 'failed').length;
+  return json({ ok: true, results, created: results.filter(r => r.status === 'created').length, existing: results.filter(r => r.status === 'existing').length, failed, recorded, record_error: recordError, rev: recorded ? newRev : undefined,
+    message: failed ? failed + ' work order' + (failed === 1 ? '' : 's') + ' could not be created. Press "Try the rest again": the ones that worked are not made twice.' : (done.length && !recorded ? 'The work orders exist, but the inspection could not be updated with their numbers (' + recordError + '). Pressing Create again reuses them.' : 'Done. No texts or emails were sent.') });
+}
 // ═══ FI-BLOCK-END ═══════════════════════════════════════════════════════════════════════════════
 
 // ═══ INSB-BLOCK-START ══════════════════════════════════════════════════════

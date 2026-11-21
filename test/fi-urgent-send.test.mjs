@@ -244,7 +244,7 @@ function w0() { return world(); }
 // ── 10. wiring ──
 {
   t('route is wired', /path === '\/fi\/urgent-send'\)\s+return await fiRoute\(env, 'urgent-send', \(\) => fiUrgentSend\(env, body\)\)/.test(src));
-  t('staging write gate: only TEST- inspections', /path === '\/fi\/email-report' \|\| path === '\/fi\/urgent-send'\) return String\(\(body && body\.id\) \|\| ''\)\.startsWith\('TEST-'\)/.test(src));
+  t('staging write gate: only TEST- inspections', /path === '\/fi\/email-report' \|\| path === '\/fi\/urgent-send'(?: \|\| path === '\/fi\/wo\/(?:plan|create)')*\) return String\(\(body && body\.id\) \|\| ''\)\.startsWith\('TEST-'\)/.test(src));
   const fn = src.slice(src.indexOf('async function fiUrgentSend('), src.indexOf('// ═══ Part 2 (Oct 15 2026'));
   t('the text window is checked before any SMS call', fn.indexOf('win.open') > -1 && fn.indexOf('win.open') < fn.indexOf('await sendSMS('));
   t('the text goes only after the email succeeded', fn.indexOf('await gmailSendEmailMulti(') < fn.indexOf('await sendSMS('));
