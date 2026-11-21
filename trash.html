@@ -504,11 +504,21 @@ function loadNudge(){
 }
 
 // ── Visit sheet ──────────────────────────────────────────────
-function openVisit(pid){
+// opts.addPhotos = {week, date}: opened from an invoice preview to add photos to a visit
+// that is already logged. Same /trash/log-visit merge path (same property + same date adds
+// the photos to that visit), so the date is locked — a different date would create a
+// second, billable visit — and the extra-charge picker is hidden so nothing changes the total.
+function openVisit(pid, opts){
   var p=props.find(function(x){return x.id===pid;}); if(!p) return;
+  var ap=(opts&&opts.addPhotos)||null;
+  addPhotosFor = ap ? { property_id:pid, week:ap.week, date:ap.date } : null;
   document.getElementById('vm-prop-id').value=pid;
-  document.getElementById('vm-title').textContent='Log visit — '+p.label;
-  document.getElementById('vm-visit-date').value=todayStr();
+  document.getElementById('vm-title').textContent=(ap?'Add photos — ':'Log visit — ')+p.label+(ap?(' · '+ap.date):'');
+  var dateEl=document.getElementById('vm-visit-date');
+  dateEl.value=ap?ap.date:todayStr(); dateEl.disabled=!!ap;
+  document.getElementById('vm-extra-block').classList.toggle('hide', !!ap);
+  document.getElementById('vm-save').textContent=ap?'Save photos':'Save visit';
+  uploadsInFlight=0; updateSaveState();
   pendingPhotos=[]; pendingFolder=null; extraAmt=0;
   document.getElementById('thumbs-photos').innerHTML='';
   document.getElementById('vm-extra-custom').classList.add('hide');
