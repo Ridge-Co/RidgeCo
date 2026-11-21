@@ -105,7 +105,7 @@ Use the fake-DOM pattern from `test/trash-add-photos.test.mjs` (it runs the real
 8. Replacement attach closes the issue as replaced.
 9. WO Void → auto_closed. Un-void → open again.
 10. Vendor bill paths: 409 with an open issue, 409 with a pending intent, OK after the issue is resolved. Another vendor's or a tenant's issue does not block this vendor.
-11. Trash Send and Hub WO invoice: wait while pending, refuse on an open issue, send after it is resolved. The batch skips blocked ones and names them.
+11. Trash Send and Hub WO invoice: wait while pending; with an open issue they show it next to Send and **still send** when tapped (D9). The batch preview names properties with open issues.
 12. No IndexedDB → loud stay-on-page warning, nothing silently dropped. Same when an IndexedDB write fails (quota/full phone; simulate a rejecting put).
 13. Banner and record views show the WO number link, file name and uploader. Vendor text exists in Spanish.
 14. Attach fails after a good PUT → retry sends only `/upload/attach` with the stored file_id (no second create-upload-session or PUT).
