@@ -113,7 +113,7 @@ Use the fake-DOM pattern from `test/trash-add-photos.test.mjs` (it runs the real
 16. D3: one vendor-uploaded failure appears in **both** the Hub's open-issue list and the vendor portal's list.
 17. D5: WO set to Cancelled → `auto_closed`; reinstated → open again (same as Void, test 9).
 18. D7: no issue path calls any SMS/Twilio function (stub them and assert zero calls across tests 6–17).
-19. Gate scope: a customer invoice is blocked by a tenant's open issue on that record; a vendor bill is not blocked by it.
+19. Gate scope: a vendor bill is not blocked by a tenant's or another vendor's open issue on that WO; Brett's customer invoice is never blocked by any open issue (D9).
 20. Phase 2 backfill: rows already `failed` before Phase 2 each post exactly one issue on first load.
 21. `scripts/ui-check.mjs` passes on every page touched. The full `test/` suite stays green. `test/pre-build-gate.test.mjs` passes (each PR note has `## Pre-build gate`).
 Staging checks (Playwright, `test-verified-builds`): the scenarios under each phase's "Done when". `maintenance-hub-staging` does not auto-deploy reliably, so confirm with `/version` or the deployed source before testing (CLAUDE.md).
