@@ -598,17 +598,27 @@ function saveVisit(btn){
   var ci=document.getElementById('vm-extra-custom');
   if(!ci.classList.contains('hide')) extraAmt=Number(ci.value||0);
   var reason=document.getElementById('vm-extra-reason').value.trim();
+  if(uploadsInFlight>0){ toast('Photos still uploading — wait a moment'); return; }
+  var ap=addPhotosFor;
+  if(ap){ extraAmt=0; reason=''; }
   var allPhotos=pendingPhotos.slice();
-  var visitDate=document.getElementById('vm-visit-date').value||todayStr();
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving…';
+  if(ap && !allPhotos.length){ toast('Add at least one photo first'); return; }
+  var visitDate=ap?ap.date:(document.getElementById('vm-visit-date').value||todayStr());
+  var label=ap?'Save photos':'Save visit';
+  btn.setAttribute('data-saving','1'); btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving…';
   var body={ property_id:pid, visit_date:visitDate, photo_file_ids:allPhotos, extra_amount:extraAmt>0?extraAmt:0 };
   if(pendingFolder){ body.photo_folder_id=pendingFolder.id; body.photo_folder_url=pendingFolder.url; }
   if(extraAmt>0 && reason) body.extra_reason=reason;
   api('POST','/trash/log-visit',body).then(function(r){
-    btn.disabled=false; btn.textContent='Save visit';
-    if(r&&r.success){ closeVisit(); toast('Visit logged'+(r.merged?' (added to today)':'')); refreshWeek(); loadNudge(); }
+    btn.removeAttribute('data-saving'); btn.disabled=false; btn.textContent=label;
+    if(r&&r.success){
+      // From an invoice preview: closeVisit() reopens that same preview, now with the new photo count.
+      closeVisit();
+      toast(ap?(allPhotos.length+' photo'+(allPhotos.length>1?'s':'')+' added'):('Visit logged'+(r.merged?' (added to today)':'')));
+      refreshWeek(); loadNudge();
+    }
     else toast((r&&r.error)||'Could not save');
-  }).catch(function(e){ btn.disabled=false; btn.textContent='Save visit'; toast('Error: '+e.message); });
+  }).catch(function(e){ btn.removeAttribute('data-saving'); btn.disabled=false; btn.textContent=label; toast('Error: '+e.message); });
 }
 
 // ── Invoice preview + send ───────────────────────────────────
