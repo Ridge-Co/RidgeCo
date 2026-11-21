@@ -46844,6 +46844,7 @@ function fiClean(v, max) { return fiContractorize(fiStr(v, max)); }
 // Report-serve scrub: only AI-written text (issues flagged ai:true, suggested fixes, and the AI summary). Text the inspector typed or dictated verbatim is left untouched.
 function fiScrubDocForReport(doc) {
   if (!doc || typeof doc !== 'object') return doc;
+  delete doc.wo_groups;
   for (const a of (doc.areas || [])) if (a && Array.isArray(a.equipment)) { a.equipment = a.equipment.filter(e => fiEquipHasInfo(e)); for (const e of a.equipment) delete e.auto; }   // Nov 13 2026: an empty pre-attached card is not a finding
   for (const a of (doc.areas || [])) for (const is of (a.issues || [])) {
     if (!is) continue;
