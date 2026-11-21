@@ -240,6 +240,7 @@
       <div class="thumbs" id="thumbs-photos"></div>
     </div>
 
+    <div id="vm-extra-block">
     <label class="fld">Extra charge (bulk / furniture / cleanup)</label>
     <div class="extra-row" id="extra-row">
       <button data-amt="0" class="sel" onclick="setExtra(0,this)">None</button>
@@ -250,12 +251,13 @@
     </div>
     <input id="vm-extra-custom" class="hide" type="number" inputmode="decimal" placeholder="Extra amount $" oninput="extraAmt=Number(this.value||0)">
     <input id="vm-extra-reason" class="hide" placeholder="What was it? (e.g. mattress haul)" style="margin-top:8px">
+    </div>
 
     <div style="display:flex;gap:10px;margin-top:16px">
       <button class="btn ghost" style="flex:1" onclick="closeVisit()">Cancel</button>
       <button class="btn go" style="flex:2" id="vm-save" onclick="saveVisit(this)">Save visit</button>
     </div>
-    <p class="muted" style="margin-top:8px">Photos upload as you add them. Save when you're done.</p>
+    <p class="muted" style="margin-top:8px" id="vm-hint">Photos upload as you add them. Save when you're done.</p>
   </div>
 </div>
 
@@ -265,7 +267,7 @@
     <h2 id="im-title">Invoice preview</h2>
     <div id="im-body"><p class="muted">Loading…</p></div>
     <div style="display:flex;gap:10px;margin-top:16px">
-      <button class="btn ghost" style="flex:1" onclick="closeInv()">Close</button>
+      <button class="btn ghost" style="flex:1" onclick="closeInv()">Back</button>
       <button class="btn primary hide" style="flex:2" id="im-send" onclick="sendInvoice(this)">Send invoice</button>
     </div>
   </div>
@@ -281,6 +283,8 @@ var props = [];                              // trash properties
 var pendingPhotos = [];                       // uploaded Drive file ids for the open visit
 var pendingFolder = null;                     // {id,url} reused across a visit's uploads
 var extraAmt = 0;
+var uploadsInFlight = 0;                      // photos still uploading — Save waits for these
+var addPhotosFor = null;                      // {property_id, week, date} when the visit sheet was opened from an invoice preview
 var curInvoice = null;                        // {property_id, week} for the send step
 
 function api(method, path, body){
@@ -500,11 +504,21 @@ function loadNudge(){
 }
 
 // ── Visit sheet ──────────────────────────────────────────────
-function openVisit(pid){
+// opts.addPhotos = {week, date}: opened from an invoice preview to add photos to a visit
+// that is already logged. Same /trash/log-visit merge path (same property + same date adds
+// the photos to that visit), so the date is locked — a different date would create a
+// second, billable visit — and the extra-charge picker is hidden so nothing changes the total.
+function openVisit(pid, opts){
   var p=props.find(function(x){return x.id===pid;}); if(!p) return;
+  var ap=(opts&&opts.addPhotos)||null;
+  addPhotosFor = ap ? { property_id:pid, week:ap.week, date:ap.date } : null;
   document.getElementById('vm-prop-id').value=pid;
-  document.getElementById('vm-title').textContent='Log visit — '+p.label;
-  document.getElementById('vm-visit-date').value=todayStr();
+  document.getElementById('vm-title').textContent=(ap?'Add photos — ':'Log visit — ')+p.label+(ap?(' · '+ap.date):'');
+  var dateEl=document.getElementById('vm-visit-date');
+  dateEl.value=ap?ap.date:todayStr(); dateEl.disabled=!!ap;
+  document.getElementById('vm-extra-block').classList.toggle('hide', !!ap);
+  document.getElementById('vm-save').textContent=ap?'Save photos':'Save visit';
+  uploadsInFlight=0; updateSaveState();
   pendingPhotos=[]; pendingFolder=null; extraAmt=0;
   document.getElementById('thumbs-photos').innerHTML='';
   document.getElementById('vm-extra-custom').classList.add('hide');
@@ -513,7 +527,26 @@ function openVisit(pid){
   Array.prototype.forEach.call(document.querySelectorAll('#extra-row button'),function(b){ b.classList.toggle('sel', b.getAttribute('data-amt')==='0'); });
   document.getElementById('visit-modal').classList.add('open');
 }
-function closeVisit(){ document.getElementById('visit-modal').classList.remove('open'); }
+function closeVisit(){
+  document.getElementById('visit-modal').classList.remove('open');
+  // Cancel from "Add photos" goes back to the same invoice preview instead of dropping Brett on the list.
+  var back=addPhotosFor; addPhotosFor=null;
+  if(back) previewInvoice(back.property_id, back.week);
+}
+// Save stays locked while any photo is still uploading — saving early is how a visit ended
+// up with no photos and an invoice that could only be sent bare.
+function updateSaveState(){
+  var btn=document.getElementById('vm-save'), hint=document.getElementById('vm-hint');
+  if(!btn) return;
+  var label=addPhotosFor?'Save photos':'Save visit';
+  if(uploadsInFlight>0){
+    btn.disabled=true; btn.innerHTML='<span class="spin"></span> Uploading '+uploadsInFlight+' photo'+(uploadsInFlight>1?'s':'')+'…';
+    hint.textContent='Wait for the photos to finish uploading, then save.';
+  } else if(!btn.getAttribute('data-saving')){
+    btn.disabled=false; btn.textContent=label;
+    hint.textContent=addPhotosFor?'Adds these photos to the visit already logged. The price does not change.':'Photos upload as you add them. Save when you\'re done.';
+  }
+}
 
 function setExtra(amt,btn){
   extraAmt=amt;
@@ -539,19 +572,23 @@ function pickPhotos(input){
   files.forEach(function(file){
     var chip=document.createElement('span'); chip.className='thumb'; chip.innerHTML='<span class="spin"></span> '+esc(file.name.slice(0,14));
     cont.appendChild(chip);
+    uploadsInFlight++; updateSaveState();
+    var settled=false;
+    var done=function(){ if(settled) return; settled=true; uploadsInFlight=Math.max(0,uploadsInFlight-1); updateSaveState(); };
     var reqBody={ wo_id:'TRASH-'+pid, property:p.label, file_name:file.name, file_type:'photo', mime_type:file.type||'application/octet-stream', origin:window.location.origin };
     if(pendingFolder){ reqBody.folder_id=pendingFolder.id; reqBody.folder_url=pendingFolder.url; }
     api('POST','/create-upload-session',reqBody).then(function(res){
-      if(!res.success||!res.upload_url){ chip.innerHTML='⚠ '+esc(res.error||'session failed'); return; }
+      if(!res.success||!res.upload_url){ chip.innerHTML='⚠ '+esc(res.error||'session failed'); done(); return; }
       pendingFolder={ id:res.wo_folder_id, url:res.wo_folder_url };
       return fetch(res.upload_url,{ method:'PUT', headers:{'Content-Type':file.type||'application/octet-stream'}, body:file })
         .then(function(r){ return r.json(); })
         .then(function(fd){
-          if(!fd||!fd.id){ chip.innerHTML='⚠ upload failed'; return; }
+          if(!fd||!fd.id){ chip.innerHTML='⚠ upload failed'; done(); return; }
           pendingPhotos.push(fd.id);
           chip.innerHTML='📷 '+esc(file.name.slice(0,14));
+          done();
         });
-    }).catch(function(e){ chip.innerHTML='⚠ '+esc(e.message||'error'); });
+    }).catch(function(e){ chip.innerHTML='⚠ '+esc(e.message||'error'); done(); });
   });
   input.value='';
 }
@@ -561,17 +598,27 @@ function saveVisit(btn){
   var ci=document.getElementById('vm-extra-custom');
   if(!ci.classList.contains('hide')) extraAmt=Number(ci.value||0);
   var reason=document.getElementById('vm-extra-reason').value.trim();
+  if(uploadsInFlight>0){ toast('Photos still uploading — wait a moment'); return; }
+  var ap=addPhotosFor;
+  if(ap){ extraAmt=0; reason=''; }
   var allPhotos=pendingPhotos.slice();
-  var visitDate=document.getElementById('vm-visit-date').value||todayStr();
-  btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving…';
+  if(ap && !allPhotos.length){ toast('Add at least one photo first'); return; }
+  var visitDate=ap?ap.date:(document.getElementById('vm-visit-date').value||todayStr());
+  var label=ap?'Save photos':'Save visit';
+  btn.setAttribute('data-saving','1'); btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving…';
   var body={ property_id:pid, visit_date:visitDate, photo_file_ids:allPhotos, extra_amount:extraAmt>0?extraAmt:0 };
   if(pendingFolder){ body.photo_folder_id=pendingFolder.id; body.photo_folder_url=pendingFolder.url; }
   if(extraAmt>0 && reason) body.extra_reason=reason;
   api('POST','/trash/log-visit',body).then(function(r){
-    btn.disabled=false; btn.textContent='Save visit';
-    if(r&&r.success){ closeVisit(); toast('Visit logged'+(r.merged?' (added to today)':'')); refreshWeek(); loadNudge(); }
+    btn.removeAttribute('data-saving'); btn.disabled=false; btn.textContent=label;
+    if(r&&r.success){
+      // From an invoice preview: closeVisit() reopens that same preview, now with the new photo count.
+      closeVisit();
+      toast(ap?(allPhotos.length+' photo'+(allPhotos.length>1?'s':'')+' added'):('Visit logged'+(r.merged?' (added to today)':'')));
+      refreshWeek(); loadNudge();
+    }
     else toast((r&&r.error)||'Could not save');
-  }).catch(function(e){ btn.disabled=false; btn.textContent='Save visit'; toast('Error: '+e.message); });
+  }).catch(function(e){ btn.removeAttribute('data-saving'); btn.disabled=false; btn.textContent=label; toast('Error: '+e.message); });
 }
 
 // ── Invoice preview + send ───────────────────────────────────
@@ -591,6 +638,14 @@ function previewInvoice(pid, week){
     html+='</div><div class="total">Total '+money(p.total)+'</div>';
     html+='<div class="muted" style="margin-top:6px">'+p.attach_photos+' photo(s) will attach.</div>';
     if(p.warnings&&p.warnings.length) html+='<div class="warn">⚠ '+p.warnings.map(esc).join('<br>⚠ ')+'</div>';
+    // Fix the photos here before sending — nothing is in QuickBooks until Send is tapped.
+    html+='<div style="margin-top:12px"><b>Photos by visit</b></div>';
+    (p.visits||[]).forEach(function(v){
+      var n=Number(v.photos||0);
+      html+='<div class="line" style="align-items:center"><span>'+esc(v.date)+' · '+(n?('📷 '+n+' photo'+(n>1?'s':'')):'<span class="warn">no photos</span>')+'</span>'
+          + '<button class="btn" style="padding:6px 10px" onclick="addPhotosFromPreview(\''+esc(pid)+'\',\''+esc(week)+'\',\''+esc(v.date)+'\')">📷 Add photos</button></div>';
+    });
+    html+='<div class="muted" style="margin-top:8px">Nothing has been sent yet. Back keeps everything as is.</div>';
     document.getElementById('im-body').innerHTML=html;
     var sendBtn=document.getElementById('im-send');
     sendBtn.classList.remove('hide'); sendBtn.textContent='Send '+money(p.total);
@@ -613,6 +668,10 @@ function sendInvoice(btn){
   }).catch(function(e){ btn.disabled=false; btn.textContent='Send invoice'; toast('Error: '+e.message); });
 }
 function closeInv(){ document.getElementById('inv-modal').classList.remove('open'); curInvoice=null; curBatch=null; }
+function addPhotosFromPreview(pid, week, date){
+  closeInv();
+  openVisit(pid, { addPhotos:{ week:week, date:date } });
+}
 
 // ── Add property ─────────────────────────────────────────────
 function toggleAdd(){
