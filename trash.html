@@ -668,6 +668,10 @@ function sendInvoice(btn){
   }).catch(function(e){ btn.disabled=false; btn.textContent='Send invoice'; toast('Error: '+e.message); });
 }
 function closeInv(){ document.getElementById('inv-modal').classList.remove('open'); curInvoice=null; curBatch=null; }
+function addPhotosFromPreview(pid, week, date){
+  closeInv();
+  openVisit(pid, { addPhotos:{ week:week, date:date } });
+}
 
 // ── Add property ─────────────────────────────────────────────
 function toggleAdd(){
