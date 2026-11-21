@@ -49142,7 +49142,7 @@ async function fiWoCreate(env, body) {
       const sr = await fiSave(env, { id: L.id, base_rev: Number(L.row.o.Rev), doc: doc2, meta: {} }), sj = await fiWoReadJson(sr);
       if (sj && sj.ok) { recorded = true; var newRev = sj.rev; } else recordError = String((sj && (sj.message || sj.error)) || 'The inspection could not be saved.').slice(0, 160);
     } catch (e) { recordError = String((e && e.message) || e).slice(0, 160); }
-    if (!recorded) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_wo_record_error', Skill_Or_Endpoint: '/fi/wo/create', Success: 'FALSE', Notes: (L.id + ' ' + recordError).slice(0, 200) }); } catch (e3) { console.error('fi/wo/create telemetry failed:', e3 && e3.message); } }
+    if (!recorded) { try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_wo_record_error', Skill_Or_Endpoint: '/fi/wo/create', Success: 'FALSE', Notes: (L.id + ' ' + recordError).slice(0, 200) }); } catch (e3) { console.error('fi/wo/create telemetry failed:', e3 && e3.message); } }   // silent-ok: telemetry is best-effort, the result already shows the failure
   }
   const failed = results.filter(r => r.status === 'failed').length;
   return json({ ok: true, results, created: results.filter(r => r.status === 'created').length, existing: results.filter(r => r.status === 'existing').length, failed, recorded, record_error: recordError, rev: recorded ? newRev : undefined,
