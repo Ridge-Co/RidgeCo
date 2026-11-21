@@ -1024,6 +1024,7 @@ const _hubWorkerCore = {
         if (path === '/turnover/start')           return await startTurnoverManual(env, body);
         if (path === '/tenant/schedule-move-out') return await scheduleMoveOutWithTurnover(env, body);
         if (path === '/schedule')                 return await scheduleWO(env, body);
+        if (path === '/wo/en-route')              return await woEnRoute(env, body);   // queue #131: one-tap 'On my way' (admin, or the assigned vendor)
         if (path === '/owner/notifications')      return await saveOwnerNotifications(env, body);
         if (path === '/owner-user/add')           return await addRow(env, 'Owner_Users', body);
         if (path === '/owner-user/update')        return await updateRow(env, 'Owner_Users', body.id, body.fields);
@@ -2890,7 +2891,7 @@ async function ownerWriteScopeDenied(env, path, body, ownerId) {
 // Every refusal is a 4xx with a plain reason (English / Spanish, the portal shows it as is) plus a FAILED Ops_Telemetry row
 // (`vendor_write_scope_denied`) - never silent. Routes that check the vendor themselves are left alone: additional work,
 // /vendor-task-request/mark-done, /vendor/update-contact, bill-with-no-job, self-serve work orders, property-access requests.
-const VENDOR_WO_WRITE_PATHS = ['/estimate', '/status', '/wo/checklist', '/schedule', '/time-entry/add', '/receipt/add', '/vendor-bill/add'];   // a work order is REQUIRED
+const VENDOR_WO_WRITE_PATHS = ['/estimate', '/status', '/wo/checklist', '/schedule', '/wo/en-route', '/time-entry/add', '/receipt/add', '/vendor-bill/add'];   // a work order is REQUIRED
 const VENDOR_WO_OPTIONAL_PATHS = ['/upload-photo', '/create-upload-session', '/log-attachment', '/vendor-bill/reconcile-receipts'];          // checked when a work order is named
 const VENDOR_OWN_ROW_DELETE_PATHS = { '/time-entry/delete': { tab: 'Time_Entries', by: 'Entered_By_ID', what: 'time entry' }, '/receipt/delete': { tab: 'Receipts', by: 'Added_By_ID', what: 'receipt' } };
 const VENDOR_NOT_YOURS_MSG = 'This work order is not assigned to you, so nothing was saved. Contact Ridge Co if this is a mistake. / Esta orden de trabajo no está asignada a usted, así que no se guardó nada. Comuníquese con Ridge Co si es un error.';
@@ -2930,8 +2931,8 @@ async function vendorWriteScopeDenied(env, path, body, vendorId) {
   // The identity is the session's, never the client's: no bill "from" another vendor, no status change "as admin".
   if (b.Vendor_ID !== undefined && b.Vendor_ID !== null && b.Vendor_ID !== '' && String(b.Vendor_ID) !== sid) return await vendorWriteDeny(env, path, sid, 403, 'Forbidden', `sent Vendor_ID=${String(b.Vendor_ID).slice(0, 40)}`);
   if (path === '/vendor-bill/add') { b.Vendor_ID = sid; if (String(b.Entered_By || '').toLowerCase() === 'hub') delete b.Entered_By; }   // 'hub' is how the Hub marks its own bills (it skips the vendor checklist gate); a vendor session cannot claim it
-  if (path === '/estimate' || path === '/status' || path === '/schedule') b.vendor_id = sid;
-  if (path === '/status' || path === '/schedule' || path === '/wo/checklist') b.updated_by_role = 'vendor';
+  if (path === '/estimate' || path === '/status' || path === '/schedule' || path === '/wo/en-route') b.vendor_id = sid;
+  if (path === '/status' || path === '/schedule' || path === '/wo/checklist' || path === '/wo/en-route') b.updated_by_role = 'vendor';
   if (path === '/time-entry/add') { b.role = 'vendor'; b.entered_by_id = sid; }
   if (path === '/receipt/add') { b.role = 'vendor'; b.added_by_id = sid; }
   return null;
@@ -16897,7 +16898,7 @@ async function scheduleWO(env, body) {
   await logWOAudit(env,body.wo_id,body.updated_by||'admin',body.updated_by_role||'admin','Scheduled',wo.Scheduled_Date||'',schedDate+' '+(body.window||''),isWithinHour?'On my way notification':'Appointment scheduled');
   // Vendor nudge clock reset (Sep 14 2026) — a vendor setting a schedule is real activity.
   if (body.updated_by_role === 'vendor') { await resetVendorNudgeClock(env, body.wo_id, body.vendor_id || wo.Vendor_ID); }
-  let tenantSMSSent=false, notifyQueued=false;
+  let tenantSMSSent=false, notifyQueued=false; const tenantResults=[]; // queue #131: one line per tenant so the one-tap 'On my way' screen can say what really happened
   const [units,tenants,properties,owners]=await fetchTabs(env, ['Units','Tenants','Properties','Owners']);
   const unit=units.find(u=>u.ID===wo.Unit_ID), property=properties.find(p=>p.ID===wo.Property_ID);
   const owner=property?owners.find(o=>o.ID===property.Owner_ID):null;
@@ -16920,10 +16921,12 @@ async function scheduleWO(env, body) {
       if(schedDate===today||isWithinHour){
         const r = await smsGatedSend(env, { wo_id: body.wo_id, message_type: 'tenant_job_scheduled', recipient_type: 'tenant', tenant, owner, property, message_body: msg });
         if (r.sent) tenantSMSSent = true;
+        tenantResults.push({ first: tenant.First_Name || '', sent: !!r.sent, why: r.sent ? '' : String(r.suppress_reason || r.reason || r.gate_snapshot || 'held by the text gate').slice(0, 200) });
       } else {
         let sendAfter;if(schedDate===tomorrowStr){sendAfter=new Date(now.getTime()+3600000).toISOString();}else{const fivePM=new Date(now);fivePM.setUTCHours(21,0,0,0);if(now<fivePM){sendAfter=fivePM.toISOString();}else{const eightAM=new Date(tomorrow);eightAM.setUTCHours(13,0,0,0);sendAfter=eightAM.toISOString();}}
         await queueNotification(env,body.wo_id,'tenant_schedule',tenant.Phone,msg,sendAfter,{ message_type: 'tenant_job_scheduled', recipient_type: 'tenant', recipient_id: tenant.ID, property_id: property ? property.ID : '' });
         notifyQueued=true;
+        tenantResults.push({ first: tenant.First_Name || '', sent: false, why: 'queued for a reasonable hour' });
       }
     }
     }
@@ -16938,7 +16941,7 @@ async function scheduleWO(env, body) {
   // the tenant toggle happens to be on) and independent of isWithinHour (Brett's own event set
   // — Received/Scheduled/Complete/On_Hold — doesn't have a distinct "technician en route" tier).
   let ownerSMSSent=false;
-  if (property && owner?.Phone) {
+  if (property && owner?.Phone && !body.skip_owner) { // queue #131: the one-tap 'On my way' must not text the owner a second 'scheduled' message
     const notify = await shouldNotifyOwner(env, wo, 'Scheduled');
     if (notify) {
       const dateStr = new Date(schedDate+'T12:00:00').toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});
@@ -16949,7 +16952,57 @@ async function scheduleWO(env, body) {
     }
   }
   try { await logTelemetry(env, { Source:'worker', Job_Type:'wo_schedule', Skill_Or_Endpoint:'/schedule', Success:'TRUE', Latency_ms: Date.now()-_t0, Notes:`window=${body.window||''} new_status=${updates.Status||wo.Status||''}` }); } catch(_){} // silent-ok: telemetry is best effort, a logging miss must not fail the request
-  return json({success:true,tenant_sms:tenantSMSSent,notify_queued:notifyQueued,owner_sms:ownerSMSSent,new_status:updates.Status||wo.Status});
+  return json({success:true,tenant_sms:tenantSMSSent,notify_queued:notifyQueued,owner_sms:ownerSMSSent,new_status:updates.Status||wo.Status,tenant_results:tenantResults});
+}
+
+// ── ONE-TAP "ON MY WAY" (queue #131, Phase 1 of 3) ───────────────────────────
+// POST /wo/en-route {wo_id, dry_run?}. Admin, or the vendor the work order is assigned to (vendorWriteScopeDenied already
+// proved that and put the session's vendor id in the body). There is NO second sender: this calls scheduleWO with today +
+// "Within 1 hour", so the text goes through smsGatedSend (kill switch, SMS_Enabled, opt-out, quiet hours, test mode,
+// duplicate refusal) exactly like picking that window in the Schedule box. A second tap inside 60 minutes sends nothing.
+const EN_ROUTE_REPEAT_MIN = 60;
+const EN_ROUTE_COLS = ['En_Route_Sent_At'];
+// PURE. Is this status one a technician can still be on the way to? Done, paid, cancelled and void jobs are not.
+function enRouteStatusOk(status) {
+  return !WOStatus.inSet('CLOSED_FINAL', status) && !WOStatus.inSet('DONE_THROUGH_PAID', status) && !WOStatus.inSet('DEAD', status);
+}
+// PURE. Minutes since an ISO stamp, or null when blank / unreadable.
+function enRouteMinutesSince(iso, nowMs) {
+  const t = Date.parse(String(iso || ''));
+  return isFinite(t) ? Math.floor((nowMs - t) / 60000) : null;
+}
+async function woEnRoute(env, body) {
+  const woId = String((body && body.wo_id) || '').trim();
+  if (!woId) return json({ error: 'wo_id required' }, 400);
+  try { await ensureColumns(env, 'Work_Orders', EN_ROUTE_COLS); } catch (e) { return json({ error: 'Could not prepare the work order sheet, nothing was sent: ' + String((e && e.message) || e).slice(0, 160), code: 'en_route_columns' }, 500); }
+  const wos = await fetchTab(env, 'Work_Orders');
+  const wo = wos.find(w => String(w.ID) === woId);
+  if (!wo) return json({ error: 'WO not found' }, 404);
+  if (!enRouteStatusOk(wo.Status)) return json({ error: 'This job is ' + String(wo.Status || 'closed') + ', so no on-the-way text was sent.', code: 'en_route_closed' }, 409);
+  const ago = enRouteMinutesSince(wo.En_Route_Sent_At, Date.now());
+  if (ago !== null && ago >= 0 && ago < EN_ROUTE_REPEAT_MIN) return json({ error: 'The on-the-way text was already sent ' + ago + ' minute' + (ago === 1 ? '' : 's') + ' ago. Nothing new was sent.', code: 'en_route_repeat', minutes_ago: ago }, 409);
+  const [units, tenants, properties] = await fetchTabs(env, ['Units', 'Tenants', 'Properties']);
+  const unit = units.find(u => u.ID === wo.Unit_ID), property = properties.find(p => p.ID === wo.Property_ID);
+  const address = property ? property.Address + (unit && unit.Unit_Label ? ' ' + formatUnitLabel(unit.Unit_Label) : '') : 'your address';
+  const people = tenantsForDispatch(tenants, unit, wo).filter(t => isTenantNotifiable(t, wo));
+  const sample = SMS_MSG.tenantJobScheduled({ first: (people[0] && people[0].First_Name) || 'there', label: woJobLabel(wo), address, dateStr: '', window: 'Within 1 hour', woId, withinHour: true });
+  if (body.dry_run) return json({ ok: true, dry_run: true, text: sample, recipients: people.map(t => t.First_Name || 'Tenant'), tenant_notify_off: wo.Tenant_Notify_Updates === 'FALSE' });
+  if (!people.length || wo.Tenant_Notify_Updates === 'FALSE') return json({ success: true, sent: false, tenant_results: [], note: wo.Tenant_Notify_Updates === 'FALSE' ? 'Tenant texts are turned off for this job. Nobody was texted.' : 'No tenant on this job can be texted (no phone, moved out, or background job). Nobody was texted.' });
+  // Claim BEFORE sending: stamp, re-read, and only then text (a failed write sends nothing, and a double tap finds the stamp).
+  const stamp = new Date().toISOString();
+  await updateWOFields(env, woId, { En_Route_Sent_At: stamp });
+  const back = (await fetchTab(env, 'Work_Orders')).find(w => String(w.ID) === woId);
+  if (!back || back.En_Route_Sent_At !== stamp) {
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'wo_en_route_claim', ref: 'WO ' + woId, severity: 'P1', message: 'the on-the-way stamp did not save, so no text was sent' });
+    return json({ error: 'Could not save the on-the-way stamp, so nothing was sent. Try again.', code: 'en_route_claim' }, 500);
+  }
+  const res = await scheduleWO(env, { wo_id: woId, window: 'Within 1 hour', notify_tenant: true, skip_owner: true, vendor_id: body.vendor_id, updated_by: body.updated_by || (body.updated_by_role === 'vendor' ? 'Vendor' : 'Admin'), updated_by_role: body.updated_by_role || 'admin' });
+  let out = null; try { out = await res.json(); } catch (e) { out = null; }
+  if (!out || !out.success) {
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'wo_en_route_send', ref: 'WO ' + woId, severity: 'P1', message: 'the on-the-way text step failed: ' + String((out && out.error) || 'no answer').slice(0, 160) });
+    return json({ error: (out && out.error) || 'The text step did not answer. Try again.', code: 'en_route_send' }, 500);
+  }
+  return json({ success: true, sent: !!out.tenant_sms, tenant_results: out.tenant_results || [], new_status: out.new_status });
 }
 
 // Notification_Queue — a send-TIMING defer (day-before-5pm / day-of-8am cutoff so a schedule
@@ -29936,7 +29989,7 @@ async function smsGatePreviewHandler(env, url) {
 }
 
 const ROLE_SCOPES = {
-  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact','/vendor-task-requests','/vendor-task-request/mark-done',
+  vendor: ['/vendor-by-pin','/vendor-workorders','/vendor-bills','/vendor-bill/add','/vendor-bill/extract','/vendor-bill/reconcile-receipts','/receipts','/receipt/add','/receipt/delete','/time-entries','/time-entry/add','/time-entry/delete','/status','/wo/checklist','/upload-photo','/wishlist/add','/schedule','/wo/en-route','/attachments','/create-upload-session','/estimate','/estimates','/log-attachment','/nearby-wos','/vendor-file/view','/vendor/update-contact','/vendor-task-requests','/vendor-task-request/mark-done',
     // Vendor Additional Work (Sep 30 2026): ownership of the parent / child WO is re-checked server-side in each handler.
     '/wo/additional-work','/wo/additional-work/start','/wo/additional-work/submit','/wo/additional-work/withdraw',
     // Vendor Standalone Billing + Self-Serve Work Orders (Sep 24 2026 build brief §2-4):
@@ -31587,7 +31640,7 @@ async function hubTestWriteAllowed(env, path, body) {
     if (!wo) return false;
     return await isTestRecord(env, 'Properties', wo.Property_ID);
   }
-  if (path === '/schedule') {
+  if (path === '/schedule' || path === '/wo/en-route') {
     // Same gate as /status: /schedule only ever touches an existing Work_Orders row (never
     // creates one), so the only thing to check is that the WO it's targeting is itself a
     // TEST- record via its linked Property.
