@@ -2004,6 +2004,188 @@ function renderUrgentResult(r, n){
   openSheet(h);
 }
 
+// ---- queue #261 (Nov 20 2026): Create work orders from inspection findings. Nothing is created until he confirms; nothing is texted or emailed. ----
+function woState(){ if (!S.wo) S.wo = { vendors:null, vendErr:'', busy:'', err:'', sel:{}, plan:null, result:null }; return S.wo; }
+function woGroups(doc){ return doc.wo_groups || []; }
+function woItems(doc){
+  var out = { items:[], tray:[] };
+  (doc.areas||[]).forEach(function(a){ (a.issues||[]).forEach(function(is){
+    var it = { id:is.id, area:a.name||'', title:is.title||'', sev:is.severity, trade:is.trade, wo_id:is.wo_id||'', np:(is.photo_ids||[]).length, flagged:!!is.wo };
+    if (a.excluded || is.trade==='tenant_action' || is.tenant_action){ it.why = a.excluded ? 'Area is left out of the report' : 'Tenant action'; out.tray.push(it); } else out.items.push(it);
+  }); });
+  var f = out.items.filter(function(i){ return i.flagged; }), r = out.items.filter(function(i){ return !i.flagged; });
+  out.items = f.concat(r); return out;
+}
+function woGroupOf(doc, id){ var g = woGroups(doc); for (var i=0;i<g.length;i++) if (g[i].issue_ids.indexOf(id)>=0) return g[i]; return null; }
+function woNewKey(doc){ var n = 1, used = {}; woGroups(doc).forEach(function(g){ used[g.key]=1; }); while (used['g'+n]) n++; return 'g'+n; }
+function woUniqueTitle(doc, t, skipKey){
+  t = String(t||'Work order').slice(0,110); var used = {}; woGroups(doc).forEach(function(g){ if (g.key!==skipKey) used[String(g.title||'').toLowerCase()] = 1; });
+  var out = t, n = 1; while (used[out.toLowerCase()]){ n++; out = t+' ('+n+')'; } return out;
+}
+function openWo(){
+  stopDictation(); var w = woState(); w.err=''; w.sel={}; w.plan=null; w.result=null; S.view='wo'; render();
+  if (!w.vendors){ api('GET','/fi/wo/vendors').then(function(r){ w.vendors = r.vendors||[]; w.vendErr=''; if (S.view==='wo') safeRender(); }).catch(function(e){ w.vendErr = e.message; if (S.view==='wo') safeRender(); }); }
+}
+function woBack(){ S.view='review'; render(); }
+function viewWo(){
+  var rec = S.rec, doc = rec.doc, w = woState(), data = woItems(doc), groups = woGroups(doc);
+  var h = '<div class="row"><button class="btn sm ghost" onclick="woBack()">‹ Review</button>'+(rec.status==='published'?'<span class="pill ok">Published</span>':'<span class="pill">Draft</span>')+'</div><h1>Work orders</h1>';
+  h += '<div class="muted">Nothing is created until you confirm at the end, and no texts or emails go to anyone. Pick how to start, then move items around as you like.</div>';
+  if (!doc.property || !doc.property.id){ h += '<div class="banner warn" id="wo-noprop" style="margin-top:10px">Link this inspection to a Hub property first (on the Review screen), then come back.</div>'; return h; }
+  if (!rec.base_rev) h += '<div class="banner info" id="wo-wait" style="margin-top:10px">This inspection has not been saved to the server yet. The buttons below work once it shows “Saved to server”.</div>';
+  if (w.err) h += '<div class="banner err" id="wo-err" style="margin-top:10px">'+esc(w.err)+' <button class="btn sm" onclick="woState().err=\'\';render()">Dismiss</button></div>';
+  if (w.vendErr) h += '<div class="banner warn" id="wo-venderr" style="margin-top:10px">Could not load vendors: '+esc(w.vendErr)+' <button class="btn sm" onclick="woState().vendErr=\'\';openWo()">Retry</button></div>';
+  if (!data.items.length && !data.tray.length){ h += '<div class="card" id="wo-empty" style="margin-top:10px">This inspection has no issues to convert.</div>'; return h; }
+  var ready = !!rec.base_rev, busy = !!w.busy;   // the arrange / review buttons save first (urgentEnsureSaved), so a pending save does not lock them
+  h += '<div class="seg" id="wo-arrange" style="margin-top:10px">'
+    +'<button id="wo-one" onclick="woArrange(\'one\')"'+((ready&&!busy)?'':' disabled')+'>All on one work order</button>'
+    +'<button id="wo-rel" onclick="woArrange(\'related\')"'+((ready&&!busy)?'':' disabled')+'>Related items together</button>'
+    +'<button id="wo-pick" onclick="woArrange(\'pick\')"'+((ready&&!busy)?'':' disabled')+'>I’ll pick</button></div>';
+  if (w.busy) h += '<div class="banner info" id="wo-busy">'+esc(w.busy)+'</div>';
+  var grouped = 0; data.items.forEach(function(i){ if (woGroupOf(doc,i.id)) grouped++; });
+  h += '<div class="muted" id="wo-count" style="margin:6px 0">'+data.items.length+' item'+(data.items.length===1?'':'s')+': '+grouped+' on a work order, '+(data.items.length-grouped)+' not yet.</div>';
+  var byId = {}; data.items.concat(data.tray).forEach(function(i){ byId[i.id]=i; });
+  groups.forEach(function(g){
+    var made = !!g.wo_id;
+    h += '<div class="card wo-group" data-key="'+esc(g.key)+'">';
+    h += '<div class="row"><b>'+(made?esc(g.title):'Work order')+'</b>'+(made?'<a class="pill ok" target="_blank" rel="noopener" href="'+esc(S.reportBase)+'/index.html?wo='+encodeURIComponent(g.wo_id)+'">'+esc(g.wo_id)+' ›</a>':'<span class="pill new">Draft</span>')+'</div>';
+    if (!made){
+      h += '<label class="fld">Title</label><input aria-label="Work order title" maxlength="110" value="'+esc(g.title)+'" onchange="woSetTitle(\''+esc(g.key)+'\',this.value)">';
+      h += '<label class="fld">Vendor (optional)</label><select aria-label="Vendor" onchange="woSetVendor(\''+esc(g.key)+'\',this.value)"><option value="">No vendor yet</option>'+(w.vendors||[]).map(function(v){ return '<option value="'+esc(v.id)+'"'+(g.vendor_id===v.id?' selected':'')+'>'+esc(v.name)+(v.trade?' · '+esc(v.trade):'')+'</option>'; }).join('')+'</select>';
+    } else h += '<div class="muted">Created. Editing a created work order comes in a later update.</div>';
+    g.issue_ids.forEach(function(id){ var it = byId[id]; if (!it) return; h += woItemRow(it, g.key, made); });
+    if (!g.issue_ids.length) h += '<div class="muted">No items yet. Use “Add to…” on an item below.</div>';
+    if (!made) h += '<div class="btns"><button class="btn sm danger" onclick="woDeleteGroup(\''+esc(g.key)+'\')">Remove this work order</button></div>';
+    h += '</div>';
+  });
+  var free = data.items.filter(function(i){ return !woGroupOf(doc,i.id); });
+  h += '<div class="card" id="wo-free"><b>Not yet on a work order</b>';
+  if (!free.length) h += '<div class="muted">Every item is on a work order.</div>';
+  free.forEach(function(it){ h += woItemRow(it, '', false); });
+  h += '</div>';
+  if (data.tray.length){
+    h += '<details class="card" id="wo-tray"><summary><b>Not converting ('+data.tray.length+')</b></summary><div class="muted">Tenant actions and areas left out of the report. You can still add one by hand.</div>';
+    data.tray.forEach(function(it){ var g = woGroupOf(doc,it.id); h += woItemRow(it, g?g.key:'', !!(g&&g.wo_id), it.why); });
+    h += '</details>';
+  }
+  var nSel = Object.keys(w.sel).filter(function(k){ return w.sel[k]; }).length;
+  if (nSel) h += '<div class="card" id="wo-selbar"><div class="row"><b>'+nSel+' selected</b><span><button class="btn sm primary" onclick="woPickTarget(null)">Move selected…</button> <button class="btn sm ghost" onclick="woState().sel={};render()">Clear</button></span></div></div>';
+  var nDraft = groups.filter(function(g){ return !g.wo_id && g.issue_ids.length; }).length;
+  h += '<div style="position:sticky;bottom:60px;padding:8px 0;background:var(--bg)"><button class="btn go block" id="wo-review" style="min-height:52px" onclick="woPlan()"'+((ready&&!busy&&nDraft)?'':' disabled')+'>'+(nDraft?'Review '+nDraft+' work order'+(nDraft===1?'':'s'):(groups.length?'Nothing left to create':'Arrange work orders first'))+'</button></div>';
+  return h;
+}
+function woItemRow(it, gkey, locked, note){
+  var w = woState();
+  return '<div class="issue '+esc(it.sev)+'" style="cursor:default"><div class="row"><label style="display:flex;gap:10px;align-items:flex-start;flex:1;min-width:0">'
+    +(locked?'':'<input type="checkbox" style="width:24px;min-width:24px;height:24px;margin-top:2px" aria-label="Select '+esc(it.title)+'"'+(w.sel[it.id]?' checked':'')+' onchange="woToggleSel(\''+esc(it.id)+'\',this.checked)">')
+    +'<span style="min-width:0"><span class="t">'+esc(it.title)+'</span><span class="f" style="display:block">'+esc(it.area)+' · '+esc(SEV_LABEL[it.sev]||'')+' · '+esc(TRADE_LABEL[it.trade]||it.trade)+(it.np?' · 📷 '+it.np:'')+(note?' · '+esc(note):'')+'</span></span></label>'
+    +(locked?'<span class="pill ok">'+esc(it.wo_id||'on a work order')+'</span>':'<button class="btn sm" onclick="woPickTarget(\''+esc(it.id)+'\')">'+(gkey?'Move…':'Add to…')+'</button>')+'</div></div>';
+}
+function woToggleSel(id, on){ var w = woState(); if (on) w.sel[id]=true; else delete w.sel[id]; render(); }
+function woSetTitle(key, v){ mut(function(doc){ woGroups(doc).forEach(function(g){ if (g.key===key && !g.wo_id) g.title = woUniqueTitle(doc, String(v).trim()||'Work order', key); }); }); render(); }
+function woSetVendor(key, v){ mut(function(doc){ woGroups(doc).forEach(function(g){ if (g.key===key && !g.wo_id) g.vendor_id = v; }); }); }
+function woDeleteGroup(key){ mut(function(doc){ doc.wo_groups = woGroups(doc).filter(function(g){ return g.key!==key || g.wo_id; }); }); render(); toast('Removed. Its items are back in the list.'); }
+function woPickTarget(id){
+  var w = woState(), doc = S.rec.doc, ids = id ? [id] : Object.keys(w.sel).filter(function(k){ return w.sel[k]; });
+  if (!ids.length) return; w.moving = ids;
+  var h = '<h2>Put '+(ids.length===1?'this item':ids.length+' items')+' on…</h2>';
+  woGroups(doc).forEach(function(g){ if (g.wo_id) return; h += '<button class="btn block" style="margin-top:8px;text-align:left" onclick="woMove(\''+esc(g.key)+'\')">'+esc(g.title)+' <span class="muted">('+g.issue_ids.length+' item'+(g.issue_ids.length===1?'':'s')+')</span></button>'; });
+  h += '<button class="btn primary block" style="margin-top:8px" id="wo-newwo" onclick="woMove(\'new\')">＋ New work order</button>';
+  if (ids.some(function(i){ return woGroupOf(doc,i); })) h += '<button class="btn block" style="margin-top:8px" onclick="woMove(\'out\')">Take off its work order</button>';
+  h += '<div class="btns"><button class="btn" onclick="closeSheet()">Cancel</button></div>';
+  openSheet(h);
+}
+function woMove(target){
+  var w = woState(), ids = w.moving || [], byId = {}; var d = woItems(S.rec.doc); d.items.concat(d.tray).forEach(function(i){ byId[i.id]=i; });
+  mut(function(doc){
+    var gs = woGroups(doc); doc.wo_groups = gs;
+    ids.forEach(function(id){ gs.forEach(function(g){ if (!g.wo_id){ var ix = g.issue_ids.indexOf(id); if (ix>=0) g.issue_ids.splice(ix,1); } }); });
+    gs = doc.wo_groups = gs.filter(function(g){ return g.wo_id || g.issue_ids.length; });   // an emptied draft goes first, so a new title never clashes with it
+    if (target==='new'){ if (gs.length >= 60) return; gs.push({ key:woNewKey(doc), title:woUniqueTitle(doc, ids.length===1 ? (byId[ids[0]]||{}).title : 'Work order '+(gs.length+1)), vendor_id:'', issue_ids:ids.slice() }); }
+    else if (target!=='out'){ gs.forEach(function(g){ if (g.key===target && !g.wo_id) ids.forEach(function(id){ if (g.issue_ids.indexOf(id)<0) g.issue_ids.push(id); }); }); }
+    doc.wo_groups = gs.filter(function(g){ return g.wo_id || g.issue_ids.length; });
+  });
+  w.sel = {}; w.moving = null; closeSheet(); render();
+}
+function woArrange(mode){
+  var doc = S.rec.doc, drafts = woGroups(doc).filter(function(g){ return !g.wo_id && g.issue_ids.length; });
+  if (drafts.length){
+    openSheet('<h2>Start over?</h2><div class="muted">This replaces your '+drafts.length+' draft work order'+(drafts.length===1?'':'s')+'. Work orders that were already created are not touched.</div><div class="btns"><button class="btn primary" id="wo-confirm-arrange" onclick="closeSheet();woArrangeGo(\''+mode+'\')">Replace them</button><button class="btn" onclick="closeSheet()">Keep what I have</button></div>');
+    return;
+  }
+  woArrangeGo(mode);
+}
+function woArrangeGo(mode){
+  var w = woState();
+  if (!claim('woarr')) return; w.err=''; w.busy='Arranging…'; render();
+  urgentEnsureSaved([]).then(function(){ return api('POST','/fi/wo/plan',{ id:S.rec.id, rev:S.rec.base_rev, arrange:mode }); }).then(function(r){
+    release('woarr'); w.busy='';
+    mut(function(d){
+      var made = woGroups(d).filter(function(g){ return g.wo_id; }), taken = {}; made.forEach(function(g){ g.issue_ids.forEach(function(i){ taken[i]=1; }); });
+      var out = made.slice();
+      (r.groups||[]).forEach(function(g){ var ids = g.issue_ids.filter(function(i){ return !taken[i]; }); if (!ids.length) return; var keys = {}; out.forEach(function(x){ keys[x.key]=1; }); var n = 1; while (keys['g'+n]) n++; out.push({ key:'g'+n, title:g.title, vendor_id:'', issue_ids:ids }); });
+      d.wo_groups = out;
+    });
+    w.sel = {}; render();
+  }).catch(function(e){ release('woarr'); w.busy=''; w.err = 'Could not arrange: '+e.message; render(); });
+}
+function woPlan(){
+  var w = woState(); if (!claim('woplan')) return; w.err=''; w.busy='Checking everything…'; render();
+  urgentEnsureSaved([]).then(function(){ return api('POST','/fi/wo/plan',{ id:S.rec.id, rev:S.rec.base_rev }); }).then(function(r){
+    release('woplan'); w.busy=''; w.plan = r; w.key = w.key || ('w'+rid(14)); render(); renderWoPlan();
+  }).catch(function(e){ release('woplan'); w.busy=''; w.err = e.message; render(); });
+}
+function renderWoPlan(){
+  var w = woState(), r = w.plan, h = '<h2>Review '+r.will_create+' work order'+(r.will_create===1?'':'s')+'</h2><div class="muted">At '+esc(r.address)+'. This is exactly what will be created.</div>';
+  var warn = []; r.plan.forEach(function(p){ p.warnings.forEach(function(x){ warn.push(p.title+': '+x); }); });
+  if (warn.length) h += '<div class="banner warn" id="wo-warns" style="margin-top:10px"><b>Check these first</b>'+warn.map(function(x){ return '<div>• '+esc(x)+'</div>'; }).join('')+'</div>';
+  r.plan.forEach(function(p){
+    h += '<div class="card" style="margin:10px 0"><div class="row"><b>'+esc(p.title)+'</b>'+(p.existing_wo_id?'<span class="pill ok">'+esc(p.existing_wo_id)+' already made</span>':(p.skip?'<span class="pill warn">skipped</span>':'<span class="pill new">new</span>'))+'</div>'
+      +'<div class="muted">'+esc(p.trade)+' · '+(p.priority==='high'?'High priority':'Normal priority')+' · '+(p.vendor_name?'Vendor: '+esc(p.vendor_name):'No vendor yet')+(p.photo_count?' · 📷 '+p.photo_count:'')+'</div>'
+      +'<ul style="margin:8px 0 0;padding-left:20px;font-size:14px">'+p.checklist.map(function(l){ return '<li>'+esc(l)+'</li>'; }).join('')+'</ul></div>';
+  });
+  h += '<div class="banner info" id="wo-notexts"><b>No texts or emails are sent.</b> Dispatch each work order from the Hub when you are ready.</div>';
+  if (w.err) h += '<div class="banner err" id="wo-cerr">'+esc(w.err)+'</div>';
+  h += '<div class="btns"><button class="btn go" id="wo-create"'+(r.will_create?'':' disabled')+' onclick="woCreate()">Create '+r.will_create+' work order'+(r.will_create===1?'':'s')+'</button><button class="btn" onclick="closeSheet()">‹ Back</button></div>';
+  openSheet(h);
+}
+function woCreate(){
+  // One request per work order, one after another: a work order with photos makes many calls to Google, and one request must stay under the Worker's call budget (D3).
+  var w = woState(); if (!claim('wocreate')) return; var btn = $('wo-create'); if (btn){ btn.disabled = true; btn.textContent = 'Creating…'; } w.err='';
+  var keys = (w.plan && w.plan.plan || []).filter(function(p){ return !p.skip && !p.existing_wo_id; }).map(function(p){ return p.key; });
+  var agg = { ok:true, results:[], created:0, existing:0, failed:0, recorded:true, message:'' }, rev = S.rec.base_rev, lastErr = '';
+  function step(i){
+    if (i >= keys.length) return Promise.resolve();
+    if (btn) btn.textContent = 'Creating '+(i+1)+' of '+keys.length+'…';
+    return api('POST','/fi/wo/create',{ id:S.rec.id, rev:rev, keys:[keys[i]] }).then(function(r){
+      agg.results = agg.results.concat(r.results||[]); agg.created += r.created||0; agg.existing += r.existing||0; agg.failed += r.failed||0;
+      if (!r.recorded && (r.created||r.existing)){ agg.recorded = false; lastErr = r.record_error||''; }
+      if (r.rev) rev = r.rev;
+      return step(i+1);
+    });
+  }
+  urgentEnsureSaved([]).then(function(){ return step(0); }).then(function(){
+    agg.message = agg.failed ? agg.failed+' work order'+(agg.failed===1?'':'s')+' could not be created. Press “Try the rest again”: the ones that worked are not made twice.'
+      : (agg.recorded ? 'Done. No texts or emails were sent.' : 'The work orders exist, but the inspection could not be updated with their numbers ('+lastErr+'). Pressing Create again reuses them.');
+    w.result = agg;
+    return api('GET','/fi/inspection?id='+encodeURIComponent(S.rec.id)).then(function(d){ var rec = S.rec; rec.doc = d.doc; rec.base_rev = d.inspection.rev; rec.status = d.inspection.status; rec.dirty = false; return persistLocal(); }).catch(function(e){ agg.reload_error = e.message; });
+  }).then(function(){ release('wocreate'); render(); renderWoResult(); })
+    .catch(function(e){
+      release('wocreate'); w.err = (agg.results.length ? agg.results.length+' made before this stopped. ' : '')+e.message; renderWoPlan();
+    });
+}
+function renderWoResult(){
+  var w = woState(), r = w.result, bad = r.results.filter(function(x){ return x.status==='failed'; });
+  var h = '<h2>'+(bad.length ? 'Some work orders were not created' : '✓ Work orders created')+'</h2>';
+  h += '<div class="banner '+(bad.length?'warn':'ok')+'" id="wo-resmsg">'+esc(r.message||'')+'</div>';
+  r.results.forEach(function(x){
+    h += '<div class="card" style="margin:8px 0"><div class="row"><b>'+esc(x.title)+'</b>'+(x.wo_id?'<a class="pill ok" target="_blank" rel="noopener" href="'+esc(S.reportBase)+'/index.html?wo='+encodeURIComponent(x.wo_id)+'">'+esc(x.wo_id)+' ›</a>':'<span class="pill bad">not created</span>')+'</div>'
+      +(x.error?'<div class="muted" style="color:var(--danger)">'+esc(x.error)+'</div>':'')+(x.warnings||[]).map(function(m){ return '<div class="muted">⚠ '+esc(m)+'</div>'; }).join('')+'</div>';
+  });
+  if (r.reload_error) h += '<div class="banner warn">The work orders exist, but this phone could not reload the inspection ('+esc(r.reload_error)+'). Reload the page before changing anything.</div>';
+  h += '<div class="btns">'+(bad.length?'<button class="btn go" onclick="woPlan()">Try the rest again</button>':'')+'<button class="btn primary" onclick="closeSheet()">Done</button></div>';
+  openSheet(h);
+}
 // ---- brands ----
 function openBrands(){ S.view='brands'; render(); refreshList().then(function(){ if (S.view==='brands') render(); }); }
 function viewBrands(){
