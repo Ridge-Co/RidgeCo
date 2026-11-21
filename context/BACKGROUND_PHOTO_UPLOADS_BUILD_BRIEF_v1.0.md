@@ -19,8 +19,7 @@ Wanted: pick any number of photos, keep working (Save, Next, Close, another scre
 | D6 | **The vendor cannot submit a bill for a WO** while that WO has an open warning on a file that vendor uploaded, or uploads of theirs still pending. Enforced **server-side**, explained on screen with the fix buttons. |
 | D7 | No texts for any of this (standing rule R-1). Ledger rows are P2. |
 | D8 | PR #623 (merged Nov 21) made trash Save wait for uploads. Phase 4 replaces that lock with "safe to leave". Keep 623's Add-photos-from-preview. |
-
-Default applied without asking (Brett may override): the D6 rule also applies to **Brett's own customer invoice** for that WO / trash visit. Same resolve buttons, so a missing receipt or before/after photo can't slip out on an invoice either. For the customer invoice, **any** uploader's open issue or pending upload on that record blocks it. For a vendor bill, only that vendor's own issues and pending uploads block it (D6).
+| D9 | **Open warnings block vendors only** (Brett, Nov 21 15:45 ET: "I can fix my own"). Brett's customer invoice (Hub WO invoice, trash Send) is **never blocked** by an open warning; it shows the open warnings for that record next to Send, with Replace / Not needed buttons, and sends when he taps Send. D2 still applies: Send waits for photos that are still uploading. |
 
 **Canonical `file_type` values:** `photo, before, after, receipt, report, video, document`. Map each page's existing values onto these in Phase 0; add a new value only with the strong reviewer's OK.
 
@@ -86,7 +85,7 @@ Server (`worker.js`):
 
 ### Phase 3: Gates (D2, D6, plus the default in §2). **GATED: Brett approves the main merge.**
 - **Vendor bill:** every server path from Phase 0 that creates a vendor bill for a WO refuses with HTTP 409 `{blocked:'upload_issues', open_issues:[…], pending_uploads:n}` while that WO has open issues on files from that vendor, or that vendor's intents are still pending. The vendor portal shows why and offers Replace / Not needed right there. Pending ones say: "2 photos are still uploading from your phone. Open the portal on that phone to finish."
-- **Customer invoice (Hub WO invoice + trash Send):** waits while the record has pending uploads ("Waiting for 2 photos…"), and refuses on open issues for that record with the same resolve buttons. The trash batch "Send all" skips blocked properties and lists them.
+- **Customer invoice (Hub WO invoice + trash Send):** waits while the record has pending uploads ("Waiting for 2 photos…"). Open issues **do not block** it (D9): they are listed next to Send with Replace / Not needed buttons, and Send goes ahead when tapped. The trash batch "Send all" waits on pending uploads the same way and lists any properties with open issues in its preview.
 - The money math and the QuickBooks payload are unchanged. This phase only adds a refusal in front of them.
 **Done when** the Phase 3 tests pass and on staging: a vendor with an open issue gets 409 and the explanation; after Not needed the bill submits; Brett's trash Send waits, then sends.
 
@@ -106,7 +105,7 @@ Use the fake-DOM pattern from `test/trash-add-photos.test.mjs` (it runs the real
 8. Replacement attach closes the issue as replaced.
 9. WO Void → auto_closed. Un-void → open again.
 10. Vendor bill paths: 409 with an open issue, 409 with a pending intent, OK after the issue is resolved. Another vendor's or a tenant's issue does not block this vendor.
-11. Trash Send and Hub WO invoice: wait while pending, refuse on an open issue, send after it is resolved. The batch skips blocked ones and names them.
+11. Trash Send and Hub WO invoice: wait while pending; with an open issue they show it next to Send and **still send** when tapped (D9). The batch preview names properties with open issues.
 12. No IndexedDB → loud stay-on-page warning, nothing silently dropped. Same when an IndexedDB write fails (quota/full phone; simulate a rejecting put).
 13. Banner and record views show the WO number link, file name and uploader. Vendor text exists in Spanish.
 14. Attach fails after a good PUT → retry sends only `/upload/attach` with the stored file_id (no second create-upload-session or PUT).
@@ -114,7 +113,7 @@ Use the fake-DOM pattern from `test/trash-add-photos.test.mjs` (it runs the real
 16. D3: one vendor-uploaded failure appears in **both** the Hub's open-issue list and the vendor portal's list.
 17. D5: WO set to Cancelled → `auto_closed`; reinstated → open again (same as Void, test 9).
 18. D7: no issue path calls any SMS/Twilio function (stub them and assert zero calls across tests 6–17).
-19. Gate scope: a customer invoice is blocked by a tenant's open issue on that record; a vendor bill is not blocked by it.
+19. Gate scope: a vendor bill is not blocked by a tenant's or another vendor's open issue on that WO; Brett's customer invoice is never blocked by any open issue (D9).
 20. Phase 2 backfill: rows already `failed` before Phase 2 each post exactly one issue on first load.
 21. `scripts/ui-check.mjs` passes on every page touched. The full `test/` suite stays green. `test/pre-build-gate.test.mjs` passes (each PR note has `## Pre-build gate`).
 Staging checks (Playwright, `test-verified-builds`): the scenarios under each phase's "Done when". `maintenance-hub-staging` does not auto-deploy reliably, so confirm with `/version` or the deployed source before testing (CLAUDE.md).
