@@ -281,6 +281,8 @@ var props = [];                              // trash properties
 var pendingPhotos = [];                       // uploaded Drive file ids for the open visit
 var pendingFolder = null;                     // {id,url} reused across a visit's uploads
 var extraAmt = 0;
+var uploadsInFlight = 0;                      // photos still uploading — Save waits for these
+var addPhotosFor = null;                      // {property_id, week, date} when the visit sheet was opened from an invoice preview
 var curInvoice = null;                        // {property_id, week} for the send step
 
 function api(method, path, body){
