@@ -11955,7 +11955,7 @@ async function assignVendor(env, body, internal) {
     const _descText = String(wo.Description || '').length > 300 ? String(wo.Description).slice(0, 300).replace(/\s+\S*$/, '') + '... (full details in the portal)' : wo.Description;
     const msgEn = `[${body.wo_id}] New ${wo.Trade} job: ${_descText} (at ${address}). Log in to your vendor portal to accept or decline — the lockbox code & tenant contact unlock once you accept.${_mpLineEn}\n${link}`;
     const msg = isSpanish
-      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${wo.Description} en ${address}. Inicie sesión en su portal de proveedor para aceptar o rechazar — el código de la caja y el contacto del inquilino se desbloquean al aceptar.${_mpLineEs}\n${link}`
+      ? `[${body.wo_id}] Nuevo trabajo: ${wo.Trade} — ${_descText} en ${address}. Inicie sesión en su portal de proveedor para aceptar o rechazar — el código de la caja y el contacto del inquilino se desbloquean al aceptar.${_mpLineEs}\n${link}`
       : msgEn;
     // TWILIO_SMS_BUILD_BRIEF_v1.0 — vendor_job_assigned. Gated + queued via smsGatedSend;
     // the accept-gate withholding (lockbox/tenant contact) itself is unchanged, only the
