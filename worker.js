@@ -40882,7 +40882,7 @@ async function trashInvoice(env, body) {
       return json({ preview: {
         property: p.Label, week,
         customer: { id: p.QBO_Customer_ID || '', name: p.Customer_Name || '' },
-        visits: toBill.map(v => ({ date: v.Visit_Date, base: Number(v.Base_Rate || p.Flat_Rate || 40) || 0, extra: Number(v.Extra_Amount || 0) || 0, reason: v.Extra_Reason || '' })),
+        visits: toBill.map(v => ({ id: v.ID, date: v.Visit_Date, base: Number(v.Base_Rate || p.Flat_Rate || 40) || 0, extra: Number(v.Extra_Amount || 0) || 0, reason: v.Extra_Reason || '', photos: String(v.Photo_File_IDs || '').split(',').filter(Boolean).length })),
         lines: pv.lines.map(l => ({ desc: l.Description, amount: l.Amount })),
         total: +pv.total.toFixed(2), attach_photos: photoCount, warnings,
       }});
