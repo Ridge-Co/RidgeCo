@@ -527,7 +527,26 @@ function openVisit(pid, opts){
   Array.prototype.forEach.call(document.querySelectorAll('#extra-row button'),function(b){ b.classList.toggle('sel', b.getAttribute('data-amt')==='0'); });
   document.getElementById('visit-modal').classList.add('open');
 }
-function closeVisit(){ document.getElementById('visit-modal').classList.remove('open'); }
+function closeVisit(){
+  document.getElementById('visit-modal').classList.remove('open');
+  // Cancel from "Add photos" goes back to the same invoice preview instead of dropping Brett on the list.
+  var back=addPhotosFor; addPhotosFor=null;
+  if(back) previewInvoice(back.property_id, back.week);
+}
+// Save stays locked while any photo is still uploading — saving early is how a visit ended
+// up with no photos and an invoice that could only be sent bare.
+function updateSaveState(){
+  var btn=document.getElementById('vm-save'), hint=document.getElementById('vm-hint');
+  if(!btn) return;
+  var label=addPhotosFor?'Save photos':'Save visit';
+  if(uploadsInFlight>0){
+    btn.disabled=true; btn.innerHTML='<span class="spin"></span> Uploading '+uploadsInFlight+' photo'+(uploadsInFlight>1?'s':'')+'…';
+    hint.textContent='Wait for the photos to finish uploading, then save.';
+  } else if(!btn.getAttribute('data-saving')){
+    btn.disabled=false; btn.textContent=label;
+    hint.textContent=addPhotosFor?'Adds these photos to the visit already logged. The price does not change.':'Photos upload as you add them. Save when you\'re done.';
+  }
+}
 
 function setExtra(amt,btn){
   extraAmt=amt;
