@@ -746,6 +746,7 @@ const _hubWorkerCore = {
         if (path === '/scope-proposal/signed')  return await scopeProposalSignedList(env, url);
         if (path === '/insp/customers')         return await inspCustomersList(env);
         if (path === '/fi/list')                return await fiRoute(env, 'list', () => fiList(env));
+        if (path === '/fi/wo/vendors')          return await fiRoute(env, 'wo-vendors', () => fiWoVendors(env));
         if (path === '/fi/inspection')          return await fiRoute(env, 'inspection', () => fiGetInspection(env, url));
         if (path === '/fi/photo-sizes')         return await fiRoute(env, 'photo-sizes', () => fiPhotoSizes(env, url));
         if (path === '/fi/report')              return await fiRoute(env, 'report', () => fiReport(env, request, url));
