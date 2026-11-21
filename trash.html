@@ -583,11 +583,12 @@ function pickPhotos(input){
       return fetch(res.upload_url,{ method:'PUT', headers:{'Content-Type':file.type||'application/octet-stream'}, body:file })
         .then(function(r){ return r.json(); })
         .then(function(fd){
-          if(!fd||!fd.id){ chip.innerHTML='⚠ upload failed'; return; }
+          if(!fd||!fd.id){ chip.innerHTML='⚠ upload failed'; done(); return; }
           pendingPhotos.push(fd.id);
           chip.innerHTML='📷 '+esc(file.name.slice(0,14));
+          done();
         });
-    }).catch(function(e){ chip.innerHTML='⚠ '+esc(e.message||'error'); });
+    }).catch(function(e){ chip.innerHTML='⚠ '+esc(e.message||'error'); done(); });
   });
   input.value='';
 }
