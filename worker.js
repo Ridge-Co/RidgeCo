@@ -46986,6 +46986,7 @@ function fiValidateDoc(doc) {
   fiValidateVoiceNotes(doc.voice_notes, errors);
   fiValidateVisit(doc.visit, errors);
   fiValidateLayout(doc.layout, errors);
+  fiWoValidateGroups(doc.wo_groups, errors);
   if (doc.booking !== undefined && (!doc.booking || typeof doc.booking !== 'object' || Array.isArray(doc.booking))) errors.push('doc.booking must be an object');
   if (!doc.property || typeof doc.property !== 'object' || !String(doc.property.address || '').trim()) errors.push('doc.property.address required');
   if (doc.owner !== undefined && (!doc.owner || typeof doc.owner !== 'object' || Array.isArray(doc.owner) || String(doc.owner.name || '').length > 160)) errors.push('doc.owner must be an object with a name under 160 characters');
