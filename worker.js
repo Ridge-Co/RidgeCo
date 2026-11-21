@@ -47223,7 +47223,7 @@ async function fiGetInspection(env, url) {
 }
 // True when the two saved docs differ ONLY in phone-only fields (the 'send to requester' flag / sent mark, and the touch timestamp).
 function fiPublicDocKey(serialized) {
-  try { const d = JSON.parse(serialized); delete d.updated; for (const a of (d.areas || [])) for (const is of (a.issues || [])) { delete is.flag_send; delete is.sent; } return JSON.stringify(d); }
+  try { const d = JSON.parse(serialized); delete d.updated; delete d.wo_groups; for (const a of (d.areas || [])) for (const is of (a.issues || [])) { delete is.flag_send; delete is.sent; delete is.wo_id; delete is.wo_group; } return JSON.stringify(d); }
   catch (e) { return null; }
 }
 function fiOnlyPhoneMarksChanged(prevSerialized, nextSerialized) {
