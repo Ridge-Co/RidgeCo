@@ -31340,7 +31340,7 @@ async function hubTestWriteAllowed(env, path, body) {
   if (path === '/owner/tenant-roster/preview') return true;
   if (path === '/owner/tenant-roster/apply') return !!(body && body.owner_id) && await isTestRecord(env, 'Owners', body.owner_id);
   // Oct 15 2026 (field inspection): the staging token may only write inspections whose id starts TEST-, brands named TEST- (never default, never a non-TEST brand); structure/summarize write nothing.
-  if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report' || path === '/fi/urgent-send') return String((body && body.id) || '').startsWith('TEST-');
+  if (path === '/fi/save' || path === '/fi/publish' || path === '/fi/email-report' || path === '/fi/urgent-send' || path === '/fi/wo/plan' || path === '/fi/wo/create') return String((body && body.id) || '').startsWith('TEST-');
   if (path === '/fi/structure' || path === '/fi/summarize' || path === '/fi/route' || path === '/fi/brand/scrape' || path === '/fi/transcribe/json') return true; // AI / read-only: no sheet writes
   if (path === '/fi/reword') return true; // AI only: writes nothing
   if (path === '/admin/fi-originals-bridge') return String((body && body.inspection_id) || '').startsWith('TEST-'); // Nov 2 2026: staging may only read/attach photos of a TEST- inspection
