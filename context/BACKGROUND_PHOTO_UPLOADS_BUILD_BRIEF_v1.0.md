@@ -19,7 +19,6 @@ Wanted: pick any number of photos, keep working (Save, Next, Close, another scre
 | D6 | **The vendor cannot submit a bill for a WO** while that WO has an open warning on a file that vendor uploaded, or uploads of theirs still pending. Enforced **server-side**, explained on screen with the fix buttons. |
 | D7 | No texts for any of this (standing rule R-1). Ledger rows are P2. |
 | D8 | PR #623 (merged Nov 21) made trash Save wait for uploads. Phase 4 replaces that lock with "safe to leave". Keep 623's Add-photos-from-preview. |
-
 | D9 | **Open warnings block vendors only** (Brett, Nov 21 15:45 ET: "I can fix my own"). Brett's customer invoice (Hub WO invoice, trash Send) is **never blocked** by an open warning; it shows the open warnings for that record next to Send, with Replace / Not needed buttons, and sends when he taps Send. D2 still applies: Send waits for photos that are still uploading. |
 
 **Canonical `file_type` values:** `photo, before, after, receipt, report, video, document`. Map each page's existing values onto these in Phase 0; add a new value only with the strong reviewer's OK.
