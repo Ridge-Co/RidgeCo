@@ -49124,7 +49124,7 @@ async function fiWoCreate(env, body) {
     } catch (e) {
       if (sheetsQuotaBusyError(e)) { r.status = r.wo_id ? 'created' : 'failed'; r.error = 'Google is busy. Press Create again in a minute; nothing is duplicated.'; r.warnings.push('Busy: some steps may be unfinished.'); }
       else { r.status = r.wo_id ? 'created' : 'failed'; r.error = String((e && e.message) || e).slice(0, 160); if (r.wo_id) r.warnings.push('Created, but a later step failed: ' + r.error); }
-      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_wo_create_error', Skill_Or_Endpoint: '/fi/wo/create', Success: 'FALSE', Notes: (L.id + ' ' + g.key + ' ' + String((e && e.message) || e)).slice(0, 200) }); } catch (e3) { console.error('fi/wo/create telemetry failed:', e3 && e3.message); }
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'fi_wo_create_error', Skill_Or_Endpoint: '/fi/wo/create', Success: 'FALSE', Notes: (L.id + ' ' + g.key + ' ' + String((e && e.message) || e)).slice(0, 200) }); } catch (e3) { console.error('fi/wo/create telemetry failed:', e3 && e3.message); }   // silent-ok: telemetry is best-effort, the result already shows the failure
     }
     results.push(r);
   }
