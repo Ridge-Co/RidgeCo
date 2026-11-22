@@ -22372,7 +22372,7 @@ function formatDigestText(d, minBusy) {
 async function deliverDigest(env, digest) {
   const cfg = await fetchConfig(env);
   if (String(cfg.digest_enabled||'').toUpperCase() !== 'TRUE') return { delivered:false, reason:'digest_enabled not TRUE (dormant)' };
-  const text = formatDigestText(digest);
+  const text = formatDigestText(digest, parseInt(cfg.quota_digest_min_busy_minutes, 10));
   const out = { sms:null, email:null };
   if (String(cfg.digest_sms_enabled||'').toUpperCase()==='TRUE' && cfg.digest_sms_to && env.TWILIO_FROM) out.sms = await sendSMS(env, cfg.digest_sms_to, text);
   if (String(cfg.digest_email_enabled||'').toUpperCase()==='TRUE' && cfg.digest_email_to) out.email = await deliverDigestEmail(env, cfg.digest_email_to, 'Ridge Co — Daily Digest', text);
