@@ -25470,7 +25470,7 @@ async function selftestFinish(env, endpointResults, goldenResults, opts, t0) {
   // Self-instrument (PAT-031 pattern, same as runWeeklyReview) — the selftest is itself a
   // measured job, and its OWN success reflects whether every check passed, not just whether the
   // function ran without throwing.
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'selftest', Skill_Or_Endpoint: 'selftestRun', Success: agg.failed === 0 ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: `${agg.passed}/${agg.total} passed, trigger=${opts.trigger || 'manual'}${agg.failed ? '; failing: ' + agg.failures.map(f => f.name).join(', ') : ''}`.slice(0, 300) }); }   // Oct 21 2026: name the failing checks so Needs Attention says WHAT failed
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'selftest', Skill_Or_Endpoint: 'selftestRun', Success: agg.failed === 0 ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: selftestTelemetryNotes(agg, endpointResults, opts) }); }   // Oct 21 2026: name the failing checks so Needs Attention says WHAT failed
   catch (e) { errors.push({ step: 'selftest_telemetry', error: schedErrText(e) }); }
   return { ok: true, total: agg.total, passed: agg.passed, failed: agg.failed, failures: agg.failures, digest: digestText, delivery, logged, errors, endpoint_results: endpointResults, golden_results: goldenResults };
 }
