@@ -15,8 +15,8 @@ const make = new Function('stubs',
   'const { selftestDeliverDigest, selftestRecordResult, logTelemetry, SELFTEST_ENDPOINT_CHECKS } = stubs;\n' +
   'const SELFTEST_SLICE_MS = 30 * 1000, SELFTEST_GOLDEN_MARGIN_MS = 12 * 1000;\n' +
   grab('schedErrText') + '\n' + grab('selftestAggregateResults') + '\n' + grab('selftestComposeDigest') + '\n' +
-  grab('selftestFinish', true) + '\n' + grab('selftestRunSlice', true) + '\n' +
-  'return { selftestRunSlice, selftestFinish };');
+  grab('selftestTelemetryNotes') + '\n' + grab('selftestFinish', true) + '\n' + grab('selftestRunSlice', true) + '\n' +
+  'return { selftestRunSlice, selftestFinish, selftestTelemetryNotes };');
 
 let pass = 0, fail = 0;
 const t = (n, c) => { if (c) pass++; else { fail++; console.log('FAIL:', n); } };
