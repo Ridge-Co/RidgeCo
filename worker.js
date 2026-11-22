@@ -908,6 +908,7 @@ const _hubWorkerCore = {
           body.__triage = TRIAGE_INTAKE_TYPES.includes(String(body.type || 'manual'));   // set here, never trusted from the client
           return await callWithFailureAlert(env, 'wo_create', '/workorder', () => createWorkOrder(env, body));
         }
+        if (path === '/workorder/similar-check')  return await woSimilarCheck(env, body, callerRole, callerSessionId);   // TENANT sessions only (queue #63); read-only, ships OFF behind Config wo_similar_enabled
         if (path === '/intake/email')             return await intakeEmail(env, body);
         if (path === '/intake/retry')             return await intakeRetry(env, body);
         if (path === '/intake/delivery-email')    return await deliveryEmailIntake(env, _idEmail ? Object.assign({}, body, { mailbox: _idEmail, mailbox_claimed: String(body && body.mailbox || '').slice(0, 120) }) : body);   // a verified identity replaces whatever mailbox the body claims   // Oct 23 2026: store delivery emails (INTAKE_TOKEN or WORKER_SECRET)
