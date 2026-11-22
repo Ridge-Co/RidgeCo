@@ -823,6 +823,7 @@ function openSubmitRequest() {
   document.getElementById('srPreview').innerHTML = '';
   document.getElementById('srMsg').innerHTML = '';
   document.getElementById('srSubmitBtn').disabled = false;
+  document.getElementById('srDupPanel').style.display = 'none'; document.getElementById('srDupPanel').innerHTML = ''; document.getElementById('srActions').style.display = '';
   srFiles = [];
   openModal('modalSubmitRequest');
 }
