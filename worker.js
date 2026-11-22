@@ -25450,6 +25450,24 @@ async function selftestDeliverDigest(env, digestText) {
   }
 }
 
+// Notes text for the `selftest` telemetry row (Nov 22 2026, queue #271). Pure. Keeps the old "passed, trigger=..." and "failing: ..." text
+// FIRST (Needs Attention reads it), then, only for the sliced daily run (opts.slices set), says WHY the number looks like ~20 s:
+// slice count, the last slice (what Latency_ms measures), summed per-check time and the three slowest checks. 300-char cap: the
+// slowest list is dropped first, then the pacing note; the failing list is never cut by the extras.
+function selftestTelemetryNotes(agg, endpointResults, opts) {
+  opts = opts || {};
+  const head = `${agg.passed}/${agg.total} passed, trigger=${opts.trigger || 'manual'}${agg.failed ? '; failing: ' + agg.failures.map(f => f.name).join(', ') : ''}`;
+  if (opts.slices == null) return head.slice(0, 300);
+  const sec = (ms) => (Math.round((Number(ms) || 0) / 100) / 10).toFixed(1) + 's';
+  const checks = (endpointResults || []).filter(r => r && r.latency_ms != null);
+  const total = checks.reduce((a, r) => a + (Number(r.latency_ms) || 0), 0);
+  const slowest = checks.slice().sort((a, b) => (b.latency_ms || 0) - (a.latency_ms || 0)).slice(0, 3).map(r => `${r.name} ${sec(r.latency_ms)}`).join(', ');
+  const base = `${head}; ${opts.slices} slice${opts.slices === 1 ? '' : 's'}; last slice ${sec(opts.lastSliceMs)}; checks total ${sec(total)}`;
+  const tries = [`${base}; slowest: ${slowest}; paced 2.5s between Sheets reads (by design)`, `${base}; slowest: ${slowest}`, base];
+  for (const t of tries) if (t.length <= 300) return t;
+  return head.slice(0, 300);
+}
+
 // Everything after the checks have run: tally, digest, deliver, record, self-instrument. NOTHING here is swallowed (Oct 14 2026):
 // a digest that cannot be sent, a history row that cannot be written or a telemetry row that cannot be logged is pushed onto
 // `errors` so the caller (the scheduler job, or the /selftest response) shows it.
@@ -25470,7 +25488,7 @@ async function selftestFinish(env, endpointResults, goldenResults, opts, t0) {
   // Self-instrument (PAT-031 pattern, same as runWeeklyReview) — the selftest is itself a
   // measured job, and its OWN success reflects whether every check passed, not just whether the
   // function ran without throwing.
-  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'selftest', Skill_Or_Endpoint: 'selftestRun', Success: agg.failed === 0 ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: `${agg.passed}/${agg.total} passed, trigger=${opts.trigger || 'manual'}${agg.failed ? '; failing: ' + agg.failures.map(f => f.name).join(', ') : ''}`.slice(0, 300) }); }   // Oct 21 2026: name the failing checks so Needs Attention says WHAT failed
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'selftest', Skill_Or_Endpoint: 'selftestRun', Success: agg.failed === 0 ? 'TRUE' : 'FALSE', Latency_ms: Date.now() - t0, Notes: selftestTelemetryNotes(agg, endpointResults, opts) }); }   // Oct 21 2026: name the failing checks so Needs Attention says WHAT failed
   catch (e) { errors.push({ step: 'selftest_telemetry', error: schedErrText(e) }); }
   return { ok: true, total: agg.total, passed: agg.passed, failed: agg.failed, failures: agg.failures, digest: digestText, delivery, logged, errors, endpoint_results: endpointResults, golden_results: goldenResults };
 }
@@ -25493,6 +25511,9 @@ async function selftestRun(env, opts) {
 // SELFTEST_SLICE_MS, saves its progress in the Config row `selftest_progress`, and the next tick carries on; when the last
 // check is done the digest/history/telemetry go out exactly once. A progress read/write failure THROWS (the job shows failed).
 const SELFTEST_PROGRESS_KEY = 'selftest_progress';
+// Expected range for the LAST slice (the number Latency_ms on the `selftest` telemetry row holds): 15 to 30 s. About 8 Sheets reads spaced
+// CRON_READ_GAP_MS (2.5 s) apart is ~20 s on its own; that spacing is what protects the read quota (rules 214/215/228), so ~20 s is by design.
+// The Notes on that row now name the slice count, summed check time and slowest three checks (queue #271).
 const SELFTEST_SLICE_MS = 30 * 1000;
 const SELFTEST_GOLDEN_MARGIN_MS = 12 * 1000;   // do not START the golden checks with less than this left in the slice
 async function selftestReadProgress(env) {
@@ -25522,6 +25543,7 @@ async function selftestRunSlice(env, today, opts) {
   let prog = await read();
   if (!prog || prog.date !== today) prog = { date: today, started: new Date(t0).toISOString(), endpoint: [], golden: null, complete: false };
   if (prog.complete) return { skipped: true, reason: `already finished today (${today})` };
+  prog.slices = (Number(prog.slices) || 0) + 1;   // queue #271: a progress row from the previous version has no `slices`; it just starts counting here
   while (prog.endpoint.length < checks.length && now() < deadline) prog.endpoint.push(await runOne(checks[prog.endpoint.length]));
   if (prog.endpoint.length < checks.length) {
     await write(prog);
@@ -25534,7 +25556,7 @@ async function selftestRunSlice(env, today, opts) {
     }
     prog.golden = await (opts.golden ? opts.golden() : selftestRunGoldenChecks(env));
   }
-  const res = await selftestFinish(env, prog.endpoint, prog.golden, { deliver: true, trigger: 'cron' }, t0);
+  const res = await selftestFinish(env, prog.endpoint, prog.golden, { deliver: true, trigger: 'cron', slices: prog.slices, lastSliceMs: now() - t0 }, t0);
   prog.complete = true; prog.finished = new Date(now()).toISOString(); prog.summary = { total: res.total, passed: res.passed, failed: res.failed };
   try { await write(prog); }
   catch (e) { res.errors.push({ step: 'selftest_progress', error: 'finished, but could not mark today as done (it may run again): ' + schedErrText(e) }); }
