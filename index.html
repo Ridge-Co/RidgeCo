@@ -3191,7 +3191,13 @@ function openWODetail(woId) {
         '<div id="auditTrailRest" style="display:none">'+restHtml+'</div>';
     }
     el.innerHTML = html;
-  }).catch(function(){ var el=document.getElementById('auditTrailBody'); if(el) el.innerHTML='<span style="color:var(--muted)">Unavailable</span>'; });
+  }).catch(function(e){
+    console.error('[wo-audit]', e);
+    var el=document.getElementById('auditTrailBody');
+    if(el) el.innerHTML='<span style="color:var(--danger)">Couldn\'t load history.</span> <a href="#" onclick="loadAuditTrail(\''+woId+'\');return false" style="color:var(--info)">Retry</a>';
+  });
+  }
+  window.loadAuditTrail = loadAuditTrail;
 
   // Tenant visibility controls in detail. Label names the actual current tenant (when known)
   // instead of a generic "Tenant" — this button IS "remove [tenant] from this work order": it's
