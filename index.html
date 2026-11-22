@@ -15621,6 +15621,17 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
 </div>
 
 <!-- MANAGE WO TEMPLATES MODAL (Dev Log → Tools; moved out of the Shopping menu Aug 24, 2026) -->
+<div class="modal-overlay" id="modal-pm-plans">
+  <div class="modal" style="max-width:760px">
+    <div class="modal-header"><div class="modal-title">PM PLANS</div><button class="modal-close" aria-label="Close" onclick="closeModal('modal-pm-plans')">✕</button></div>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:12px">A plan is a set of yearly visits. Enrolling a property adds it to those visits, and the work orders post on the normal schedule. Nothing is texted or billed from here.</p>
+    <div id="pm-body"><div class="loading">Loading…</div></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal('modal-pm-plans')">Close</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-manage-templates">
   <div class="modal" style="max-width:700px">
     <div class="modal-header"><div class="modal-title">WO TEMPLATES — MANAGE</div><button class="modal-close" onclick="closeModal('modal-manage-templates')">✕</button></div>
