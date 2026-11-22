@@ -25997,7 +25997,6 @@ function vendorPerfRows(vendors, wos, bills, times) {
   // below with `&& !DONE.has(w.Status)` reconciles the two so a completed-but-unbilled job never
   // double-counts as both done and open.
   const DONE = new Set(WOStatus.sets.DONE_THROUGH_PAID);
-  const now = Date.now();
   const daysBetween = (a, b) => {
     const ta = Date.parse(a), tb = Date.parse(b);
     return (isNaN(ta) || isNaN(tb)) ? null : Math.max(0, Math.round((tb - ta) / 86400000));
