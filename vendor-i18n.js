@@ -372,6 +372,8 @@ var ES_EXTRA = {
 "Marked done -- Brett will take a look": "Marcado como terminado -- Brett lo revisará",
 "Read it — check the amount, #, and date below": "Lo leímos — revise el monto, el n.º y la fecha abajo",
 "Could not load": "No se pudo cargar",
+"your requests from Ridge Co": "sus solicitudes de Ridge Co",
+"extra-work status": "el estado del trabajo adicional",
 "The system is busy — tap Retry in a moment.": "El sistema está ocupado — toque Reintentar en un momento.",
 "the estimate": "el estimado",
 "your receipts": "sus recibos de compra",

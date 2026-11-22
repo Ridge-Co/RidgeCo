@@ -593,9 +593,15 @@ function doLogout() {
 var VTR_TYPE_LABELS_VENDOR = { photos: 'Upload photos', description: 'Update / clarify your description', other: 'Request' };
 function loadVendorTaskAlerts() {
   if (!session) return;
-  api('/vendor-task-requests?status=open').then(function(rows) {
-    renderVendorTaskAlerts(rows || []);
-  }).catch(function(e) { console.error('[loadVendorTaskAlerts]', e); });
+  // Queue #112: apiList() signs the vendor out on 401 and throws on any non-array reply, so a failed read can never look like
+  // an empty list (a blank banner told a vendor with an open request from Brett that they had none).
+  apiList('/vendor-task-requests?status=open').then(function(rows) {
+    renderVendorTaskAlerts(rows);
+  }).catch(function(e) {
+    console.error('[loadVendorTaskAlerts]', e);
+    if (!session) return;   // 401 already signed the vendor out
+    showLoadFailed('vtrBanner', 'your requests from Ridge Co', (e && e.message) || e, loadVendorTaskAlerts, 'vendor_task_requests');
+  });
 }
 function renderVendorTaskAlerts(rows) {
   var el = document.getElementById('vtrBanner');
@@ -1056,11 +1062,20 @@ function awSubmit() {
 // every add-on of the signed-in vendor, each row carrying parent_wo_id; rows are distributed to the cards here.
 function loadVendorAddons() {
   return api('GET', '/wo/additional-work').then(function(res) {
-    var all = (res && res.success && res.items) || [];
+    // Queue #112: a failed read must not look like an empty list (the vendor could send the same extra work twice).
+    if (res && res.error === 'Unauthorized') { sessionExpired(); return; }
+    if (!res || !res.success || !Array.isArray(res.items)) throw new Error((res && res.error) || 'Unexpected response');
+    var all = res.items;
     window._addons = {};
     all.forEach(function(a) { var p = a.parent_wo_id; if (p) (window._addons[p] = window._addons[p] || []).push(a); });
     (window._wos || []).forEach(function(wo, idx) { if (awEligible(wo)) renderVendorAddons(wo.ID, idx); });
-  }).catch(function() { /* non-critical: leave empty */ });
+  }).catch(function(e) {
+    console.error('[loadVendorAddons]', e);
+    window._addons = null;
+    (window._wos || []).forEach(function(wo, idx) {
+      if (awEligible(wo)) showLoadFailed('addon-wrap-' + idx, 'extra-work status', (e && e.message) || e, loadVendorAddons, 'wo_additional_work');
+    });
+  });
 }
 function awStatusInfo(a) {
   var s = String(a.estimate_status || '').toLowerCase();
