@@ -1411,10 +1411,42 @@ export class ReadMeterStore {
       return new Response('not found', { status: 404 });
     } catch (e) { return new Response('store error: ' + String((e && e.message) || e).slice(0, 200), { status: 500 }); }
   }
+  // Per-day tally (queue #233, Nov 22 2026). Each instance saves its last 60 minutes every time, so the same minute arrives many times:
+  // 'f:<tag>:<id>' remembers the newest minute already counted for that instance, and the minute still in progress is never counted.
+  // Day record 'd:<tag>:<Eastern date>' = { date, reads, x (refusals), mins: {minuteIndex: [reads, refusals]}, src: {label: reads}, tab: {label: reads} }; kept METER_DAILY_KEEP_DAYS days.
+  async _fold(rec, now) {
+    const st = this.state.storage, mins = Array.isArray(rec.payload && rec.payload.mins) ? rec.payload.mins : [];
+    const fk = 'f:' + rec.tag + ':' + rec.id, prev = await st.get(fk), last = prev && typeof prev.last === 'number' ? prev.last : 0;
+    const cutoff = Math.floor(now / 60000) * 60000;
+    const fresh = mins.filter(m => m && typeof m.t === 'number' && m.t > last && m.t < cutoff);
+    if (!fresh.length) return;
+    const days = new Map(), etDate = (ms) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    for (const m of fresh) { const d = etDate(m.t); if (!days.has(d)) days.set(d, []); days.get(d).push(m); }
+    for (const [d, ms] of days) {
+      const dk = 'd:' + rec.tag + ':' + d;
+      const day = (await st.get(dk)) || { date: d, reads: 0, x: 0, mins: {}, src: {}, tab: {} };
+      for (const m of ms) {
+        const r = +m.r || 0, x = +m.x || 0, mi = String(Math.floor(m.t / 60000));
+        day.reads += r; day.x += x;
+        const cur = day.mins[mi] || [0, 0]; cur[0] += r; cur[1] += x; day.mins[mi] = cur;
+        for (const e of (Array.isArray(m.s) ? m.s : [])) if (Array.isArray(e) && e[0] !== '(other)') day.src[String(e[0])] = (day.src[String(e[0])] || 0) + (+e[1] || 0);
+        for (const e of (Array.isArray(m.a) ? m.a : [])) if (Array.isArray(e) && e[0] !== '(other)') day.tab[String(e[0])] = (day.tab[String(e[0])] || 0) + (+e[1] || 0);
+      }
+      for (const key of ['src', 'tab']) {
+        const ent = Object.entries(day[key]);
+        if (ent.length > 100) { ent.sort((a, b) => b[1] - a[1]); const keep = ent.slice(0, 60), rest = ent.slice(60).reduce((s2, e) => s2 + e[1], 0); day[key] = Object.fromEntries(keep); day[key]['(other)'] = (day[key]['(other)'] || 0) + rest; }
+      }
+      await st.put(dk, day);
+    }
+    await st.put(fk, { last: Math.max(last, ...fresh.map(m => m.t)), seen: now });
+  }
   async _prune(now) {                                 // at most once a minute: drop records not saved for METER_STORE_TTL_S
     if (now - this.lastPrune < 60000) return;
     this.lastPrune = now;
     const dead = [];
+    const oldest = new Date(now - METER_DAILY_KEEP_DAYS * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    for (const [k, v] of await this.state.storage.list({ prefix: 'd:' })) { if (!v || typeof v.date !== 'string' || v.date < oldest) dead.push(k); }
+    for (const [k, v] of await this.state.storage.list({ prefix: 'f:' })) { if (!v || typeof v.seen !== 'number' || now - v.seen > METER_DAILY_KEEP_DAYS * 86400000) dead.push(k); }
     for (const [k, v] of await this.state.storage.list({ prefix: 'i:' })) if (!v || typeof v.t !== 'number' || now - v.t > METER_STORE_TTL_S * 1000) dead.push(k);
     for (let i = 0; i < dead.length; i += 128) await this.state.storage.delete(dead.slice(i, i + 128));
   }
