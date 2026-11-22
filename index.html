@@ -794,7 +794,9 @@ window.addEventListener('pageshow', function(e){
     <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
       <button class="btn small" onclick="loadPayables(false)">↻ Check QuickBooks</button>
       <button class="btn small" onclick="loadPayables(true)" style="background:var(--surface2);color:var(--text)">↻ Check and save to the sheet</button>
+      <button class="btn small" id="pay-run-btn" onclick="loadPayRun()" style="background:var(--surface2);color:var(--text);min-height:44px">📋 This week's pay run</button>
     </div>
+    <div id="pay-run-panel"></div>
     <div id="payables-alerts"></div>
     <div id="payables-filters"></div>
     <div id="payables-body"><div style="color:var(--muted);font-size:12px">Reading QuickBooks…</div></div>
