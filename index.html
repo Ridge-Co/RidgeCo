@@ -1229,7 +1229,7 @@ window.addEventListener('pageshow', function(e){
       </div>
       <div class="form-group" id="wo-unit-group" style="display:none"><label>Unit</label><select id="wo-unit"><option value="">Whole property</option></select></div>
       <div class="form-group"><label>Room / Area <span style="color:var(--muted);font-weight:normal">(optional — vendor-facing)</span></label><input type="text" id="wo-room" placeholder="e.g. Bedroom 2" list="wo-room-list"><datalist id="wo-room-list"></datalist></div>
-      <div class="form-group"><label>Trade</label><select id="wo-trade"></select></div>
+      <div class="form-group"><label>Trade</label><select id="wo-trade" onchange="woTradeChanged()"></select></div>
       <div class="form-group"><label>Priority</label><select id="wo-priority"><option value="normal">Normal</option><option value="urgent">Urgent</option><option value="low">Low</option></select></div>
       <div class="form-group"><label>Type</label><select id="wo-type"><option value="manual">Manual</option><option value="tenant">Tenant Request</option><option value="owner">Owner Request</option><option value="recurring">Recurring/Preventive</option></select></div>
       <div class="form-group full"><label>Description</label><textarea id="wo-desc" class="wo-desc-area" oninput="growDescArea(this)" placeholder="Describe the issue..."></textarea></div>
@@ -1238,7 +1238,7 @@ window.addEventListener('pageshow', function(e){
         <textarea id="wo-checklist" class="cl-area" oninput="checklistRefresh('wo-checklist')" placeholder="One per line, e.g.&#10;Replace faucet cartridge&#10;Re-caulk around sink&#10;Run water & check for leaks"></textarea>
         <div class="cl-hint">One item per line. Pasted bullets / numbers / checkboxes are cleaned up; items are added to the end, never replacing what is here.</div></div>
       <div class="form-group" id="wo-max-price-block"><label>Max price <span style="color:var(--muted);font-weight:normal">(optional — vendor sees it; never on the description or invoice)</span></label><input type="text" inputmode="decimal" id="wo-max-price" placeholder="e.g. 350" autocomplete="off"></div>
-      <div class="form-group"><label>Assign Vendor <span style="color:var(--muted);font-weight:normal">(optional)</span></label><select id="wo-vendor-opt" onchange="woVendorOptChanged()" style="width:100%"><option value="">Assign after creation</option></select></div>
+      <div class="form-group"><label>Assign Vendor <span style="color:var(--muted);font-weight:normal">(optional)</span></label><select id="wo-vendor-opt" onchange="woVendorOptChanged()" style="width:100%"><option value="">Assign after creation</option></select><div id="wo-vendor-suggest-note" style="display:none;margin-top:6px;color:var(--muted);font-size:13px"></div></div>
       <div class="form-group" id="wo-vendor-notify-group" style="display:none"><label style="cursor:pointer;display:flex;align-items:center;gap:6px;margin-top:22px"><input type="checkbox" id="wo-vendor-notify" checked style="width:auto"> Notify vendor + tenant now</label></div>
       <div class="form-group"><label>Schedule Date <span style="color:var(--muted);font-weight:normal">(optional)</span></label><input type="date" id="wo-sched-date-opt"></div>
       <div class="form-group full" id="wo-sched-window-group" style="display:none"><label>Time Window</label><select id="wo-sched-window-opt" style="width:100%"></select></div>
@@ -1288,7 +1288,8 @@ window.addEventListener('pageshow', function(e){
         <select id="assign-vendor-select" onchange="updateAssignPreview()" size="6" style="height:auto;min-height:120px;font-size:13px;cursor:pointer;width:100%"><option value="">Select vendor...</option></select>
       </div>
     </div>
-    <div id="assign-preview" style="margin-top:12px;color:var(--muted);font-size:12px"></div>
+    <div id="assign-preview" style="margin-top:12px;color:var(--muted);font-size:13px"></div>
+    <button class="btn secondary" id="assign-suggest-retry" type="button" style="display:none;margin-top:8px;min-height:44px" onclick="loadAssignSuggestions()">Retry suggestions</button>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-assign')">Cancel</button><button class="btn" id="assign-submit-btn" onclick="submitAssign()">Assign + Send SMS</button></div>
   </div>
 </div>
@@ -3634,22 +3635,68 @@ function openAssignModal(woId) {
 
   _assignVendorList = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';});
   document.getElementById('assign-vendor-search').value = '';
+  _assignSuggest = { items: [], trade: '', seq: _assignSuggest.seq, summary: '' };
   renderAssignVendorOptions('');
   document.getElementById('assign-preview').textContent = '';
   closeModal('modal-wo-detail');
   openModal('modal-assign');
+  loadAssignSuggestions();
   // Focus search box after modal opens
   setTimeout(function(){ var el = document.getElementById('assign-vendor-search'); if(el) el.focus(); }, 100);
 }
 
+// Vendor suggestions (queue #58 Phase 1). Suggestion only: nothing is pre-selected and opening the box writes and texts nothing.
+// OFF unless Config vendor_suggest_enabled is TRUE (the Worker then answers enabled:false and the box looks as it always did).
+var _assignSuggest = { items: [], trade: '', seq: 0, summary: '' };
+function suggestPick(list, items) {
+  return items.map(function(s){ return list.find(function(v){ return String(v.ID) === String(s.vendor_id); }); }).filter(Boolean);
+}
+function suggestOptGroups(list, items, trade, optHtml) {
+  var picked = suggestPick(list, items);
+  if (!picked.length) return optHtml(list);
+  return '<optgroup label="Suggested for ' + esc(trade) + '">' + picked.map(function(v, i){ return optHtml([v], i === 0 ? '★ ' : ''); }).join('') + '</optgroup>' +
+    '<optgroup label="All vendors">' + optHtml(list) + '</optgroup>';
+}
+function loadAssignSuggestions() {
+  var woId = assignWOId, seq = ++_assignSuggest.seq;
+  var prev = document.getElementById('assign-preview'), retry = document.getElementById('assign-suggest-retry');
+  _assignSuggest.items = []; _assignSuggest.summary = '';
+  if (retry) retry.style.display = 'none';
+  var done = false;
+  function failed(msg) {
+    if (done || seq !== _assignSuggest.seq) return; done = true;
+    prev.textContent = 'Suggestions unavailable - showing all vendors.';
+    if (retry) retry.style.display = '';
+    logError('Vendor suggest', msg);
+  }
+  var firstChoice = document.getElementById('assign-vendor-select');
+  var timer = setTimeout(function(){ failed('no answer in 4 seconds'); }, 4000);
+  api('GET', '/vendor-suggest?wo_id=' + encodeURIComponent(woId)).then(function(res){
+    clearTimeout(timer);
+    if (done || seq !== _assignSuggest.seq) return; done = true;
+    if (!res || res.ok === false || res.error) { done = false; failed((res && res.error) || 'empty answer'); return; }
+    if (!res.enabled) { prev.textContent = ''; return; }
+    var items = safeArray(res.suggestions), msg = '';
+    if (!items.length) msg = res.reason === 'no_trade' ? 'This job has no trade set, so there is no suggestion.' : 'No vendor on file for ' + (res.trade || 'this trade') + '. Showing all vendors.';
+    else msg = 'Best match: ' + items[0].name + ' — ' + items[0].reason + '.';
+    if (res.warnings && res.warnings.length) msg += ' ' + res.warnings[0];
+    _assignSuggest.items = items; _assignSuggest.trade = res.trade || ''; _assignSuggest.summary = msg;
+    var q = document.getElementById('assign-vendor-search').value;
+    var keep = firstChoice ? firstChoice.value : '';
+    if (!q) { renderAssignVendorOptions(''); if (keep) firstChoice.value = keep; }
+    prev.textContent = keep ? prev.textContent : msg;
+  }).catch(function(e){ clearTimeout(timer); done = false; failed(e && e.message ? e.message : 'request failed'); });
+  prev.textContent = 'Finding the best match…';
+}
 function renderAssignVendorOptions(query) {
   var q = query.toLowerCase().trim();
   var filtered = q
     ? _assignVendorList.filter(function(v){ return (v.Name||'').toLowerCase().includes(q) || (v.Trade||'').toLowerCase().includes(q) || (v.Phone||'').includes(q); })
     : _assignVendorList;
+  function opts(list, star) { return list.map(function(v){ return '<option value="'+v.ID+'">'+(star||'')+v.Name+' — '+v.Trade+(v.Phone?' — '+v.Phone:'')+'</option>'; }).join(''); }
   document.getElementById('assign-vendor-select').innerHTML =
     '<option value="">— Select vendor —</option>' +
-    filtered.map(function(v){ return '<option value="'+v.ID+'">'+v.Name+' — '+v.Trade+(v.Phone?' — '+v.Phone:'')+'</option>'; }).join('');
+    (q ? opts(filtered) : suggestOptGroups(filtered, _assignSuggest.items, _assignSuggest.trade, opts));
 }
 
 function filterAssignVendors() {
@@ -3673,12 +3720,15 @@ function filterEWOVendors() {
 }
 function updateAssignPreview() {
   var v = state.vendors.find(function(x){return x.ID===document.getElementById('assign-vendor-select').value;});
-  document.getElementById('assign-preview').textContent = v ? 'SMS will be sent to '+v.Name+' ('+v.Phone+') with job details and access info.' : '';
+  var sg = v ? _assignSuggest.items.find(function(s){ return String(s.vendor_id) === String(v.ID); }) : null;
+  document.getElementById('assign-preview').textContent = v ? (sg ? sg.reason + '. ' : '') + 'SMS will be sent to '+v.Name+' ('+v.Phone+') with job details and access info.' : _assignSuggest.summary;
 }
 function submitAssign() {
+  var btn = document.getElementById('assign-submit-btn'); if (btn) { if (btn.disabled) return; btn.disabled = true; }
   var vendorId = document.getElementById('assign-vendor-select').value;
-  if (!vendorId) { toast('Select a vendor','error'); return; }
+  if (!vendorId) { if (btn) btn.disabled = false; toast('Select a vendor','error'); return; }
   api('POST','/assign',{wo_id:assignWOId,vendor_id:vendorId}).then(function(res){
+    if (btn) btn.disabled = false;
     if (res.success) {
       toast('Assigned. Vendor SMS: '+(res.vendor_sms?'✅':'❌')+' | Tenant SMS: '+(res.tenant_sms?'✅':'—'),'success');
       closeModal('modal-assign');
@@ -3688,7 +3738,7 @@ function submitAssign() {
       renderWOPage();
       loadAll();
     }
-  }).catch(function(e){logError('Assign vendor',e.message);toast('Error: '+e.message,'error');});
+  }).catch(function(e){if (btn) btn.disabled = false;logError('Assign vendor',e.message);toast('Error: '+e.message,'error');});
 }
 
 function cancelWO(woId) {
@@ -4152,6 +4202,36 @@ function openNewWOModal() {
 // actually selected in the New Work Order modal. Brett: "there's often no reason to send
 // anything at all" for a WO created purely to record billing for work already done — this
 // is the toggle for that case, default ON so nothing changes unless he explicitly turns it off.
+// Queue #58 Phase 1: suggested vendors for the chosen trade, at the top of the New Work Order vendor list. Never selects one for Brett
+// (this box can text a vendor and the tenant in one tap); "Assign after creation" stays the default. Any failure: the list stays as it was.
+var _woSuggestSeq = 0;
+function woTradeChanged() {
+  var trade = (document.getElementById('wo-trade') || {}).value || '';
+  var seq = ++_woSuggestSeq, vs = document.getElementById('wo-vendor-opt'), note = document.getElementById('wo-vendor-suggest-note');
+  if (!vs || !note) return;
+  note.style.display = 'none'; note.textContent = '';
+  var list = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';});
+  function opts(l, star) { return l.map(function(v){ return '<option value="'+v.ID+'">'+(star||'')+v.Name+' — '+v.Trade+'</option>'; }).join(''); }
+  function setNote(t) { note.textContent = t; note.style.display = t ? '' : 'none'; }
+  var keep = vs.value;
+  vs.innerHTML = '<option value="">Assign after creation</option>' + opts(list); vs.value = keep;
+  if (!trade) return;
+  var done = false;
+  function failed(msg) { if (done || seq !== _woSuggestSeq) return; done = true; setNote('Suggestions unavailable - showing all vendors. Pick the trade again to retry.'); logError('Vendor suggest', msg); }
+  var timer = setTimeout(function(){ failed('no answer in 4 seconds'); }, 4000);
+  api('GET', '/vendor-suggest?trade=' + encodeURIComponent(trade)).then(function(res){
+    clearTimeout(timer);
+    if (done || seq !== _woSuggestSeq) return; done = true;
+    if (!res || res.ok === false || res.error) { done = false; failed((res && res.error) || 'empty answer'); return; }
+    if (!res.enabled) return;
+    var items = safeArray(res.suggestions);
+    if (!items.length) { setNote(res.reason === 'no_vendor_for_trade' ? 'No vendor on file for ' + trade + '. Showing all vendors.' : ''); return; }
+    var cur = vs.value;
+    vs.innerHTML = '<option value="">Assign after creation</option>' + suggestOptGroups(list, items, trade, opts);
+    vs.value = cur;
+    setNote('Best match: ' + items[0].name + ' — ' + items[0].reason + '.' + (res.warnings && res.warnings.length ? ' ' + res.warnings[0] : ''));
+  }).catch(function(e){ clearTimeout(timer); done = false; failed(e && e.message ? e.message : 'request failed'); });
+}
 function woVendorOptChanged() {
   var vendorId = (document.getElementById('wo-vendor-opt')||{}).value||'';
   var notifyGroup = document.getElementById('wo-vendor-notify-group');
