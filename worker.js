@@ -22327,11 +22327,22 @@ async function staleWos(env, url) {
   return json({ ok: true, threshold_days: days, count: stale.length, stale: stale.slice(0, 100) });
 }
 
-function formatDigestText(d) {
+// Queue #233: the one quota line for the digest (or ''). Calm day = nothing. Under about 130 characters; labels carry no names or ids.
+function quotaDigestLine(q, minBusy) {
+  if (!q) return '';
+  if (q.ok === false) return 'Sheets quota: could not read yesterday\'s meter';
+  const min = isFinite(minBusy) && minBusy >= 0 ? minBusy : 5;
+  if (!(q.refusals > 0 || q.busy_minutes >= min) || q.no_data) return '';
+  const top = (q.top_sources || []).filter(x => x[0] !== '(other)').slice(0, 3).map(x => x[0] + ' ' + x[1]).join(', ');
+  return 'Sheets quota: ' + q.busy_minutes + ' busy minutes, ' + q.refusals + ' refusals yesterday.' + (top ? ' Top: ' + top + '.' : '');
+}
+function formatDigestText(d, minBusy) {
   const L = [];
   L.push(`RIDGE CO — DAILY DIGEST · ${d.stamp}`); L.push('');
-  if ((d.healthAlerts && d.healthAlerts.length) || (d.stuckReceipts && d.stuckReceipts.length) || (d.warnings && d.warnings.length)) {
+  const qLine = quotaDigestLine(d.quota, minBusy);
+  if ((d.healthAlerts && d.healthAlerts.length) || (d.stuckReceipts && d.stuckReceipts.length) || (d.warnings && d.warnings.length) || qLine) {
     L.push('▶ SYSTEM HEALTH');
+    if (qLine) L.push('⚠ ' + qLine);
     (d.warnings||[]).forEach(x=>L.push('⚠ '+x+' (numbers below may be incomplete)'));
     (d.healthAlerts||[]).forEach(x=>L.push('⚠ '+x));
     (d.stuckReceipts||[]).forEach(x=>L.push('⚠ Receipt could not be read after 3 tries: '+x));
