@@ -3180,8 +3180,11 @@ async function handlePhotoUploadClean(env, request) {
         await updateWOField(env, woId, 'Drive_Folder_URL', woFolder.webViewLink);
         await updateWOField(env, woId, 'Drive_Folder_ID',  woFolder.id);
       }
-    } catch(woErr) { /* non-fatal */ }
-    return json({ success: true, fileId: uploaded.id, url: uploaded.webViewLink || `https://drive.google.com/file/d/${uploaded.id}/view`, name: filename, woFolderUrl: woFolder.webViewLink || '' });
+    } catch(woErr) {
+      logWarnings.push('the file saved but the work order photo-folder link was not updated');
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'upload_photo_wo_folder_link_failed', Skill_Or_Endpoint: 'upload-photo', Success: 'FALSE', Notes: `wo=${woId} err=${String((woErr && woErr.message) || woErr).slice(0, 200)}` }); } catch (le) { console.error('upload-photo: could not log the folder-link failure:', le && le.message); }
+    }
+    return json({ success: true, fileId: uploaded.id, url: uploaded.webViewLink || `https://drive.google.com/file/d/${uploaded.id}/view`, name: filename, woFolderUrl: woFolder.webViewLink || '', ...(markedFrom ? { markedFrom } : {}), ...(logWarnings.length ? { warnings: logWarnings } : {}) });
   } catch(e) {
     return json({ error: e.message || 'Upload failed', step: step.current, stack: e.stack?.substring(0,300) }, 500);
   }
