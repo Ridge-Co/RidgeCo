@@ -31093,7 +31093,7 @@ function missingTabResponse(tab) {
 // ── Possible-duplicate check at intake (queue #63, Nov 22 2026) ──────────────────────────────────────────────
 // PURE. Which OPEN work orders on the same unit look like this new request? Never blocks anything: the caller only shows a warning.
 // opts: { threshold (same trade, default 0.45), otherTradeThreshold (default 0.70), statuses (default TENANT-visible open set), max (default 3) }
-const WO_SIMILAR_TENANT_STATUSES = ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];   // open work only; no billing states
+const WO_SIMILAR_TENANT_STATUSES = WOStatus.sets.TENANT_OPEN.filter(st => st !== 'Pending Invoice');   // open work only; no billing states
 function woSimilarOpen(candidate, workorders, opts) {
   opts = opts || {};
   const th = Number.isFinite(Number(opts.threshold)) && Number(opts.threshold) > 0 && Number(opts.threshold) <= 1 ? Number(opts.threshold) : 0.45;
