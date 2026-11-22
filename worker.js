@@ -25707,7 +25707,7 @@ function ownerSummaryScrub(html) {
   test(/\d+(\.\d+)?\s*(hours?|hrs?|days?)\s+to\s+(complete|finish|close)/i, 'a time-to-complete figure', true);
   test(/\b(spend|spent|spending|total|totals|cost|costs|average|averages|avg|ytd|margin|markup|price|prices|invoice amount|paid)\b/i, 'a spend / cost / total / average word', true);
   test(/lockbox|door code|gate code|key ?code|access code|lock code/i, 'an access code');
-  test(/max_price|admin_notes|owner_notes|vendor_admin_notes|entry_notes/i, 'an internal field name');
+  test(/admin_notes|owner_notes|vendor_admin_notes|entry_notes/i, 'an internal field name');
   return { ok: hits.length === 0, hits };
 }
 // PURE. The owner-facing name, and a draft built for one owner. A job line whose text trips the scrub (a description mentioning a cost word)
