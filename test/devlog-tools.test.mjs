@@ -55,6 +55,7 @@ const TOOLS = {
   'reformat-sheets': "runAdminTool('reformat-sheets')",
   'share-photos': 'shareAttachments(false)',
   'ops-review': 'runOpsReview()',
+  'ai-cache-test': 'runAiCacheTest()',
   'test-telemetry': 'logTestTelemetry()',
 };
 // Non-tool controls on the same page that other code / Brett rely on.

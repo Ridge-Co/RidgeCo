@@ -956,6 +956,7 @@ window.addEventListener('pageshow', function(e){
       <summary><span class="dl-h">Checks &amp; diagnostics</span><span class="dl-sub">Make sure the system itself is healthy</span><span class="dl-count"></span></summary>
       <div class="dl-body"><div class="dl-grid">
         <div class="dl-tool" data-tool="ops-review" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="runOpsReview()">🔎 Run Ops Review</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Run the weekly Optimizer review now. It reads the usage log, saves its findings, and may use AI credits.</p></div>
+        <div class="dl-tool" data-tool="ai-cache-test" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="runAiCacheTest()">🧠 AI Cache Test</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Make two tiny AI calls to check the saved-reading discount works. Uses a fraction of a cent of AI credit.</p></div>
         <div class="dl-tool" data-tool="test-telemetry" data-kind="open"><button type="button" class="btn small secondary dl-tool-btn" onclick="logTestTelemetry()">📊 Log Test Telemetry Row</button><button type="button" class="dl-star" aria-pressed="false" title="Pin to Most used">☆</button><p class="dl-desc">Adds one test row to the usage log to confirm logging works.</p></div>
       </div></div>
     </details>
@@ -17566,6 +17567,19 @@ function runOpsReview() {
     var prop = '<div style="white-space:pre-wrap;color:var(--text);font-size:11px;border-left:2px solid var(--accent);padding-left:8px">' + esc(res.proposal || '') + '</div>';
     if (el) el.innerHTML = head + prop;
   }).catch(function(e) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(String(e)) + '</span>'; });
+}
+
+function runAiCacheTest() {
+  var el = document.getElementById('admin-tool-result');
+  if (el) el.textContent = '⏳ Making two tiny AI calls…';
+  var fail = function(msg) { if (el) el.innerHTML = '<span style="color:var(--danger)">⚠ ' + esc(msg) + '</span> <button type="button" class="btn small secondary" onclick="runAiCacheTest()">Try again</button>'; };
+  api('POST', '/admin/ai-cache-test', {}).then(function(res) {
+    if (res && res.paused) { if (el) el.innerHTML = '<span style="color:var(--warn)">⏸ ' + esc(res.error || 'AI reading is paused.') + '</span>'; return; }
+    if (!res || res.error || res.ok === false) { fail((res && res.error) || 'failed'); return; }
+    var c = res.calls || [];
+    var rows = c.map(function(x) { return 'Call ' + x.call + ': wrote ' + esc(String(x.cache_write || 0)) + ' · read ' + esc(String(x.cache_read || 0)); }).join('<br>');
+    if (el) el.innerHTML = '<div style="color:var(--accent2);margin-bottom:6px">' + esc(res.verdict || 'done') + '</div><div>Shared text: ' + esc(String(res.prefix_chars || 0)) + ' characters</div><div>' + rows + '</div>';
+  }).catch(function(e) { fail(String(e)); });
 }
 
 // Log one telemetry row from the Hub — the one-tap way to verify the B-128 spine end to
