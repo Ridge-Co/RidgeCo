@@ -5,7 +5,7 @@
 var TLANG = 'en';
 var TENANT_LANG_KEY = 'ridgeco_tenant_lang';
 try { TLANG = (localStorage.getItem(TENANT_LANG_KEY) === 'es') ? 'es' : 'en'; }
-catch (e) { console.error('tenant language choice could not be read; using English', e); }   // storage blocked: English, page keeps working
+catch (e) { console.error('tenant language choice could not be read; using English', e); }   // silent-ok: storage blocked, English and the page keeps working
 var TENANT_ES = {
   // login
   'RIDGE CO': 'RIDGE CO', 'TENANT PORTAL': 'PORTAL DE INQUILINOS', 'Ridge Co — Tenant Portal': 'Ridge Co — Portal de Inquilinos',
