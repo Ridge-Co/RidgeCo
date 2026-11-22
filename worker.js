@@ -30435,6 +30435,41 @@ async function __meterReportStoreFault(env, msg) {
     if (!r || r.ok === false) console.error('[read-meter] store fault could not be saved to the failure ledger:', JSON.stringify(r || {}).slice(0, 200));
   } catch (e) { console.error('[read-meter] store fault could not be saved:', String((e && e.message) || e).slice(0, 200)); }
 }
+// Queue #233: a day's tally from the shared store, as numbers + top spenders. Labels never carry a name, phone or id (digestSrcLabel).
+function __digestSrcLabel(k) {
+  const s = String(k || ''), bar = s.indexOf('|'), who = (bar < 0 ? s : s.slice(0, bar)), route = bar < 0 ? '' : s.slice(bar + 1);
+  if (who === 'cron' && /^job:/.test(route)) return 'job ' + route.slice(4).replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 40);
+  const kind = who.split(':')[0].replace(/[^A-Za-z0-9_-]/g, '').slice(0, 20) || 'unknown';
+  const path = route.replace(/^([A-Z]+) /, '$1 ').split('?')[0].split('/').map(seg => (/\d/.test(seg) ? ':id' : seg)).join('/').slice(0, 40);
+  return (kind + ' ' + path).trim();
+}
+async function __meterDaily(env, url) {
+  const etDate = (ms) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const date = (url && url.searchParams.get('date')) || etDate(Date.now() - 86400000);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, error: 'date must look like 2026-11-21' };
+  const stub = __meterStub(env);
+  if (!stub) return { ok: false, date, error: 'the shared meter store (READ_METER_STORE) is not bound, so there is no daily tally' };
+  let body;
+  try {
+    const res = await stub.fetch('https://read-meter.internal/daily?tag=' + encodeURIComponent(__meter.tag) + '&date=' + date);
+    if (!res.ok) throw new Error('shared store answered HTTP ' + res.status + ': ' + String(await res.text()).slice(0, 120));
+    body = await res.json();
+  } catch (e) { return { ok: false, date, error: String((e && e.message) || e).slice(0, 200) }; }
+  const rec = body && body.record;
+  const out = { ok: true, date, complete: date < etDate(Date.now()), reads: 0, refusals: 0, busy_minutes: 0, peak_minute: null, top_sources: [], top_tabs: [], no_data: !rec };
+  if (!rec) return out;
+  out.reads = rec.reads || 0; out.refusals = rec.x || 0;
+  let peak = null;
+  for (const [mi, v] of Object.entries(rec.mins || {})) {
+    if (v[0] >= METER_DAILY_BUSY_READS || v[1] > 0) out.busy_minutes++;
+    if (!peak || v[0] > peak.reads) peak = { at: new Date(+mi * 60000).toISOString(), reads: v[0] };
+  }
+  out.peak_minute = peak;
+  const fold = (o) => { const m = new Map(); for (const [k, v] of Object.entries(o || {})) { const l = k === '(other)' ? k : __digestSrcLabel(k); m.set(l, (m.get(l) || 0) + v); } return Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5); };
+  out.top_sources = fold(rec.src);
+  out.top_tabs = Array.from(Object.entries(rec.tab || {})).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  return out;
+}
 // The shared store is one Durable Object (see ReadMeterStore). Not bound (or bound to something else) -> null, and the page says so.
 function __meterStub(env) {
   try { const ns = env && env.READ_METER_STORE; return ns && typeof ns.idFromName === 'function' ? ns.get(ns.idFromName('meter-v1')) : null; }
