@@ -8808,6 +8808,143 @@ function renderTemplates() {
     }).join('') + '</tbody></table></div>';
 }
 
+// ── PM Plans (queue #155, Phase 1 of 5) ─────────────────────────────────────────────────────
+// Admin only. Plans group the yearly visit templates; enrolling a property adds it to those templates' Targets.
+var _pm = { view: 'enrollments', plans: [], enrolls: [], tpls: [], error: '', loading: true, busy: false, form: null, preview: null };
+function pmOpen() { openModal('modal-pm-plans'); pmLoad(); }
+function pmLoad() {
+  _pm.loading = true; _pm.error = ''; pmRender();
+  return Promise.all([api('GET','/pm/plans'), api('GET','/pm/enrollments'), api('GET','/wo-templates')]).then(function(r) {
+    if (r[0] && r[0].error) throw new Error(r[0].error);
+    if (r[1] && r[1].error) throw new Error(r[1].error);
+    _pm.plans = safeArray(r[0]); _pm.enrolls = safeArray(r[1]); _pm.tpls = safeArray(r[2]);
+    _pm.loading = false; pmRender();
+  }).catch(function(e) { _pm.loading = false; _pm.error = (e && e.message) || 'Could not load PM plans'; pmRender(); });
+}
+function pmBusy(on) { _pm.busy = !!on; var b = document.querySelectorAll('#pm-body button[data-pm-write]'); for (var i = 0; i < b.length; i++) b[i].disabled = !!on; }
+// Every write goes through here: buttons are disabled before the request starts and restored when it ends (double-tap guard).
+function pmWrite(method, path, body, okMsg, after) {
+  if (_pm.busy) return;
+  pmBusy(true);
+  api(method, path, body, 60000).then(function(res) {
+    pmBusy(false);
+    if (res && res.success) { toast(okMsg, 'success'); if (after) after(res); return pmLoad(); }
+    toast((res && res.error) || 'Not saved. Try again.', 'error');
+    if (res && res.needs_attention) return pmLoad();
+  }).catch(function(e) { pmBusy(false); toast('Not saved: ' + ((e && e.message) || 'try again'), 'error'); });
+}
+function pmStatusChip(s) {
+  var c = s === 'Active' ? 'var(--success)' : s === 'Paused' ? 'var(--warn)' : 'var(--muted)';
+  return '<span class="badge" style="border:1px solid ' + c + ';color:' + c + ';background:var(--surface)">' + esc(s || 'Active') + '</span>';
+}
+function pmPropLabel(e) { return recurTargetLabel({ p: e.Property_ID, u: e.Unit_ID }); }
+function pmRender() {
+  var el = document.getElementById('pm-body'); if (!el) return;
+  if (_pm.loading) { el.innerHTML = '<div class="loading">Loading…</div>'; return; }
+  if (_pm.error) { el.innerHTML = '<div role="alert" style="padding:12px;border:1px solid var(--danger);border-radius:var(--radius);color:var(--danger);margin-bottom:10px">Could not load PM plans: ' + esc(_pm.error) + '</div><button class="btn" style="min-height:44px" onclick="pmLoad()">Try again</button>'; return; }
+  var tabs = '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
+    '<button class="btn' + (_pm.view === 'enrollments' ? '' : ' secondary') + '" style="min-height:44px" onclick="_pm.view=\'enrollments\';_pm.form=null;pmRender()">Enrolled properties</button>' +
+    '<button class="btn' + (_pm.view === 'plans' ? '' : ' secondary') + '" style="min-height:44px" onclick="_pm.view=\'plans\';_pm.form=null;pmRender()">Plans</button>' +
+    '<button class="btn secondary" style="min-height:44px" onclick="pmLoad()">↻ Refresh</button></div>';
+  el.innerHTML = tabs + (_pm.view === 'plans' ? pmPlansHtml() : pmEnrollHtml());
+}
+function pmEnrollHtml() {
+  if (_pm.form && _pm.form.kind === 'enroll') return pmEnrollFormHtml();
+  var h = '<button class="btn" style="min-height:44px;margin-bottom:12px" onclick="pmOpenEnroll()">Enroll a property</button>';
+  if (!_pm.enrolls.length) return h + '<div style="color:var(--muted);padding:16px 4px">No properties on a plan yet. ' + (_pm.plans.length ? 'Enroll one.' : 'Make a plan first (Plans tab), then enroll a property.') + '</div>';
+  var rows = _pm.enrolls.slice().sort(function(a, b) { return (a.Status === 'Ended') - (b.Status === 'Ended') || String(a.Next_Visit || '9999').localeCompare(String(b.Next_Visit || '9999')); });
+  return h + rows.map(function(e) {
+    var st = e.Status || 'Active', id = esc(e.ID);
+    return '<div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:10px;background:var(--surface)">' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="flex:1;min-width:180px">' + esc(pmPropLabel(e)) + '</b>' + pmStatusChip(st) + '</div>' +
+      '<div style="color:var(--muted);font-size:13px;margin-top:4px">' + esc(e.Plan_Name || '') + ' · Next visit: ' + esc(st === 'Active' ? (e.Next_Visit || 'none scheduled') : '—') + ' · ' + esc(e.Visits_Planned || 0) + ' planned in 12 months</div>' +
+      (safeArray(e.Switched_Off).length && st === 'Active' ? '<div style="color:var(--warn-text);font-size:13px;margin-top:6px">Switched off, so these will not post: ' + esc(e.Switched_Off.join(', ')) + '</div>' : '') +
+      (e.Attention ? '<div role="alert" style="color:var(--danger);font-size:13px;margin-top:6px">' + esc(e.Attention) + '</div>' : '') +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">' +
+      (st === 'Active' ? '<button class="btn secondary" data-pm-write style="min-height:44px" onclick="pmSetStatus(\'' + id + '\',\'Paused\')">Pause</button>' : '<button class="btn secondary" data-pm-write style="min-height:44px" onclick="pmSetStatus(\'' + id + '\',\'Active\')">' + (st === 'Ended' ? 'Restore' : 'Resume') + '</button>') +
+      (st !== 'Ended' ? '<button class="btn danger" data-pm-write style="min-height:44px" onclick="if(confirm(\'End this plan for this property? You can restore it later.\')) pmSetStatus(\'' + id + '\',\'Ended\')">End</button>' : '') +
+      '</div></div>';
+  }).join('');
+}
+function pmSetStatus(id, status) { pmWrite('POST', '/pm/enroll/status', { id: id, status: status }, 'Enrollment is now ' + status); }
+function pmOpenEnroll() { _pm.form = { kind: 'enroll', plan_id: '', property_id: '', unit_id: '' }; _pm.preview = null; pmRender(); }
+function pmEnrollFormHtml() {
+  var f = _pm.form, plans = _pm.plans.filter(function(p) { return p.Active !== 'FALSE'; });
+  var props = sortPropsNumeric(safeArray(state.properties).filter(function(p) { return p.Active !== 'FALSE'; }));
+  var units = f.property_id ? safeArray(state.units).filter(function(u) { return String(u.Property_ID) === String(f.property_id); }) : [];
+  var sel = 'style="width:100%;min-height:44px;font-size:16px;margin-bottom:10px"';
+  var h = '<div class="form-group"><label for="pm-f-plan">Plan</label><select id="pm-f-plan" ' + sel + ' onchange="pmFormSet(\'plan_id\',this.value)"><option value="">Choose a plan</option>' +
+    plans.map(function(p) { return '<option value="' + esc(p.ID) + '"' + (String(p.ID) === String(f.plan_id) ? ' selected' : '') + '>' + esc(p.Name) + '</option>'; }).join('') + '</select></div>' +
+    '<div class="form-group"><label for="pm-f-prop">Property</label><select id="pm-f-prop" ' + sel + ' onchange="pmFormSet(\'property_id\',this.value)"><option value="">Choose a property</option>' +
+    props.map(function(p) { return '<option value="' + esc(p.ID) + '"' + (String(p.ID) === String(f.property_id) ? ' selected' : '') + '>' + esc(p.Address) + '</option>'; }).join('') + '</select></div>' +
+    (units.length ? '<div class="form-group"><label for="pm-f-unit">Unit (optional)</label><select id="pm-f-unit" ' + sel + ' onchange="pmFormSet(\'unit_id\',this.value)"><option value="">Whole property</option>' +
+      units.map(function(u) { return '<option value="' + esc(u.ID) + '"' + (String(u.ID) === String(f.unit_id) ? ' selected' : '') + '>' + esc(u.Unit_Label || 'Unit') + '</option>'; }).join('') + '</select></div>' : '');
+  if (_pm.preview && _pm.preview.error) h += '<div role="alert" style="color:var(--danger);margin-bottom:10px">' + esc(_pm.preview.error) + '</div>';
+  else if (_pm.preview) {
+    var pv = _pm.preview;
+    h += '<div style="border:1px solid var(--border);border-radius:var(--radius);padding:10px;margin-bottom:10px;background:var(--surface2)"><b>Visits in the next 12 months</b>' +
+      safeArray(pv.visits).map(function(v) { return '<div style="font-size:13px;margin-top:6px"><b>' + esc(v.name) + '</b>: ' + (v.dates.length ? esc(v.dates.join(', ')) : 'no dates in the next 12 months') + '</div>'; }).join('') + '</div>' +
+      safeArray(pv.warnings).map(function(w) { return '<div style="color:var(--warn-text);font-size:13px;margin-bottom:8px">' + esc(w) + '</div>'; }).join('') +
+      (pv.duplicate ? '<div role="alert" style="color:var(--danger);font-size:13px;margin-bottom:8px">This property is already on this plan (' + esc(pv.duplicate.status) + ').</div>' : '');
+  }
+  var ready = f.plan_id && f.property_id;
+  return h + '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" data-pm-write style="min-height:44px"' + (ready ? '' : ' disabled') + ' onclick="pmDoEnroll()">Enroll</button>' +
+    '<button class="btn secondary" style="min-height:44px"' + (ready ? '' : ' disabled') + ' onclick="pmDoPreview()">Preview visits</button>' +
+    '<button class="btn secondary" style="min-height:44px" onclick="_pm.form=null;pmRender()">Cancel</button></div>';
+}
+function pmFormSet(k, v) { _pm.form[k] = v; if (k === 'property_id') _pm.form.unit_id = ''; _pm.preview = null; pmRender(); }
+function pmDoPreview() {
+  var f = _pm.form; if (!f.plan_id || !f.property_id) return;
+  api('POST', '/pm/enroll/preview', { plan_id: f.plan_id, property_id: f.property_id, unit_id: f.unit_id }).then(function(r) { _pm.preview = r; pmRender(); })
+    .catch(function(e) { _pm.preview = { error: 'Preview failed: ' + ((e && e.message) || 'try again') }; pmRender(); });
+}
+function pmDoEnroll() {
+  var f = _pm.form; if (!f.plan_id || !f.property_id) return;
+  pmWrite('POST', '/pm/enroll', { plan_id: f.plan_id, property_id: f.property_id, unit_id: f.unit_id }, 'Property enrolled', function() { _pm.form = null; });
+}
+function pmPlansHtml() {
+  if (_pm.form && _pm.form.kind === 'plan') return pmPlanFormHtml();
+  var h = '<button class="btn" style="min-height:44px;margin-bottom:12px" onclick="pmOpenPlan(\'\')">New plan</button>';
+  if (!_pm.tpls.length) h += ' <button class="btn secondary" data-pm-write style="min-height:44px;margin-bottom:12px" onclick="pmWrite(\'POST\',\'/pm/seasonal-pack\',{},\'Seasonal visits added (all switched off)\')">Add the five seasonal visits</button>';
+  if (!_pm.plans.length) return h + '<div style="color:var(--muted);padding:16px 4px">No plans yet. Make one to start.</div>';
+  return h + _pm.plans.map(function(p) {
+    var ids = []; try { ids = JSON.parse(p.Template_IDs || '[]'); } catch (e) { ids = []; }
+    var names = ids.map(function(i) { var t = _pm.tpls.find(function(x) { return String(x.ID) === String(i); }); return t ? t.Name : 'missing template ' + i; });
+    return '<div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:10px;background:var(--surface)' + (p.Active === 'FALSE' ? ';opacity:.7' : '') + '">' +
+      '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b style="flex:1;min-width:160px">' + esc(p.Name) + '</b>' + (p.Active === 'FALSE' ? pmStatusChip('Ended') : pmStatusChip('Active')) + '</div>' +
+      '<div style="color:var(--muted);font-size:13px;margin-top:4px">' + esc(names.join(', ')) + '</div>' +
+      '<div style="font-size:13px;margin-top:4px">' + (p.Price ? '$' + esc(p.Price) + ' ' + esc(String(p.Price_Basis || '').replace('_', ' ')) + ', ' + esc(p.Billing_Period || '') : 'Price not set (bill by hand)') + '</div>' +
+      '<div style="margin-top:10px"><button class="btn secondary" style="min-height:44px" onclick="pmOpenPlan(\'' + esc(p.ID) + '\')">Edit</button></div></div>';
+  }).join('');
+}
+function pmOpenPlan(id) {
+  var p = id ? _pm.plans.find(function(x) { return String(x.ID) === String(id); }) : null;
+  var ids = []; if (p) { try { ids = JSON.parse(p.Template_IDs || '[]'); } catch (e) { ids = []; } }
+  _pm.form = { kind: 'plan', id: id || '', Name: p ? p.Name : '', Template_IDs: ids.map(String), Price: p ? p.Price : '', Price_Basis: p ? (p.Price_Basis || 'per_unit') : 'per_unit', Billing_Period: p ? (p.Billing_Period || 'quarterly') : 'quarterly', Notes: p ? p.Notes : '', Active: p ? p.Active !== 'FALSE' : true };
+  pmRender();
+}
+function pmPlanFormHtml() {
+  var f = _pm.form, st = 'style="width:100%;min-height:44px;font-size:16px;margin-bottom:10px"';
+  var tpls = _pm.tpls.filter(function(t) { return recurIsOn(t.Recurrence_Enabled) || recurIsOn(t.Season_Enabled) || t.Freq_Type; });
+  return '<div class="form-group"><label for="pm-p-name">Plan name</label><input id="pm-p-name" ' + st + ' value="' + esc(f.Name) + '" oninput="_pm.form.Name=this.value"></div>' +
+    '<div class="form-group"><label>Included visits</label>' + (tpls.length ? tpls.map(function(t) {
+      return '<label style="display:flex;gap:10px;align-items:center;min-height:44px"><input type="checkbox"' + (f.Template_IDs.indexOf(String(t.ID)) >= 0 ? ' checked' : '') + ' onchange="pmTplToggle(\'' + esc(t.ID) + '\',this.checked)"> <span>' + esc(t.Name) + (recurIsOn(t.Recurrence_Enabled) ? '' : ' <span style="color:var(--warn-text);font-size:13px">(switched off)</span>') + '</span></label>';
+    }).join('') : '<div style="color:var(--muted)">No scheduled visits exist yet. Use "Add the five seasonal visits" on the Plans tab.</div>') + '</div>' +
+    '<div class="form-group"><label for="pm-p-price">Price (leave blank to bill by hand)</label><input id="pm-p-price" inputmode="decimal" ' + st + ' value="' + esc(f.Price) + '" oninput="_pm.form.Price=this.value"></div>' +
+    '<div class="form-group"><label for="pm-p-basis">Price is</label><select id="pm-p-basis" ' + st + ' onchange="_pm.form.Price_Basis=this.value"><option value="per_unit"' + (f.Price_Basis === 'per_unit' ? ' selected' : '') + '>per unit</option><option value="per_property"' + (f.Price_Basis === 'per_property' ? ' selected' : '') + '>per property</option></select></div>' +
+    '<div class="form-group"><label for="pm-p-period">Billing period</label><select id="pm-p-period" ' + st + ' onchange="_pm.form.Billing_Period=this.value"><option value="quarterly"' + (f.Billing_Period === 'quarterly' ? ' selected' : '') + '>quarterly</option><option value="monthly"' + (f.Billing_Period === 'monthly' ? ' selected' : '') + '>monthly</option><option value="yearly"' + (f.Billing_Period === 'yearly' ? ' selected' : '') + '>yearly</option></select></div>' +
+    '<div class="form-group"><label for="pm-p-notes">Notes</label><textarea id="pm-p-notes" style="width:100%;min-height:80px;font-size:16px;margin-bottom:10px" oninput="_pm.form.Notes=this.value">' + esc(f.Notes) + '</textarea></div>' +
+    '<label style="display:flex;gap:10px;align-items:center;min-height:44px;margin-bottom:10px"><input type="checkbox"' + (f.Active ? ' checked' : '') + ' onchange="_pm.form.Active=this.checked"> <span>Plan is on (switch off to hide it; nothing is deleted)</span></label>' +
+    '<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" data-pm-write style="min-height:44px" onclick="pmSavePlan()">Save plan</button><button class="btn secondary" style="min-height:44px" onclick="_pm.form=null;pmRender()">Cancel</button></div>';
+}
+function pmTplToggle(id, on) { var a = _pm.form.Template_IDs, i = a.indexOf(String(id)); if (on && i < 0) a.push(String(id)); if (!on && i >= 0) a.splice(i, 1); }
+function pmSavePlan() {
+  var f = _pm.form;
+  if (!String(f.Name).trim()) { toast('Plan name is required', 'error'); return; }
+  if (!f.Template_IDs.length) { toast('Pick at least one visit', 'error'); return; }
+  pmWrite('POST', '/pm/plan/save', { id: f.id || undefined, fields: { Name: f.Name, Template_IDs: f.Template_IDs, Price: f.Price, Price_Basis: f.Price_Basis, Billing_Period: f.Billing_Period, Notes: f.Notes, Active: f.Active ? 'TRUE' : 'FALSE' } }, 'Plan saved', function() { _pm.form = null; });
+}
+
 // ── Recurring / scheduled work orders (Sep 28 2026) ─────────────────────────────────────────
 var _tmplTargets = [];   // [{p:propertyId,u:unitId|''}] being edited in the template modal
 var _woSnippets = [];
