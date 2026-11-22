@@ -55,6 +55,7 @@ ok(top.length === 3 && top[0].score >= top[1].score && top[1].score >= top[2].sc
 ok(woSimilarOpen({ ...base, trade: 'Plumbing', description: 'kitchen sink leaking' }, [wo({})], { threshold: 'junk', otherTradeThreshold: '', max: 'x' }).length === 1, 'junk settings fall back to safe defaults');
 ok(woSimilarOpen({ ...base, trade: 'Plumbing', description: 'fregadero de la cocina gotea' }, [wo({ Description: 'fregadero de la cocina gotea mucho' })]).length === 1, 'Spanish text works');
 ok(woSimilarOpen(null, null).length === 0, 'null inputs give no matches');
+ok(JSON.stringify(WOStatus.sets.TENANT_OPEN.filter(st => st !== 'Pending Invoice')) === JSON.stringify(['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold']), 'open set comes from the status single source of truth, without the billing state');
 
 // endpoint
 const tenant = { ID: 'T1', Property_ID: 'P1', Unit_ID: 'U1', Active: 'TRUE', Move_In_Date: '2026-01-01' };
