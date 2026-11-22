@@ -15830,6 +15830,35 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
 </div>
 
 <!-- EDIT OWNER MODAL (Aug 20, 2026 — replaces the old "edit via the Sheet" toast; real edit like Vendor/Tenant/Property) -->
+<!-- OWNER SUMMARIES (queue #122, Phase 1): Brett builds, reads, edits, test-sends, sends or skips each owner's monthly email. Nothing is sent without Send. -->
+<div class="modal-overlay" id="modal-owner-summaries">
+  <div class="modal" style="max-width:720px">
+    <div class="modal-header"><div class="modal-title">OWNER SUMMARIES</div><button class="modal-close" onclick="closeModal('modal-owner-summaries')">✕</button></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
+      <div class="form-group" style="margin:0"><label for="os-month">Month</label><input type="month" id="os-month" style="font-size:16px" onchange="osLoad()"></div>
+      <button class="btn" id="os-build-btn" onclick="osBuild()">Build drafts</button>
+    </div>
+    <p style="color:var(--muted);font-size:13px;margin:0 0 12px">Only owners with “Monthly summary email” switched on get a draft (Edit owner). Nothing goes out until you press Send on a draft.</p>
+    <div id="os-staging" style="display:none;background:var(--warn-bg);color:var(--warn-text);border-radius:var(--radius);padding:8px 12px;font-size:13px;margin-bottom:12px">Staging: emails are held here, nothing really sends.</div>
+    <div id="os-build-msg"></div>
+    <div id="os-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+    <div id="os-detail" style="display:none;border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+      <input type="hidden" id="os-id">
+      <div id="os-to" style="font-size:15px;font-weight:600;margin-bottom:8px"></div>
+      <div class="form-group"><label for="os-subject">Subject</label><input type="text" id="os-subject" style="font-size:16px"></div>
+      <label style="font-size:13px;font-weight:600">What the owner will see (tap the text to change it)</label>
+      <iframe id="os-frame" sandbox="allow-same-origin" title="Email preview" style="width:100%;height:320px;border:1px solid var(--border);border-radius:var(--radius);background:#fff"></iframe>
+      <div id="os-msg" style="margin-top:8px"></div>
+      <div class="modal-actions" style="flex-wrap:wrap">
+        <button class="btn secondary" id="os-skip-btn" onclick="osAct('skip')">Skip</button>
+        <button class="btn secondary" id="os-save-btn" onclick="osAct('save')">Save changes</button>
+        <button class="btn secondary" id="os-test-btn" onclick="osAct('test-send')">Send me a test</button>
+        <button class="btn" id="os-send-btn" onclick="osAct('send')">Send to owner</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-edit-owner">
   <div class="modal" style="max-width:480px">
     <div class="modal-header"><div class="modal-title">EDIT OWNER</div><button class="modal-close" onclick="closeModal('modal-edit-owner')">✕</button></div>
