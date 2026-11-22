@@ -945,7 +945,7 @@ function srCreateRequest(trade, desc, dupOf) {
     type: 'tenant', created_by: session.tenant_name, possible_dup_of: dupOf || '',
   }}).then(function(res) {
     if (!res.id) {
-      document.getElementById('srSubmitBtn').disabled = false;
+      document.getElementById('srSubmitBtn').disabled = false; srBackToForm();
       msgEl.innerHTML = '<div class="msg error">' + esc(res.error || 'Error submitting request') + '</div>';
       return;
     }
