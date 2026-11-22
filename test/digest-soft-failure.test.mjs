@@ -23,6 +23,7 @@ const world = {
   computeTelemetryMetrics: () => ({ byJob: {} }),
   fetchConfig: async () => { if (CFG_THROW) throw new Error('config down'); return CFG; },
   fuDigestLines: async () => ({ lines: [], error: null }),
+  __meterDaily: async () => ({ ok: true, complete: true, reads: 0, refusals: 0, busy_minutes: 0, peak_minute: null, top_sources: [], top_tabs: [], no_data: true }),
 };
 const names = Object.keys(world);
 const F = new Function(...names, helpers + '\n' + activeRows + '\n' + build + '\n' + fmt + '\nreturn { buildDigest, formatDigestText };')(...names.map(n => world[n]));
