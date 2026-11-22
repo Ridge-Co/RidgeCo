@@ -1109,6 +1109,12 @@ const _hubWorkerCore = {
         if (path === '/wo-template/copy')         return await recurCopyTemplate(env, body);
         if (path === '/wo-template/link')         return await recurLinkTemplate(env, body);
         if (path === '/wo-template/preview')      return await recurPreview(env, body);
+        // Queue #155 (PM plans, Phase 1): admin only by construction. Not in PUBLIC_PATHS, ROLE_SCOPES or HUB_PROD_WRITE_PATHS.
+        if (path === '/pm/plan/save')             return await pmSavePlan(env, body);
+        if (path === '/pm/seasonal-pack')         return await pmSeasonalPack(env, body);
+        if (path === '/pm/enroll/preview')        return await pmEnrollPreview(env, body);
+        if (path === '/pm/enroll')                return await pmEnroll(env, body);
+        if (path === '/pm/enroll/status')         return await pmSetStatus(env, body);
         if (path === '/wo-snippet/add')           { await ensureTab(env, WO_SNIPPETS_TAB, WO_SNIPPETS_COLS); return await addRow(env, WO_SNIPPETS_TAB, body); }
         if (path === '/wo-snippet/update')        { await ensureTab(env, WO_SNIPPETS_TAB, WO_SNIPPETS_COLS); return await updateRow(env, WO_SNIPPETS_TAB, body.id, body.fields); }
         if (path === '/material/add')             return await addRow(env, 'Materials', body);
