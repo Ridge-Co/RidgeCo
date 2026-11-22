@@ -3645,14 +3645,58 @@ function openAssignModal(woId) {
   setTimeout(function(){ var el = document.getElementById('assign-vendor-search'); if(el) el.focus(); }, 100);
 }
 
+// Vendor suggestions (queue #58 Phase 1). Suggestion only: nothing is pre-selected and opening the box writes and texts nothing.
+// OFF unless Config vendor_suggest_enabled is TRUE (the Worker then answers enabled:false and the box looks as it always did).
+var _assignSuggest = { items: [], trade: '', seq: 0, summary: '' };
+function suggestPick(list, items) {
+  return items.map(function(s){ return list.find(function(v){ return String(v.ID) === String(s.vendor_id); }); }).filter(Boolean);
+}
+function suggestOptGroups(list, items, trade, optHtml) {
+  var picked = suggestPick(list, items);
+  if (!picked.length) return optHtml(list);
+  return '<optgroup label="Suggested for ' + esc(trade) + '">' + picked.map(function(v, i){ return optHtml([v], i === 0 ? '★ ' : ''); }).join('') + '</optgroup>' +
+    '<optgroup label="All vendors">' + optHtml(list) + '</optgroup>';
+}
+function loadAssignSuggestions() {
+  var woId = assignWOId, seq = ++_assignSuggest.seq;
+  var prev = document.getElementById('assign-preview'), retry = document.getElementById('assign-suggest-retry');
+  _assignSuggest.items = []; _assignSuggest.summary = '';
+  if (retry) retry.style.display = 'none';
+  var done = false;
+  function failed(msg) {
+    if (done || seq !== _assignSuggest.seq) return; done = true;
+    prev.textContent = 'Suggestions unavailable - showing all vendors.';
+    if (retry) retry.style.display = '';
+    logError('Vendor suggest', msg);
+  }
+  var firstChoice = document.getElementById('assign-vendor-select');
+  var timer = setTimeout(function(){ failed('no answer in 4 seconds'); }, 4000);
+  api('GET', '/vendor-suggest?wo_id=' + encodeURIComponent(woId)).then(function(res){
+    clearTimeout(timer);
+    if (done || seq !== _assignSuggest.seq) return; done = true;
+    if (!res || res.ok === false || res.error) { done = false; failed((res && res.error) || 'empty answer'); return; }
+    if (!res.enabled) { prev.textContent = ''; return; }
+    var items = safeArray(res.suggestions), msg = '';
+    if (!items.length) msg = res.reason === 'no_trade' ? 'This job has no trade set, so there is no suggestion.' : 'No vendor on file for ' + (res.trade || 'this trade') + '. Showing all vendors.';
+    else msg = 'Best match: ' + items[0].name + ' — ' + items[0].reason + '.';
+    if (res.warnings && res.warnings.length) msg += ' ' + res.warnings[0];
+    _assignSuggest.items = items; _assignSuggest.trade = res.trade || ''; _assignSuggest.summary = msg;
+    var q = document.getElementById('assign-vendor-search').value;
+    var keep = firstChoice ? firstChoice.value : '';
+    if (!q) { renderAssignVendorOptions(''); if (keep) firstChoice.value = keep; }
+    prev.textContent = keep ? prev.textContent : msg;
+  }).catch(function(e){ clearTimeout(timer); done = false; failed(e && e.message ? e.message : 'request failed'); });
+  prev.textContent = 'Finding the best match…';
+}
 function renderAssignVendorOptions(query) {
   var q = query.toLowerCase().trim();
   var filtered = q
     ? _assignVendorList.filter(function(v){ return (v.Name||'').toLowerCase().includes(q) || (v.Trade||'').toLowerCase().includes(q) || (v.Phone||'').includes(q); })
     : _assignVendorList;
+  function opts(list, star) { return list.map(function(v){ return '<option value="'+v.ID+'">'+(star||'')+v.Name+' — '+v.Trade+(v.Phone?' — '+v.Phone:'')+'</option>'; }).join(''); }
   document.getElementById('assign-vendor-select').innerHTML =
     '<option value="">— Select vendor —</option>' +
-    filtered.map(function(v){ return '<option value="'+v.ID+'">'+v.Name+' — '+v.Trade+(v.Phone?' — '+v.Phone:'')+'</option>'; }).join('');
+    (q ? opts(filtered) : suggestOptGroups(filtered, _assignSuggest.items, _assignSuggest.trade, opts));
 }
 
 function filterAssignVendors() {
