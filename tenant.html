@@ -966,7 +966,7 @@ function srCreateRequest(trade, desc, dupOf) {
       uploadTenantPhoto(srFiles[i], woId).then(function(ok){ if (!ok) failedUploads++; uploadNext(i + 1); });
     };
     uploadNext(0);
-  }).catch(function(){ document.getElementById('srSubmitBtn').disabled = false; msgEl.innerHTML = '<div class="msg error">Connection error.</div>'; });
+  }).catch(function(){ document.getElementById('srSubmitBtn').disabled = false; srBackToForm(); msgEl.innerHTML = '<div class="msg error">Connection error.</div>'; });
 }
 
 // ── Feedback ──────────────────────────────────────────────────
