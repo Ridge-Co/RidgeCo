@@ -834,7 +834,7 @@ function openSubmitRequest() {
   openModal('modalSubmitRequest');
 }
 function srHandleFiles(fileList) {
-  Array.from(fileList).forEach(function(f) { if (srFiles.length < 6) srFiles.push(f); });
+  Array.from(fileList).forEach(function(f) { if (srFiles.length < 6) { srFiles.push(f); srMarks.push(null); } });
   renderSrPreview();
 }
 function renderSrPreview() {
