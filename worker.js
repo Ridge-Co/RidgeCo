@@ -908,6 +908,7 @@ const _hubWorkerCore = {
           body.__triage = TRIAGE_INTAKE_TYPES.includes(String(body.type || 'manual'));   // set here, never trusted from the client
           return await callWithFailureAlert(env, 'wo_create', '/workorder', () => createWorkOrder(env, body));
         }
+        if (path === '/workorder/similar-check')  return await woSimilarCheck(env, body, callerRole, callerSessionId);   // TENANT sessions only (queue #63); read-only, ships OFF behind Config wo_similar_enabled
         if (path === '/intake/email')             return await intakeEmail(env, body);
         if (path === '/intake/retry')             return await intakeRetry(env, body);
         if (path === '/intake/delivery-email')    return await deliveryEmailIntake(env, _idEmail ? Object.assign({}, body, { mailbox: _idEmail, mailbox_claimed: String(body && body.mailbox || '').slice(0, 120) }) : body);   // a verified identity replaces whatever mailbox the body claims   // Oct 23 2026: store delivery emails (INTAKE_TOKEN or WORKER_SECRET)
@@ -2102,6 +2103,7 @@ async function demoSessionDenied(env, session) {
 // A demo TENANT session may write only inside its own slot: submit a request on the slot's properties and add a note on a slot work order. Everything else is refused.
 async function demoTenantWriteDenied(env, path, body, tenantId, slot) {
   const deny = async (why) => { await logTelemetry(env, { Source: 'worker', Job_Type: 'demo_write_denied', Skill_Or_Endpoint: path, Success: 'FALSE', Notes: `slot=${slot} tenant=${tenantId} ${why}`.slice(0, 480) }); return json({ error: 'Forbidden' }, 403); };
+  if (path === '/workorder/similar-check') return null;   // read-only, resolves everything from the session (queue #63)
   if (path === '/demo/test-send') return null;   // the "send me a test" button: the handler ignores the body except `event` and takes the person, slot and phone from the session
   if (path !== '/workorder' && path !== '/wo/add-note') return await deny('path not available in the demo');
   const b = (body && typeof body === 'object') ? body : null;
@@ -9511,6 +9513,9 @@ async function createWorkOrder(env, body) {
   const _mpRaw = parseFloat(String(body.max_price == null ? '' : body.max_price).replace(/[$,\s]/g, ''));
   const _maxPrice = Number.isFinite(_mpRaw) && _mpRaw > 0 ? Math.round(_mpRaw * 100) / 100 : 0;
   if (_maxPrice) { try { await ensureColumns(env, 'Work_Orders', ['Max_Price']); } catch(_){} } // silent-ok: ensureColumns reports its own failure to the ledger
+  // Possible duplicate (queue #63): a tenant who was warned and said "no, different problem" sends the WO it was shown. A label only; the column is added only when a value is sent.
+  const _dupOf = /^WO-\d{1,9}$/.test(String(body.possible_dup_of || '').trim()) ? String(body.possible_dup_of).trim() : '';
+  if (_dupOf) { try { await ensureColumns(env, 'Work_Orders', ['Possible_Dup_Of']); } catch(_){} } // silent-ok: ensureColumns reports its own failure to the ledger
   const data = await sheetsRequest(env, 'GET', `/values/Work_Orders`);
   const rows = data.values || [];
   if (!rows.length) throw new Error('Work_Orders tab has no headers');
@@ -9537,7 +9542,8 @@ async function createWorkOrder(env, body) {
     // Vendor Additional Work (Sep 30 2026) — only /wo/additional-work/start sends this, after ensureColumns.
     Parent_WO_ID: body.parent_wo_id||'',
     // Max price (Nov 5 2026) — vendor-facing ceiling, never printed on a description or invoice.
-    Max_Price: _maxPrice ? _maxPrice.toFixed(2) : ''
+    Max_Price: _maxPrice ? _maxPrice.toFixed(2) : '',
+    Possible_Dup_Of: _dupOf
   }[h] ?? ''));
   const _woAppend = await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   // Oct 16 2026: if another request took the same WO number in the gap, give THIS row the next free number (and say so in telemetry).
@@ -29950,7 +29956,7 @@ const ROLE_SCOPES = {
     '/vendor-bill/add-standalone','/vendor/request-property-access','/workorder/self-serve','/properties',
     // Web push (Nov 5 2026): a session manages only ITS OWN devices (identity comes from the session inside pushRoute). /push/send is admin-only and is in no role scope.
     '/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
-  tenant: ['/demo/test-send','/demo/test-status','/tenant-by-pin','/tenant-session-refresh','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/upload-photo','/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
+  tenant: ['/demo/test-send','/demo/test-status','/tenant-by-pin','/tenant-session-refresh','/tenant-workorders','/attachments','/wo/add-note','/wishlist/add','/create-upload-session','/log-attachment','/workorder','/workorder/similar-check','/upload-photo','/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
   owner:  ['/demo/test-send','/demo/test-status','/owner-by-pin','/owner-workorders','/owner-properties','/owner-notifications','/owner/notifications','/attachments','/wo-audit','/wo/add-note','/wo/append-description','/wo/owner-update','/wo/set-tenant-visibility','/workorder','/wishlist/add','/create-upload-session','/log-attachment','/owner/billing','/owner/get-billing','/upload-photo','/owner-file/view','/owner/tenant-roster','/owner/tenant-roster/preview','/owner/tenant-roster/apply','/owner/approvals','/owner/approval/respond','/push/vapid-key','/push/devices','/push/subscribe','/push/device','/push/remove','/push/test'],
 };
 function isPathAllowedForRole(path, role){ const s = ROLE_SCOPES[role]; return !!(s && s.includes(path)); }
@@ -31082,6 +31088,57 @@ function isMissingTabError(e) {
 }
 function missingTabResponse(tab) {
   return json({ error: `Sheet tab "${tab}" does not exist`, tab, hint: 'Create it via context/sheet-ops/pending.json' }, 404);
+}
+
+// ── Possible-duplicate check at intake (queue #63, Nov 22 2026) ──────────────────────────────────────────────
+// PURE. Which OPEN work orders on the same unit look like this new request? Never blocks anything: the caller only shows a warning.
+// opts: { threshold (same trade, default 0.45), otherTradeThreshold (default 0.70), statuses (default TENANT-visible open set), max (default 3) }
+const WO_SIMILAR_TENANT_STATUSES = WOStatus.sets.TENANT_OPEN.filter(st => st !== 'Pending Invoice');   // open work only; no billing states
+function woSimilarOpen(candidate, workorders, opts) {
+  opts = opts || {};
+  const th = Number.isFinite(Number(opts.threshold)) && Number(opts.threshold) > 0 && Number(opts.threshold) <= 1 ? Number(opts.threshold) : 0.45;
+  const th2 = Number.isFinite(Number(opts.otherTradeThreshold)) && Number(opts.otherTradeThreshold) > 0 && Number(opts.otherTradeThreshold) <= 1 ? Number(opts.otherTradeThreshold) : 0.70;
+  const statuses = Array.isArray(opts.statuses) ? opts.statuses : WO_SIMILAR_TENANT_STATUSES;
+  const max = Number.isFinite(Number(opts.max)) && Number(opts.max) > 0 ? Math.floor(Number(opts.max)) : 3;
+  const c = candidate || {};
+  const nt = queueTokens(c.description);
+  const trade = String(c.trade || '').trim().toLowerCase();
+  const out = [];
+  (workorders || []).forEach(w => {
+    if (!w || w.Voided === 'TRUE' || String(w.Type || '') === 'addon' || String(w.Bid_Group_ID || '').trim()) return;
+    if (!statuses.includes(w.Status)) return;
+    if (String(w.Property_ID || '') !== String(c.property_id || '')) return;
+    if (String(w.Unit_ID || '') !== String(c.unit_id || '')) return;
+    const sameTrade = String(w.Trade || '').trim().toLowerCase() === trade && trade !== '';
+    if (!sameTrade && String(w.Recurring_Template_ID || '').trim()) return;   // a recurring job only matches on the same trade
+    const ot = queueTokens(w.Description);
+    const score = queueDice(nt, ot);
+    let hit = false;
+    if (nt.size < 2 || ot.size < 2) { let shared = false; nt.forEach(t => { if (ot.has(t)) shared = true; }); hit = sameTrade && shared; }
+    else hit = score >= (sameTrade ? th : th2);
+    if (hit) out.push({ id: String(w.ID || ''), trade: w.Trade || '', status: w.Status || '', created: String(w.Created_Date || '').slice(0, 10), snippet: String(w.Description || '').replace(/\s+/g, ' ').trim().slice(0, 120), score: Math.round(score * 100) / 100 });
+  });
+  out.sort((a, b) => b.score - a.score);
+  return out.slice(0, max);
+}
+const WO_SIMILAR_TENANT_LABEL = { 'New': 'Received', 'Assigned': 'Assigned', 'Accepted': 'Assigned', 'In Progress': 'In progress', 'On Hold': 'On hold' };
+
+// POST /workorder/similar-check (tenant session only in Phase 1). Ships OFF: Config wo_similar_enabled must be TRUE. Read-only.
+// The property / unit come from the signed session, never from the page. Only work orders tenantCanSeeWO allows can come back.
+async function woSimilarCheck(env, body, callerRole, callerSessionId) {
+  if (callerRole !== 'tenant') return json({ enabled: false, matches: [] });
+  const cfg = await fetchConfig(env);
+  if (String(cfg.wo_similar_enabled || '').trim().toUpperCase() !== 'TRUE') return json({ enabled: false, matches: [] });
+  const b = (body && typeof body === 'object') ? body : {};
+  const [tenants, wos] = await fetchTabs(env, ['Tenants', 'Work_Orders']);
+  const tenant = tenants.find(t => t.ID === callerSessionId && t.Active !== 'FALSE');
+  if (!tenant) return json({ error: 'Tenant session not found or no longer active' }, 403);
+  const visible = wos.filter(w => tenantCanSeeWO(tenant, w));
+  const hits = woSimilarOpen({ property_id: tenant.Property_ID, unit_id: tenant.Unit_ID || '', trade: String(b.trade || ''), description: String(b.description || '').slice(0, 2000) }, visible, {
+    threshold: cfg.wo_similar_threshold, otherTradeThreshold: cfg.wo_similar_other_trade_threshold, statuses: WO_SIMILAR_TENANT_STATUSES, max: 3 });
+  const matches = hits.map(h => ({ id: h.id, trade: h.trade, status_label: WO_SIMILAR_TENANT_LABEL[h.status] || 'Open', created: h.created, snippet: h.snippet }));
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_similar_check', Skill_Or_Endpoint: '/workorder/similar-check', Success: 'TRUE', Notes: `tenant=${tenant.ID} matches=${matches.map(m => m.id).join(',') || 'none'}` });
+  return json({ enabled: true, matches });
 }
 
 // Server-side backstop against the same submission landing twice.
