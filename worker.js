@@ -705,6 +705,7 @@ const _hubWorkerCore = {
         if (path === '/qb/repairable')          return await qbRepairable(env, url);
         if (path === '/qb/repairable-scope')    return await qbRepairableScope(env, url);
         if (path === '/qb/payables')            return await qbPayables(env, url);
+        if (path === '/qb/pay-run')             return await payRunGet(env, url);   // queue #53 phase 1: read-only weekly pay run, admin only
         if (path === '/qb/proposal-billing-sweep') return await proposalBillingSweep(env);
         if (path === '/daily-digest')           return await digestResponse(env, url);
         if (path === '/ops-telemetry')          return await opsTelemetryRead(env, url);
