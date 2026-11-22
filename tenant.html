@@ -850,11 +850,99 @@ function submitNewRequest() {
   msgEl.innerHTML = '';
   if (!trade) { msgEl.innerHTML = '<div class="msg error">Please select the type of issue.</div>'; return; }
   if (!desc)  { msgEl.innerHTML = '<div class="msg error">Please describe the issue.</div>'; return; }
+  var subBtn = document.getElementById('srSubmitBtn');
+  subBtn.disabled = true; subBtn.textContent = SR_T.checking;   // disabled before the first await, so a double tap cannot file two things
+  srSimilarCheck(trade, desc).then(function(matches) {
+    subBtn.textContent = 'SUBMIT';
+    if (matches.length) { srShowDup(matches, trade, desc); return; }
+    srCreateRequest(trade, desc, '');
+  });
+}
+
+// ── Possible-duplicate warning (queue #63, Nov 22 2026) ───────────────────────────────────────
+// Ships OFF: the Worker answers enabled:false until Config wo_similar_enabled is TRUE, and then this is skipped silently (nothing to see).
+// FAIL OPEN on purpose: if the check errors or takes over 3 seconds the request is filed exactly as before and the miss is reported.
+var SR_T = (navigator.language || '').toLowerCase().indexOf('es') === 0 ? {
+  checking: 'Revisando...', head: 'Esto se parece a una solicitud que ya tiene abierta', ask: '¿Es el mismo problema?', add: 'Agregar a esta solicitud',
+  diff: 'No, es un problema diferente', opened: 'Abierta el ', added: 'Agregado a su solicitud abierta ', added2: '. Nosotros nos encargamos.',
+  addFail: 'No pudimos agregarlo. Intente de nuevo, o toque "No, es un problema diferente" para enviarlo como solicitud nueva.' } : {
+  checking: 'Checking...', head: 'This looks like a request you already have open', ask: 'Is this the same problem?', add: 'Add to this request',
+  diff: 'No, this is a different problem', opened: 'Opened ', added: 'Added to your open request ', added2: ". We'll take it from here.",
+  addFail: "We could not add that. Try again, or tap 'No, this is a different problem' to send it as a new request." };
+function srSimilarCheck(trade, desc) {
+  var timedOut = false;
+  var timer = new Promise(function(resolve) { setTimeout(function() { timedOut = true; resolve({ __timeout: true }); }, 3000); });
+  var call = api('/workorder/similar-check', { method:'POST', body: { trade: trade, description: desc } });
+  return Promise.race([call, timer]).then(function(res) {
+    if (res && res.__timeout) { srReportMiss('check took over 3 seconds'); return []; }
+    if (!res || res.error) { srReportMiss((res && res.error) || 'no answer'); return []; }
+    return (res.enabled && res.matches) ? res.matches : [];
+  }).catch(function(e) { srReportMiss(String((e && e.message) || e)); return []; });
+}
+function srReportMiss(why) {
+  if (typeof window.hubReportFailure === 'function') window.hubReportFailure('wo_similar_check', 'duplicate check did not run, request filed anyway: ' + why);
+  else console.error('wo_similar_check did not run: ' + why);
+}
+function srShowDup(matches, trade, desc) {
+  var panel = document.getElementById('srDupPanel');
+  var cards = matches.map(function(m) {
+    return '<div style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:10px;background:var(--surface2)">' +
+      '<div style="font-weight:bold;font-size:14px">' + esc(m.id) + ' &middot; ' + esc(m.trade) + ' &middot; ' + esc(m.status_label) + '</div>' +
+      '<div style="color:var(--muted);font-size:13px;margin:4px 0">' + SR_T.opened + esc(m.created) + '</div>' +
+      '<div style="font-size:14px;margin-bottom:10px">' + esc(m.snippet) + '</div>' +
+      '<button type="button" class="btn btn-green btn-full" data-wo="' + esc(m.id) + '" onclick="srAddToExisting(this.getAttribute(\'data-wo\'))">' + SR_T.add + '</button></div>';
+  }).join('');
+  panel.innerHTML = '<div style="font-weight:bold;font-size:15px;margin-bottom:4px">' + SR_T.head + '</div>' +
+    '<div style="color:var(--muted);font-size:14px;margin-bottom:10px">' + SR_T.ask + '</div>' + cards +
+    '<button type="button" class="btn btn-muted btn-full" id="srDupDiff" data-wo="' + esc(matches[0].id) + '" style="margin-bottom:12px">' + SR_T.diff + '</button>';
+  document.getElementById('srDupDiff').onclick = function() { srDupGo(function() { srCreateRequest(trade, desc, matches[0].id); }); };
+  panel.style.display = 'block';
+  document.getElementById('srActions').style.display = 'none';
+  panel._pending = { trade: trade, desc: desc };
+}
+function srDupGo(fn) {
+  var panel = document.getElementById('srDupPanel');
+  Array.prototype.forEach.call(panel.querySelectorAll('button'), function(b) { b.disabled = true; });
+  fn();
+}
+// A failed create after the warning: put the form back so the tenant can fix it and try again (the check runs again).
+function srBackToForm() { var p = document.getElementById('srDupPanel'); p.style.display = 'none'; p.innerHTML = ''; document.getElementById('srActions').style.display = ''; }
+function srDupRestore(msg) {
+  var panel = document.getElementById('srDupPanel');
+  Array.prototype.forEach.call(panel.querySelectorAll('button'), function(b) { b.disabled = false; });
+  if (msg) document.getElementById('srMsg').innerHTML = '<div class="msg error">' + esc(msg) + '</div>';
+}
+// "Add to this request": the text goes on the existing WO as an attributed note (Brett gets the existing tenant-note text), photos go to that WO, NO new WO is created.
+function srAddToExisting(woId) {
+  var panel = document.getElementById('srDupPanel'), pend = panel._pending || {}, msgEl = document.getElementById('srMsg');
+  msgEl.innerHTML = '';
+  srDupGo(function() {
+    var note = (pend.trade ? '[' + pend.trade + '] ' : '') + pend.desc;
+    api('/wo/add-note', { method:'POST', body: { wo_id: woId, note: note, author: session.tenant_name, author_role: 'tenant' } }).then(function(res) {
+      if (!res || !res.success) { srDupRestore(SR_T.addFail); return; }
+      var failed = 0, total = srFiles.length;
+      var next = function(i) {
+        if (i >= srFiles.length) {
+          loadWOs();
+          if (failed) { msgEl.innerHTML = '<div class="msg error">' + esc(SR_T.added + woId + SR_T.added2) + ' ' + failed + ' of ' + total + ' photo' + (total===1?'':'s') + ' did not upload. Close this window, open ' + esc(woId) + ', and add ' + (failed===1?'it':'them') + ' under REPORT ISSUE.</div>'; return; }
+          msgEl.innerHTML = '<div class="msg success">' + esc(SR_T.added + woId + SR_T.added2) + '</div>';
+          setTimeout(function() { closeModal('modalSubmitRequest'); }, 1800);
+          return;
+        }
+        uploadTenantPhoto(srFiles[i], woId).then(function(ok) { if (!ok) failed++; next(i + 1); });
+      };
+      next(0);
+    }).catch(function() { srDupRestore(SR_T.addFail); });
+  });
+}
+
+function srCreateRequest(trade, desc, dupOf) {
+  var msgEl = document.getElementById('srMsg');
   document.getElementById('srSubmitBtn').disabled = true;
   api('/workorder', { method:'POST', body: {
     property_id: session.property_id, unit_id: session.unit_id, tenant_id: session.tenant_id,
     trade: trade, priority: document.getElementById('srPriority').value, description: desc,
-    type: 'tenant', created_by: session.tenant_name,
+    type: 'tenant', created_by: session.tenant_name, possible_dup_of: dupOf || '',
   }}).then(function(res) {
     if (!res.id) {
       document.getElementById('srSubmitBtn').disabled = false;
