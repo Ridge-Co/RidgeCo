@@ -25540,6 +25540,7 @@ async function selftestRunSlice(env, today, opts) {
   let prog = await read();
   if (!prog || prog.date !== today) prog = { date: today, started: new Date(t0).toISOString(), endpoint: [], golden: null, complete: false };
   if (prog.complete) return { skipped: true, reason: `already finished today (${today})` };
+  prog.slices = (Number(prog.slices) || 0) + 1;   // queue #271: a progress row from the previous version has no `slices`; it just starts counting here
   while (prog.endpoint.length < checks.length && now() < deadline) prog.endpoint.push(await runOne(checks[prog.endpoint.length]));
   if (prog.endpoint.length < checks.length) {
     await write(prog);
