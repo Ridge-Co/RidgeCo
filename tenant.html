@@ -885,10 +885,15 @@ function submitNewRequest() {
       return;
     }
     var woId = res.id;
-    var failedUploads = 0, totalUploads = srFiles.length;
+    var failedUploads = 0, totalUploads = srFiles.length, failedMarked = 0;
+    var marksToSend = srMarks.slice();
     var uploadNext = function(i) {
       if (i >= srFiles.length) {
         loadWOs();
+        if (!failedUploads && failedMarked) {
+          msgEl.innerHTML = '<div class="msg error">Your request was submitted with its photos, but ' + failedMarked + ' marked-up cop' + (failedMarked===1?'y':'ies') + ' did not upload. The original photo' + (failedMarked===1?' is':'s are') + ' on the request. Close this window.</div>';
+          return;
+        }
         if (failedUploads) {
           // The request itself was created. Keep Submit disabled so it cannot be filed twice.
           msgEl.innerHTML = '<div class="msg error">Your request was submitted, but ' + failedUploads + ' of ' + totalUploads + ' photo' + (totalUploads===1?'':'s') + ' did not upload. Close this window, open your new request, and add ' + (failedUploads===1?'it':'them') + ' under REPORT ISSUE.</div>';
