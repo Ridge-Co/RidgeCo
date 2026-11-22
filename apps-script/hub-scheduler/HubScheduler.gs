@@ -1074,19 +1074,24 @@ function probeWorkers_(deadline) {
   var p = props_(), st = {};
   try { st = JSON.parse(p.getProperty('PROBE_STATE') || '{}') || {}; } catch (e) { st = {}; Logger.log('PROBE_STATE was not valid JSON; starting fresh.'); }
   PROBES.forEach(function (pr) {
-    var s = st[pr.name] || { fails: 0, alerted: false }, code = 0, err = '';
-    try { code = UrlFetchApp.fetch(pr.url + '/health', { method: 'get', muteHttpExceptions: true, followRedirects: false }).getResponseCode(); }
+    if (deadline && Date.now() > deadline) { Logger.log('Probe ' + pr.name + ' skipped: no time left in this tick; it runs on the next one.'); return; }
+    var s = st[pr.name] || { fails: 0, alerted: false }, code = 0, err = '', body = '', target = pr.url + (pr.path || '/health');
+    try { var resp = UrlFetchApp.fetch(target, { method: 'get', muteHttpExceptions: true, followRedirects: false }); code = resp.getResponseCode(); if (pr.expect && code >= 200 && code < 300) body = String(resp.getContentText() || ''); }
     catch (e) { err = String(e).slice(0, 200); }
-    var down = !!err || code === 0 || code >= 500, why = err || ('HTTP ' + code);
+    var wrong = !err && !!pr.expect && code >= 200 && code < 300 && body.indexOf(pr.expect) < 0;
+    var down = !!err || code === 0 || code >= 500 || (pr.kind === 'page' && (code === 404 || code >= 300)) || wrong;
+    var why = err || (wrong ? ('HTTP ' + code + ' but the expected text "' + pr.expect + '" is missing from the answer') : ('HTTP ' + code));
+    var what = pr.kind === 'page' ? 'page' : 'Worker';
     if (down) {
       s.fails = (s.fails || 0) + 1; s.last = why;
       if (s.fails >= PROBE_FAILS_BEFORE_ALERT) {
         s.alerted = true;
-        alertThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, 'Worker DOWN: ' + pr.name, 'The Worker "' + pr.name + '" (' + pr.url + ') has failed its health check ' + s.fails + ' ticks in a row. Last answer: ' + why + '.\n\nAnything that depends on it is not working until it is fixed.');
-        ledgerThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, 'worker_probe:' + pr.name, 'P1', pr.name + ' health check failing (' + why + ', ' + s.fails + ' ticks in a row)');
+        var headline = wrong ? (what + ' answers but its content is wrong: ' + pr.name) : (what + ' DOWN: ' + pr.name);
+        alertThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, headline, 'The ' + what + ' "' + pr.name + '" (' + target + ') has failed its check ' + s.fails + ' ticks in a row. Last answer: ' + why + '.\n\nAnything that depends on it is not working until it is fixed.');
+        ledgerThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, 'worker_probe:' + pr.name, 'P1', pr.name + ' check failing (' + why + ', ' + s.fails + ' ticks in a row)');
       }
     } else {
-      if (s.alerted) alert_('Worker back up: ' + pr.name, 'The Worker "' + pr.name + '" is answering its health check again (HTTP ' + code + ').');
+      if (s.alerted) alert_(what + ' back up: ' + pr.name, 'The ' + what + ' "' + pr.name + '" is answering its check again (HTTP ' + code + ').');
       s = { fails: 0, alerted: false };
     }
     st[pr.name] = s;
