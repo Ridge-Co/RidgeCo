@@ -3635,10 +3635,12 @@ function openAssignModal(woId) {
 
   _assignVendorList = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';});
   document.getElementById('assign-vendor-search').value = '';
+  _assignSuggest = { items: [], trade: '', seq: _assignSuggest.seq, summary: '' };
   renderAssignVendorOptions('');
   document.getElementById('assign-preview').textContent = '';
   closeModal('modal-wo-detail');
   openModal('modal-assign');
+  loadAssignSuggestions();
   // Focus search box after modal opens
   setTimeout(function(){ var el = document.getElementById('assign-vendor-search'); if(el) el.focus(); }, 100);
 }
