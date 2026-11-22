@@ -3738,7 +3738,7 @@ function submitAssign() {
       renderWOPage();
       loadAll();
     }
-  }).catch(function(e){logError('Assign vendor',e.message);toast('Error: '+e.message,'error');});
+  }).catch(function(e){if (btn) btn.disabled = false;logError('Assign vendor',e.message);toast('Error: '+e.message,'error');});
 }
 
 function cancelWO(woId) {
