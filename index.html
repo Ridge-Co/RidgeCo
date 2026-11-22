@@ -1229,7 +1229,7 @@ window.addEventListener('pageshow', function(e){
       </div>
       <div class="form-group" id="wo-unit-group" style="display:none"><label>Unit</label><select id="wo-unit"><option value="">Whole property</option></select></div>
       <div class="form-group"><label>Room / Area <span style="color:var(--muted);font-weight:normal">(optional — vendor-facing)</span></label><input type="text" id="wo-room" placeholder="e.g. Bedroom 2" list="wo-room-list"><datalist id="wo-room-list"></datalist></div>
-      <div class="form-group"><label>Trade</label><select id="wo-trade"></select></div>
+      <div class="form-group"><label>Trade</label><select id="wo-trade" onchange="woTradeChanged()"></select></div>
       <div class="form-group"><label>Priority</label><select id="wo-priority"><option value="normal">Normal</option><option value="urgent">Urgent</option><option value="low">Low</option></select></div>
       <div class="form-group"><label>Type</label><select id="wo-type"><option value="manual">Manual</option><option value="tenant">Tenant Request</option><option value="owner">Owner Request</option><option value="recurring">Recurring/Preventive</option></select></div>
       <div class="form-group full"><label>Description</label><textarea id="wo-desc" class="wo-desc-area" oninput="growDescArea(this)" placeholder="Describe the issue..."></textarea></div>
