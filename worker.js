@@ -26916,6 +26916,108 @@ async function summarizeItemsCheap(env, items) {
   }
 }
 
+// ── AI HOUSE FACTS (queue #151, Phase 1, Nov 22 2026) ────────────────────────────────────────────────────────────────────
+// One shared, byte-stable "house facts" text that a BATCH of AI jobs can pass as `cachePrefix` to routeAI (#89), so calls 2..N in the same run
+// read Anthropic's prompt cache at 0.1x. No live job passes it yet (Phase 2 = the owner-summary AI rewrite, Phase 3 = triage, only if measured
+// useful); this phase only builds the text and an admin test that PROVES whether the cache hits. Anthropic's cache lives ~5 minutes, so a lone
+// call every few hours would only ever pay the write price: do not pad a prompt with this just to cross the 4096-character minimum.
+// Everything comes from the Sheet at run time (nothing about a property, person or price is written in this file). Hard exclusions, enforced by
+// aiHouseFactsHits() on the finished text: no phone, email, PIN or door / lockbox / access code, no dollar amount, rate, markup or max price.
+const AI_HOUSE_FACTS_TTL_MS = 10 * 60 * 1000;
+let _aiHouseFactsMemo = null;   // { at, text } for this Worker isolate; one batch read of three tabs per 10 minutes
+// PURE. The excluded things found in `text` (empty array = clean).
+function aiHouseFactsHits(text) {
+  const t = String(text == null ? '' : text), hits = [];
+  if (/\(?\b\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}\b/.test(t)) hits.push('a phone number');
+  if (/[\w.+\-]+@[\w\-]+\.[\w.\-]+/.test(t)) hits.push('an email address');
+  if (/\b(code|lockbox|pin|passcode|combination)\b[^.\n]{0,20}\b\d{3,8}\b/i.test(t)) hits.push('an access code or PIN');
+  if (/\$/.test(t)) hits.push('a dollar sign');
+  if (/max.?price|markup|hourly.?rate|\brate\s*[:=]/i.test(t)) hits.push('a price, rate or markup field');
+  return hits;
+}
+// PURE. data = { properties, units, vendors, policy }. Sorted by ID with a fixed field order, no timestamps and no counts that change daily,
+// so two calls with the same sheet produce identical bytes (any drift would kill the cache).
+function aiHouseFactsText(data) {
+  data = data || {};
+  const clean = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+  const byId = (a, b) => String(a.ID).localeCompare(String(b.ID), undefined, { numeric: true });
+  const unitsBy = new Map();
+  for (const u of (data.units || [])) {
+    if (u.Active === 'FALSE' || !clean(u.Unit_Label)) continue;
+    const k = String(u.Property_ID); if (!unitsBy.has(k)) unitsBy.set(k, []);
+    unitsBy.get(k).push(clean(u.Unit_Label));
+  }
+  const propLines = (data.properties || []).filter(p => p.Active !== 'FALSE' && clean(p.Address)).slice().sort(byId).map(p => {
+    const us = (unitsBy.get(String(p.ID)) || []).slice().sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    return `- ${clean(p.ID)}: ${clean(p.Address)}${clean(p.City) ? ', ' + clean(p.City) : ''}${us.length ? ' (units: ' + us.join(', ') + ')' : ''}`;
+  });
+  const trades = new Set();
+  const vendorLines = (data.vendors || []).filter(v => v.Active !== 'FALSE' && clean(v.Name)).slice().sort(byId).map(v => {
+    const tr = clean(v.Trades || v.Trade); if (tr) tr.split(/[,;/]/).map(clean).filter(Boolean).forEach(x => trades.add(x));
+    return `- ${clean(v.ID)}: ${clean(v.Name)}${tr ? ' (' + tr + ')' : ''}`;
+  });
+  const lines = [
+    'RIDGE CO HOUSE FACTS (shared reference text; it never changes within a run).',
+    '',
+    'Who we are: Ridge Co coordinates maintenance for rental properties. We are a maintenance coordinator, not a property manager. We send the right vendor, keep everyone informed and keep records.',
+    'Rules for every message: plain, calm, past tense for work done, no jargon, no promises about dates we do not control. Owners never see what they spend. Tenants never see billing. Never give a door, lockbox or access code, a phone number or a price.',
+    '',
+    'Work order statuses, in order: ' + WOStatus.statuses.join(', ') + '.',
+    '',
+    'Trades we use: ' + (trades.size ? Array.from(trades).sort((a, b) => a.localeCompare(b)).join(', ') : '(none listed)') + '.',
+    '',
+    'Properties (ID: address, units):', ...(propLines.length ? propLines : ['- (none)']),
+    '',
+    'Vendors (ID: name, trades):', ...(vendorLines.length ? vendorLines : ['- (none)']),
+  ];
+  const policy = clean(data.policy);
+  if (policy) lines.push('', 'House policy: ' + policy);
+  return lines.join('\n');
+}
+// The prefix for this run, or throws. Memoised per isolate for 10 minutes so a batch does not rebuild it per call. A text that trips an exclusion is refused.
+async function aiHouseFacts(env) {
+  if (_aiHouseFactsMemo && Date.now() - _aiHouseFactsMemo.at < AI_HOUSE_FACTS_TTL_MS) return { text: _aiHouseFactsMemo.text, memo: true };
+  const [properties, units, vendors] = await fetchTabs(env, ['Properties', 'Units', 'Vendors']);
+  const cfg = await fetchConfig(env);
+  const text = aiHouseFactsText({ properties, units, vendors, policy: cfg && cfg.AI_House_Policy });
+  const hits = aiHouseFactsHits(text);
+  if (hits.length) throw new Error('house facts refused: the text contains ' + hits.join(', ') + ' (check AI_House_Policy and the property / vendor names)');
+  _aiHouseFactsMemo = { at: Date.now(), text };
+  return { text, memo: false };
+}
+// For callers: NEVER throws. A builder failure is written to telemetry and returned, so the job can run without a prefix (and say why).
+async function aiHouseFactsSafe(env, source) {
+  try { return await aiHouseFacts(env); }
+  catch (e) {
+    const why = schedErrText(e);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'ai_house_facts', Skill_Or_Endpoint: source || 'aiHouseFacts', Success: 'FALSE', Notes: ('house facts not built; the job runs without a prefix: ' + why).slice(0, 300) }); }
+    catch (e2) { return { text: '', error: why, telemetry_error: schedErrText(e2) }; }
+    return { text: '', error: why };
+  }
+}
+// POST /admin/ai-cache-test {tier?: 'REASON' | 'CHEAP'}  Two short identical calls back to back with the prefix; says plainly whether call 2 read the cache.
+// Admin only. Costs well under a cent. Does nothing (no provider call) while the AI credit guard is paused. routeAI writes its own telemetry row per call.
+async function aiCacheTest(env, body) {
+  const tier = body && body.tier === 'CHEAP' ? 'CHEAP' : 'REASON';
+  const facts = await aiHouseFactsSafe(env, 'aiCacheTest');
+  if (facts.error) return json({ ok: false, error: 'Could not build the house facts: ' + facts.error }, 500);
+  const chars = facts.text.length, out = { ok: true, tier, prefix_chars: chars, calls: [] };
+  for (let i = 1; i <= 2; i++) {
+    try {
+      const r = await routeAI(env, { type: 'ai_cache_test', tier, cachePrefix: facts.text, prompt: 'Reply with the single word: ok', maxTokens: 10, source: 'aiCacheTest' });
+      out.calls.push({ call: i, tokens_in: r.tokens_in, tokens_out: r.tokens_out, cache_write: r.cache_write, cache_read: r.cache_read, model: r.model_used });
+    } catch (e) {
+      if (e && e.name === 'AiCreditPausedError') return json({ ok: false, paused: true, error: 'AI reading is paused (credit guard), so nothing was called.', prefix_chars: chars }, 200);
+      return json({ ok: false, error: 'Call ' + i + ' failed: ' + schedErrText(e), prefix_chars: chars, calls: out.calls }, 502);
+    }
+  }
+  const hit = out.calls[1] && out.calls[1].cache_read > 0;
+  out.verdict = hit ? 'cache HIT on call 2'
+    : chars < ROUTE_AI_CACHE_MIN_CHARS ? `no cache hit: the prefix is only ${chars} characters and the cache marker needs ${ROUTE_AI_CACHE_MIN_CHARS}`
+    : 'no cache hit (the provider did not cache it, or the model does not cache a prefix this size)';
+  return json(out);
+}
+
 // GET|POST /admin/items-summarize-test — read-only diagnostic (Ops_Build_Queue #24, Sep 19
 // 2026). The Sep 17 review found items_summarize escalated 49/49 times with the cause
 // invisible in telemetry — a separate fix (see routeAI's cheapFailReason capture) now logs
