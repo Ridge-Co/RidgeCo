@@ -10,7 +10,7 @@ const ok = (c, m) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail
 const slice = (a, b) => { const i = src.indexOf(a), j = src.indexOf(b, i); if (i < 0 || j < 0) throw new Error('marker missing: ' + a); return src.slice(i, j); };
 const helpers = slice('// ═══ SOFT-FAILURE-HELPERS-BEGIN', '// ═══ SOFT-FAILURE-HELPERS-END');
 const build = slice('async function buildDigest(env) {', '// GET /stale-wos');
-const fmt = slice('function formatDigestText(d) {', 'async function deliverDigest');
+const fmt = slice(src.includes('function quotaDigestLine') ? 'function quotaDigestLine' : 'function formatDigestText(d, minBusy) {', 'async function deliverDigest');
 const activeRows = "function activeRows(rows) { return rows.filter(r => String(r.Active||'').toUpperCase() !== 'FALSE'); }";
 
 let REPORTED, BAD_TABS, CFG, METRICS_THROW, CFG_THROW;
