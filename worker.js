@@ -22300,7 +22300,7 @@ async function buildDigest(env) {
     billsTotal,
     wins: wins.map(w=>`WO-${w.ID} · ${w.Property_Address||('prop '+(w.Property_ID||'?'))} · ${w.Status} · ${String(w.Description||'').slice(0,45)}`),
     pulse: { properties: activeRows(props).length, tenants: activeRows(tenants).length, vendors: activeRows(vendors).length, open_wos: open.length, pending_bills: pendingBills.length },
-    healthAlerts, stuckReceipts,
+    healthAlerts, stuckReceipts, quota,
   };
 }
 
