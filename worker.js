@@ -719,6 +719,7 @@ const _hubWorkerCore = {
         if (path === '/vendor-onboarding-status') return await vendorOnboardingStatus(env, url);
         if (path === '/vendor-onboarding-gaps') return await vendorOnboardingGaps(env);
         if (path === '/ops-queue')              return await opsQueueRead(env, url);
+        if (path === '/owner-summary/list')     return await ownerSummaryList(env, url);   // queue #122: admin only
         if (path === '/receipt-queue')          return await listReceiptQueue(env, url);
         if (path === '/receipt-recon/queue')    return await listReceiptReconQueue(env, url);
         if (path === '/receipt-recon/search')   return await receiptReconSearch(env, url);
