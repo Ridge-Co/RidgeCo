@@ -26031,6 +26031,14 @@ function vendorPerfRows(vendors, wos, bills, times) {
       last_activity: lastActivity,
     };
   }).sort((a, b) => b.jobs_total - a.jobs_total || b.total_billed - a.total_billed);
+  return rows;
+}
+async function vendorPerformance(env, url) {
+  const [vendors, wos, bills, times] = await fetchTabs(
+    env, ['Vendors', 'Work_Orders', 'Vendor_Bills', 'Time_Entries']
+  );
+  const now = Date.now();
+  const rows = vendorPerfRows(vendors, wos, bills, times);
   return json({
     ok: true,
     as_of: new Date(now).toISOString().slice(0, 10),
