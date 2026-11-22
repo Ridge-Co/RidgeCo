@@ -3720,7 +3720,8 @@ function filterEWOVendors() {
 }
 function updateAssignPreview() {
   var v = state.vendors.find(function(x){return x.ID===document.getElementById('assign-vendor-select').value;});
-  document.getElementById('assign-preview').textContent = v ? 'SMS will be sent to '+v.Name+' ('+v.Phone+') with job details and access info.' : '';
+  var sg = v ? _assignSuggest.items.find(function(s){ return String(s.vendor_id) === String(v.ID); }) : null;
+  document.getElementById('assign-preview').textContent = v ? (sg ? sg.reason + '. ' : '') + 'SMS will be sent to '+v.Name+' ('+v.Phone+') with job details and access info.' : _assignSuggest.summary;
 }
 function submitAssign() {
   var vendorId = document.getElementById('assign-vendor-select').value;
