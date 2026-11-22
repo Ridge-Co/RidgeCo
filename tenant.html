@@ -903,7 +903,13 @@ function submitNewRequest() {
         closeModal('modalSubmitRequest');
         return;
       }
-      uploadTenantPhoto(srFiles[i], woId).then(function(ok){ if (!ok) failedUploads++; uploadNext(i + 1); });
+      // The ORIGINAL always uploads first and unchanged; the marked copy follows, paired to it by the original's Drive id.
+      uploadTenantPhotoEx(srFiles[i], woId, '', '').then(function(res){
+        if (!res.ok) { failedUploads++; uploadNext(i + 1); return; }
+        if (!marksToSend[i]) { uploadNext(i + 1); return; }
+        var mf = new File([marksToSend[i]], (typeof rcMarkup !== 'undefined' ? rcMarkup.markedName(srFiles[i].name) : 'marked-photo.jpg'), { type: 'image/jpeg' });
+        uploadTenantPhotoEx(mf, woId, '', res.fileId).then(function(m){ if (!m.ok) failedMarked++; uploadNext(i + 1); });
+      });
     };
     uploadNext(0);
   }).catch(function(){ document.getElementById('srSubmitBtn').disabled = false; msgEl.innerHTML = '<div class="msg error">Connection error.</div>'; });
