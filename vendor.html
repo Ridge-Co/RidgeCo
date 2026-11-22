@@ -593,9 +593,15 @@ function doLogout() {
 var VTR_TYPE_LABELS_VENDOR = { photos: 'Upload photos', description: 'Update / clarify your description', other: 'Request' };
 function loadVendorTaskAlerts() {
   if (!session) return;
-  api('/vendor-task-requests?status=open').then(function(rows) {
-    renderVendorTaskAlerts(rows || []);
-  }).catch(function(e) { console.error('[loadVendorTaskAlerts]', e); });
+  // Queue #112: apiList() signs the vendor out on 401 and throws on any non-array reply, so a failed read can never look like
+  // an empty list (a blank banner told a vendor with an open request from Brett that they had none).
+  apiList('/vendor-task-requests?status=open').then(function(rows) {
+    renderVendorTaskAlerts(rows);
+  }).catch(function(e) {
+    console.error('[loadVendorTaskAlerts]', e);
+    if (!session) return;   // 401 already signed the vendor out
+    showLoadFailed('vtrBanner', 'your requests from Ridge Co', (e && e.message) || e, loadVendorTaskAlerts, 'vendor_task_requests');
+  });
 }
 function renderVendorTaskAlerts(rows) {
   var el = document.getElementById('vtrBanner');
