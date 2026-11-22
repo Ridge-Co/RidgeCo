@@ -3158,9 +3158,21 @@ async function handlePhotoUploadClean(env, request) {
       } catch (_) { /* still non-fatal to the upload itself */ }
     }
     step.current = 'log_attachments';
+    // Queue #163 (photo markup): an optional pairing. A marked-up copy carries the Drive file id of its untouched original in Marked_From.
+    // Only a plain id shape is accepted; anything else is ignored (the upload itself still succeeds, and the warning says so).
+    const markedFromRaw = String(formData.get('marked_from') || '').trim();
+    const markedFrom = /^[A-Za-z0-9_-]{5,120}$/.test(markedFromRaw) ? markedFromRaw : '';
+    const logWarnings = [];
+    if (markedFromRaw && !markedFrom) logWarnings.push('marked_from was not a valid file id and was ignored');
     try {
-      await addRow(env, 'Attachments', { WO_ID: woId, File_Name: filename, File_Type: fileType, Drive_File_ID: uploaded.id, Drive_URL: uploaded.webViewLink || uploaded.id, Mime_Type: mimeType, Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE' });
-    } catch(sheetErr) { /* non-fatal */ }
+      const attRow = { WO_ID: woId, File_Name: filename, File_Type: fileType, Drive_File_ID: uploaded.id, Drive_URL: uploaded.webViewLink || uploaded.id, Mime_Type: mimeType, Created_Date: new Date().toISOString().split('T')[0], Active: 'TRUE' };
+      if (markedFrom) { await ensureColumns(env, 'Attachments', ['Marked_From']); attRow.Marked_From = markedFrom; }
+      await addRow(env, 'Attachments', attRow);
+    } catch(sheetErr) {
+      // The file is safely in Drive, so the upload still answers success, but the missing Attachments row is reported, never swallowed.
+      logWarnings.push('the file saved to Drive but its Attachments row was not written');
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'upload_photo_attachment_row_failed', Skill_Or_Endpoint: 'upload-photo', Success: 'FALSE', Notes: `wo=${woId} file=${filename} id=${uploaded.id} err=${String((sheetErr && sheetErr.message) || sheetErr).slice(0, 200)}` }); } catch (le) { console.error('upload-photo: could not log the Attachments row failure:', le && le.message); }
+    }
     step.current = 'update_wo_fields';
     try {
       // Only the customer-facing WO folder becomes the WO's shared Drive_Folder (photo link).
@@ -3168,8 +3180,11 @@ async function handlePhotoUploadClean(env, request) {
         await updateWOField(env, woId, 'Drive_Folder_URL', woFolder.webViewLink);
         await updateWOField(env, woId, 'Drive_Folder_ID',  woFolder.id);
       }
-    } catch(woErr) { /* non-fatal */ }
-    return json({ success: true, fileId: uploaded.id, url: uploaded.webViewLink || `https://drive.google.com/file/d/${uploaded.id}/view`, name: filename, woFolderUrl: woFolder.webViewLink || '' });
+    } catch(woErr) {
+      logWarnings.push('the file saved but the work order photo-folder link was not updated');
+      try { await logTelemetry(env, { Source: 'worker', Job_Type: 'upload_photo_wo_folder_link_failed', Skill_Or_Endpoint: 'upload-photo', Success: 'FALSE', Notes: `wo=${woId} err=${String((woErr && woErr.message) || woErr).slice(0, 200)}` }); } catch (le) { console.error('upload-photo: could not log the folder-link failure:', le && le.message); }
+    }
+    return json({ success: true, fileId: uploaded.id, url: uploaded.webViewLink || `https://drive.google.com/file/d/${uploaded.id}/view`, name: filename, woFolderUrl: woFolder.webViewLink || '', ...(markedFrom ? { markedFrom } : {}), ...(logWarnings.length ? { warnings: logWarnings } : {}) });
   } catch(e) {
     return json({ error: e.message || 'Upload failed', step: step.current, stack: e.stack?.substring(0,300) }, 500);
   }

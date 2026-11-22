@@ -4,6 +4,7 @@
 <script src="test-login.js"></script>
 <script src="failure-reporter.js"></script>
 <script src="wo-status.js"></script>
+<script src="photo-markup.js"></script>
 <script data-wo-status-guard>if (typeof WOStatus === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div style="background:#b42318;color:#fff;padding:12px;font:14px sans-serif;position:relative;z-index:99999">The status list (wo-status.js) did not load, so work orders will not show correctly. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -762,13 +763,19 @@ function noteRemoveFile(i) { noteFiles.splice(i, 1); renderNotePreview(); }
 
 // Upload one tenant photo to the Worker. Resolves true only when the Worker confirms it saved; never rejects.
 function uploadTenantPhoto(file, woId, fileType) {
+  return uploadTenantPhotoEx(file, woId, fileType, '').then(function(res){ return res.ok; });
+}
+// Same upload, but also hands back the Drive file id (needed to pair a marked-up copy, queue #163) and takes an optional markedFrom.
+// Resolves {ok, fileId}; never rejects. ok is true only when the Worker confirms it saved.
+function uploadTenantPhotoEx(file, woId, fileType, markedFrom) {
   var fd = new FormData();
   fd.append('file', file);
   fd.append('wo_id', woId);
   if (fileType) fd.append('file_type', fileType);
+  if (markedFrom) fd.append('marked_from', markedFrom);
   return fetch(WORKER + '/upload-photo', { method:'POST', headers:{'X-Auth-Token':SECRET}, body: fd })
-    .then(function(r){ return r.json().then(function(j){ return !!(r.ok && j && j.success); }, function(){ return false; }); })
-    .catch(function(){ return false; });
+    .then(function(r){ return r.json().then(function(j){ var ok = !!(r.ok && j && j.success); return { ok: ok, fileId: ok && j.fileId ? String(j.fileId) : '' }; }, function(){ return { ok:false, fileId:'' }; }); })
+    .catch(function(){ return { ok:false, fileId:'' }; });
 }
 
 function submitNote() {
@@ -814,6 +821,7 @@ function submitNote() {
 // Gated by can_submit_wo (set at login from the existing owner/property toggle hierarchy);
 // POST /workorder re-checks the same thing server-side.
 var srFiles = [];
+var srMarks = [];   // parallel to srFiles: a marked-up JPEG Blob (queue #163) or null. The original File in srFiles is never changed.
 function openSubmitRequest() {
   document.getElementById('srTrade').value = '';
   document.getElementById('srDesc').value = '';
@@ -822,24 +830,41 @@ function openSubmitRequest() {
   document.getElementById('srPreview').innerHTML = '';
   document.getElementById('srMsg').innerHTML = '';
   document.getElementById('srSubmitBtn').disabled = false;
-  srFiles = [];
+  srFiles = []; srMarks = [];
   openModal('modalSubmitRequest');
 }
 function srHandleFiles(fileList) {
-  Array.from(fileList).forEach(function(f) { if (srFiles.length < 6) srFiles.push(f); });
+  Array.from(fileList).forEach(function(f) { if (srFiles.length < 6) { srFiles.push(f); srMarks.push(null); } });
   renderSrPreview();
 }
 function renderSrPreview() {
   document.getElementById('srPreview').innerHTML = srFiles.map(function(f, i) {
-    var url = URL.createObjectURL(f);
     var isVideo = f.type.startsWith('video/');
-    return '<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;background:var(--surface2)">' +
+    var url = URL.createObjectURL(srMarks[i] || f);
+    var isImg = f.type.startsWith('image/');
+    return '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">' +
+      '<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;background:var(--surface2)">' +
       (isVideo ? '<video src="' + url + '" muted style="width:100%;height:100%;object-fit:cover"></video>' : '<img src="' + url + '" style="width:100%;height:100%;object-fit:cover">') +
-      '<button onclick="srRemoveFile(' + i + ')" style="position:absolute;top:1px;right:1px;background:rgba(0,0,0,.8);color:#fff;border:none;border-radius:50%;width:16px;height:16px;font-size:9px;cursor:pointer">&#x2715;</button>' +
+      '<button onclick="srRemoveFile(' + i + ')" aria-label="Remove" style="position:absolute;top:1px;right:1px;background:rgba(0,0,0,.8);color:#fff;border:none;border-radius:50%;width:16px;height:16px;font-size:9px;cursor:pointer">&#x2715;</button>' +
+      '</div>' +
+      (isImg ? '<button type="button" onclick="srMarkUp(' + i + ')" style="min-height:44px;min-width:56px;padding:0 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px;cursor:pointer">' + (srMarks[i] ? '&#x270E; Marked' : '&#x270E; Mark up') + '</button>' : '') +
+      (srMarks[i] ? '<button type="button" onclick="srResetMark(' + i + ')" style="min-height:44px;padding:0 8px;border-radius:6px;border:none;background:none;color:var(--muted);font-size:13px;cursor:pointer;text-decoration:underline">Use original</button>' : '') +
       '</div>';
   }).join('');
 }
-function srRemoveFile(i) { srFiles.splice(i, 1); renderSrPreview(); }
+function srRemoveFile(i) { srFiles.splice(i, 1); srMarks.splice(i, 1); renderSrPreview(); }
+function srResetMark(i) { srMarks[i] = null; renderSrPreview(); }
+function srMarkUp(i) {
+  var msgEl = document.getElementById('srMsg');
+  if (typeof rcMarkup === 'undefined') { msgEl.innerHTML = '<div class="msg error">The photo markup tool did not load. Reload the page. If this stays, tell Brett.</div>'; return; }
+  msgEl.innerHTML = '';
+  // Always starts from the ORIGINAL file, so marking twice never stacks drawings on a drawing.
+  rcMarkup.open(srFiles[i], {
+    lang: 'en',
+    onDone: function(blob) { srMarks[i] = blob; renderSrPreview(); },
+    onError: function(m) { msgEl.innerHTML = '<div class="msg error">' + esc(m) + '</div>'; }
+  });
+}
 
 function submitNewRequest() {
   var trade = document.getElementById('srTrade').value;
@@ -860,10 +885,15 @@ function submitNewRequest() {
       return;
     }
     var woId = res.id;
-    var failedUploads = 0, totalUploads = srFiles.length;
+    var failedUploads = 0, totalUploads = srFiles.length, failedMarked = 0;
+    var marksToSend = srMarks.slice();
     var uploadNext = function(i) {
       if (i >= srFiles.length) {
         loadWOs();
+        if (!failedUploads && failedMarked) {
+          msgEl.innerHTML = '<div class="msg error">Your request was submitted with its photos, but ' + failedMarked + ' marked-up cop' + (failedMarked===1?'y':'ies') + ' did not upload. The original photo' + (failedMarked===1?' is':'s are') + ' on the request. Close this window.</div>';
+          return;
+        }
         if (failedUploads) {
           // The request itself was created. Keep Submit disabled so it cannot be filed twice.
           msgEl.innerHTML = '<div class="msg error">Your request was submitted, but ' + failedUploads + ' of ' + totalUploads + ' photo' + (totalUploads===1?'':'s') + ' did not upload. Close this window, open your new request, and add ' + (failedUploads===1?'it':'them') + ' under REPORT ISSUE.</div>';
@@ -873,7 +903,13 @@ function submitNewRequest() {
         closeModal('modalSubmitRequest');
         return;
       }
-      uploadTenantPhoto(srFiles[i], woId).then(function(ok){ if (!ok) failedUploads++; uploadNext(i + 1); });
+      // The ORIGINAL always uploads first and unchanged; the marked copy follows, paired to it by the original's Drive id.
+      uploadTenantPhotoEx(srFiles[i], woId, '', '').then(function(res){
+        if (!res.ok) { failedUploads++; uploadNext(i + 1); return; }
+        if (!marksToSend[i]) { uploadNext(i + 1); return; }
+        var mf = new File([marksToSend[i]], (typeof rcMarkup !== 'undefined' ? rcMarkup.markedName(srFiles[i].name) : 'marked-photo.jpg'), { type: 'image/jpeg' });
+        uploadTenantPhotoEx(mf, woId, '', res.fileId).then(function(m){ if (!m.ok) failedMarked++; uploadNext(i + 1); });
+      });
     };
     uploadNext(0);
   }).catch(function(){ document.getElementById('srSubmitBtn').disabled = false; msgEl.innerHTML = '<div class="msg error">Connection error.</div>'; });
