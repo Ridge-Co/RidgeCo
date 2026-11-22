@@ -26051,6 +26051,102 @@ async function vendorPerformance(env, url) {
   });
 }
 
+// ── Vendor suggestions (queue #58, Phase 1) ──────────────────────────────────────────────────────────────────
+// GET /vendor-suggest?wo_id=  or  ?trade=  — READ-ONLY, admin-only (not in PUBLIC_PATHS, not in any role path list). Ranks the
+// active vendors of a job's trade with the numbers the scorecard already has. It never assigns and never texts: Brett still taps Assign.
+// Config: vendor_suggest_enabled (blank = OFF), vendor_suggest_min_jobs (default 3), vendor_suggest_weights (JSON, optional).
+const VENDOR_SUGGEST_DEFAULT_WEIGHTS = { completion: 40, speed: 30, price: 15, workload: 15 };
+const VENDOR_SUGGEST_LIMIT = 3;
+function vendorTradeTokens(s) {
+  return String(s == null ? '' : s).split(/[,\/;]/).map(t => t.replace(/\s+/g, '').toLowerCase()).filter(Boolean);
+}
+function vendorSuggestWeights(raw) {
+  const out = Object.assign({}, VENDOR_SUGGEST_DEFAULT_WEIGHTS);
+  const text = String(raw == null ? '' : raw).trim();
+  if (!text) return { weights: out, warning: '' };
+  try {
+    const j = JSON.parse(text);
+    if (!j || typeof j !== 'object' || Array.isArray(j)) throw new Error('not an object');
+    for (const k of Object.keys(VENDOR_SUGGEST_DEFAULT_WEIGHTS)) {
+      if (j[k] === undefined) continue;
+      const n = Number(j[k]);
+      if (!isFinite(n) || n < 0) throw new Error(k + ' must be a number of 0 or more');
+      out[k] = n;
+    }
+    return { weights: out, warning: '' };
+  } catch (e) {
+    return { weights: Object.assign({}, VENDOR_SUGGEST_DEFAULT_WEIGHTS), warning: 'vendor_suggest_weights in Config is not valid (' + String((e && e.message) || e).slice(0, 80) + '); the built-in weights were used.' };
+  }
+}
+// Pure: no reads, no writes. perfRows = vendorPerfRows() output (active vendors only). job = { trade }.
+function rankVendorsForJob(perfRows, job, opts) {
+  opts = opts || {};
+  const w = opts.weights || VENDOR_SUGGEST_DEFAULT_WEIGHTS;
+  const minJobs = opts.minJobs != null ? opts.minJobs : 3;
+  const limit = opts.limit || VENDOR_SUGGEST_LIMIT;
+  const jobTrades = vendorTradeTokens(job && job.trade);
+  if (!jobTrades.length) return { suggestions: [], reason: 'no_trade' };
+  const match = (perfRows || []).filter(r => vendorTradeTokens(r.trade).some(t => jobTrades.includes(t)));
+  if (!match.length) return { suggestions: [], reason: 'no_vendor_for_trade' };
+  // lower-is-better measures are compared only among the matching vendors; a vendor with no data gets the neutral middle
+  const norm = (vals, v) => {
+    const have = vals.filter(x => x != null && isFinite(x));
+    if (v == null || !isFinite(v) || !have.length) return 0.5;
+    const lo = Math.min(...have), hi = Math.max(...have);
+    return hi === lo ? 1 : (hi - v) / (hi - lo);
+  };
+  const days = match.map(r => r.avg_days_to_complete);
+  const bills = match.map(r => (r.bill_count > 0 ? r.avg_bill : null));
+  const scored = match.map(r => {
+    const load = (r.jobs_open || 0) + (r.jobs_open_urgent || 0);
+    const score = (r.completion_rate == null ? 0 : r.completion_rate) * w.completion
+      + norm(days, r.avg_days_to_complete) * w.speed
+      + norm(bills, r.bill_count > 0 ? r.avg_bill : null) * w.price
+      + Math.max(0, 1 - load / 10) * w.workload;
+    const low = (r.jobs_completed || 0) < minJobs;
+    const parts = [];
+    if (low) parts.push('New - not enough history (' + (r.jobs_completed || 0) + ' finished)');
+    else {
+      parts.push(r.jobs_total + ' jobs');
+      if (r.completion_rate != null) parts.push(Math.round(r.completion_rate * 100) + '% finished');
+      if (r.avg_days_to_complete != null) parts.push('about ' + Math.round(r.avg_days_to_complete) + ' days each');
+      parts.push(r.jobs_open + ' open now');
+    }
+    return { vendor_id: r.vendor_id, name: r.name, score: +score.toFixed(1), reason: parts.join(', '), low_history: low, _last: r.last_activity || '' };
+  });
+  scored.sort((a, b) => (a.low_history - b.low_history) || (b.score - a.score) || (b._last < a._last ? -1 : b._last > a._last ? 1 : 0) || String(a.name).localeCompare(String(b.name)));
+  return { suggestions: scored.slice(0, limit).map(x => { const { _last, ...rest } = x; return rest; }), reason: '' };
+}
+async function vendorSuggest(env, url) {
+  const woId = String(url.searchParams.get('wo_id') || '').trim();
+  const tradeParam = String(url.searchParams.get('trade') || '').trim();
+  try {
+    const cfg = await fetchConfig(env);
+    if (!/^(true|1|yes|on)$/i.test(String(cfg.vendor_suggest_enabled || '').trim())) {
+      return json({ ok: true, enabled: false, suggestions: [], reason: 'off' });
+    }
+    if (!woId && !tradeParam) return json({ ok: false, error: 'wo_id or trade is required' }, 400);
+    const [vendors, wos, bills, times] = await fetchTabs(env, ['Vendors', 'Work_Orders', 'Vendor_Bills', 'Time_Entries']);
+    let trade = tradeParam;
+    if (woId) {
+      const wo = wos.find(w => String(w.WO_ID || '') === woId || String(w.ID || '') === woId);
+      if (!wo) throw new Error('work order ' + woId + ' was not found, so no suggestion could be made');
+      trade = String(wo.Trade || '').trim();
+    }
+    const { weights, warning } = vendorSuggestWeights(cfg.vendor_suggest_weights);
+    const minRaw = parseInt(cfg.vendor_suggest_min_jobs, 10);
+    const minJobs = isFinite(minRaw) && minRaw >= 0 ? minRaw : 3;
+    const rows = vendorPerfRows(vendors, wos, bills, times);
+    const ranked = rankVendorsForJob(rows, { trade }, { weights, minJobs });
+    return json({ ok: true, enabled: true, trade, suggestions: ranked.suggestions, reason: ranked.reason, warnings: warning ? [warning] : [] });
+  } catch (e) {
+    const msg = String((e && e.message) || e).slice(0, 300);
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_suggest', Skill_Or_Endpoint: '/vendor-suggest', Success: 'FALSE', Notes: (woId ? 'wo ' + woId + ': ' : 'trade ' + tradeParam + ': ') + msg }); }
+    catch (te) { console.error('[vendor_suggest] could not log to Ops_Telemetry', msg, String((te && te.message) || te)); }
+    return json({ ok: false, error: msg }, 500);
+  }
+}
+
 // GET /brettos-tasks-summary — READ-ONLY glance summary of the BrettOS Tasks Sheet (Brett's
 // real, canonical task tracker — a SEPARATE Google Sheet from this repo's own env.SHEET_ID /
 // "RidgeCo Main"; sheet id lives in env.BRETTOS_TASKS_SHEET_ID, never hardcoded here since this
