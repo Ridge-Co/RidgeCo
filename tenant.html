@@ -4,6 +4,7 @@
 <script src="test-login.js"></script>
 <script src="failure-reporter.js"></script>
 <script src="wo-status.js"></script>
+<script src="tenant-i18n.js"></script>
 <script data-wo-status-guard>if (typeof WOStatus === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div style="background:#b42318;color:#fff;padding:12px;font:14px sans-serif;position:relative;z-index:99999">The status list (wo-status.js) did not load, so work orders will not show correctly. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -166,6 +167,7 @@ label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font
       <svg width="48" height="48" viewBox="0 0 48 48" fill="none" style="display:block;margin:0 auto 12px"><rect x="2" y="2" width="44" height="44" rx="8" fill="#f3f5f8" stroke="#1d4ed8" stroke-width="2"/><polygon points="24,8 40,38 8,38" fill="none" stroke="#1d4ed8" stroke-width="2" stroke-linejoin="round"/><polygon points="24,18 33,38 15,38" fill="#1d4ed8" fill-opacity="0.4"/></svg>
       <div class="logo">RIDGE CO</div>
       <div class="logo-sub">TENANT PORTAL</div>
+      <div class="tenant-lang-toggle" style="display:flex;justify-content:center;margin:6px 0 12px"></div>
       <div style="margin-bottom:14px">
         <label>FIRST NAME <span style="font-weight:normal;color:var(--muted)">(e.g. Janice, Troy)</span></label>
         <input type="text" id="nameInput" placeholder="Your first name" style="margin-bottom:10px;width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);font-family:var(--font);font-size:13px;padding:9px 12px;border-radius:6px" autocorrect="off" spellcheck="false">
@@ -188,6 +190,7 @@ label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font
     </div>
     <span id="rc-bell-slot" style="display:contents"></span>
     <button class="btn btn-sm btn-muted" onclick="openModal('modalFeedback')" id="feedbackFloatBtn" style="display:none">💬 Feedback</button>
+    <span class="tenant-lang-toggle" style="display:inline-flex"></span>
     <button class="btn btn-sm btn-muted" onclick="doLogout()">LOG OUT</button>
   </div>
 
