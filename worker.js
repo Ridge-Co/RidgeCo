@@ -580,6 +580,7 @@ const _hubWorkerCore = {
         if (path === '/version')                return buildVersionJson(env, ctx);
         if (path === '/watchdog/door-system')   return await doorWatchdogStatus(env);
         if (path === '/sheets-identities')      return await sheetsIdentitiesReport(env);   // Nov 2 2026: admin-only check of the main and second Sheets accounts (no secrets shown)
+        if (path === '/read-meter/daily')       return json(await __meterDaily(env, url));   // queue #233: one day's tally from the shared store (zero Sheets reads)
         if (path === '/read-meter')             return json(await __meterSnapshotAll(env, url)); // Oct 19 2026: who/what is spending the Sheets read quota (in-memory, zero Sheets reads)
         if (path === '/model-registry')         return json(modelRegistryInfo()); // B-127: routing table shape only, never key values
         if (path === '/hub-bootstrap')          return await hubBootstrap(env);
@@ -1389,8 +1390,16 @@ export class ReadMeterStore {
         const rec = await request.json();
         if (!rec || typeof rec.id !== 'string' || !rec.id || typeof rec.tag !== 'string' || !rec.tag || !rec.payload || typeof rec.payload !== 'object') return new Response('bad record', { status: 400 });
         await st.put('i:' + rec.tag + ':' + rec.id, { id: rec.id, tag: rec.tag, t: now, build: String(rec.build || '').slice(0, 80), payload: rec.payload });
+        let folded = 'ok';
+        try { await this._fold(rec, now); } catch (fe) { folded = 'fold error: ' + String((fe && fe.message) || fe).slice(0, 160); }   // the instance record is saved either way; the daily tally problem is reported to the caller
         await this._prune(now);
-        return new Response('ok');
+        return new Response(folded);
+      }
+      if (request.method === 'GET' && url.pathname === '/daily') {
+        const tag = url.searchParams.get('tag') || 'prd', date = String(url.searchParams.get('date') || '');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return new Response('bad date', { status: 400 });
+        const rec = await st.get('d:' + tag + ':' + date);
+        return new Response(JSON.stringify({ date, tag, record: rec || null }), { headers: { 'content-type': 'application/json' } });
       }
       if (request.method === 'GET' && url.pathname === '/list') {
         const tag = url.searchParams.get('tag') || 'prd', exclude = url.searchParams.get('exclude') || '';
@@ -1402,10 +1411,42 @@ export class ReadMeterStore {
       return new Response('not found', { status: 404 });
     } catch (e) { return new Response('store error: ' + String((e && e.message) || e).slice(0, 200), { status: 500 }); }
   }
+  // Per-day tally (queue #233, Nov 22 2026). Each instance saves its last 60 minutes every time, so the same minute arrives many times:
+  // 'f:<tag>:<id>' remembers the newest minute already counted for that instance, and the minute still in progress is never counted.
+  // Day record 'd:<tag>:<Eastern date>' = { date, reads, x (refusals), mins: {minuteIndex: [reads, refusals]}, src: {label: reads}, tab: {label: reads} }; kept METER_DAILY_KEEP_DAYS days.
+  async _fold(rec, now) {
+    const st = this.state.storage, mins = Array.isArray(rec.payload && rec.payload.mins) ? rec.payload.mins : [];
+    const fk = 'f:' + rec.tag + ':' + rec.id, prev = await st.get(fk), last = prev && typeof prev.last === 'number' ? prev.last : 0;
+    const cutoff = Math.floor(now / 60000) * 60000;
+    const fresh = mins.filter(m => m && typeof m.t === 'number' && m.t > last && m.t < cutoff);
+    if (!fresh.length) return;
+    const days = new Map(), etDate = (ms) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    for (const m of fresh) { const d = etDate(m.t); if (!days.has(d)) days.set(d, []); days.get(d).push(m); }
+    for (const [d, ms] of days) {
+      const dk = 'd:' + rec.tag + ':' + d;
+      const day = (await st.get(dk)) || { date: d, reads: 0, x: 0, mins: {}, src: {}, tab: {} };
+      for (const m of ms) {
+        const r = +m.r || 0, x = +m.x || 0, mi = String(Math.floor(m.t / 60000));
+        day.reads += r; day.x += x;
+        const cur = day.mins[mi] || [0, 0]; cur[0] += r; cur[1] += x; day.mins[mi] = cur;
+        for (const e of (Array.isArray(m.s) ? m.s : [])) if (Array.isArray(e) && e[0] !== '(other)') day.src[String(e[0])] = (day.src[String(e[0])] || 0) + (+e[1] || 0);
+        for (const e of (Array.isArray(m.a) ? m.a : [])) if (Array.isArray(e) && e[0] !== '(other)') day.tab[String(e[0])] = (day.tab[String(e[0])] || 0) + (+e[1] || 0);
+      }
+      for (const key of ['src', 'tab']) {
+        const ent = Object.entries(day[key]);
+        if (ent.length > 100) { ent.sort((a, b) => b[1] - a[1]); const keep = ent.slice(0, 60), rest = ent.slice(60).reduce((s2, e) => s2 + e[1], 0); day[key] = Object.fromEntries(keep); day[key]['(other)'] = (day[key]['(other)'] || 0) + rest; }
+      }
+      await st.put(dk, day);
+    }
+    await st.put(fk, { last: Math.max(last, ...fresh.map(m => m.t)), seen: now });
+  }
   async _prune(now) {                                 // at most once a minute: drop records not saved for METER_STORE_TTL_S
     if (now - this.lastPrune < 60000) return;
     this.lastPrune = now;
     const dead = [];
+    const oldest = new Date(now - METER_DAILY_KEEP_DAYS * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    for (const [k, v] of await this.state.storage.list({ prefix: 'd:' })) { if (!v || typeof v.date !== 'string' || v.date < oldest) dead.push(k); }
+    for (const [k, v] of await this.state.storage.list({ prefix: 'f:' })) { if (!v || typeof v.seen !== 'number' || now - v.seen > METER_DAILY_KEEP_DAYS * 86400000) dead.push(k); }
     for (const [k, v] of await this.state.storage.list({ prefix: 'i:' })) if (!v || typeof v.t !== 'number' || now - v.t > METER_STORE_TTL_S * 1000) dead.push(k);
     for (let i = 0; i < dead.length; i += 128) await this.state.storage.delete(dead.slice(i, i + 128));
   }
@@ -22241,6 +22282,13 @@ async function buildDigest(env) {
     await softFail(env, 'digest:stuck-receipts', e, { req, severity: 'P1' });
     warnings.push('Could not check for receipts that failed to read: ' + String((e && e.message) || e).slice(0, 120));
   }
+  // Queue #233: yesterday's Sheets read tally from the shared store (no Sheets reads). Unreadable is said so in the digest, never shown as "no problems".
+  let quota;
+  try { quota = await __meterDaily(env, null); } catch (qe) { quota = { ok: false, error: String((qe && qe.message) || qe).slice(0, 200) }; }
+  if (!quota.ok) {
+    try { await reportFailure(env, { system: 'hub', source: 'digest', where: 'quota_digest_read', severity: 'P2', message: 'The daily digest could not read yesterday\'s Sheets read tally: ' + quota.error }); }
+    catch (re) { console.error('[quota_digest_read] could not file the failure', String((re && re.message) || re)); }
+  }
   // Tenant fix-checks (Oct 16 2026): answers waiting for Brett + checks nobody answered. An unreadable list is reported IN the digest, never skipped.
   const fuDigest = await fuDigestLines(env);
   await softFlush(env, req);   // sends the queued corrupt-cell report before the digest returns
@@ -22252,7 +22300,7 @@ async function buildDigest(env) {
     billsTotal,
     wins: wins.map(w=>`WO-${w.ID} · ${w.Property_Address||('prop '+(w.Property_ID||'?'))} · ${w.Status} · ${String(w.Description||'').slice(0,45)}`),
     pulse: { properties: activeRows(props).length, tenants: activeRows(tenants).length, vendors: activeRows(vendors).length, open_wos: open.length, pending_bills: pendingBills.length },
-    healthAlerts, stuckReceipts,
+    healthAlerts, stuckReceipts, quota,
   };
 }
 
@@ -22279,11 +22327,22 @@ async function staleWos(env, url) {
   return json({ ok: true, threshold_days: days, count: stale.length, stale: stale.slice(0, 100) });
 }
 
-function formatDigestText(d) {
+// Queue #233: the one quota line for the digest (or ''). Calm day = nothing. Under about 130 characters; labels carry no names or ids.
+function quotaDigestLine(q, minBusy) {
+  if (!q) return '';
+  if (q.ok === false) return 'Sheets quota: could not read yesterday\'s meter';
+  const min = isFinite(minBusy) && minBusy >= 0 ? minBusy : 5;
+  if (!(q.refusals > 0 || q.busy_minutes >= min) || q.no_data) return '';
+  const top = (q.top_sources || []).filter(x => x[0] !== '(other)').slice(0, 3).map(x => x[0] + ' ' + x[1]).join(', ');
+  return 'Sheets quota: ' + q.busy_minutes + ' busy minutes, ' + q.refusals + ' refusals yesterday.' + (top ? ' Top: ' + top + '.' : '');
+}
+function formatDigestText(d, minBusy) {
   const L = [];
   L.push(`RIDGE CO — DAILY DIGEST · ${d.stamp}`); L.push('');
-  if ((d.healthAlerts && d.healthAlerts.length) || (d.stuckReceipts && d.stuckReceipts.length) || (d.warnings && d.warnings.length)) {
+  const qLine = quotaDigestLine(d.quota, minBusy);
+  if ((d.healthAlerts && d.healthAlerts.length) || (d.stuckReceipts && d.stuckReceipts.length) || (d.warnings && d.warnings.length) || qLine) {
     L.push('▶ SYSTEM HEALTH');
+    if (qLine) L.push('⚠ ' + qLine);
     (d.warnings||[]).forEach(x=>L.push('⚠ '+x+' (numbers below may be incomplete)'));
     (d.healthAlerts||[]).forEach(x=>L.push('⚠ '+x));
     (d.stuckReceipts||[]).forEach(x=>L.push('⚠ Receipt could not be read after 3 tries: '+x));
@@ -22313,7 +22372,7 @@ function formatDigestText(d) {
 async function deliverDigest(env, digest) {
   const cfg = await fetchConfig(env);
   if (String(cfg.digest_enabled||'').toUpperCase() !== 'TRUE') return { delivered:false, reason:'digest_enabled not TRUE (dormant)' };
-  const text = formatDigestText(digest);
+  const text = formatDigestText(digest, parseInt(cfg.quota_digest_min_busy_minutes, 10));
   const out = { sms:null, email:null };
   if (String(cfg.digest_sms_enabled||'').toUpperCase()==='TRUE' && cfg.digest_sms_to && env.TWILIO_FROM) out.sms = await sendSMS(env, cfg.digest_sms_to, text);
   if (String(cfg.digest_email_enabled||'').toUpperCase()==='TRUE' && cfg.digest_email_to) out.email = await deliverDigestEmail(env, cfg.digest_email_to, 'Ridge Co — Daily Digest', text);
@@ -30165,6 +30224,8 @@ const METER_ALARM_GAP_MS = 10 * 60 * 1000;
 const METER_PERSIST_MIN = 60;               // minutes of history each instance saves
 const METER_PERSIST_GAP_MS = 60 * 1000;     // save at most this often per instance
 const METER_STORE_TTL_S = 2 * 60 * 60;      // a saved instance record disappears after 2h
+const METER_DAILY_KEEP_DAYS = 8;            // queue #233: per-day tallies live this long, then the store drops them
+const METER_DAILY_BUSY_READS = 40;          // a minute with this many reads (or any refusal from Google) is 'busy' (same level as the per-minute alarm)
 const METER_MAX_REMOTE = 30;                // most other instances read per view (bounds the size/CPU of one view; truncation is reported)
 const METER_REMOTE_CACHE_MS = 20 * 1000;    // several viewers / refreshes within 20s share one KV read
 const __meter = { isolate: Math.random().toString(36).slice(2, 8), since: 0 /* set on first use: Workers freeze Date.now() at startup */, tag: 'prd', mins: new Map(), lastAlarmAt: 0, pending: null, alarms: 0, faults: 0,
@@ -30373,6 +30434,41 @@ async function __meterReportStoreFault(env, msg) {
       message: 'The Read Meter could not save its counts to its shared store (Durable Object READ_METER_STORE): ' + msg + '. Until fixed, the Read Meter page shows only part of the traffic.', context: { isolate: __meter.isolate } });
     if (!r || r.ok === false) console.error('[read-meter] store fault could not be saved to the failure ledger:', JSON.stringify(r || {}).slice(0, 200));
   } catch (e) { console.error('[read-meter] store fault could not be saved:', String((e && e.message) || e).slice(0, 200)); }
+}
+// Queue #233: a day's tally from the shared store, as numbers + top spenders. Labels never carry a name, phone or id (digestSrcLabel).
+function __digestSrcLabel(k) {
+  const s = String(k || ''), bar = s.indexOf('|'), who = (bar < 0 ? s : s.slice(0, bar)), route = bar < 0 ? '' : s.slice(bar + 1);
+  if (who === 'cron' && /^job:/.test(route)) return 'job ' + route.slice(4).replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 40);
+  const kind = who.split(':')[0].replace(/[^A-Za-z0-9_-]/g, '').slice(0, 20) || 'unknown';
+  const path = route.replace(/^([A-Z]+) /, '$1 ').split('?')[0].split('/').map(seg => (/\d/.test(seg) ? ':id' : seg)).join('/').slice(0, 40);
+  return (kind + ' ' + path).trim();
+}
+async function __meterDaily(env, url) {
+  const etDate = (ms) => new Date(ms).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const date = (url && url.searchParams.get('date')) || etDate(Date.now() - 86400000);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { ok: false, error: 'date must look like 2026-11-21' };
+  const stub = __meterStub(env);
+  if (!stub) return { ok: false, date, error: 'the shared meter store (READ_METER_STORE) is not bound, so there is no daily tally' };
+  let body;
+  try {
+    const res = await stub.fetch('https://read-meter.internal/daily?tag=' + encodeURIComponent(__meter.tag) + '&date=' + date);
+    if (!res.ok) throw new Error('shared store answered HTTP ' + res.status + ': ' + String(await res.text()).slice(0, 120));
+    body = await res.json();
+  } catch (e) { return { ok: false, date, error: String((e && e.message) || e).slice(0, 200) }; }
+  const rec = body && body.record;
+  const out = { ok: true, date, complete: date < etDate(Date.now()), reads: 0, refusals: 0, busy_minutes: 0, peak_minute: null, top_sources: [], top_tabs: [], no_data: !rec };
+  if (!rec) return out;
+  out.reads = rec.reads || 0; out.refusals = rec.x || 0;
+  let peak = null;
+  for (const [mi, v] of Object.entries(rec.mins || {})) {
+    if (v[0] >= METER_DAILY_BUSY_READS || v[1] > 0) out.busy_minutes++;
+    if (!peak || v[0] > peak.reads) peak = { at: new Date(+mi * 60000).toISOString(), reads: v[0] };
+  }
+  out.peak_minute = peak;
+  const fold = (o) => { const m = new Map(); for (const [k, v] of Object.entries(o || {})) { const l = k === '(other)' ? k : __digestSrcLabel(k); m.set(l, (m.get(l) || 0) + v); } return Array.from(m.entries()).sort((a, b) => b[1] - a[1]).slice(0, 5); };
+  out.top_sources = fold(rec.src);
+  out.top_tabs = Array.from(Object.entries(rec.tab || {})).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  return out;
 }
 // The shared store is one Durable Object (see ReadMeterStore). Not bound (or bound to something else) -> null, and the page says so.
 function __meterStub(env) {
