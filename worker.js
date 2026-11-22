@@ -33244,6 +33244,64 @@ async function qbPayables(env, url) {
   } catch (e) { return json({ ok: false, error: e.message }, 500); }
 }
 
+// ── Weekly pay run, Phase 1 of 4 (queue #53, Nov 22 2026) ─────────────────────────────────────────────────────────────
+// READ-ONLY. Turns the rows /qb/payables already works out into "this week's pay run": which vendor bills are ready to pay
+// (customer paid in full AND the funds should have cleared AND no duplicate-payment warning) grouped by vendor with totals,
+// plus a "not ready, and why" list. It never writes to QuickBooks, never texts, never moves money: Brett pays in QuickBooks.
+// PURE (no env, no network): the cleared rule is the one qbPayables already computed (customer_clear_status), so the page and
+// the pay run can never disagree about today's date or the bank-holiday list.
+function payRunAmount(r) {
+  const n = r.vendor_balance != null ? Number(r.vendor_balance) : Number(r.vendor_cost);
+  return isFinite(n) ? n : 0;
+}
+function payRunReason(r) {
+  const st = String(r.state || '');
+  if (st === 'PAY THE VENDOR') {
+    const cs = String(r.customer_clear_status || '');
+    if (cs === 'cleared') return '';   // ready
+    if (cs === 'clearing') return 'funds not cleared until ' + (r.customer_clears_on || 'a date QuickBooks has not given');
+    return 'customer payment date unavailable, check QuickBooks before paying';
+  }
+  if (st === 'possible duplicate') return 'possible duplicate payment, check first';
+  if (st === 'waiting on the owner') return 'customer has not paid';
+  if (st === 'owner paid in part') return 'customer has paid only part';
+  if (st === 'vendor bill missing') return 'vendor bill missing in QuickBooks';
+  if (st === 'unknown') return 'could not tell the customer or bill status, check QuickBooks';
+  return null;   // 'vendor paid' / 'nothing to pay' / anything else: not part of a pay run at all
+}
+function payRunBuild(rows) {
+  const cents = n => Math.round(Number(n) * 100);
+  const byVendor = new Map(), notReady = [];
+  for (const r of (Array.isArray(rows) ? rows : [])) {
+    const why = payRunReason(r);
+    if (why === null) continue;
+    const bill = { wo_id: r.wo_id || '', ir_id: r.ir_id || '', bill_id: r.bill_id || '', vendor_ref: r.vendor_ref || '', amount: payRunAmount(r), customer_paid_date: r.customer_paid_date || '', customer_clears_on: r.customer_clears_on || '' };
+    if (why === '') {
+      const key = (r.vendor_id || '') + '|' + (r.vendor_name || '');
+      if (!byVendor.has(key)) byVendor.set(key, { vendor_id: r.vendor_id || '', vendor: r.vendor_name || '(no vendor name)', bills: [], total_cents: 0 });
+      const g = byVendor.get(key); g.bills.push(bill); g.total_cents += cents(bill.amount);
+    } else notReady.push(Object.assign({ vendor_id: r.vendor_id || '', vendor: r.vendor_name || '(no vendor name)', reason: why }, bill));
+  }
+  const ready = [...byVendor.values()].sort((a, b) => b.total_cents - a.total_cents || a.vendor.localeCompare(b.vendor))
+    .map(g => ({ vendor_id: g.vendor_id, vendor: g.vendor, count: g.bills.length, total: g.total_cents / 100, bills: g.bills }));
+  const grandCents = ready.reduce((n, g) => n + Math.round(g.total * 100), 0);
+  return { ready, not_ready: notReady, grand_total: grandCents / 100, ready_count: ready.reduce((n, g) => n + g.count, 0), not_ready_count: notReady.length };
+}
+// GET /qb/pay-run (admin only, same gate as /qb/payables). Calls qbPayables ONCE; no second QuickBooks read path. If the payables read
+// fails the answer is an ERROR, never an empty "nothing to pay" list.
+async function payRunGet(env, url) {
+  const sink = [];
+  let res, data, failure = '';
+  try { res = await qbPayables(env, url); data = await res.json(); }
+  catch (e) { failure = String((e && e.message) || e).slice(0, 200); await logAndCollectError(env, sink, 'pay_run', '/qb/pay-run', 'could not read /qb/payables', e); }
+  if (!failure && (!res.ok || !data || data.ok !== true || !Array.isArray(data.rows))) {
+    failure = String((data && data.error) || ('HTTP ' + res.status)).slice(0, 200);
+    await logAndCollectError(env, sink, 'pay_run', '/qb/pay-run', '/qb/payables did not return a list', new Error(failure));
+  }
+  if (failure) return json({ ok: false, error: 'Could not check QuickBooks for the pay run: ' + failure, warnings: sink }, 502);
+  return json(Object.assign({ ok: true, as_of: data.as_of, warnings: data.warnings || [] }, payRunBuild(data.rows)));
+}
+
 // POST /qb/sync-payments { days? }
 // Writes what QuickBooks says back onto the Hub's own rows, so the payable state is
 // visible without going and asking QuickBooks every time.
