@@ -132,7 +132,7 @@ function tenantStartObserver() {
 // EN | ES buttons: drawn into every element with class tenant-lang-toggle (login card + dashboard header).
 function tenantSetLang(l) {
   var next = (l === 'es') ? 'es' : 'en';
-  try { localStorage.setItem(TENANT_LANG_KEY, next); } catch (e) { console.error('tenant language choice not stored (this tab only)', e); }
+  try { localStorage.setItem(TENANT_LANG_KEY, next); } catch (e) { console.error('tenant language choice not stored (this tab only)', e); }   // silent-ok: storage blocked, choice lasts this tab only
   if (next === TLANG) return;
   if (next === 'en') { location.reload(); return; }   // English strings are not kept after translating, so a reload restores them
   TLANG = 'es';
