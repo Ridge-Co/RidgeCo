@@ -16,7 +16,8 @@ let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
 
 const tel = []; let cfg = {}, sheets = {};
 const json = (body, status = 200) => ({ body, status });
-const factory = new Function('json', 'fetchConfig', 'fetchTabs', 'logTelemetry', `
+const WOStatus = new Function(fs.readFileSync(new URL('../wo-status.js', import.meta.url), 'utf8') + '; return WOStatus;')();
+const factory = new Function('WOStatus', 'json', 'fetchConfig', 'fetchTabs', 'logTelemetry', `
   ${line('const QUEUE_STOPWORDS')}
   ${grab('function', 'queueTokens')}
   ${grab('function', 'queueDice')}
