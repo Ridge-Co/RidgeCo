@@ -25989,10 +25989,8 @@ async function vendorCompleteOnboarding(env, body) {
 // (Work_Orders + Vendor_Bills + Time_Entries). No new tab, no new column, no writes. Admin-gated
 // by omission from PUBLIC_PATHS (top auth gate), same convention as arAging above, which this
 // is modeled on (aggregate → bucket/roll-up → return json({...})).
-async function vendorPerformance(env, url) {
-  const [vendors, wos, bills, times] = await fetchTabs(
-    env, ['Vendors', 'Work_Orders', 'Vendor_Bills', 'Time_Entries']
-  );
+// vendorPerfRows (queue #58): the per-vendor math, lifted out so the scorecard and /vendor-suggest share ONE calculation.
+function vendorPerfRows(vendors, wos, bills, times) {
   // "Done" here means the job itself is finished (billing-lifecycle-agnostic) — distinct from
   // OPEN_WO_STATUSES, which (correctly, for the vendor portal it was built for) still counts
   // Complete/Pending Invoice as "open" because there's billing follow-up left. Guarding `open`
