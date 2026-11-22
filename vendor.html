@@ -1069,7 +1069,13 @@ function loadVendorAddons() {
     window._addons = {};
     all.forEach(function(a) { var p = a.parent_wo_id; if (p) (window._addons[p] = window._addons[p] || []).push(a); });
     (window._wos || []).forEach(function(wo, idx) { if (awEligible(wo)) renderVendorAddons(wo.ID, idx); });
-  }).catch(function() { /* non-critical: leave empty */ });
+  }).catch(function(e) {
+    console.error('[loadVendorAddons]', e);
+    window._addons = null;
+    (window._wos || []).forEach(function(wo, idx) {
+      if (awEligible(wo)) showLoadFailed('addon-wrap-' + idx, 'extra-work status', (e && e.message) || e, loadVendorAddons, 'wo_additional_work');
+    });
+  });
 }
 function awStatusInfo(a) {
   var s = String(a.estimate_status || '').toLowerCase();
