@@ -830,7 +830,7 @@ function openSubmitRequest() {
   document.getElementById('srPreview').innerHTML = '';
   document.getElementById('srMsg').innerHTML = '';
   document.getElementById('srSubmitBtn').disabled = false;
-  srFiles = [];
+  srFiles = []; srMarks = [];
   openModal('modalSubmitRequest');
 }
 function srHandleFiles(fileList) {
