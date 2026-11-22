@@ -22,7 +22,8 @@
  *   - the JOBS table has a typo                                     → hourly, until fixed (Hub jobs keep running on their last schedule)
  *   - there is more than one scheduler timer (it deletes the extras and tells you)
  *   - the Hub's failure ledger has an urgent problem nobody acknowledged     → email at once, then every 6 h while the list is unchanged (works even if Hub texting is down or alerts are off)
- *   - another Worker (BarrelCo, STR, BrettOS, Pinterest) fails its health check twice in a row → email + a ledger item, then a "back up" email
+ *   - another Worker (BarrelCo, STR, BrettOS, Pinterest), the Hub's /version, or one of the four portal pages (Hub, vendor, tenant, owner on GitHub Pages)
+ *     fails its check twice in a row (down, or a page that answers but is missing its expected text) → email + a ledger item, then a "back up" email
  *   - this script itself throws (it emails you, then re-throws so Google's own failure email also fires)
  *
  * ── SETUP: TWO STEPS, YOU CHOOSE WHEN TO START ─────────────────────────────────────────────────────
