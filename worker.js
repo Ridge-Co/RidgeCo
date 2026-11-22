@@ -31085,6 +31085,57 @@ function missingTabResponse(tab) {
   return json({ error: `Sheet tab "${tab}" does not exist`, tab, hint: 'Create it via context/sheet-ops/pending.json' }, 404);
 }
 
+// ── Possible-duplicate check at intake (queue #63, Nov 22 2026) ──────────────────────────────────────────────
+// PURE. Which OPEN work orders on the same unit look like this new request? Never blocks anything: the caller only shows a warning.
+// opts: { threshold (same trade, default 0.45), otherTradeThreshold (default 0.70), statuses (default TENANT-visible open set), max (default 3) }
+const WO_SIMILAR_TENANT_STATUSES = ['New', 'Assigned', 'Accepted', 'In Progress', 'On Hold'];   // open work only; no billing states
+function woSimilarOpen(candidate, workorders, opts) {
+  opts = opts || {};
+  const th = Number.isFinite(Number(opts.threshold)) && Number(opts.threshold) > 0 && Number(opts.threshold) <= 1 ? Number(opts.threshold) : 0.45;
+  const th2 = Number.isFinite(Number(opts.otherTradeThreshold)) && Number(opts.otherTradeThreshold) > 0 && Number(opts.otherTradeThreshold) <= 1 ? Number(opts.otherTradeThreshold) : 0.70;
+  const statuses = Array.isArray(opts.statuses) ? opts.statuses : WO_SIMILAR_TENANT_STATUSES;
+  const max = Number.isFinite(Number(opts.max)) && Number(opts.max) > 0 ? Math.floor(Number(opts.max)) : 3;
+  const c = candidate || {};
+  const nt = queueTokens(c.description);
+  const trade = String(c.trade || '').trim().toLowerCase();
+  const out = [];
+  (workorders || []).forEach(w => {
+    if (!w || w.Voided === 'TRUE' || String(w.Type || '') === 'addon' || String(w.Bid_Group_ID || '').trim()) return;
+    if (!statuses.includes(w.Status)) return;
+    if (String(w.Property_ID || '') !== String(c.property_id || '')) return;
+    if (String(w.Unit_ID || '') !== String(c.unit_id || '')) return;
+    const sameTrade = String(w.Trade || '').trim().toLowerCase() === trade && trade !== '';
+    if (!sameTrade && String(w.Recurring_Template_ID || '').trim()) return;   // a recurring job only matches on the same trade
+    const ot = queueTokens(w.Description);
+    const score = queueDice(nt, ot);
+    let hit = false;
+    if (nt.size < 2 || ot.size < 2) { let shared = false; nt.forEach(t => { if (ot.has(t)) shared = true; }); hit = sameTrade && shared; }
+    else hit = score >= (sameTrade ? th : th2);
+    if (hit) out.push({ id: String(w.ID || ''), trade: w.Trade || '', status: w.Status || '', created: String(w.Created_Date || '').slice(0, 10), snippet: String(w.Description || '').replace(/\s+/g, ' ').trim().slice(0, 120), score: Math.round(score * 100) / 100 });
+  });
+  out.sort((a, b) => b.score - a.score);
+  return out.slice(0, max);
+}
+const WO_SIMILAR_TENANT_LABEL = { 'New': 'Received', 'Assigned': 'Assigned', 'Accepted': 'Assigned', 'In Progress': 'In progress', 'On Hold': 'On hold' };
+
+// POST /workorder/similar-check (tenant session only in Phase 1). Ships OFF: Config wo_similar_enabled must be TRUE. Read-only.
+// The property / unit come from the signed session, never from the page. Only work orders tenantCanSeeWO allows can come back.
+async function woSimilarCheck(env, body, callerRole, callerSessionId) {
+  if (callerRole !== 'tenant') return json({ enabled: false, matches: [] });
+  const cfg = await fetchConfig(env);
+  if (String(cfg.wo_similar_enabled || '').trim().toUpperCase() !== 'TRUE') return json({ enabled: false, matches: [] });
+  const b = (body && typeof body === 'object') ? body : {};
+  const [tenants, wos] = await fetchTabs(env, ['Tenants', 'Work_Orders']);
+  const tenant = tenants.find(t => t.ID === callerSessionId && t.Active !== 'FALSE');
+  if (!tenant) return json({ error: 'Tenant session not found or no longer active' }, 403);
+  const visible = wos.filter(w => tenantCanSeeWO(tenant, w));
+  const hits = woSimilarOpen({ property_id: tenant.Property_ID, unit_id: tenant.Unit_ID || '', trade: String(b.trade || ''), description: String(b.description || '').slice(0, 2000) }, visible, {
+    threshold: cfg.wo_similar_threshold, otherTradeThreshold: cfg.wo_similar_other_trade_threshold, statuses: WO_SIMILAR_TENANT_STATUSES, max: 3 });
+  const matches = hits.map(h => ({ id: h.id, trade: h.trade, status_label: WO_SIMILAR_TENANT_LABEL[h.status] || 'Open', created: h.created, snippet: h.snippet }));
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'wo_similar_check', Skill_Or_Endpoint: '/workorder/similar-check', Success: 'TRUE', Notes: `tenant=${tenant.ID} matches=${matches.map(m => m.id).join(',') || 'none'}` });
+  return json({ enabled: true, matches });
+}
+
 // Server-side backstop against the same submission landing twice.
 //
 // The portals now hold a client-side latch on every submit button, but a latch dies with
