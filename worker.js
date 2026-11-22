@@ -25553,7 +25553,7 @@ async function selftestRunSlice(env, today, opts) {
     }
     prog.golden = await (opts.golden ? opts.golden() : selftestRunGoldenChecks(env));
   }
-  const res = await selftestFinish(env, prog.endpoint, prog.golden, { deliver: true, trigger: 'cron' }, t0);
+  const res = await selftestFinish(env, prog.endpoint, prog.golden, { deliver: true, trigger: 'cron', slices: prog.slices, lastSliceMs: now() - t0 }, t0);
   prog.complete = true; prog.finished = new Date(now()).toISOString(); prog.summary = { total: res.total, passed: res.passed, failed: res.failed };
   try { await write(prog); }
   catch (e) { res.errors.push({ step: 'selftest_progress', error: 'finished, but could not mark today as done (it may run again): ' + schedErrText(e) }); }
