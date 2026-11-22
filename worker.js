@@ -31746,6 +31746,24 @@ async function hubTestWriteAllowed(env, path, body) {
     return true;
   }
   if (path === '/wo-template/preview') return true; // read-only computation, writes nothing
+  // PM plans (queue #155): the staging token may only touch TEST- plans, TEST- properties and TEST- templates, because enrolling edits template Targets and so can post real WOs.
+  if (path === '/pm/enroll/preview') return true; // read-only, writes nothing
+  if (path === '/pm/seasonal-pack') return String((body && body.name_prefix) || '').startsWith('TEST-');
+  if (path === '/pm/plan/save') {
+    if (body && body.id) { const _p = (await fetchTab(env, PM_PLANS_TAB).catch(() => [])).find(x => String(x.ID) === String(body.id)); return !!_p && String(_p.Name || '').startsWith('TEST-'); } // silent-ok: a failed read makes the test-write guard refuse, the safe side
+    return String((body && body.fields && body.fields.Name) || '').startsWith('TEST-');
+  }
+  if (path === '/pm/enroll' || path === '/pm/enroll/status') {
+    let _plan, _prop;
+    if (path === '/pm/enroll') { _plan = body && body.plan_id; _prop = body && body.property_id; }
+    else { const _e = (await fetchTab(env, PM_ENROLL_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id)); if (!_e) return false; _plan = _e.Plan_ID; _prop = _e.Property_ID; } // silent-ok: a failed read makes the test-write guard refuse, the safe side
+    const _pl = (await fetchTab(env, PM_PLANS_TAB).catch(() => [])).find(x => String(x.ID) === String(_plan)); // silent-ok: a failed read makes the test-write guard refuse, the safe side
+    if (!_pl || !String(_pl.Name || '').startsWith('TEST-')) return false;
+    if (!(await isTestRecord(env, 'Properties', _prop))) return false;
+    const _tt = await fetchTab(env, 'WO_Templates').catch(() => []); // silent-ok: a failed read makes the test-write guard refuse, the safe side
+    for (const _i of pmParseIds(_pl.Template_IDs)) { const _t = _tt.find(x => String(x.ID) === _i); if (!_t || !String(_t.Name || '').startsWith('TEST-')) return false; }
+    return true;
+  }
   if (path === '/wo-snippet/add') return String((body && body.Name) || '').startsWith('TEST-');
   if (path === '/wo-snippet/update') {
     const _sn = (await fetchTab(env, WO_SNIPPETS_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id)); // silent-ok: a failed read makes the test-write guard refuse, the safe side
