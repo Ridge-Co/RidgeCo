@@ -1067,8 +1067,10 @@ function ledgerThrottled_(key, windowMs, where, severity, message) {
   if (Date.now() - last < windowMs) return;
   if (ledger_(where, severity, message)) p.setProperty(k, String(Date.now()));
 }
-// GET /health on each Worker in PROBES. Reports only after PROBE_FAILS_BEFORE_ALERT failures in a row; emails once per 6 h; says when it recovers.
-function probeWorkers_() {
+// GET each row in PROBES (path default /health). Reports only after PROBE_FAILS_BEFORE_ALERT failures in a row; emails once per 6 h; says when it recovers.
+// Down = no answer, HTTP 0, HTTP >= 500, HTTP 404 on a page row, or (when the row has `expect`) a 200 body without that text ("up but wrong").
+// A probe that has no time left in this tick is skipped, logged, and leaves its state untouched (never counted as a failure).
+function probeWorkers_(deadline) {
   var p = props_(), st = {};
   try { st = JSON.parse(p.getProperty('PROBE_STATE') || '{}') || {}; } catch (e) { st = {}; Logger.log('PROBE_STATE was not valid JSON; starting fresh.'); }
   PROBES.forEach(function (pr) {
