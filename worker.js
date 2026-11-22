@@ -677,6 +677,8 @@ const _hubWorkerCore = {
         // creation landing.
         if (path === '/master-key/holders')     return await getSheet(env, 'Master_Key_Holders');
         if (path === '/wo-templates')           return await listWOTemplates(env, url);
+        if (path === '/pm/plans')               return await pmListPlans(env);
+        if (path === '/pm/enrollments')         return await pmListEnrollments(env);
         if (path === '/wo-snippets')            return await listWOSnippets(env);
         if (path === '/materials')              return await listMaterials(env, url);
         if (path === '/returns')                return await getSheet(env, 'Returns');
@@ -1107,6 +1109,12 @@ const _hubWorkerCore = {
         if (path === '/wo-template/copy')         return await recurCopyTemplate(env, body);
         if (path === '/wo-template/link')         return await recurLinkTemplate(env, body);
         if (path === '/wo-template/preview')      return await recurPreview(env, body);
+        // Queue #155 (PM plans, Phase 1): admin only by construction. Not in PUBLIC_PATHS, ROLE_SCOPES or HUB_PROD_WRITE_PATHS.
+        if (path === '/pm/plan/save')             return await pmSavePlan(env, body);
+        if (path === '/pm/seasonal-pack')         return await pmSeasonalPack(env, body);
+        if (path === '/pm/enroll/preview')        return await pmEnrollPreview(env, body);
+        if (path === '/pm/enroll')                return await pmEnroll(env, body);
+        if (path === '/pm/enroll/status')         return await pmSetStatus(env, body);
         if (path === '/wo-snippet/add')           { await ensureTab(env, WO_SNIPPETS_TAB, WO_SNIPPETS_COLS); return await addRow(env, WO_SNIPPETS_TAB, body); }
         if (path === '/wo-snippet/update')        { await ensureTab(env, WO_SNIPPETS_TAB, WO_SNIPPETS_COLS); return await updateRow(env, WO_SNIPPETS_TAB, body.id, body.fields); }
         if (path === '/material/add')             return await addRow(env, 'Materials', body);
@@ -21952,6 +21960,272 @@ async function recurPreview(env, body) {
   return json({ dates: recurNextOccurrences(f, today, 6) });
 }
 
+// ── PM plans (queue #155, Phase 1 of 5) ─────────────────────────────────────────────────────
+// A plan is a named group of recurring WO templates plus a price. Enrolling a property adds it to
+// each included template's Targets (the existing recurring engine then posts the visits on the
+// existing sweep_work job). Phase 1 has no money, no texts, no scheduler job of its own: price is
+// stored for Brett's reference and he bills by hand. Enrolling NEVER switches a template on.
+const PM_PLANS_TAB = 'PM_Plans';
+const PM_ENROLL_TAB = 'PM_Enrollments';
+const PM_PLAN_COLS = ['ID','Name','Template_IDs','Price','Price_Basis','Billing_Period','Notes','Active','Created_At','Updated_At','Updated_By'];
+const PM_ENROLL_COLS = ['ID','Plan_ID','Property_ID','Unit_ID','Owner_ID','Start_Date','End_Date','Status','Price_Override','Change_Log','Created_At','Attention'];
+const PM_STATUSES = ['Active','Paused','Ended'];
+const PM_BASES = ['per_unit','per_property'];
+const PM_PERIODS = ['monthly','quarterly','yearly'];
+// The five yearly visits (queue #108's starter pack, folded in because #108 was never built). All OFF by default.
+const PM_SEASONAL_PACK = [
+  { Name: 'Winterization', Trade: 'Plumbing', md: '10-15', Description: 'Seasonal plan visit: winterize the property. Shut off and drain outdoor spigots, check for drafts and exposed pipes, confirm heat works. Take photos of anything found.' },
+  { Name: 'HVAC pre-season check', Trade: 'HVAC', md: '09-15', Description: 'Seasonal plan visit: pre-season HVAC check. Replace the filter, test heating and cooling, check the thermostat. Take photos of anything found.' },
+  { Name: 'Dryer vent cleaning', Trade: 'Appliance', md: '03-15', Description: 'Seasonal plan visit: clean the dryer vent from the machine to the outside cap. Take before and after photos.' },
+  { Name: 'Water heater flush', Trade: 'Plumbing', md: '05-15', Description: 'Seasonal plan visit: flush the water heater and check the relief valve. Take photos of anything found.' },
+  { Name: 'Detector batteries', Trade: 'Electrical', md: '01-15', Description: 'Seasonal plan visit: replace smoke and CO detector batteries and test each one. Take photos of anything found.' },
+];
+
+function pmParseIds(cell) {
+  const s = String(cell == null ? '' : cell).trim();
+  if (!s) return [];
+  let a; try { a = JSON.parse(s); } catch (e) { a = s.split(','); }
+  if (!Array.isArray(a)) return [];
+  const seen = new Set(), out = [];
+  for (const x of a) { const v = String(x == null ? '' : x).trim(); if (v && !seen.has(v)) { seen.add(v); out.push(v); } }
+  return out;
+}
+// Pure: the new Targets list after adding or removing one property/unit. Other targets are untouched; no duplicates.
+function pmTargetsAfter(existing, target, action) {
+  const key = (t) => String(t.p) + '|' + (t.u || '');
+  const t = { p: String(target.p), u: target.u ? String(target.u) : '' };
+  const out = (existing || []).filter(x => x && x.p && key({ p: x.p, u: x.u }) !== key(t)).map(x => ({ p: String(x.p), u: x.u ? String(x.u) : '' }));
+  if (action !== 'remove') out.push(t);
+  return out;
+}
+// Pure: is the same property/unit already on this plan (Active or Paused)? Ended rows do not count (they can be restored instead).
+function pmFindDuplicate(enrollments, planId, propertyId, unitId) {
+  return (enrollments || []).find(e => String(e.Plan_ID) === String(planId) && String(e.Property_ID) === String(propertyId)
+    && String(e.Unit_ID || '') === String(unitId || '') && String(e.Status || 'Active') !== 'Ended') || null;
+}
+// Pure: for each template the plan includes, its next dates inside the next 12 months, plus whether it is switched off.
+function pmPreviewVisits(templates, fromISO) {
+  const endDn = recurDayNum(fromISO) + 365;
+  return (templates || []).map(t => {
+    const dates = recurNextOccurrences(t, fromISO, 24).filter(d => recurDayNum(d) <= endDn);
+    const off = !recurIsTrue(t.Recurrence_Enabled);
+    return { template_id: String(t.ID), name: t.Name || '', dates, switched_off: off,
+      warning: off ? (t.Name || 'This template') + ' is switched off, so no visits will post until you turn it on.' : '' };
+  });
+}
+// Pure: validates and normalizes plan fields on the way in. Returns { fields } or { error }.
+function pmSanitizePlan(f, templateIdsKnown) {
+  f = f || {};
+  const o = {};
+  if (f.Name !== undefined) { const n = String(f.Name).trim(); if (!n) return { error: 'Plan name is required.' }; o.Name = n.slice(0, 80); }
+  if (f.Template_IDs !== undefined) {
+    const ids = pmParseIds(Array.isArray(f.Template_IDs) ? JSON.stringify(f.Template_IDs) : f.Template_IDs);
+    if (!ids.length) return { error: 'Pick at least one visit for the plan.' };
+    if (templateIdsKnown) { const miss = ids.filter(i => !templateIdsKnown.has(i)); if (miss.length) return { error: 'Unknown template id(s): ' + miss.join(', ') }; }
+    o.Template_IDs = JSON.stringify(ids);
+  }
+  if (f.Price !== undefined) { const p = String(f.Price).trim(); if (p === '') o.Price = ''; else { const n = Number(p.replace(/[$,]/g, '')); if (!Number.isFinite(n) || n < 0) return { error: 'Price must be a number or blank.' }; o.Price = n.toFixed(2); } }
+  if (f.Price_Basis !== undefined) { if (!PM_BASES.includes(f.Price_Basis)) return { error: 'Price basis must be per_unit or per_property.' }; o.Price_Basis = f.Price_Basis; }
+  if (f.Billing_Period !== undefined && f.Billing_Period !== '') { if (!PM_PERIODS.includes(f.Billing_Period)) return { error: 'Billing period must be monthly, quarterly or yearly.' }; o.Billing_Period = f.Billing_Period; }
+  else if (f.Billing_Period === '') o.Billing_Period = '';
+  if (f.Notes !== undefined) o.Notes = String(f.Notes).slice(0, 1000);
+  if (f.Active !== undefined) o.Active = (f.Active === true || recurIsTrue(f.Active)) ? 'TRUE' : 'FALSE';
+  return { fields: o };
+}
+function pmLogLine(entry, who, what) { return recurEtDateISO() + ' | ' + who + ' | ' + what; }
+function pmAppendLog(prev, line) { const s = (String(prev || '') ? String(prev) + '\n' : '') + line; return s.length > 4000 ? s.slice(s.length - 4000) : s; }
+
+let _pmColsReady = false;
+async function pmEnsureTabs(env) {
+  if (_pmColsReady) return;
+  await ensureTab(env, PM_PLANS_TAB, PM_PLAN_COLS);
+  await ensureColumns(env, PM_PLANS_TAB, PM_PLAN_COLS);
+  await ensureTab(env, PM_ENROLL_TAB, PM_ENROLL_COLS);
+  await ensureColumns(env, PM_ENROLL_TAB, PM_ENROLL_COLS);
+  await recurEnsureCols(env);
+  _pmColsReady = true;
+}
+// A failed read is an error response, never an empty list (a failed fetch must not look like "no plans yet").
+async function pmReadTab(env, tab) {
+  try { await pmEnsureTabs(env); return { rows: await fetchTab(env, tab) }; }
+  catch (e) { await pmFail(env, 'pm_read', tab, e, ''); return { error: 'Could not read ' + tab + ': ' + String((e && e.message) || e).slice(0, 200) }; }
+}
+async function pmFail(env, job, where, e, ref) {
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: job, Skill_Or_Endpoint: where, Success: 'FALSE', Notes: (ref ? 'ref ' + ref + ': ' : '') + String((e && e.message) || e).slice(0, 400) }); }
+  catch (e2) { console.error('pmFail: telemetry write failed', e2 && e2.message); } // silent-ok: the telemetry write itself failed and the caller still returns the real error
+}
+
+// GET /pm/plans — every plan (Active or not) so a paused plan can be restored from the screen.
+async function pmListPlans(env) {
+  const r = await pmReadTab(env, PM_PLANS_TAB); if (r.error) return json({ error: r.error }, 500);
+  return json(r.rows);
+}
+// GET /pm/enrollments — every enrollment row, with the plan name and the next visit date per row worked out here.
+async function pmListEnrollments(env) {
+  const e = await pmReadTab(env, PM_ENROLL_TAB); if (e.error) return json({ error: e.error }, 500);
+  const p = await pmReadTab(env, PM_PLANS_TAB); if (p.error) return json({ error: p.error }, 500);
+  let tpls; try { tpls = await fetchTab(env, 'WO_Templates'); } catch (x) { await pmFail(env, 'pm_read', 'WO_Templates', x, ''); return json({ error: 'Could not read WO_Templates: ' + String((x && x.message) || x).slice(0, 200) }, 500); }
+  const today = recurEtDateISO();
+  const planById = new Map(p.rows.map(x => [String(x.ID), x]));
+  const out = e.rows.map(en => {
+    const plan = planById.get(String(en.Plan_ID));
+    const ids = plan ? pmParseIds(plan.Template_IDs) : [];
+    const vis = pmPreviewVisits(tpls.filter(t => ids.includes(String(t.ID))), today);
+    const next = vis.flatMap(v => v.dates).sort()[0] || '';
+    return { ...en, Plan_Name: plan ? plan.Name : '(plan missing)', Next_Visit: next, Visits_Planned: vis.reduce((n, v) => n + v.dates.length, 0), Switched_Off: vis.filter(v => v.switched_off).map(v => v.name) };
+  });
+  return json(out);
+}
+
+// POST /pm/plan/save { id?, fields } — creates (no id) or edits a plan. Every field editable (B1); Active=FALSE is the restorable "delete" (B5).
+// Price changes are logged to the plan's own Notes-free history through Ops_Telemetry (who/when/old/new, B15).
+async function pmSavePlan(env, body) {
+  const r = await pmReadTab(env, PM_PLANS_TAB); if (r.error) return json({ error: r.error }, 500);
+  let tpls; try { tpls = await fetchTab(env, 'WO_Templates'); } catch (x) { await pmFail(env, 'pm_plan_save', 'WO_Templates', x, ''); return json({ error: 'Could not read WO_Templates: ' + String((x && x.message) || x).slice(0, 200) }, 500); }
+  const known = new Set(tpls.map(t => String(t.ID)));
+  const s = pmSanitizePlan(body && body.fields, known);
+  if (s.error) return json({ error: s.error }, 400);
+  const now = new Date().toISOString();
+  if (!body.id) {
+    if (!s.fields.Name || !s.fields.Template_IDs) return json({ error: 'A new plan needs a name and at least one visit.' }, 400);
+    if (r.rows.some(p => String(p.Name || '').trim().toLowerCase() === s.fields.Name.toLowerCase() && p.Active !== 'FALSE')) return json({ error: 'A plan named "' + s.fields.Name + '" already exists.' }, 409);
+    const fields = { Price_Basis: 'per_unit', Billing_Period: 'quarterly', Active: 'TRUE', ...s.fields, Created_At: now, Updated_At: now, Updated_By: 'admin' };
+    const res = await addRow(env, PM_PLANS_TAB, fields);
+    let j = null; try { j = await res.clone().json(); } catch (x) { await pmFail(env, 'pm_plan_save', PM_PLANS_TAB, x, ''); }
+    if (!j || !j.success) return json({ error: 'The plan was not saved: ' + ((j && j.error) || 'no answer from the sheet') }, 500);
+    invalidateTabCache(PM_PLANS_TAB);
+    const back = (await fetchTab(env, PM_PLANS_TAB)).find(p => String(p.ID) === String(j.id));
+    if (!back || back.Name !== fields.Name) { await pmFail(env, 'pm_plan_save', PM_PLANS_TAB, new Error('plan row did not read back'), j.id); return json({ error: 'The plan did not read back after saving. Check the PM_Plans tab.' }, 500); }
+    return json({ success: true, id: back.ID, plan: back });
+  }
+  const cur = r.rows.find(p => String(p.ID) === String(body.id));
+  if (!cur) return json({ error: 'Plan not found' }, 404);
+  const fields = { ...s.fields, Updated_At: now, Updated_By: 'admin' };
+  try { const back = await updateRowVerified(env, PM_PLANS_TAB, cur.ID, fields); 
+    for (const k of ['Price', 'Price_Basis', 'Template_IDs', 'Name']) { if (s.fields[k] !== undefined && String(cur[k] || '') !== String(s.fields[k])) await logTelemetry(env, { Source: 'worker', Job_Type: 'pm_plan_change', Skill_Or_Endpoint: '/pm/plan/save', Success: 'TRUE', Notes: 'plan ' + cur.ID + ' ' + k + ': "' + String(cur[k] || '') + '" -> "' + String(s.fields[k]) + '"' }); }
+    return json({ success: true, id: cur.ID, plan: back });
+  } catch (e) { await pmFail(env, 'pm_plan_save', PM_PLANS_TAB, e, cur.ID); return json({ error: String((e && e.message) || e).slice(0, 300) }, 500); }
+}
+
+// POST /pm/seasonal-pack { name_prefix? } — adds the five yearly visit templates that are not there yet (matched by name). Idempotent. Every one is OFF and has no targets.
+async function pmSeasonalPack(env, body) {
+  const prefix = String((body && body.name_prefix) || '');
+  try { await pmEnsureTabs(env); } catch (e) { await pmFail(env, 'pm_pack', 'ensure', e, ''); return json({ error: 'Could not prepare the sheet: ' + String((e && e.message) || e).slice(0, 200) }, 500); }
+  const have = await fetchTab(env, 'WO_Templates');
+  const year = recurEtDateISO().slice(0, 4);
+  const created = [], existed = [], errors = [];
+  for (const d of PM_SEASONAL_PACK) {
+    const name = prefix + d.Name;
+    const hit = have.find(t => String(t.Name || '').trim().toLowerCase() === name.toLowerCase() && t.Active !== 'FALSE');
+    if (hit) { existed.push({ name, id: hit.ID }); continue; }
+    const fields = recurSanitizeTemplateFields({ Name: name, Trade: d.Trade, Priority: 'normal', Description: d.Description, Active: 'TRUE',
+      Recurrence_Enabled: 'FALSE', Freq_Type: 'monthly_date', Freq_Interval: '12', Freq_Day_Of_Month: d.md.slice(3), Start_Date: year + '-' + d.md,
+      Lead_Days: '14', Notify_Tenant: 'FALSE', Targets: '[]' });
+    try {
+      const res = await addRow(env, 'WO_Templates', fields);
+      const j = await res.clone().json();
+      if (!j || !j.success) throw new Error((j && j.error) || 'no answer from the sheet');
+      created.push({ name, id: j.id });
+    } catch (e) { errors.push({ name, error: String((e && e.message) || e).slice(0, 200) }); await pmFail(env, 'pm_pack', 'WO_Templates', e, name); }
+  }
+  invalidateTabCache('WO_Templates');
+  return json({ success: errors.length === 0, created, existed, errors }, errors.length ? 500 : 200);
+}
+
+async function pmEnrollContext(env, body) {
+  const r = await pmReadTab(env, PM_PLANS_TAB); if (r.error) return { err: json({ error: r.error }, 500) };
+  const plan = r.rows.find(p => String(p.ID) === String(body && body.plan_id));
+  if (!plan) return { err: json({ error: 'Plan not found' }, 404) };
+  if (!body.property_id) return { err: json({ error: 'property_id required' }, 400) };
+  let tpls; try { tpls = await fetchTab(env, 'WO_Templates'); } catch (x) { await pmFail(env, 'pm_enroll', 'WO_Templates', x, ''); return { err: json({ error: 'Could not read WO_Templates: ' + String((x && x.message) || x).slice(0, 200) }, 500) }; }
+  const ids = pmParseIds(plan.Template_IDs);
+  const mine = ids.map(i => tpls.find(t => String(t.ID) === i)).filter(Boolean);
+  const lost = ids.filter(i => !tpls.some(t => String(t.ID) === i));
+  if (lost.length) return { err: json({ error: 'This plan points at template(s) that no longer exist: ' + lost.join(', ') + '. Edit the plan first.' }, 409) };
+  const e = await pmReadTab(env, PM_ENROLL_TAB); if (e.error) return { err: json({ error: e.error }, 500) };
+  return { plan, templates: mine, enrollments: e.rows };
+}
+
+// POST /pm/enroll/preview { plan_id, property_id, unit_id? } — writes nothing.
+async function pmEnrollPreview(env, body) {
+  const c = await pmEnrollContext(env, body || {}); if (c.err) return c.err;
+  const dup = pmFindDuplicate(c.enrollments, c.plan.ID, body.property_id, body.unit_id);
+  const visits = pmPreviewVisits(c.templates, recurEtDateISO());
+  return json({ plan: { id: c.plan.ID, name: c.plan.Name }, visits, warnings: visits.filter(v => v.warning).map(v => v.warning), duplicate: dup ? { id: dup.ID, status: dup.Status } : null });
+}
+
+// POST /pm/enroll { plan_id, property_id, unit_id?, owner_id?, start_date?, price_override? }
+// Order: write the enrollment row and read it back, THEN add the property to each template's Targets, re-reading each.
+// If any template write fails the row is marked "needs attention" with the exact template, a telemetry row is written, and the answer is an error. Never a quiet half state.
+async function pmEnroll(env, body) {
+  const c = await pmEnrollContext(env, body || {}); if (c.err) return c.err;
+  if (c.plan.Active === 'FALSE') return json({ error: 'This plan is switched off. Turn it on before enrolling a property.' }, 409);
+  const dup = pmFindDuplicate(c.enrollments, c.plan.ID, body.property_id, body.unit_id);
+  if (dup) return json({ error: 'This property is already on "' + c.plan.Name + '" (' + (dup.Status || 'Active') + '). Use Pause / Resume on the existing enrollment.', duplicate: dup.ID }, 409);
+  const warnings = pmPreviewVisits(c.templates, recurEtDateISO()).filter(v => v.warning).map(v => v.warning);
+  const start = body.start_date && recurParseISO(body.start_date) ? body.start_date : recurEtDateISO();
+  const row = { Plan_ID: c.plan.ID, Property_ID: String(body.property_id), Unit_ID: body.unit_id ? String(body.unit_id) : '', Owner_ID: body.owner_id ? String(body.owner_id) : '',
+    Start_Date: start, End_Date: '', Status: 'Active', Price_Override: body.price_override != null ? String(body.price_override).trim() : '',
+    Change_Log: pmLogLine(null, 'admin', 'enrolled on plan ' + c.plan.ID), Created_At: new Date().toISOString(), Attention: '' };
+  let id;
+  try {
+    const res = await addRow(env, PM_ENROLL_TAB, row);
+    const j = await res.clone().json();
+    if (!j || !j.success) throw new Error((j && j.error) || 'no answer from the sheet');
+    id = j.id; invalidateTabCache(PM_ENROLL_TAB);
+    const back = (await fetchTab(env, PM_ENROLL_TAB)).find(x => String(x.ID) === String(id));
+    if (!back || String(back.Property_ID) !== row.Property_ID) throw new Error('enrollment row did not read back');
+  } catch (e) { await pmFail(env, 'pm_enroll', PM_ENROLL_TAB, e, body.property_id); return json({ error: 'The enrollment was not saved, and no template was changed: ' + String((e && e.message) || e).slice(0, 200) }, 500); }
+  const r = await pmApplyTargets(env, c.templates, { p: row.Property_ID, u: row.Unit_ID }, 'add');
+  if (r.failed.length) return await pmHalfState(env, id, r, 'enroll');
+  return json({ success: true, id, warnings, templates_updated: r.done });
+}
+
+// Adds or removes one target on each template, re-reading each. Collects every failure (does not stop at the first) so the message is complete.
+async function pmApplyTargets(env, templates, target, action) {
+  const done = [], failed = [];
+  for (const t of templates) {
+    try {
+      invalidateTabCache('WO_Templates');
+      const fresh = (await fetchTab(env, 'WO_Templates')).find(x => String(x.ID) === String(t.ID));
+      if (!fresh) throw new Error('template ' + t.ID + ' not found');
+      const list = pmTargetsAfter(recurTargets(fresh, env), target, action);
+      await updateRowVerified(env, 'WO_Templates', fresh.ID, { Targets: JSON.stringify(list) });
+      done.push({ id: String(t.ID), name: t.Name });
+    } catch (e) { failed.push({ id: String(t.ID), name: t.Name, error: String((e && e.message) || e).slice(0, 200) }); await pmFail(env, 'pm_targets', 'WO_Templates', e, t.ID); }
+  }
+  return { done, failed };
+}
+async function pmHalfState(env, enrollId, r, what) {
+  const note = 'Needs attention: ' + what + ' could not update ' + r.failed.map(f => f.name + ' (' + f.error + ')').join('; ') + '. Done: ' + (r.done.map(d => d.name).join(', ') || 'none') + '.';
+  try { await updateRowVerified(env, PM_ENROLL_TAB, enrollId, { Attention: note.slice(0, 900) }); }
+  catch (e) { await pmFail(env, 'pm_enroll', 'mark-attention', e, enrollId); }
+  return json({ error: 'Enrollment ' + enrollId + ' is only partly done. ' + note, enrollment_id: enrollId, failed: r.failed, done: r.done, needs_attention: true }, 500);
+}
+
+// POST /pm/enroll/status { id, status:'Active'|'Paused'|'Ended' } — pause/end remove the property from every included template; resume restores it. Ended rows stay (restorable by Resume).
+async function pmSetStatus(env, body) {
+  const status = String((body && body.status) || '');
+  if (!PM_STATUSES.includes(status)) return json({ error: 'status must be Active, Paused or Ended' }, 400);
+  const e = await pmReadTab(env, PM_ENROLL_TAB); if (e.error) return json({ error: e.error }, 500);
+  const en = e.rows.find(x => String(x.ID) === String(body.id));
+  if (!en) return json({ error: 'Enrollment not found' }, 404);
+  if (String(en.Status || 'Active') === status) return json({ success: true, id: en.ID, unchanged: true });
+  const c = await pmEnrollContext(env, { plan_id: en.Plan_ID, property_id: en.Property_ID }); if (c.err) return c.err;
+  if (status === 'Active') {
+    const dup = c.enrollments.find(x => String(x.ID) !== String(en.ID) && String(x.Plan_ID) === String(en.Plan_ID) && String(x.Property_ID) === String(en.Property_ID) && String(x.Unit_ID || '') === String(en.Unit_ID || '') && String(x.Status || 'Active') !== 'Ended');
+    if (dup) return json({ error: 'Another enrollment for this property on this plan is already ' + dup.Status + '. End that one first.' }, 409);
+  }
+  const target = { p: String(en.Property_ID), u: en.Unit_ID ? String(en.Unit_ID) : '' };
+  const r = await pmApplyTargets(env, c.templates, target, status === 'Active' ? 'add' : 'remove');
+  if (r.failed.length) return await pmHalfState(env, en.ID, r, status === 'Active' ? 'resume' : 'pause');
+  try {
+    await updateRowVerified(env, PM_ENROLL_TAB, en.ID, { Status: status, Attention: '', End_Date: status === 'Ended' ? recurEtDateISO() : '',
+      Change_Log: pmAppendLog(en.Change_Log, pmLogLine(null, 'admin', String(en.Status || 'Active') + ' -> ' + status + (body.reason ? ' (' + String(body.reason).slice(0, 120) + ')' : ''))) });
+  } catch (x) { await pmFail(env, 'pm_enroll', 'status', x, en.ID); return json({ error: 'Templates were updated but the status did not save: ' + String((x && x.message) || x).slice(0, 200), enrollment_id: en.ID, needs_attention: true }, 500); }
+  return json({ success: true, id: en.ID, status, templates_updated: r.done });
+}
+
 async function listWOSnippets(env) {
   try { return json((await fetchTab(env, WO_SNIPPETS_TAB)).filter(s => s.Active !== 'FALSE')); } catch (e) { return json([]); }
 }
@@ -31472,6 +31746,24 @@ async function hubTestWriteAllowed(env, path, body) {
     return true;
   }
   if (path === '/wo-template/preview') return true; // read-only computation, writes nothing
+  // PM plans (queue #155): the staging token may only touch TEST- plans, TEST- properties and TEST- templates, because enrolling edits template Targets and so can post real WOs.
+  if (path === '/pm/enroll/preview') return true; // read-only, writes nothing
+  if (path === '/pm/seasonal-pack') return String((body && body.name_prefix) || '').startsWith('TEST-');
+  if (path === '/pm/plan/save') {
+    if (body && body.id) { const _p = (await fetchTab(env, PM_PLANS_TAB).catch(() => [])).find(x => String(x.ID) === String(body.id)); return !!_p && String(_p.Name || '').startsWith('TEST-'); } // silent-ok: a failed read makes the test-write guard refuse, the safe side
+    return String((body && body.fields && body.fields.Name) || '').startsWith('TEST-');
+  }
+  if (path === '/pm/enroll' || path === '/pm/enroll/status') {
+    let _plan, _prop;
+    if (path === '/pm/enroll') { _plan = body && body.plan_id; _prop = body && body.property_id; }
+    else { const _e = (await fetchTab(env, PM_ENROLL_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id)); if (!_e) return false; _plan = _e.Plan_ID; _prop = _e.Property_ID; } // silent-ok: a failed read makes the test-write guard refuse, the safe side
+    const _pl = (await fetchTab(env, PM_PLANS_TAB).catch(() => [])).find(x => String(x.ID) === String(_plan)); // silent-ok: a failed read makes the test-write guard refuse, the safe side
+    if (!_pl || !String(_pl.Name || '').startsWith('TEST-')) return false;
+    if (!(await isTestRecord(env, 'Properties', _prop))) return false;
+    const _tt = await fetchTab(env, 'WO_Templates').catch(() => []); // silent-ok: a failed read makes the test-write guard refuse, the safe side
+    for (const _i of pmParseIds(_pl.Template_IDs)) { const _t = _tt.find(x => String(x.ID) === _i); if (!_t || !String(_t.Name || '').startsWith('TEST-')) return false; }
+    return true;
+  }
   if (path === '/wo-snippet/add') return String((body && body.Name) || '').startsWith('TEST-');
   if (path === '/wo-snippet/update') {
     const _sn = (await fetchTab(env, WO_SNIPPETS_TAB).catch(() => [])).find(x => String(x.ID) === String(body && body.id)); // silent-ok: a failed read makes the test-write guard refuse, the safe side

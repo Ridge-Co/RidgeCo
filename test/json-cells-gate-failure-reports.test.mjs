@@ -25,7 +25,7 @@ has(/softFail\(env, 'vendorBillReconcileReceipts:Receipts', e, \{ severity: 'P2'
 
 console.log('Test-write guard reads fail closed, with a reason');
 const guardLines = src.split('\n').filter(l => /\.catch\(\(\) => \[\]\)\)\.find\(/.test(l) && /silent-ok: a failed read makes the test-write guard refuse/.test(l));
-ok(guardLines.length === 5, 'all 5 hubTestWriteAllowed reads carry a real silent-ok reason (' + guardLines.length + ')');
+ok(guardLines.length === 8, 'all 8 hubTestWriteAllowed reads carry a real silent-ok reason (' + guardLines.length + ')');
 
 console.log('Checklist parsing reports a corrupt checklist');
 has(/function parseChecklistItems\(raw, env, ref\) \{\n  let arr = raw;\n  if \(typeof raw === 'string'\) arr = parseJsonCell\(raw, \[\], \{ env, where: 'parseChecklistItems', ref: String\(ref \|\| ''\), severity: 'P1' \}\);\n  if \(!Array\.isArray\(arr\)\) return \[\];/, 'parseChecklistItems goes through parseJsonCell at P1 and still returns [] for anything that is not a list');

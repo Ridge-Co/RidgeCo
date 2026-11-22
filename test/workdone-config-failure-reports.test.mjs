@@ -22,7 +22,7 @@ has(/workDoneWarnings\(wo, env\)\.forEach\(w => warnings\.push\(w\)\);/, 'the in
 console.log('Recurring template targets and Config reads report');
 has(/function recurTargets\(tpl, env\) \{\n  const a = parseJsonCell\(String\(\(tpl && tpl\.Targets\) \|\| ''\), \[\], \{ env, where: 'recurTargets:Targets', ref: String\(\(tpl && tpl\.ID\) \|\| ''\), severity: 'P1' \}\);/, 'recurTargets goes through parseJsonCell at P1 with the template id');
 const rtCalls = (src.match(/(?<!function )recurTargets\([^)]*\)/g) || []);
-ok(rtCalls.length === 5 && rtCalls.every(c => /, env\)$/.test(c)), 'all 5 recurTargets callers pass env (' + rtCalls.length + ' calls)');
+ok(rtCalls.length === 6 && rtCalls.every(c => /, env\)$/.test(c)), 'all 6 recurTargets callers pass env (' + rtCalls.length + ' calls)');
 has(/softFail\(env, 'fetchConfig:Config', e, \{ severity: 'P1', source: 'read'/, 'fetchConfig reports a failed Config read at P1');
 has(/if \(n - _cfgFailAt > 300000\) \{ _cfgFailAt = n;/, 'the fetchConfig report is throttled to once per 5 minutes per isolate');
 
