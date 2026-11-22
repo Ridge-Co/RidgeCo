@@ -127,5 +127,35 @@ function rig(over) {
   const ok = rig(); let d2; for (let k = 0; k < 4; k++) d2 = await ok.tick();
   t('a clean run has no failing list', !/failing/.test(ok.log.telemetry[0].Notes));
 }
+// Nov 22 2026 (queue #271): the telemetry Notes explain the ~20 s (slices, last slice, summed checks, slowest three)
+{
+  const r = rig(); let d; for (let k = 0; k < 4; k++) d = await r.tick();
+  const n = r.log.telemetry[0].Notes;
+  t('Notes name the slice count', /; 4 slices;/.test(n));
+  t('Notes name the last slice and the summed check time', /last slice \d+\.\ds; checks total 100\.0s/.test(n));
+  t('Notes name the slowest three, sorted', /slowest: c\d 10\.0s, c\d 10\.0s, c\d 10\.0s;/.test(n));
+  t('Notes say the pacing is by design', /paced 2\.5s between Sheets reads \(by design\)/.test(n));
+  t('Notes within 300 characters', n.length <= 300);
+  t('Latency_ms still means the last slice (numeric, not whole-run)', typeof r.log.telemetry[0].Latency_ms === 'number');
+  t('slices counted across resumed ticks', r.stored().slices === 4);
+}
+{
+  const r = rig({ initial: JSON.stringify({ date: '2026-10-14', started: 'x', endpoint: [], golden: null, complete: false }) });
+  let d; for (let k = 0; k < 4; k++) d = await r.tick();
+  t('a progress row from the previous version (no slices field) resumes without error', d.ok === true && r.stored().slices === 4);
+}
+{
+  // pure: long failing list keeps "failing:" first; extras dropped first; manual run (no slices) keeps the old short form
+  const failures = Array.from({ length: 20 }, (_, i) => ({ name: 'check_number_' + i }));
+  const agg = { passed: 19, total: 39, failed: 20, failures };
+  const res = [{ name: 'a', latency_ms: 3100 }, { name: 'b', latency_ms: 2900 }, { name: 'c', latency_ms: 2700 }, { name: 'd', latency_ms: 10 }];
+  const S = make({ SELFTEST_ENDPOINT_CHECKS: CHECKS });
+  const long = S.selftestTelemetryNotes(agg, res, { trigger: 'cron', slices: 3, lastSliceMs: 20400 });
+  t('long failing list: capped at 300, failing first', long.length <= 300 && /^19\/39 passed, trigger=cron; failing: check_number_0/.test(long));
+  const short = S.selftestTelemetryNotes({ passed: 39, total: 39, failed: 0, failures: [] }, res, { trigger: 'cron', slices: 3, lastSliceMs: 20400 });
+  t('exact format', short === '39/39 passed, trigger=cron; 3 slices; last slice 20.4s; checks total 8.7s; slowest: a 3.1s, b 2.9s, c 2.7s; paced 2.5s between Sheets reads (by design)');
+  const manual = S.selftestTelemetryNotes({ passed: 39, total: 39, failed: 0, failures: [] }, res, { trigger: 'manual' });
+  t('manual run (no slices) writes the old short form', manual === '39/39 passed, trigger=manual');
+}
 console.log(`selftest-slice: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
