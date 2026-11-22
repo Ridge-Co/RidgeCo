@@ -260,8 +260,9 @@ label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font
       <input type="file" id="srFiles" accept="image/*,video/*" multiple onchange="srHandleFiles(this.files)">
       <div id="srPreview" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px"></div>
     </div>
+    <div id="srDupPanel" style="display:none"></div>
     <div id="srMsg"></div>
-    <div class="modal-actions">
+    <div class="modal-actions" id="srActions">
       <button class="btn btn-sm btn-muted" onclick="closeModal('modalSubmitRequest')">Cancel</button>
       <button class="btn btn-sm btn-green" id="srSubmitBtn" onclick="submitNewRequest()">SUBMIT</button>
     </div>
