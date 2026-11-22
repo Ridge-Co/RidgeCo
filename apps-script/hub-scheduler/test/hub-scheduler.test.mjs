@@ -1134,5 +1134,47 @@ const callPW = (w, expr) => vm.runInContext(expr, w.ctx);
   ok(!/fetch\(|http_\(/.test(SRC.slice(SRC.indexOf('5b. PAYMENT-EMAIL WATCHER'), SRC.indexOf('// GitHub: press "Run workflow"'))), 'the watcher makes no HTTP call: it cannot touch the Hub, QuickBooks or anything else, so it cannot mark an invoice paid');
 }
 
+// ── queue #262: portal pages + Hub /version probes ──────────────────────────────────────────────
+{
+  const fresh = () => { const w = world(); w.props.STARTED = '1'; w.props.SCHEDULER_TOKEN = 'T'.repeat(30); scriptedHub(w, [{}], Object.assign({}, GOOD_STATUS, { failures: { ok: true, open: 0, P0: 0, P1: 0, p0_unack: [], p0_unack_total: 0 } })); return w; };
+  const tick = (w) => { w.clock += 15 * MIN; w.run('runScheduler'); };
+  // every page row's expected text really is in the file it probes (a UI edit that removes it must fail here, not at 3am)
+  const w0 = fresh(); const rows = JSON.parse(vm.runInContext('JSON.stringify(PROBES)', w0.ctx));
+  const pageRows = rows.filter(r => r.kind === 'page');
+  ok(pageRows.length === 4 && rows.length === 9, 'PROBES has the 4 Workers, hub-version and 4 page rows', rows.map(r => r.name));
+  ok(pageRows.every(r => PAGE_TEXT[r.path.slice(1)].includes(r.expect) && PAGE_TEXT[r.path.slice(1)].includes('uptime probe looks for this text')), 'each page contains its expected text and the comment that says a probe depends on it');
+  ok(rows.filter(r => !r.path).length === 4 && rows.filter(r => !r.path).every(r => !r.expect && !r.kind), 'the original four Worker rows keep the default /health path, no keyword');
+  // page 404 twice -> one email naming the page, one P1 ledger row; recovery email once
+  let w = fresh(); const baseHub = w.hub; w.hub = (u, o) => (/\/failure\/report$/.test(u) ? { code: 200, body: '{}' } : baseHub(u, o)); w.run('runScheduler');
+  w.probe = (u) => /tenant\.html$/.test(u) ? { code: 404 } : { code: 200 };
+  tick(w); ok(mailsWith(w, /page DOWN/).length === 0, 'one page failure is not reported yet');
+  tick(w); ok(mailsWith(w, /page DOWN: page-tenant/).length === 1 && mailsWith(w, /DOWN/).length === 1, 'two page failures in a row: one email, only for the page that is down');
+  ok(w.fetches.some(f => /\/failure\/report$/.test(f.url) && JSON.parse(f.o.payload).where === 'worker_probe:page-tenant' && JSON.parse(f.o.payload).severity === 'P1'), '... and a P1 ledger row for the page');
+  tick(w); ok(mailsWith(w, /page DOWN/).length === 1, 'still down: no repeat inside 6 h (ledger report throttled too)');
+  ok(w.fetches.filter(f => /\/failure\/report$/.test(f.url) && JSON.parse(f.o.payload).where === 'worker_probe:page-tenant').length === 1, 'ledger report sent once, not every tick');
+  w.probe = () => ({ code: 200 }); tick(w);
+  ok(mailsWith(w, /page back up: page-tenant/).length === 1, 'recovery email sent once');
+  tick(w); ok(mailsWith(w, /back up/).length === 1, 'and not again on the next tick');
+  // 500 and a thrown fetch also count as down for a page
+  w = fresh(); w.probe = (u) => /vendor\.html$/.test(u) ? { code: 500 } : /owner\.html$/.test(u) ? new Error('DNS failure') : { code: 200 };
+  tick(w); tick(w);
+  ok(mailsWith(w, /page DOWN: page-vendor/).length === 1 && mailsWith(w, /page DOWN: page-owner/).length === 1, 'HTTP 500 and a network exception both count as down for a page');
+  // 200 but wrong content -> "content is wrong" wording, not "DOWN"
+  w = fresh(); w.probe = (u) => /index\.html$/.test(u) ? { code: 200, text: '<html><title>Error</title></html>' } : { code: 200 };
+  tick(w); tick(w);
+  ok(mailsWith(w, /page answers but its content is wrong: page-hub/).length === 1 && mailsWith(w, /DOWN/).length === 0, 'a 200 without the expected text raises the content-is-wrong alert');
+  ok(mailsWith(w, /content is wrong/)[0].body.includes('"Maintenance Hub" is missing'), 'the email says which text was missing');
+  // a redirect on a page row is not "up"
+  w = fresh(); w.probe = (u) => /tenant\.html$/.test(u) ? { code: 301, text: '' } : { code: 200 };
+  tick(w); tick(w); ok(mailsWith(w, /page DOWN: page-tenant/).length === 1, 'a 301 on a page row counts as down (the keyword is the real check)');
+  // Hub /version: junk body is wrong, a 404 Worker-style row is judged by the keyword too
+  w = fresh(); w.probe = (u) => /\/version$/.test(u) ? { code: 200, text: '<html>Cloudflare error</html>' } : { code: 200 };
+  tick(w); tick(w); ok(mailsWith(w, /content is wrong: hub-version/).length === 1, 'the Hub /version row alerts when the answer has no version_id');
+  // time guard: a probe with no time left is skipped and NOT counted as a failure
+  w = fresh(); w.props.PROBE_STATE = JSON.stringify({ 'page-owner': { fails: 1, alerted: false } });
+  vm.runInContext('probeWorkers_(Date.now() - 1)', w.ctx);
+  ok(JSON.parse(w.props.PROBE_STATE)['page-owner'].fails === 1 && w.logs.some(l => /Probe page-owner skipped: no time left/.test(l)), 'a probe skipped for time leaves its state alone and says so in the log');
+}
+
 console.log(`\nhub-scheduler: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
