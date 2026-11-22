@@ -39,7 +39,7 @@ function rig(over) {
   };
   const opts = (extra) => Object.assign({
     checks: CHECKS, progress, now: () => clock,
-    runOne: async (c) => { clock += over.perCheckMs || 10000; return { name: c.name, path: c.path, status: 200, ok: over.failName !== c.name, reason: 'r' }; },
+    runOne: async (c) => { clock += over.perCheckMs || 10000; return { name: c.name, path: c.path, status: 200, ok: over.failName !== c.name, reason: 'r', latency_ms: over.perCheckMs || 10000 }; },
     golden: async () => { clock += 3000; return [{ name: 'g1', ok: true, reason: 'fine' }]; },
   }, extra || {});
   return { S, log, opts, tick: (extra) => { clock = 0; return S.selftestRunSlice({}, '2026-10-14', opts(extra)); }, stored: () => stored && JSON.parse(stored) };
