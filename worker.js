@@ -9542,7 +9542,8 @@ async function createWorkOrder(env, body) {
     // Vendor Additional Work (Sep 30 2026) — only /wo/additional-work/start sends this, after ensureColumns.
     Parent_WO_ID: body.parent_wo_id||'',
     // Max price (Nov 5 2026) — vendor-facing ceiling, never printed on a description or invoice.
-    Max_Price: _maxPrice ? _maxPrice.toFixed(2) : ''
+    Max_Price: _maxPrice ? _maxPrice.toFixed(2) : '',
+    Possible_Dup_Of: _dupOf
   }[h] ?? ''));
   const _woAppend = await sheetsRequest(env, 'POST', `/values/Work_Orders:append?valueInputOption=RAW`, { values: [newRow] });
   // Oct 16 2026: if another request took the same WO number in the gap, give THIS row the next free number (and say so in telemetry).
