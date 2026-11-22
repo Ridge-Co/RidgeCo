@@ -3724,9 +3724,11 @@ function updateAssignPreview() {
   document.getElementById('assign-preview').textContent = v ? (sg ? sg.reason + '. ' : '') + 'SMS will be sent to '+v.Name+' ('+v.Phone+') with job details and access info.' : _assignSuggest.summary;
 }
 function submitAssign() {
+  var btn = document.getElementById('assign-submit-btn'); if (btn) { if (btn.disabled) return; btn.disabled = true; }
   var vendorId = document.getElementById('assign-vendor-select').value;
-  if (!vendorId) { toast('Select a vendor','error'); return; }
+  if (!vendorId) { if (btn) btn.disabled = false; toast('Select a vendor','error'); return; }
   api('POST','/assign',{wo_id:assignWOId,vendor_id:vendorId}).then(function(res){
+    if (btn) btn.disabled = false;
     if (res.success) {
       toast('Assigned. Vendor SMS: '+(res.vendor_sms?'✅':'❌')+' | Tenant SMS: '+(res.tenant_sms?'✅':'—'),'success');
       closeModal('modal-assign');
