@@ -130,6 +130,7 @@ var PINTEREST_URL = 'https://pinterest-sync.brett-2f8.workers.dev';
 var BARRELCO_URL  = 'https://barrel-co.brett-2f8.workers.dev';
 var STR_URL       = 'https://str-automation.brett-2f8.workers.dev';
 var BRETTOS_URL   = 'https://brett-os.brett-2f8.workers.dev';
+var PAGES_URL     = 'https://ridge-co.github.io/RidgeCo';   // the static portal pages (GitHub Pages)
 // Workers the watcher probes every tick (GET /health). Up = any answer below HTTP 500 (a 404 or 401 still proves the Worker is alive);
 // down = no answer, a Cloudflare error, or HTTP 5xx. To watch another Worker add a row here.
 var PROBES = [
