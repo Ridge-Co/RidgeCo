@@ -711,6 +711,7 @@ window.addEventListener('pageshow', function(e){
         <option value="inactive">Inactive Only</option>
       </select>
       <button class="btn small secondary" onclick="selectOwnersMissingPin()" title="Tick every listed owner who has no PIN yet, then tap Set PIN for Selected">☑ Select owners with no PIN</button>
+      <button class="btn small secondary" onclick="openOwnerSummaries()" title="Build, read, edit and send the monthly summary email for owners who have it switched on">✉ Monthly summaries</button>
     </div>
     <div id="owners-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
   </div>
@@ -15829,6 +15830,35 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
 </div>
 
 <!-- EDIT OWNER MODAL (Aug 20, 2026 — replaces the old "edit via the Sheet" toast; real edit like Vendor/Tenant/Property) -->
+<!-- OWNER SUMMARIES (queue #122, Phase 1): Brett builds, reads, edits, test-sends, sends or skips each owner's monthly email. Nothing is sent without Send. -->
+<div class="modal-overlay" id="modal-owner-summaries">
+  <div class="modal" style="max-width:720px">
+    <div class="modal-header"><div class="modal-title">OWNER SUMMARIES</div><button class="modal-close" onclick="closeModal('modal-owner-summaries')">✕</button></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px">
+      <div class="form-group" style="margin:0"><label for="os-month">Month</label><input type="month" id="os-month" style="font-size:16px" onchange="osLoad()"></div>
+      <button class="btn" id="os-build-btn" onclick="osBuild()">Build drafts</button>
+    </div>
+    <p style="color:var(--muted);font-size:13px;margin:0 0 12px">Only owners with “Monthly summary email” switched on get a draft (Edit owner). Nothing goes out until you press Send on a draft.</p>
+    <div id="os-staging" style="display:none;background:var(--warn-bg);color:var(--warn-text);border-radius:var(--radius);padding:8px 12px;font-size:13px;margin-bottom:12px">Staging: emails are held here, nothing really sends.</div>
+    <div id="os-build-msg"></div>
+    <div id="os-list"><div class="loading"><span class="spinner"></span>Loading...</div></div>
+    <div id="os-detail" style="display:none;border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+      <input type="hidden" id="os-id">
+      <div id="os-to" style="font-size:15px;font-weight:600;margin-bottom:8px"></div>
+      <div class="form-group"><label for="os-subject">Subject</label><input type="text" id="os-subject" style="font-size:16px"></div>
+      <label style="font-size:13px;font-weight:600">What the owner will see (tap the text to change it)</label>
+      <iframe id="os-frame" sandbox="allow-same-origin" title="Email preview" style="width:100%;height:320px;border:1px solid var(--border);border-radius:var(--radius);background:#fff"></iframe>
+      <div id="os-msg" style="margin-top:8px"></div>
+      <div class="modal-actions" style="flex-wrap:wrap">
+        <button class="btn secondary" id="os-skip-btn" onclick="osAct('skip')">Skip</button>
+        <button class="btn secondary" id="os-save-btn" onclick="osAct('save')">Save changes</button>
+        <button class="btn secondary" id="os-test-btn" onclick="osAct('test-send')">Send me a test</button>
+        <button class="btn" id="os-send-btn" onclick="osAct('send')">Send to owner</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-edit-owner">
   <div class="modal" style="max-width:480px">
     <div class="modal-header"><div class="modal-title">EDIT OWNER</div><button class="modal-close" onclick="closeModal('modal-edit-owner')">✕</button></div>
@@ -15843,6 +15873,9 @@ function qbSendRows(rows, btn, statusEl, heldBack) {
       <div class="form-group"><label>PIN</label><input type="text" id="eo-pin" maxlength="8" style="text-transform:uppercase"></div>
       <div class="form-group"><label>Active</label>
         <select id="eo-active"><option value="TRUE">Active</option><option value="FALSE">Inactive</option></select>
+      </div>
+      <div class="form-group"><label for="eo-monthly">Monthly summary email</label>
+        <select id="eo-monthly"><option value="">Off</option><option value="TRUE">On (you review each one)</option></select>
       </div>
     </div>
     <div class="form-grid" style="border-top:1px solid var(--border);padding-top:12px;margin-top:4px">
@@ -16010,6 +16043,97 @@ function loadTenantWOSettings(force) {
   }).catch(function() { return state._tenantWOSettings || { owners: [], properties: [] }; });
 }
 
+// ── OWNER SUMMARIES (queue #122, Phase 1) ──
+var __osDrafts = [];
+function osPrevMonth() { var d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); }
+function openOwnerSummaries() {
+  var m = document.getElementById('os-month'); if (m && !m.value) m.value = osPrevMonth();
+  document.getElementById('os-detail').style.display = 'none';
+  document.getElementById('os-build-msg').innerHTML = '';
+  openModal('modal-owner-summaries'); osLoad();
+}
+function osErr(el, msg, retry) {
+  el.innerHTML = '<div style="background:var(--danger-bg);color:var(--danger);border-radius:var(--radius);padding:8px 12px;font-size:13px">' + esc(msg) + (retry ? ' <button class="btn small secondary" onclick="' + retry + '">Try again</button>' : '') + '</div>';
+}
+function osLoad() {
+  var el = document.getElementById('os-list'), month = document.getElementById('os-month').value || osPrevMonth();
+  el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading...</div>';
+  api('GET', '/owner-summary/list?month=' + encodeURIComponent(month)).then(function(r) {
+    if (!r || r.error) { osErr(el, (r && r.error) || 'Could not load the drafts', 'osLoad()'); return; }
+    __osDrafts = safeArray(r.drafts);
+    document.getElementById('os-staging').style.display = r.staging ? 'block' : 'none';
+    if (!__osDrafts.length) { el.innerHTML = '<div style="color:var(--muted);font-size:15px;padding:12px 0">No drafts for this month. Press Build drafts.</div>'; return; }
+    el.innerHTML = __osDrafts.map(function(d) {
+      var c = d.counts || {}, color = d.status === 'Sent' ? 'var(--success)' : d.status === 'Failed' ? 'var(--danger)' : d.status === 'Skipped' ? 'var(--muted)' : 'var(--accent)';
+      return '<button type="button" onclick="osOpen(\'' + esc(d.id) + '\')" style="display:block;width:100%;text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:8px;min-height:44px;font-family:var(--font);font-size:15px;color:var(--text);cursor:pointer">' +
+        '<span style="font-weight:600">' + esc(d.owner_name) + '</span> <span style="color:' + color + ';font-size:13px;font-weight:600">' + esc(d.status) + '</span><br>' +
+        '<span style="color:var(--muted);font-size:13px">' + esc((c.completed || 0) + ' done / ' + (c.open || 0) + ' open / ' + (c.scheduled || 0) + ' scheduled') + (d.send_result && d.status === 'Failed' ? ' · ' + esc(d.send_result) : '') + '</span></button>';
+    }).join('');
+  }).catch(function(e) { osErr(el, 'Could not load the drafts: ' + e.message, 'osLoad()'); });
+}
+function osBuild() {
+  var btn = document.getElementById('os-build-btn'), msg = document.getElementById('os-build-msg'), month = document.getElementById('os-month').value || osPrevMonth();
+  btn.disabled = true; msg.innerHTML = '<div class="loading"><span class="spinner"></span>Building...</div>';
+  api('POST', '/owner-summary/build', { month: month }).then(function(r) {
+    btn.disabled = false;
+    if (!r || r.error) { osErr(msg, (r && r.error) || 'Build failed', 'osBuild()'); return; }
+    var lines = [];
+    lines.push('Built ' + safeArray(r.built).length + ' draft(s).');
+    safeArray(r.skipped).forEach(function(s) { lines.push(s.owner + ': ' + s.reason); });
+    safeArray(r.failed).forEach(function(s) { lines.push('PROBLEM, ' + s.owner + ': ' + s.reason); });
+    if (r.partial) lines.push('More owners are waiting (' + r.remaining + '). Press Build drafts again.');
+    msg.innerHTML = '<div style="background:' + (safeArray(r.failed).length ? 'var(--warn-bg);color:var(--warn-text)' : 'var(--info-bg);color:var(--text)') + ';border-radius:var(--radius);padding:8px 12px;font-size:13px;margin-bottom:12px">' + lines.map(esc).join('<br>') + '</div>';
+    osLoad();
+  }).catch(function(e) { btn.disabled = false; osErr(msg, 'Build failed: ' + e.message, 'osBuild()'); });
+}
+function osOpen(id) {
+  var d = __osDrafts.filter(function(x) { return String(x.id) === String(id); })[0]; if (!d) return;
+  document.getElementById('os-id').value = d.id;
+  document.getElementById('os-to').textContent = 'To: ' + (d.to_email || 'NO EMAIL ON FILE') + ' (' + d.owner_name + ')';
+  document.getElementById('os-subject').value = d.subject || '';
+  document.getElementById('os-msg').innerHTML = d.status === 'Failed' && d.send_result ? '<div style="color:var(--danger);font-size:13px">' + esc(d.send_result) + '</div>' : '';
+  var f = document.getElementById('os-frame'); f.onload = function() { try { f.contentDocument.designMode = d.status === 'Draft' ? 'on' : 'off'; } catch (e) { document.getElementById('os-msg').innerHTML = '<div style="color:var(--danger);font-size:13px">Preview could not switch to edit mode: ' + esc(e.message) + '</div>'; } };
+  f.srcdoc = d.body_html || '';
+  var locked = d.status === 'Sent' || d.status === 'Skipped';
+  ['os-skip-btn', 'os-save-btn', 'os-send-btn'].forEach(function(b) { document.getElementById(b).disabled = locked || (b === 'os-save-btn' && d.status !== 'Draft'); });
+  document.getElementById('os-test-btn').disabled = false;
+  document.getElementById('os-detail').style.display = 'block';
+  document.getElementById('os-detail').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+function osAct(kind) {
+  var id = document.getElementById('os-id').value, msg = document.getElementById('os-msg');
+  var btnId = { skip: 'os-skip-btn', save: 'os-save-btn', 'test-send': 'os-test-btn', send: 'os-send-btn' }[kind], btn = document.getElementById(btnId);
+  if (kind === 'send' || kind === 'skip') {   // two taps instead of a browser dialog: the first arms the button, the second does it
+    var armed = btn.getAttribute('data-armed') === '1';
+    if (!armed) {
+      btn.setAttribute('data-armed', '1'); btn.setAttribute('data-label', btn.textContent);
+      btn.textContent = kind === 'send' ? 'Tap again to send now' : 'Tap again to skip';
+      msg.innerHTML = '<div style="color:var(--warn-text);background:var(--warn-bg);border-radius:var(--radius);padding:8px 12px;font-size:13px">' + (kind === 'send' ? 'This goes to the owner right away and cannot be unsent.' : 'This owner gets no summary this month.') + '</div>';
+      setTimeout(function() { if (btn.getAttribute('data-armed') === '1') { btn.removeAttribute('data-armed'); btn.textContent = btn.getAttribute('data-label'); } }, 6000);
+      return;
+    }
+    btn.removeAttribute('data-armed'); btn.textContent = btn.getAttribute('data-label');
+  }
+  var body = { id: id };
+  var doCall = function() {
+    return api('POST', '/owner-summary/' + kind, body).then(function(r) {
+      if (!r || r.error) { msg.innerHTML = '<div style="color:var(--danger);font-size:13px">' + esc((r && r.error) || 'That did not work') + '</div>'; btn.disabled = false; return; }
+      toast(kind === 'send' ? 'Sent' : kind === 'test-send' ? 'Test sent to you' : kind === 'skip' ? 'Skipped' : 'Saved', 'success');
+      if (kind === 'send' || kind === 'skip') document.getElementById('os-detail').style.display = 'none';
+      else btn.disabled = false;
+      osLoad();
+    });
+  };
+  btn.disabled = true;   // before any await: a second tap can never send twice
+  var f = document.getElementById('os-frame'), saveFirst = (kind === 'save' || kind === 'send' || kind === 'test-send');
+  var chain = Promise.resolve();
+  if (saveFirst) {
+    var html = ''; try { html = f.contentDocument.body.innerHTML; } catch (e) { html = ''; }
+    var d = __osDrafts.filter(function(x) { return String(x.id) === String(id); })[0];
+    if (d && d.status === 'Draft' && html) chain = api('POST', '/owner-summary/save', { id: id, subject: document.getElementById('os-subject').value, html: html }).then(function(r) { if (!r || r.error) throw new Error((r && r.error) || 'Could not save your changes'); });
+  }
+  chain.then(doCall).catch(function(e) { btn.disabled = false; msg.innerHTML = '<div style="color:var(--danger);font-size:13px">' + esc(e.message) + '</div>'; });
+}
 function openEditOwnerModal(id) {
   var o = safeArray(state.owners).find(function(x){return x.ID===id;}); if(!o) return;
   document.getElementById('eo-id').value = o.ID;
@@ -16024,6 +16148,7 @@ function openEditOwnerModal(id) {
   document.getElementById('eo-b-city').value = o.Billing_City||''; document.getElementById('eo-b-state').value = o.Billing_State||'';
   document.getElementById('eo-b-zip').value = o.Billing_Zip||''; document.getElementById('eo-b-phone').value = o.Billing_Phone||''; document.getElementById('eo-b-email').value = o.Billing_Email||'';
   document.getElementById('eo-active').value = o.Active==='FALSE' ? 'FALSE' : 'TRUE';
+  document.getElementById('eo-monthly').value = String(o.Monthly_Summary||'').toUpperCase()==='TRUE' ? 'TRUE' : '';
   document.getElementById('eo-two-toggle').value = o.Tenant_WO_Toggle==='ON'||o.Tenant_WO_Toggle==='OFF' ? o.Tenant_WO_Toggle : '';
   document.getElementById('eo-two-propids').value = o.Tenant_WO_Property_IDs||'';
   document.getElementById('eo-held-note').value = o.Held_Contact_Note||'';
@@ -16053,6 +16178,7 @@ function submitEditOwner() {
     Billing_City: document.getElementById('eo-b-city').value.trim(), Billing_State: document.getElementById('eo-b-state').value.trim().toUpperCase(),
     Billing_Zip: document.getElementById('eo-b-zip').value.trim(), Billing_Phone: document.getElementById('eo-b-phone').value.trim(), Billing_Email: document.getElementById('eo-b-email').value.trim(),
     Active: document.getElementById('eo-active').value,
+    Monthly_Summary: document.getElementById('eo-monthly').value,
   };
   var twoToggle = document.getElementById('eo-two-toggle').value;
   var twoPropIds = document.getElementById('eo-two-propids').value.trim();
