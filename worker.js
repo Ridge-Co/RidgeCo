@@ -22282,6 +22282,13 @@ async function buildDigest(env) {
     await softFail(env, 'digest:stuck-receipts', e, { req, severity: 'P1' });
     warnings.push('Could not check for receipts that failed to read: ' + String((e && e.message) || e).slice(0, 120));
   }
+  // Queue #233: yesterday's Sheets read tally from the shared store (no Sheets reads). Unreadable is said so in the digest, never shown as "no problems".
+  let quota;
+  try { quota = await __meterDaily(env, null); } catch (qe) { quota = { ok: false, error: String((qe && qe.message) || qe).slice(0, 200) }; }
+  if (!quota.ok) {
+    try { await reportFailure(env, { system: 'hub', source: 'digest', where: 'quota_digest_read', severity: 'P2', message: 'The daily digest could not read yesterday\'s Sheets read tally: ' + quota.error }); }
+    catch (re) { console.error('[quota_digest_read] could not file the failure', String((re && re.message) || re)); }
+  }
   // Tenant fix-checks (Oct 16 2026): answers waiting for Brett + checks nobody answered. An unreadable list is reported IN the digest, never skipped.
   const fuDigest = await fuDigestLines(env);
   await softFlush(env, req);   // sends the queued corrupt-cell report before the digest returns
