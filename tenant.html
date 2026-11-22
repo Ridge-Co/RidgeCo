@@ -821,6 +821,7 @@ function submitNote() {
 // Gated by can_submit_wo (set at login from the existing owner/property toggle hierarchy);
 // POST /workorder re-checks the same thing server-side.
 var srFiles = [];
+var srMarks = [];   // parallel to srFiles: a marked-up JPEG Blob (queue #163) or null. The original File in srFiles is never changed.
 function openSubmitRequest() {
   document.getElementById('srTrade').value = '';
   document.getElementById('srDesc').value = '';
