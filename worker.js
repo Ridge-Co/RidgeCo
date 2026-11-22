@@ -1139,6 +1139,11 @@ const _hubWorkerCore = {
         if (path === '/ar-report/pay-link')       return await arReportPayLink(env, body);
         if (path === '/ops-approve')              return await opsApprove(env, body);
         if (path === '/ops-queue-update')         return await opsQueueUpdate(env, body);
+        if (path === '/owner-summary/build')      return await ownerSummaryBuild(env, body);   // queue #122: admin only; nothing is sent without Send on a draft
+        if (path === '/owner-summary/save')       return await ownerSummarySave(env, body);
+        if (path === '/owner-summary/send')       return await ownerSummarySend(env, body);
+        if (path === '/owner-summary/skip')       return await ownerSummarySkip(env, body);
+        if (path === '/owner-summary/test-send')  return await ownerSummaryTestSend(env, body);
         if (path === '/agent-write')              return await agentWrite(env, body);
         if (path === '/ops-queue-prepare')        return await opsQueuePrepare(env, body);
         if (path === '/ops-queue-status')         return await opsQueueStatus(env, body);
