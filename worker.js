@@ -25511,6 +25511,9 @@ async function selftestRun(env, opts) {
 // SELFTEST_SLICE_MS, saves its progress in the Config row `selftest_progress`, and the next tick carries on; when the last
 // check is done the digest/history/telemetry go out exactly once. A progress read/write failure THROWS (the job shows failed).
 const SELFTEST_PROGRESS_KEY = 'selftest_progress';
+// Expected range for the LAST slice (the number Latency_ms on the `selftest` telemetry row holds): 15 to 30 s. About 8 Sheets reads spaced
+// CRON_READ_GAP_MS (2.5 s) apart is ~20 s on its own; that spacing is what protects the read quota (rules 214/215/228), so ~20 s is by design.
+// The Notes on that row now name the slice count, summed check time and slowest three checks (queue #271).
 const SELFTEST_SLICE_MS = 30 * 1000;
 const SELFTEST_GOLDEN_MARGIN_MS = 12 * 1000;   // do not START the golden checks with less than this left in the slice
 async function selftestReadProgress(env) {
