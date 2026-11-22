@@ -839,15 +839,32 @@ function srHandleFiles(fileList) {
 }
 function renderSrPreview() {
   document.getElementById('srPreview').innerHTML = srFiles.map(function(f, i) {
-    var url = URL.createObjectURL(f);
     var isVideo = f.type.startsWith('video/');
-    return '<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;background:var(--surface2)">' +
+    var url = URL.createObjectURL(srMarks[i] || f);
+    var isImg = f.type.startsWith('image/');
+    return '<div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">' +
+      '<div style="position:relative;width:56px;height:56px;border-radius:4px;overflow:hidden;background:var(--surface2)">' +
       (isVideo ? '<video src="' + url + '" muted style="width:100%;height:100%;object-fit:cover"></video>' : '<img src="' + url + '" style="width:100%;height:100%;object-fit:cover">') +
-      '<button onclick="srRemoveFile(' + i + ')" style="position:absolute;top:1px;right:1px;background:rgba(0,0,0,.8);color:#fff;border:none;border-radius:50%;width:16px;height:16px;font-size:9px;cursor:pointer">&#x2715;</button>' +
+      '<button onclick="srRemoveFile(' + i + ')" aria-label="Remove" style="position:absolute;top:1px;right:1px;background:rgba(0,0,0,.8);color:#fff;border:none;border-radius:50%;width:16px;height:16px;font-size:9px;cursor:pointer">&#x2715;</button>' +
+      '</div>' +
+      (isImg ? '<button type="button" onclick="srMarkUp(' + i + ')" style="min-height:44px;min-width:56px;padding:0 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-size:13px;cursor:pointer">' + (srMarks[i] ? '&#x270E; Marked' : '&#x270E; Mark up') + '</button>' : '') +
+      (srMarks[i] ? '<button type="button" onclick="srResetMark(' + i + ')" style="min-height:44px;padding:0 8px;border-radius:6px;border:none;background:none;color:var(--muted);font-size:13px;cursor:pointer;text-decoration:underline">Use original</button>' : '') +
       '</div>';
   }).join('');
 }
-function srRemoveFile(i) { srFiles.splice(i, 1); renderSrPreview(); }
+function srRemoveFile(i) { srFiles.splice(i, 1); srMarks.splice(i, 1); renderSrPreview(); }
+function srResetMark(i) { srMarks[i] = null; renderSrPreview(); }
+function srMarkUp(i) {
+  var msgEl = document.getElementById('srMsg');
+  if (typeof rcMarkup === 'undefined') { msgEl.innerHTML = '<div class="msg error">The photo markup tool did not load. Reload the page. If this stays, tell Brett.</div>'; return; }
+  msgEl.innerHTML = '';
+  // Always starts from the ORIGINAL file, so marking twice never stacks drawings on a drawing.
+  rcMarkup.open(srFiles[i], {
+    lang: 'en',
+    onDone: function(blob) { srMarks[i] = blob; renderSrPreview(); },
+    onError: function(m) { msgEl.innerHTML = '<div class="msg error">' + esc(m) + '</div>'; }
+  });
+}
 
 function submitNewRequest() {
   var trade = document.getElementById('srTrade').value;
