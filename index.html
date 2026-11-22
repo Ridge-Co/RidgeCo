@@ -4202,6 +4202,36 @@ function openNewWOModal() {
 // actually selected in the New Work Order modal. Brett: "there's often no reason to send
 // anything at all" for a WO created purely to record billing for work already done — this
 // is the toggle for that case, default ON so nothing changes unless he explicitly turns it off.
+// Queue #58 Phase 1: suggested vendors for the chosen trade, at the top of the New Work Order vendor list. Never selects one for Brett
+// (this box can text a vendor and the tenant in one tap); "Assign after creation" stays the default. Any failure: the list stays as it was.
+var _woSuggestSeq = 0;
+function woTradeChanged() {
+  var trade = (document.getElementById('wo-trade') || {}).value || '';
+  var seq = ++_woSuggestSeq, vs = document.getElementById('wo-vendor-opt'), note = document.getElementById('wo-vendor-suggest-note');
+  if (!vs || !note) return;
+  note.style.display = 'none'; note.textContent = '';
+  var list = safeArray(state.vendors).filter(function(v){return v.Active!=='FALSE';});
+  function opts(l, star) { return l.map(function(v){ return '<option value="'+v.ID+'">'+(star||'')+v.Name+' — '+v.Trade+'</option>'; }).join(''); }
+  function setNote(t) { note.textContent = t; note.style.display = t ? '' : 'none'; }
+  var keep = vs.value;
+  vs.innerHTML = '<option value="">Assign after creation</option>' + opts(list); vs.value = keep;
+  if (!trade) return;
+  var done = false;
+  function failed(msg) { if (done || seq !== _woSuggestSeq) return; done = true; setNote('Suggestions unavailable - showing all vendors. Pick the trade again to retry.'); logError('Vendor suggest', msg); }
+  var timer = setTimeout(function(){ failed('no answer in 4 seconds'); }, 4000);
+  api('GET', '/vendor-suggest?trade=' + encodeURIComponent(trade)).then(function(res){
+    clearTimeout(timer);
+    if (done || seq !== _woSuggestSeq) return; done = true;
+    if (!res || res.ok === false || res.error) { done = false; failed((res && res.error) || 'empty answer'); return; }
+    if (!res.enabled) return;
+    var items = safeArray(res.suggestions);
+    if (!items.length) { setNote(res.reason === 'no_vendor_for_trade' ? 'No vendor on file for ' + trade + '. Showing all vendors.' : ''); return; }
+    var cur = vs.value;
+    vs.innerHTML = '<option value="">Assign after creation</option>' + suggestOptGroups(list, items, trade, opts);
+    vs.value = cur;
+    setNote('Best match: ' + items[0].name + ' — ' + items[0].reason + '.' + (res.warnings && res.warnings.length ? ' ' + res.warnings[0] : ''));
+  }).catch(function(e){ clearTimeout(timer); done = false; failed(e && e.message ? e.message : 'request failed'); });
+}
 function woVendorOptChanged() {
   var vendorId = (document.getElementById('wo-vendor-opt')||{}).value||'';
   var notifyGroup = document.getElementById('wo-vendor-notify-group');
