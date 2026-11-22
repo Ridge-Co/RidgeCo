@@ -25608,6 +25608,263 @@ async function arAging(env, url) {
   return json({ ok: true, as_of: new Date(now).toISOString().slice(0, 10), total_open: +totalOpen.toFixed(2), open_count: list.length, buckets, by_customer: customers, invoices: list.slice(0, 100) });
 }
 
+// ── OWNER SUMMARY — monthly plain-English email to each owner (queue #122, Phase 1, Nov 22 2026) ─────────────────────────
+// Brett builds last month's drafts on demand, reads each exactly as the owner will, edits, test-sends to himself, then Sends or
+// Skips. NOTHING is ever sent without Brett pressing Send on that draft. No spend, no KPIs: work completed / open / scheduled only
+// (Brett Nov 17: owners never see what they spend; no time-to-complete, no averages). Phase 2 (a scheduler job that only BUILDS
+// drafts) and Phase 3 (AI wording) are NOT built here. Reads Work_Orders / Properties / Owners once for all owners. Never reads
+// Max_Price or any cost column. Every function below is admin-only: none is on an owner-session path.
+const OWNER_SUMMARY_TAB = 'Owner_Summaries';
+const OWNER_SUMMARY_COLS = ['ID', 'Owner_ID', 'Month', 'Status', 'To_Email', 'Subject', 'Body_Html', 'Counts_Json', 'Built_At', 'Edited_At', 'Sent_At', 'Send_Result'];
+const OWNER_SUMMARY_SLICE = 20;
+const OWNER_SUMMARY_PORTAL_URL = 'https://ridge-co.github.io/RidgeCo/owner.html';
+const OWNER_SUMMARY_STATUS_WORDS = { 'New': 'Received', 'Estimate Requested': 'Received', 'Assigned': 'Vendor assigned', 'Accepted': 'Vendor accepted',
+  'In Progress': 'In progress', 'On Hold': 'On hold', 'Complete': 'Completed', 'Pending Invoice': 'Completed', 'Invoiced': 'Completed', 'Paid': 'Completed' };
+// PURE. 'YYYY-MM-DD' (Eastern) for a sheet date cell (a plain date or an ISO timestamp); '' when blank or unreadable.
+function ownerSummaryDay(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+// PURE. 'Thu, Nov 12' from 'YYYY-MM-DD' (DESIGN.md: people never see 2026-11-12).
+function ownerSummaryNiceDate(day) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || ''));
+  if (!m) return String(day || '');
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+// PURE. 'YYYY-MM' for the calendar month before `todayISO` ('YYYY-MM-DD', Eastern).
+function ownerSummaryPrevMonth(todayISO) {
+  let y = parseInt(String(todayISO).slice(0, 4), 10), m = parseInt(String(todayISO).slice(5, 7), 10) - 1;
+  if (m < 1) { m = 12; y -= 1; }
+  return y + '-' + String(m).padStart(2, '0');
+}
+function ownerSummaryMonthLabel(month) {
+  const names = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  return (names[parseInt(String(month).slice(5, 7), 10) - 1] || String(month)) + ' ' + String(month).slice(0, 4);
+}
+// PURE. Three lists for one owner and one calendar month (Eastern): Completed (Completed_Date in the month), Open now, Scheduled (today or later).
+// Voided, add-on children and hidden bid copies are left out. Each row: where, WO number, job, status in owner wording, date. No money field is read.
+function ownerSummaryCollect(owner, properties, workorders, month, todayISO) {
+  const propById = new Map();
+  for (const p of (properties || [])) if (String(p.Owner_ID || '') === String(owner.ID)) propById.set(String(p.ID), p);
+  const out = { completed: [], open: [], scheduled: [] };
+  for (const w of (workorders || [])) {
+    if (!propById.has(String(w.Property_ID))) continue;
+    if (w.Voided === 'TRUE' || String(w.Type || '') === 'addon' || isHiddenBidCopy(w)) continue;
+    if (WOStatus.sets.DEAD.includes(w.Status)) continue;
+    const prop = propById.get(String(w.Property_ID));
+    const row = (date) => ({ wo: String(w.WO_ID || w.ID || ''), where: [prop.Address, prop.City].filter(Boolean).join(', '), job: woJobLabel(w), trade: w.Trade || 'General',
+      status: OWNER_SUMMARY_STATUS_WORDS[w.Status] || String(w.Status || ''), date: date || '' });
+    const done = ownerSummaryDay(w.Completed_Date);
+    if (done && done.slice(0, 7) === month) out.completed.push(row(done));
+    if (WOStatus.sets.OPEN_WORK.includes(w.Status)) {
+      out.open.push(row(''));
+      const sched = ownerSummaryDay(w.Scheduled_Date);
+      if (sched && sched >= todayISO) out.scheduled.push(row(sched));
+    }
+  }
+  const byDate = (a, b) => String(a.date).localeCompare(String(b.date)) || String(a.wo).localeCompare(String(b.wo), undefined, { numeric: true });
+  out.completed.sort(byDate); out.scheduled.sort(byDate); out.open.sort(byDate);
+  out.counts = { completed: out.completed.length, open: out.open.length, scheduled: out.scheduled.length };
+  return out;
+}
+// PURE. Deterministic template (no AI): single column, readable at 390 px, past tense, WO number on every line, English only.
+function ownerSummaryHtml(data) {
+  const e = _escHtml;
+  const section = (title, rows, withDate) => {
+    const body = rows.length
+      ? '<ul style="margin:6px 0 0;padding-left:18px">' + rows.map(r => `<li style="margin:0 0 6px">${e(r.where)}: ${e(r.job)} (work order ${e(r.wo)}), ${e(r.status)}${withDate && r.date ? ', ' + e(ownerSummaryNiceDate(r.date)) : ''}</li>`).join('') + '</ul>'
+      : '<p style="margin:6px 0 0;color:#555">Nothing this month.</p>';
+    return `<h2 style="font-size:16px;margin:18px 0 0">${e(title)}</h2>${body}`;
+  };
+  return '<div style="font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:1.45;max-width:560px;margin:0 auto;padding:12px;color:#222">'
+    + `<p style="margin:0 0 10px">Hi ${e(data.ownerName || 'there')},</p>`
+    + `<p style="margin:0 0 10px">Here is where things stand at your properties for ${e(data.monthLabel)}.</p>`
+    + section('Completed this month', data.completed, true)
+    + section('Open now', data.open, false)
+    + section('Scheduled', data.scheduled, true)
+    + `<p style="margin:18px 0 0">Anything waiting on your approval, and the photos for each job, are in <a href="${e(data.portalUrl || OWNER_SUMMARY_PORTAL_URL)}">your owner portal</a>.</p>`
+    + '<p style="margin:14px 0 0">Thank you,<br>Ridge Co</p></div>';
+}
+// PURE. {ok, hits}. The owner email may never carry a dollar sign, a spend / cost / total / average / YTD word, a time-to-complete figure,
+// an access code or an internal-note field name. A hit means the draft is marked Failed and can never be sent.
+function ownerSummaryScrub(html) {
+  const raw = String(html == null ? '' : html);
+  const text = raw.replace(/<[^>]*>/g, ' ').replace(/&nbsp;|&amp;|&lt;|&gt;|&quot;|&#39;/g, ' ');
+  const hits = [];
+  const test = (re, label, textOnly) => { if ((!textOnly && re.test(raw)) || re.test(text)) hits.push(label); };   // words are checked on the visible text only (inline CSS has "margin")
+  test(/\$/, 'a dollar sign');
+  test(/\d+(\.\d+)?\s*(hours?|hrs?|days?)\s+to\s+(complete|finish|close)/i, 'a time-to-complete figure', true);
+  test(/\b(spend|spent|spending|total|totals|cost|costs|average|averages|avg|ytd|margin|markup|price|prices|invoice amount|paid)\b/i, 'a spend / cost / total / average word', true);
+  test(/lockbox|door code|gate code|key ?code|access code|lock code/i, 'an access code');
+  test(/max_price|admin_notes|owner_notes|vendor_admin_notes|entry_notes/i, 'an internal field name');
+  return { ok: hits.length === 0, hits };
+}
+// PURE. The owner-facing name, and a draft built for one owner. A job line whose text trips the scrub (a description mentioning a cost word)
+// falls back to the trade alone for that line; if the draft still fails, the caller marks it Failed.
+function ownerSummaryBuildDraft(owner, properties, workorders, month, todayISO) {
+  const data = ownerSummaryCollect(owner, properties, workorders, month, todayISO);
+  const name = [owner.First_Name, owner.Last_Name].filter(Boolean).join(' ').trim() || owner.Company || '';
+  for (const k of ['completed', 'open', 'scheduled']) data[k] = data[k].map(r => ownerSummaryScrub(r.job + ' ' + r.where).ok ? r : Object.assign({}, r, { job: r.trade + ' job' }));
+  const payload = { ownerName: name, monthLabel: ownerSummaryMonthLabel(month), completed: data.completed, open: data.open, scheduled: data.scheduled, portalUrl: OWNER_SUMMARY_PORTAL_URL };
+  const html = ownerSummaryHtml(payload);
+  return { html, counts: data.counts, empty: !data.counts.completed && !data.counts.open && !data.counts.scheduled, scrub: ownerSummaryScrub(html), subject: `Your ${ownerSummaryMonthLabel(month)} property update from Ridge Co` };
+}
+function ownerSummaryOn(owner) { return String((owner && owner.Monthly_Summary) || '').trim().toUpperCase() === 'TRUE' && String(owner.Active || '').toUpperCase() !== 'FALSE'; }
+
+async function ownerSummaryTabRows(env) {
+  await ensureTab(env, OWNER_SUMMARY_TAB, OWNER_SUMMARY_COLS);
+  await ensureColumns(env, OWNER_SUMMARY_TAB, OWNER_SUMMARY_COLS);
+  invalidateTabCache(OWNER_SUMMARY_TAB);
+  return await fetchTab(env, OWNER_SUMMARY_TAB);
+}
+// One new draft row, written then read back (rule 3): a row that is not there afterwards is an error, never "built".
+async function ownerSummaryAddVerified(env, fields) {
+  const res = await addRow(env, OWNER_SUMMARY_TAB, fields);
+  let j = null; try { j = await res.clone().json(); } catch (e) { throw new Error('Owner_Summaries add: unreadable answer (' + schedErrText(e) + ')'); }
+  if (!j || j.success !== true || !j.id) throw new Error('Owner_Summaries row for owner ' + fields.Owner_ID + ' was not added (' + ((j && j.error) || (res && res.status)) + ')');
+  invalidateTabCache(OWNER_SUMMARY_TAB);
+  const back = (await fetchTab(env, OWNER_SUMMARY_TAB)).find(r => String(r.ID) === String(j.id));
+  if (!back || String(back.Owner_ID) !== String(fields.Owner_ID) || String(back.Month) !== String(fields.Month)) throw new Error('Owner_Summaries row ' + j.id + ' did not read back after the add');
+  return back;
+}
+function ownerSummaryView(row, ownersById) {
+  const o = ownersById.get(String(row.Owner_ID)) || {};
+  let counts = {}; try { counts = JSON.parse(row.Counts_Json || '{}'); } catch (e) { counts = { error: 'Counts_Json unreadable: ' + schedErrText(e) }; }
+  return { id: row.ID, owner_id: row.Owner_ID, owner_name: [o.First_Name, o.Last_Name].filter(Boolean).join(' ').trim() || o.Company || ('Owner ' + row.Owner_ID), month: row.Month, status: row.Status,
+    to_email: row.To_Email, subject: row.Subject, body_html: row.Body_Html, counts, built_at: row.Built_At, edited_at: row.Edited_At, sent_at: row.Sent_At, send_result: row.Send_Result };
+}
+
+// POST /owner-summary/build {month?, owner_id?}  Builds drafts for owners whose Monthly_Summary switch is ON. Never overwrites a Draft, a Sent or a Skipped row.
+// At most OWNER_SUMMARY_SLICE owners per call; answers {partial:true, remaining} when there are more (call again).
+async function ownerSummaryBuild(env, body) {
+  body = body || {};
+  const today = etTodayISO();
+  const month = String(body.month || ownerSummaryPrevMonth(today));
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return json({ ok: false, error: 'month must look like 2026-10' }, 400);
+  await ensureColumns(env, 'Owners', ['Monthly_Summary']);
+  invalidateTabCache('Owners');
+  const [owners, properties, workorders] = await fetchTabs(env, ['Owners', 'Properties', 'Work_Orders']);
+  const existing = await ownerSummaryTabRows(env);
+  const have = new Map(existing.filter(r => r.Month === month).map(r => [String(r.Owner_ID), r]));
+  const res = { ok: true, month, built: [], skipped: [], failed: [], errors: [] };
+  const pool = owners.filter(o => !body.owner_id || String(o.ID) === String(body.owner_id));
+  let done = 0, remaining = 0;
+  for (const o of pool) {
+    const id = String(o.ID);
+    const name = [o.First_Name, o.Last_Name].filter(Boolean).join(' ').trim() || o.Company || ('Owner ' + id);
+    if (!ownerSummaryOn(o)) { res.skipped.push({ owner_id: id, owner: name, reason: 'summary switch is off' }); continue; }
+    const prior = have.get(id);
+    if (prior && prior.Status !== 'Failed') { res.skipped.push({ owner_id: id, owner: name, reason: 'already ' + String(prior.Status).toLowerCase() }); continue; }
+    if (!String(o.Email || '').trim()) { res.skipped.push({ owner_id: id, owner: name, reason: 'no email on file' }); continue; }
+    if (done >= OWNER_SUMMARY_SLICE) { remaining++; continue; }
+    done++;
+    try {
+      const d = ownerSummaryBuildDraft(o, properties, workorders, month, today);
+      if (d.empty) { res.skipped.push({ owner_id: id, owner: name, reason: 'nothing to report' }); continue; }
+      const fields = { Owner_ID: id, Month: month, Status: d.scrub.ok ? 'Draft' : 'Failed', To_Email: String(o.Email).trim(), Subject: d.subject, Body_Html: d.html,
+        Counts_Json: JSON.stringify(d.counts), Built_At: new Date().toISOString(), Edited_At: '', Sent_At: '', Send_Result: d.scrub.ok ? '' : 'scrub failed: ' + d.scrub.hits.join(', ') };
+      if (prior) { await updateRowVerified(env, OWNER_SUMMARY_TAB, prior.ID, fields); }
+      else await ownerSummaryAddVerified(env, fields);
+      if (d.scrub.ok) res.built.push({ owner_id: id, owner: name, counts: d.counts });
+      else { res.failed.push({ owner_id: id, owner: name, reason: fields.Send_Result }); res.errors.push({ step: 'owner_summary_scrub', owner_id: id, error: fields.Send_Result }); }
+    } catch (e) {
+      res.failed.push({ owner_id: id, owner: name, reason: schedErrText(e) });
+      res.errors.push({ step: 'owner_summary_build', owner_id: id, error: schedErrText(e) });
+    }
+  }
+  if (remaining) { res.partial = true; res.remaining = remaining; }
+  // One telemetry row per run, not per owner (Ops_Telemetry cap).
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_summary_build', Skill_Or_Endpoint: '/owner-summary/build', Success: res.errors.length ? 'FALSE' : 'TRUE', Notes: `month=${month} built=${res.built.length} skipped=${res.skipped.length} failed=${res.failed.length} remaining=${remaining}`.slice(0, 300) }); }
+  catch (e) { res.errors.push({ step: 'owner_summary_telemetry', error: schedErrText(e) }); }
+  return json(res);
+}
+// GET /owner-summary/list?month=YYYY-MM  The drafts for a month (admin only). A failed read answers an error, never an empty list.
+async function ownerSummaryList(env, url) {
+  const month = String((url && url.searchParams.get('month')) || ownerSummaryPrevMonth(etTodayISO()));
+  const [owners, rows] = await Promise.all([fetchTab(env, 'Owners'), ownerSummaryTabRows(env)]);
+  const byId = new Map(owners.map(o => [String(o.ID), o]));
+  const staging = !!(env.__STAGING__ ?? isStaging(env));
+  return json({ ok: true, month, staging, drafts: rows.filter(r => r.Month === month).map(r => ownerSummaryView(r, byId)) });
+}
+async function ownerSummaryRowOrError(env, id) {
+  const rows = await ownerSummaryTabRows(env);
+  const row = rows.find(r => String(r.ID) === String(id));
+  if (!row) return { err: json({ ok: false, error: 'No such owner summary: ' + id }, 404) };
+  return { row };
+}
+// POST /owner-summary/save {id, subject?, html?}  Only a Draft can be edited; the new text must pass the scrub or nothing is saved.
+async function ownerSummarySave(env, body) {
+  const { row, err } = await ownerSummaryRowOrError(env, body && body.id);
+  if (err) return err;
+  if (row.Status !== 'Draft') return json({ ok: false, error: 'Only a Draft can be edited (this one is ' + row.Status + ')' }, 409);
+  const fields = { Edited_At: new Date().toISOString() };
+  if (body.subject != null) fields.Subject = String(body.subject).slice(0, 200);
+  if (body.html != null) {
+    const s = ownerSummaryScrub(body.html);
+    if (!s.ok) return json({ ok: false, error: 'Not saved: the text contains ' + s.hits.join(', ') + '. Owners never see spend, costs or access codes.', hits: s.hits }, 422);
+    fields.Body_Html = String(body.html);
+  }
+  const back = await updateRowVerified(env, OWNER_SUMMARY_TAB, row.ID, fields);
+  return json({ ok: true, id: back.ID });
+}
+// POST /owner-summary/skip {id}
+async function ownerSummarySkip(env, body) {
+  const { row, err } = await ownerSummaryRowOrError(env, body && body.id);
+  if (err) return err;
+  if (row.Status === 'Sent') return json({ ok: false, error: 'Already sent; it cannot be skipped' }, 409);
+  await updateRowVerified(env, OWNER_SUMMARY_TAB, row.ID, { Status: 'Skipped', Edited_At: new Date().toISOString() });
+  return json({ ok: true, id: row.ID, status: 'Skipped' });
+}
+// POST /owner-summary/test-send {id}  Sends the draft to Brett's own inbox (Config Owner_Summary_Test_To). Changes nothing on the draft.
+async function ownerSummaryTestSend(env, body) {
+  const { row, err } = await ownerSummaryRowOrError(env, body && body.id);
+  if (err) return err;
+  const scrub = ownerSummaryScrub(row.Body_Html);
+  if (!scrub.ok) return json({ ok: false, error: 'Draft contains ' + scrub.hits.join(', ') + '; not sent' }, 422);
+  const cfg = await fetchConfig(env);
+  const to = String(cfg.Owner_Summary_Test_To || cfg.STR_CAL_IMPERSONATE || '').trim();   // Brett's own inbox; STR_CAL_IMPERSONATE already holds it
+  if (!to) return json({ ok: false, error: 'No test address: set Config Owner_Summary_Test_To to your own email' }, 422);
+  const r = await gmailSendEmail(env, { to, subject: '[TEST] ' + row.Subject, html: row.Body_Html });
+  if (!r || !r.sent) return json({ ok: false, error: 'Test email was not sent: ' + ((r && (r.reason || r.note)) || 'no confirmation from Gmail'), result: r }, 502);
+  return json({ ok: true, sent_to: to });
+}
+// POST /owner-summary/send {id}  The Sent mark is written and READ BACK first (so a second tap or a second tab is refused), then the email goes out.
+// A send that fails or is held (demo guard, staging stub) turns the row Failed with the reason, tells Brett, and can be retried; Sent blocks forever.
+async function ownerSummarySend(env, body) {
+  const { row, err } = await ownerSummaryRowOrError(env, body && body.id);
+  if (err) return err;
+  if (row.Status === 'Sent') return json({ ok: false, error: 'Already sent on ' + (row.Sent_At || '?') + '; it cannot be sent twice' }, 409);
+  if (row.Status === 'Skipped') return json({ ok: false, error: 'This draft was skipped; build it again to send it' }, 409);
+  const scrub = ownerSummaryScrub(row.Body_Html);
+  if (!scrub.ok) {
+    await updateRowVerified(env, OWNER_SUMMARY_TAB, row.ID, { Status: 'Failed', Send_Result: 'scrub failed: ' + scrub.hits.join(', ') });
+    return json({ ok: false, error: 'Not sent: the text contains ' + scrub.hits.join(', '), hits: scrub.hits }, 422);
+  }
+  if (!String(row.To_Email || '').trim()) return json({ ok: false, error: 'No owner email on this draft; not sent' }, 422);
+  const sentAt = new Date().toISOString();
+  await updateRowVerified(env, OWNER_SUMMARY_TAB, row.ID, { Status: 'Sent', Sent_At: sentAt, Send_Result: 'sending' });
+  let r = null, failure = '';
+  try { r = await gmailSendEmail(env, { to: String(row.To_Email).trim(), subject: row.Subject, html: row.Body_Html, recipientType: 'owner' }); }
+  catch (e) { failure = 'email send threw: ' + schedErrText(e); }
+  if (!failure && !(r && r.sent)) failure = 'email was not sent: ' + ((r && (r.reason || r.note)) || 'no confirmation from Gmail');
+  if (failure) {
+    try { await updateRowVerified(env, OWNER_SUMMARY_TAB, row.ID, { Status: 'Failed', Sent_At: '', Send_Result: failure.slice(0, 300) }); }
+    catch (e) { failure += ' (and the row could not be marked Failed: ' + schedErrText(e) + ')'; }
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_summary_send', Skill_Or_Endpoint: '/owner-summary/send', Success: 'FALSE', Notes: `summary=${row.ID} owner=${row.Owner_ID} ${failure}`.slice(0, 300) }); } catch (e) { failure += ' (telemetry also failed)'; }
+    await reportFailure(env, { system: 'hub', source: 'worker', where: 'owner_summary_send', ref: 'Owner_Summaries ' + row.ID, severity: 'P1', message: 'Monthly owner summary ' + row.ID + ' did not go out: ' + failure });
+    return json({ ok: false, error: failure, id: row.ID, status: 'Failed' }, 502);
+  }
+  await updateRowVerified(env, OWNER_SUMMARY_TAB, row.ID, { Send_Result: 'sent ' + (r.message_id || '') });
+  try { await logTelemetry(env, { Source: 'worker', Job_Type: 'owner_summary_send', Skill_Or_Endpoint: '/owner-summary/send', Success: 'TRUE', Notes: `summary=${row.ID} owner=${row.Owner_ID}`.slice(0, 300) }); }
+  catch (e) { return json({ ok: true, id: row.ID, status: 'Sent', warnings: ['sent, but the telemetry row failed: ' + schedErrText(e)] }); }
+  return json({ ok: true, id: row.ID, status: 'Sent', sent_at: sentAt });
+}
+
 // ── VENDOR ONBOARDING — Phase 1 (Sep 23 2026, VENDOR_ONBOARDING_BANKING_BUILD_BRIEF_v1.0) ──
 // Phase 1 ONLY: the non-banking required fields, Submit-Bill gating, and an admin gap report.
 // Banking capture/encryption (Phase 2) and the automatic nudge sweep (Phase 3) are NOT built
