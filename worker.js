@@ -9513,6 +9513,9 @@ async function createWorkOrder(env, body) {
   const _mpRaw = parseFloat(String(body.max_price == null ? '' : body.max_price).replace(/[$,\s]/g, ''));
   const _maxPrice = Number.isFinite(_mpRaw) && _mpRaw > 0 ? Math.round(_mpRaw * 100) / 100 : 0;
   if (_maxPrice) { try { await ensureColumns(env, 'Work_Orders', ['Max_Price']); } catch(_){} } // silent-ok: ensureColumns reports its own failure to the ledger
+  // Possible duplicate (queue #63): a tenant who was warned and said "no, different problem" sends the WO it was shown. A label only; the column is added only when a value is sent.
+  const _dupOf = /^WO-\d{1,9}$/.test(String(body.possible_dup_of || '').trim()) ? String(body.possible_dup_of).trim() : '';
+  if (_dupOf) { try { await ensureColumns(env, 'Work_Orders', ['Possible_Dup_Of']); } catch(_){} } // silent-ok: ensureColumns reports its own failure to the ledger
   const data = await sheetsRequest(env, 'GET', `/values/Work_Orders`);
   const rows = data.values || [];
   if (!rows.length) throw new Error('Work_Orders tab has no headers');
