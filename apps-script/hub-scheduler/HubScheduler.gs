@@ -22,7 +22,8 @@
  *   - the JOBS table has a typo                                     → hourly, until fixed (Hub jobs keep running on their last schedule)
  *   - there is more than one scheduler timer (it deletes the extras and tells you)
  *   - the Hub's failure ledger has an urgent problem nobody acknowledged     → email at once, then every 6 h while the list is unchanged (works even if Hub texting is down or alerts are off)
- *   - another Worker (BarrelCo, STR, BrettOS, Pinterest) fails its health check twice in a row → email + a ledger item, then a "back up" email
+ *   - another Worker (BarrelCo, STR, BrettOS, Pinterest), the Hub's /version, or one of the four portal pages (Hub, vendor, tenant, owner on GitHub Pages)
+ *     fails its check twice in a row (down, or a page that answers but is missing its expected text) → email + a ledger item, then a "back up" email
  *   - this script itself throws (it emails you, then re-throws so Google's own failure email also fires)
  *
  * ── SETUP: TWO STEPS, YOU CHOOSE WHEN TO START ─────────────────────────────────────────────────────
@@ -129,6 +130,7 @@ var PINTEREST_URL = 'https://pinterest-sync.brett-2f8.workers.dev';
 var BARRELCO_URL  = 'https://barrel-co.brett-2f8.workers.dev';
 var STR_URL       = 'https://str-automation.brett-2f8.workers.dev';
 var BRETTOS_URL   = 'https://brett-os.brett-2f8.workers.dev';
+var PAGES_URL     = 'https://ridge-co.github.io/RidgeCo';   // the static portal pages (GitHub Pages)
 // Workers the watcher probes every tick (GET /health). Up = any answer below HTTP 500 (a 404 or 401 still proves the Worker is alive);
 // down = no answer, a Cloudflare error, or HTTP 5xx. To watch another Worker add a row here.
 var PROBES = [
@@ -136,6 +138,17 @@ var PROBES = [
   { name: 'barrel-co',      url: BARRELCO_URL },
   { name: 'str-automation', url: STR_URL },
   { name: 'pinterest-sync', url: PINTEREST_URL },
+  // Queue #262 (Nov 22 2026): the Hub itself and the four static pages on GitHub Pages. A row may add:
+  //   path   - what to GET (default '/health')
+  //   expect - text that must be in the answer body; a 200 without it counts as "up but wrong" (a page row must have one,
+  //            because a redirect or an error page can still answer 200)
+  //   kind   - 'page' also treats HTTP 404 as down (a Worker 404 still proves the Worker is alive)
+  // The expect text of each page is in its own HTML next to the <title>, with a comment saying so; a test checks it is still there.
+  { name: 'hub-version',    url: WORKER_URL, path: '/version', expect: '"version_id"' },
+  { name: 'page-hub',       url: PAGES_URL, path: '/index.html',  expect: 'Maintenance Hub', kind: 'page' },
+  { name: 'page-vendor',    url: PAGES_URL, path: '/vendor.html', expect: 'Vendor Portal',   kind: 'page' },
+  { name: 'page-tenant',    url: PAGES_URL, path: '/tenant.html', expect: 'Tenant Portal',   kind: 'page' },
+  { name: 'page-owner',     url: PAGES_URL, path: '/owner.html',  expect: 'Owner Portal',    kind: 'page' },
 ];
 var CONFIG_TAB    = 'Config';
 var TOKEN_KEY     = 'Scheduler_Token';
@@ -281,7 +294,7 @@ function runScheduler() {
     if (hubStatus) checkLedger_(hubStatus.failures);
     if (hubStatus) checkOverdue_(mergeStatus_(hubStatus, script.status));
     else if (script.status.overdue.length) checkOverdue_(mergeStatus_({ overdue: [], jobs: {} }, script.status));
-    if (Date.now() - started < MAX_RUN_MS) { try { probeWorkers_(); } catch (pe) { alertThrottled_('probe_script', FAIL_REMIND_MS, 'Hub scheduler: the Worker health probes crashed', 'probeWorkers_ threw: ' + pe + '\n\nThe other checks in this tick still ran.'); } }
+    if (Date.now() - started < MAX_RUN_MS) { try { probeWorkers_(started + MAX_RUN_MS); } catch (pe) { alertThrottled_('probe_script', FAIL_REMIND_MS, 'Hub scheduler: the Worker health probes crashed', 'probeWorkers_ threw: ' + pe + '\n\nThe other checks in this tick still ran.'); } }
     if (!infraFailed) recovered_();
     Logger.log('Tick done: ' + (ran.length ? 'ran ' + ran.join(', ') : 'nothing was due') + (more ? ' (more still due; next tick)' : '') + '.');
     return { ok: !infraFailed, ran: ran, more: more, problem: problem };
@@ -1054,24 +1067,31 @@ function ledgerThrottled_(key, windowMs, where, severity, message) {
   if (Date.now() - last < windowMs) return;
   if (ledger_(where, severity, message)) p.setProperty(k, String(Date.now()));
 }
-// GET /health on each Worker in PROBES. Reports only after PROBE_FAILS_BEFORE_ALERT failures in a row; emails once per 6 h; says when it recovers.
-function probeWorkers_() {
+// GET each row in PROBES (path default /health). Reports only after PROBE_FAILS_BEFORE_ALERT failures in a row; emails once per 6 h; says when it recovers.
+// Down = no answer, HTTP 0, HTTP >= 500, HTTP 404 on a page row, or (when the row has `expect`) a 200 body without that text ("up but wrong").
+// A probe that has no time left in this tick is skipped, logged, and leaves its state untouched (never counted as a failure).
+function probeWorkers_(deadline) {
   var p = props_(), st = {};
   try { st = JSON.parse(p.getProperty('PROBE_STATE') || '{}') || {}; } catch (e) { st = {}; Logger.log('PROBE_STATE was not valid JSON; starting fresh.'); }
   PROBES.forEach(function (pr) {
-    var s = st[pr.name] || { fails: 0, alerted: false }, code = 0, err = '';
-    try { code = UrlFetchApp.fetch(pr.url + '/health', { method: 'get', muteHttpExceptions: true, followRedirects: false }).getResponseCode(); }
+    if (deadline && Date.now() > deadline) { Logger.log('Probe ' + pr.name + ' skipped: no time left in this tick; it runs on the next one.'); return; }
+    var s = st[pr.name] || { fails: 0, alerted: false }, code = 0, err = '', body = '', target = pr.url + (pr.path || '/health');
+    try { var resp = UrlFetchApp.fetch(target, { method: 'get', muteHttpExceptions: true, followRedirects: false }); code = resp.getResponseCode(); if (pr.expect && code >= 200 && code < 300) body = String(resp.getContentText() || ''); }
     catch (e) { err = String(e).slice(0, 200); }
-    var down = !!err || code === 0 || code >= 500, why = err || ('HTTP ' + code);
+    var wrong = !err && !!pr.expect && code >= 200 && code < 300 && body.indexOf(pr.expect) < 0;
+    var down = !!err || code === 0 || code >= 500 || (pr.kind === 'page' && (code === 404 || code >= 300)) || wrong;
+    var why = err || (wrong ? ('HTTP ' + code + ' but the expected text "' + pr.expect + '" is missing from the answer') : ('HTTP ' + code));
+    var what = pr.kind === 'page' ? 'page' : 'Worker';
     if (down) {
       s.fails = (s.fails || 0) + 1; s.last = why;
       if (s.fails >= PROBE_FAILS_BEFORE_ALERT) {
         s.alerted = true;
-        alertThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, 'Worker DOWN: ' + pr.name, 'The Worker "' + pr.name + '" (' + pr.url + ') has failed its health check ' + s.fails + ' ticks in a row. Last answer: ' + why + '.\n\nAnything that depends on it is not working until it is fixed.');
-        ledgerThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, 'worker_probe:' + pr.name, 'P1', pr.name + ' health check failing (' + why + ', ' + s.fails + ' ticks in a row)');
+        var headline = wrong ? (what + ' answers but its content is wrong: ' + pr.name) : (what + ' DOWN: ' + pr.name);
+        alertThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, headline, 'The ' + what + ' "' + pr.name + '" (' + target + ') has failed its check ' + s.fails + ' ticks in a row. Last answer: ' + why + '.\n\nAnything that depends on it is not working until it is fixed.');
+        ledgerThrottled_('probe_' + pr.name, LEDGER_REMIND_MS, 'worker_probe:' + pr.name, 'P1', pr.name + ' check failing (' + why + ', ' + s.fails + ' ticks in a row)');
       }
     } else {
-      if (s.alerted) alert_('Worker back up: ' + pr.name, 'The Worker "' + pr.name + '" is answering its health check again (HTTP ' + code + ').');
+      if (s.alerted) alert_(what + ' back up: ' + pr.name, 'The ' + what + ' "' + pr.name + '" is answering its check again (HTTP ' + code + ').');
       s = { fails: 0, alerted: false };
     }
     st[pr.name] = s;
