@@ -29,7 +29,7 @@ const factory = new Function('WOStatus', 'json', 'fetchConfig', 'fetchTabs', 'lo
   ${grab('async function', 'woSimilarCheck')}
   return { woSimilarOpen, woSimilarCheck };
 `);
-const { woSimilarOpen, woSimilarCheck } = factory(json, async () => cfg, async (env, tabs) => tabs.map(t => sheets[t] || []), async (env, r) => { tel.push(r); });
+const { woSimilarOpen, woSimilarCheck } = factory(WOStatus, json, async () => cfg, async (env, tabs) => tabs.map(t => sheets[t] || []), async (env, r) => { tel.push(r); });
 
 const base = { property_id: 'P1', unit_id: 'U1' };
 const wo = (o) => Object.assign({ ID: 'WO-1', Property_ID: 'P1', Unit_ID: 'U1', Trade: 'Plumbing', Status: 'Assigned', Description: 'kitchen sink leaking under the cabinet', Created_Date: '2026-11-10T12:00:00Z' }, o);
