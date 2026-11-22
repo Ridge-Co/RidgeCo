@@ -1390,8 +1390,16 @@ export class ReadMeterStore {
         const rec = await request.json();
         if (!rec || typeof rec.id !== 'string' || !rec.id || typeof rec.tag !== 'string' || !rec.tag || !rec.payload || typeof rec.payload !== 'object') return new Response('bad record', { status: 400 });
         await st.put('i:' + rec.tag + ':' + rec.id, { id: rec.id, tag: rec.tag, t: now, build: String(rec.build || '').slice(0, 80), payload: rec.payload });
+        let folded = 'ok';
+        try { await this._fold(rec, now); } catch (fe) { folded = 'fold error: ' + String((fe && fe.message) || fe).slice(0, 160); }   // the instance record is saved either way; the daily tally problem is reported to the caller
         await this._prune(now);
-        return new Response('ok');
+        return new Response(folded);
+      }
+      if (request.method === 'GET' && url.pathname === '/daily') {
+        const tag = url.searchParams.get('tag') || 'prd', date = String(url.searchParams.get('date') || '');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return new Response('bad date', { status: 400 });
+        const rec = await st.get('d:' + tag + ':' + date);
+        return new Response(JSON.stringify({ date, tag, record: rec || null }), { headers: { 'content-type': 'application/json' } });
       }
       if (request.method === 'GET' && url.pathname === '/list') {
         const tag = url.searchParams.get('tag') || 'prd', exclude = url.searchParams.get('exclude') || '';
