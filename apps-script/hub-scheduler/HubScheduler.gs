@@ -138,6 +138,17 @@ var PROBES = [
   { name: 'barrel-co',      url: BARRELCO_URL },
   { name: 'str-automation', url: STR_URL },
   { name: 'pinterest-sync', url: PINTEREST_URL },
+  // Queue #262 (Nov 22 2026): the Hub itself and the four static pages on GitHub Pages. A row may add:
+  //   path   - what to GET (default '/health')
+  //   expect - text that must be in the answer body; a 200 without it counts as "up but wrong" (a page row must have one,
+  //            because a redirect or an error page can still answer 200)
+  //   kind   - 'page' also treats HTTP 404 as down (a Worker 404 still proves the Worker is alive)
+  // The expect text of each page is in its own HTML next to the <title>, with a comment saying so; a test checks it is still there.
+  { name: 'hub-version',    url: WORKER_URL, path: '/version', expect: '"version_id"' },
+  { name: 'page-hub',       url: PAGES_URL, path: '/index.html',  expect: 'Maintenance Hub', kind: 'page' },
+  { name: 'page-vendor',    url: PAGES_URL, path: '/vendor.html', expect: 'Vendor Portal',   kind: 'page' },
+  { name: 'page-tenant',    url: PAGES_URL, path: '/tenant.html', expect: 'Tenant Portal',   kind: 'page' },
+  { name: 'page-owner',     url: PAGES_URL, path: '/owner.html',  expect: 'Owner Portal',    kind: 'page' },
 ];
 var CONFIG_TAB    = 'Config';
 var TOKEN_KEY     = 'Scheduler_Token';
