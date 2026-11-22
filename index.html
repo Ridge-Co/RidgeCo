@@ -16043,6 +16043,97 @@ function loadTenantWOSettings(force) {
   }).catch(function() { return state._tenantWOSettings || { owners: [], properties: [] }; });
 }
 
+// ── OWNER SUMMARIES (queue #122, Phase 1) ──
+var __osDrafts = [];
+function osPrevMonth() { var d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2); }
+function openOwnerSummaries() {
+  var m = document.getElementById('os-month'); if (m && !m.value) m.value = osPrevMonth();
+  document.getElementById('os-detail').style.display = 'none';
+  document.getElementById('os-build-msg').innerHTML = '';
+  openModal('modal-owner-summaries'); osLoad();
+}
+function osErr(el, msg, retry) {
+  el.innerHTML = '<div style="background:var(--danger-bg);color:var(--danger);border-radius:var(--radius);padding:8px 12px;font-size:13px">' + esc(msg) + (retry ? ' <button class="btn small secondary" onclick="' + retry + '">Try again</button>' : '') + '</div>';
+}
+function osLoad() {
+  var el = document.getElementById('os-list'), month = document.getElementById('os-month').value || osPrevMonth();
+  el.innerHTML = '<div class="loading"><span class="spinner"></span>Loading...</div>';
+  api('GET', '/owner-summary/list?month=' + encodeURIComponent(month)).then(function(r) {
+    if (!r || r.error) { osErr(el, (r && r.error) || 'Could not load the drafts', 'osLoad()'); return; }
+    __osDrafts = safeArray(r.drafts);
+    document.getElementById('os-staging').style.display = r.staging ? 'block' : 'none';
+    if (!__osDrafts.length) { el.innerHTML = '<div style="color:var(--muted);font-size:15px;padding:12px 0">No drafts for this month. Press Build drafts.</div>'; return; }
+    el.innerHTML = __osDrafts.map(function(d) {
+      var c = d.counts || {}, color = d.status === 'Sent' ? 'var(--success)' : d.status === 'Failed' ? 'var(--danger)' : d.status === 'Skipped' ? 'var(--muted)' : 'var(--accent)';
+      return '<button type="button" onclick="osOpen(\'' + esc(d.id) + '\')" style="display:block;width:100%;text-align:left;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:8px;min-height:44px;font-family:var(--font);font-size:15px;color:var(--text);cursor:pointer">' +
+        '<span style="font-weight:600">' + esc(d.owner_name) + '</span> <span style="color:' + color + ';font-size:13px;font-weight:600">' + esc(d.status) + '</span><br>' +
+        '<span style="color:var(--muted);font-size:13px">' + esc((c.completed || 0) + ' done / ' + (c.open || 0) + ' open / ' + (c.scheduled || 0) + ' scheduled') + (d.send_result && d.status === 'Failed' ? ' · ' + esc(d.send_result) : '') + '</span></button>';
+    }).join('');
+  }).catch(function(e) { osErr(el, 'Could not load the drafts: ' + e.message, 'osLoad()'); });
+}
+function osBuild() {
+  var btn = document.getElementById('os-build-btn'), msg = document.getElementById('os-build-msg'), month = document.getElementById('os-month').value || osPrevMonth();
+  btn.disabled = true; msg.innerHTML = '<div class="loading"><span class="spinner"></span>Building...</div>';
+  api('POST', '/owner-summary/build', { month: month }).then(function(r) {
+    btn.disabled = false;
+    if (!r || r.error) { osErr(msg, (r && r.error) || 'Build failed', 'osBuild()'); return; }
+    var lines = [];
+    lines.push('Built ' + safeArray(r.built).length + ' draft(s).');
+    safeArray(r.skipped).forEach(function(s) { lines.push(s.owner + ': ' + s.reason); });
+    safeArray(r.failed).forEach(function(s) { lines.push('PROBLEM, ' + s.owner + ': ' + s.reason); });
+    if (r.partial) lines.push('More owners are waiting (' + r.remaining + '). Press Build drafts again.');
+    msg.innerHTML = '<div style="background:' + (safeArray(r.failed).length ? 'var(--warn-bg);color:var(--warn-text)' : 'var(--info-bg);color:var(--text)') + ';border-radius:var(--radius);padding:8px 12px;font-size:13px;margin-bottom:12px">' + lines.map(esc).join('<br>') + '</div>';
+    osLoad();
+  }).catch(function(e) { btn.disabled = false; osErr(msg, 'Build failed: ' + e.message, 'osBuild()'); });
+}
+function osOpen(id) {
+  var d = __osDrafts.filter(function(x) { return String(x.id) === String(id); })[0]; if (!d) return;
+  document.getElementById('os-id').value = d.id;
+  document.getElementById('os-to').textContent = 'To: ' + (d.to_email || 'NO EMAIL ON FILE') + ' (' + d.owner_name + ')';
+  document.getElementById('os-subject').value = d.subject || '';
+  document.getElementById('os-msg').innerHTML = d.status === 'Failed' && d.send_result ? '<div style="color:var(--danger);font-size:13px">' + esc(d.send_result) + '</div>' : '';
+  var f = document.getElementById('os-frame'); f.onload = function() { try { f.contentDocument.designMode = d.status === 'Draft' ? 'on' : 'off'; } catch (e) { document.getElementById('os-msg').innerHTML = '<div style="color:var(--danger);font-size:13px">Preview could not switch to edit mode: ' + esc(e.message) + '</div>'; } };
+  f.srcdoc = d.body_html || '';
+  var locked = d.status === 'Sent' || d.status === 'Skipped';
+  ['os-skip-btn', 'os-save-btn', 'os-send-btn'].forEach(function(b) { document.getElementById(b).disabled = locked || (b === 'os-save-btn' && d.status !== 'Draft'); });
+  document.getElementById('os-test-btn').disabled = false;
+  document.getElementById('os-detail').style.display = 'block';
+  document.getElementById('os-detail').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+function osAct(kind) {
+  var id = document.getElementById('os-id').value, msg = document.getElementById('os-msg');
+  var btnId = { skip: 'os-skip-btn', save: 'os-save-btn', 'test-send': 'os-test-btn', send: 'os-send-btn' }[kind], btn = document.getElementById(btnId);
+  if (kind === 'send' || kind === 'skip') {   // two taps instead of a browser dialog: the first arms the button, the second does it
+    var armed = btn.getAttribute('data-armed') === '1';
+    if (!armed) {
+      btn.setAttribute('data-armed', '1'); btn.setAttribute('data-label', btn.textContent);
+      btn.textContent = kind === 'send' ? 'Tap again to send now' : 'Tap again to skip';
+      msg.innerHTML = '<div style="color:var(--warn-text);background:var(--warn-bg);border-radius:var(--radius);padding:8px 12px;font-size:13px">' + (kind === 'send' ? 'This goes to the owner right away and cannot be unsent.' : 'This owner gets no summary this month.') + '</div>';
+      setTimeout(function() { if (btn.getAttribute('data-armed') === '1') { btn.removeAttribute('data-armed'); btn.textContent = btn.getAttribute('data-label'); } }, 6000);
+      return;
+    }
+    btn.removeAttribute('data-armed'); btn.textContent = btn.getAttribute('data-label');
+  }
+  var body = { id: id };
+  var doCall = function() {
+    return api('POST', '/owner-summary/' + kind, body).then(function(r) {
+      if (!r || r.error) { msg.innerHTML = '<div style="color:var(--danger);font-size:13px">' + esc((r && r.error) || 'That did not work') + '</div>'; btn.disabled = false; return; }
+      toast(kind === 'send' ? 'Sent' : kind === 'test-send' ? 'Test sent to you' : kind === 'skip' ? 'Skipped' : 'Saved', 'success');
+      if (kind === 'send' || kind === 'skip') document.getElementById('os-detail').style.display = 'none';
+      else btn.disabled = false;
+      osLoad();
+    });
+  };
+  btn.disabled = true;   // before any await: a second tap can never send twice
+  var f = document.getElementById('os-frame'), saveFirst = (kind === 'save' || kind === 'send' || kind === 'test-send');
+  var chain = Promise.resolve();
+  if (saveFirst) {
+    var html = ''; try { html = f.contentDocument.body.innerHTML; } catch (e) { html = ''; }
+    var d = __osDrafts.filter(function(x) { return String(x.id) === String(id); })[0];
+    if (d && d.status === 'Draft' && html) chain = api('POST', '/owner-summary/save', { id: id, subject: document.getElementById('os-subject').value, html: html }).then(function(r) { if (!r || r.error) throw new Error((r && r.error) || 'Could not save your changes'); });
+  }
+  chain.then(doCall).catch(function(e) { btn.disabled = false; msg.innerHTML = '<div style="color:var(--danger);font-size:13px">' + esc(e.message) + '</div>'; });
+}
 function openEditOwnerModal(id) {
   var o = safeArray(state.owners).find(function(x){return x.ID===id;}); if(!o) return;
   document.getElementById('eo-id').value = o.ID;
