@@ -13761,6 +13761,42 @@ function payablesDepositSweep() {
   }).catch(function(e) { _payablesAlerts.sweepFailed = (e && e.message) || String(e); _payablesAlerts.sweep = null; renderPayablesAlerts(); });
 }
 
+// This week's pay run (queue #53 Phase 1 of 4, Nov 22 2026). READ-ONLY: lists the vendor bills that are ready to pay (customer paid in
+// full, funds should have cleared, no duplicate warning) per vendor, and why the rest are not. It never pays anything: Brett pays in QuickBooks.
+// On tap only (it reads QuickBooks once more); a failed read says so with Retry, never an empty "nothing to pay".
+function payRunMoney(n) { return '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function loadPayRun() {
+  var host = document.getElementById('pay-run-panel'), btn = document.getElementById('pay-run-btn');
+  if (!host) return;
+  if (btn) btn.disabled = true;
+  host.innerHTML = '<div style="color:var(--muted);font-size:12px;margin-bottom:12px">Reading QuickBooks for this week\'s pay run…</div>';
+  api('GET', '/qb/pay-run?days=90').then(function(res) {
+    if (!res || res.ok !== true || !Array.isArray(res.ready) || !Array.isArray(res.not_ready)) throw new Error((res && res.error) || 'Unexpected answer from the Hub');
+    renderPayRun(host, res);
+  }).catch(function(e) {
+    console.error('[loadPayRun]', e);
+    host.innerHTML = '<div style="background:#fdecea;border:1px solid var(--danger);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:var(--danger)">' +
+      'Could not check QuickBooks for the pay run: ' + esc((e && e.message) || e) + ' <button class="btn small" style="min-height:44px;margin-left:6px" onclick="loadPayRun()">Try again</button></div>';
+  }).then(function() { if (btn) btn.disabled = false; });
+}
+function renderPayRun(host, res) {
+  var ready = res.ready, nr = res.not_ready;
+  var warn = safeArray(res.warnings).length ? '<div style="color:var(--warn);font-size:12px;margin-bottom:8px">QuickBooks check had ' + res.warnings.length + ' notice(s); they are listed on the Who To Pay page.</div>' : '';
+  var head = '<div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:bold">This week\'s pay run' + (res.as_of ? ' · as of ' + esc(res.as_of) : '') + '</div>' +
+    '<div style="font-size:1.4rem;font-weight:bold;margin:4px 0">' + payRunMoney(res.grand_total) + ' <span style="font-size:12px;font-weight:normal;color:var(--muted)">' + res.ready_count + ' bill' + (res.ready_count === 1 ? '' : 's') + ' ready to pay in QuickBooks</span></div>';
+  var body = ready.length ? ready.map(function(g) {
+    return '<div style="border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-top:8px;background:var(--surface)">' +
+      '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>' + esc(g.vendor) + '</b><b>' + payRunMoney(g.total) + '</b></div>' +
+      g.bills.map(function(b) {
+        return '<div style="font-size:12px;margin-top:6px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>' + esc(b.wo_id || b.ir_id) + (b.customer_clears_on ? ' <span style="color:var(--muted)">· cleared ' + esc(b.customer_clears_on) + '</span>' : '') + '</span><span>' + payRunMoney(b.amount) +
+          (b.bill_id ? ' · <a href="' + qbBillLink(b.bill_id) + '" target="_blank" rel="noopener" style="color:var(--info);display:inline-block;min-height:44px;line-height:44px">open bill in QB</a>' : ' · <span style="color:var(--warn)">no QB bill id</span>') + '</span></div>';
+      }).join('') + '</div>';
+  }).join('') : '<div style="color:var(--muted);font-size:12px;margin-top:8px">Nothing is ready to pay this week.</div>';
+  var notReady = nr.length ? '<details style="margin-top:10px"><summary style="cursor:pointer;min-height:44px;line-height:44px;font-size:12px;font-weight:bold">Not ready (' + nr.length + ') — and why</summary>' +
+    nr.map(function(b) { return '<div style="font-size:12px;margin-top:6px;border-left:3px solid var(--border);padding-left:8px"><b>' + esc(b.vendor) + '</b> · ' + esc(b.wo_id || b.ir_id) + ' · ' + payRunMoney(b.amount) + '<div style="color:var(--muted)">' + esc(b.reason) + '</div></div>'; }).join('') + '</details>' : '';
+  host.innerHTML = '<div style="border:2px solid var(--accent2);border-radius:10px;padding:12px;margin-bottom:14px;background:var(--surface2)">' + head + warn + body + notReady +
+    '<div style="font-size:12px;color:var(--muted);margin-top:10px">Read only. Nothing here pays anyone: you pay in QuickBooks, then use Check QuickBooks to refresh.</div></div>';
+}
 function loadPayables(save) {
   _payablesLastSave = !!save;
   var el = document.getElementById('payables-body');
