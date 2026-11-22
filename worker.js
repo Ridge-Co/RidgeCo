@@ -25450,6 +25450,24 @@ async function selftestDeliverDigest(env, digestText) {
   }
 }
 
+// Notes text for the `selftest` telemetry row (Nov 22 2026, queue #271). Pure. Keeps the old "passed, trigger=..." and "failing: ..." text
+// FIRST (Needs Attention reads it), then, only for the sliced daily run (opts.slices set), says WHY the number looks like ~20 s:
+// slice count, the last slice (what Latency_ms measures), summed per-check time and the three slowest checks. 300-char cap: the
+// slowest list is dropped first, then the pacing note; the failing list is never cut by the extras.
+function selftestTelemetryNotes(agg, endpointResults, opts) {
+  opts = opts || {};
+  const head = `${agg.passed}/${agg.total} passed, trigger=${opts.trigger || 'manual'}${agg.failed ? '; failing: ' + agg.failures.map(f => f.name).join(', ') : ''}`;
+  if (opts.slices == null) return head.slice(0, 300);
+  const sec = (ms) => (Math.round((Number(ms) || 0) / 100) / 10).toFixed(1) + 's';
+  const checks = (endpointResults || []).filter(r => r && r.latency_ms != null);
+  const total = checks.reduce((a, r) => a + (Number(r.latency_ms) || 0), 0);
+  const slowest = checks.slice().sort((a, b) => (b.latency_ms || 0) - (a.latency_ms || 0)).slice(0, 3).map(r => `${r.name} ${sec(r.latency_ms)}`).join(', ');
+  const base = `${head}; ${opts.slices} slice${opts.slices === 1 ? '' : 's'}; last slice ${sec(opts.lastSliceMs)}; checks total ${sec(total)}`;
+  const tries = [`${base}; slowest: ${slowest}; paced 2.5s between Sheets reads (by design)`, `${base}; slowest: ${slowest}`, base];
+  for (const t of tries) if (t.length <= 300) return t;
+  return head.slice(0, 300);
+}
+
 // Everything after the checks have run: tally, digest, deliver, record, self-instrument. NOTHING here is swallowed (Oct 14 2026):
 // a digest that cannot be sent, a history row that cannot be written or a telemetry row that cannot be logged is pushed onto
 // `errors` so the caller (the scheduler job, or the /selftest response) shows it.
