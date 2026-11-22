@@ -31,6 +31,7 @@ const TOOLS = {
   'deliveries': "window.open('deliveries.html','_blank')",
   'tenant-wo-access': "window.open('tenant-wo-access.html','_blank')",
   'wo-templates': 'openManageTemplatesModal()',
+  'pm-plans': 'pmOpen()',
   'message-queue': "window.open('message-queue.html','_blank')",
   'read-meter': "window.open('read-meter.html','_blank')",
   'vendor-reconcile': "window.open('vendor-reconcile.html','_blank')",
