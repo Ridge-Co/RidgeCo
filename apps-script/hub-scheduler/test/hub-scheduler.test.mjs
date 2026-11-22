@@ -14,6 +14,8 @@ let pass = 0, fail = 0;
 const ok = (c, msg, extra) => { if (c) pass++; else { fail++; console.log('  FAIL:', msg, extra === undefined ? '' : JSON.stringify(extra)); } };
 
 const MIN = 60000, HOUR = 3600000;
+// The real portal pages, so the probe's expected text is checked against the files that ship (queue #262).
+const PAGE_TEXT = {}; for (const f of ['index', 'vendor', 'tenant', 'owner']) PAGE_TEXT[f + '.html'] = fs.readFileSync(new URL('../../../' + f + '.html', import.meta.url), 'utf8');
 function world(opts) {
   opts = opts || {};
   const w = { clock: Date.parse('2026-10-12T14:00:00Z'), logs: [], mails: [], fetches: [], props: {}, triggers: [], locked: false, sleeps: 0,
