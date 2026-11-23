@@ -15328,7 +15328,9 @@ async function listNearbyWOs(env, url) {
   nearbyPropIds.add(String(wo.Property_ID));
   const OPEN = new Set(WOStatus.sets.FIELD_OPEN);
   const nearby = wos.filter(w => w.ID !== woId && w.Voided !== 'TRUE' && nearbyPropIds.has(String(w.Property_ID)) && OPEN.has(w.Status) && (!vendorId || w.Vendor_ID === vendorId)).map(w => { const vend = vendors.find(v => String(v.ID) === String(w.Vendor_ID)), wProp = props.find(p => String(p.ID) === String(w.Property_ID)), t = tenants.find(t => String(t.ID) === String(w.Tenant_ID)); return { same_property: String(w.Property_ID) === String(wo.Property_ID), distance_km: distKm.has(String(w.Property_ID)) ? distKm.get(String(w.Property_ID)) : null, vendor_name: (vend&&vend.Name)||'', scheduled_date: w.Scheduled_Date||'', scheduled_window: w.Scheduled_Window||'', id: w.ID, property_id: w.Property_ID, address: (wProp&&wProp.Address)||'', city: (wProp&&wProp.City)||'', description: w.Description, trade: w.Trade, priority: w.Priority, status: w.Status, vendor_id: w.Vendor_ID, tenant_name: t ? `${t.First_Name||''} ${t.Last_Name||''}`.trim() : '', tenant_phone: isTenantCurrent(t) ? (t.Phone||'') : '' }; });
-  return json({ nearby, primary_cluster: primary, overlap_clusters: overlap });
+  nearby.sort((a, b) => (b.same_property - a.same_property) || ((a.distance_km == null ? 1e9 : a.distance_km) - (b.distance_km == null ? 1e9 : b.distance_km)));
+  if (!nearby.length && !message) message = allTags.length ? 'no_nearby' : 'no_nearby_distance';
+  return json({ nearby, primary_cluster: primary || null, overlap_clusters: overlap, message, radius_km: allTags.length ? null : radiusKm });
 }
 
 async function geocodeProperty(env, body) {
