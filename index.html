@@ -6746,7 +6746,7 @@ function loadNearbyStrip(holderId, modalId, woId) {
     el.innerHTML = html;
   }).catch(function(e) {
     if (seq !== _nearbyStripSeq[holderId]) return;
-    try { logError('Nearby jobs', (e && e.message) || String(e)); } catch (_) {}
+    logError('Nearby jobs', (e && e.message) || String(e));
     el.innerHTML = '<div style="color:var(--danger);font-size:12px;min-height:44px;display:flex;align-items:center;gap:8px">Could not check nearby jobs. ' +
       '<button type="button" class="btn small secondary" onclick="loadNearbyStrip(\'' + holderId + '\',\'' + modalId + '\',\'' + String(woId).replace(/[^A-Za-z0-9_-]/g, '') + '\')">Retry</button></div>';
   });
