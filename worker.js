@@ -15304,6 +15304,10 @@ function calcTieredEstimate(rawCost, pc) {
 
 // ── LOCATION / CLUSTER ───────────────────────────────────────
 
+// Queue #166: one shared distance helper (was nested inside clusterSuggestions) and one radius setting.
+function haversineKm(lat1,lng1,lat2,lng2) { const R=6371,d2r=Math.PI/180,dLat=(lat2-lat1)*d2r,dLng=(lng2-lng1)*d2r,a=Math.sin(dLat/2)**2+Math.cos(lat1*d2r)*Math.cos(lat2*d2r)*Math.sin(dLng/2)**2; return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)); }
+function nearbyRadiusKm(cfg) { const v = parseFloat(cfg && cfg.nearby_radius_km); return Number.isFinite(v) && v > 0 ? v : 2.5; }
+
 async function listNearbyWOs(env, url) {
   const woId = url.searchParams.get('wo_id')||'', vendorId = url.searchParams.get('vendor_id')||'';
   if (!woId) return json({ error: 'wo_id required' }, 400);
