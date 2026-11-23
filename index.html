@@ -1280,6 +1280,7 @@ window.addEventListener('pageshow', function(e){
 <div class="modal-overlay" id="modal-assign">
   <div class="modal">
     <div class="modal-header"><div class="modal-title" id="assign-modal-title">ASSIGN VENDOR</div><button class="modal-close" onclick="closeModal('modal-assign')">✕</button></div>
+    <div id="assign-nearby" style="display:none;margin-bottom:10px"></div>
     <div id="assign-current-vendor" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px;color:var(--muted)"></div>
     <div class="form-grid">
       <div class="form-group full">
@@ -1795,6 +1796,7 @@ window.addEventListener('pageshow', function(e){
 <div class="modal-overlay" id="modalSchedAdmin">
   <div class="modal" style="max-width:440px">
     <div class="modal-title">📅 SCHEDULE / DISPATCH</div>
+    <div id="modalSchedAdmin-nearby" style="display:none;margin-bottom:10px"></div>
     <div class="sched-urgent-banner" id="modalSchedAdmin-banner">
       ⚡ <b>Within 1 hour</b> selected — tenant SMS will be sent immediately on save.
     </div>
@@ -3638,6 +3640,7 @@ function openAssignModal(woId) {
   document.getElementById('assign-preview').textContent = '';
   closeModal('modal-wo-detail');
   openModal('modal-assign');
+  loadNearbyStrip('assign-nearby', 'modal-assign', woId);
   // Focus search box after modal opens
   setTimeout(function(){ var el = document.getElementById('assign-vendor-search'); if(el) el.focus(); }, 100);
 }
@@ -6704,6 +6707,49 @@ function openSchedModal(modalId, woId) {
   if (banner) banner.style.display = 'none';
   document.getElementById(modalId+'-msg').innerHTML = '';
   openModal(modalId);
+  loadNearbyStrip(modalId+'-nearby', modalId, woId);
+}
+
+// Queue #166: "other open jobs nearby" strip under the title of the Schedule and Assign windows.
+// Read-only hint: nothing is moved or changed. One /nearby-wos call per opening; a failure shows a Retry line, never a blank.
+var _nearbyStripSeq = {};
+function nearbyStripHtml(res, holderId, modalId) {
+  var box = 'border:1px solid var(--border);border-radius:8px;background:var(--surface2);font-size:13px;';
+  var list = (res && res.nearby) || [], noLoc = res && res.message === 'no_location', out = '';
+  if (list.length) {
+    var shown = list.slice(0, 5), more = list.length - shown.length;
+    out += '<details style="' + box + '"><summary style="min-height:44px;display:flex;align-items:center;padding:0 12px;cursor:pointer;color:var(--text)">' +
+      '📍 ' + list.length + ' other open job' + (list.length === 1 ? '' : 's') + ' nearby</summary><div style="padding:0 12px 6px">' +
+      shown.map(function(n) {
+        var when = n.scheduled_date ? n.scheduled_date + (n.scheduled_window ? ' ' + n.scheduled_window : '') : 'Not scheduled';
+        var sub = [n.trade, n.vendor_name || 'No vendor yet', when].filter(Boolean).join(' · ');
+        return '<button type="button" data-woid="' + esc(n.id) + '" onclick="openNearbyJob(this.dataset.woid,\'' + modalId + '\')" style="display:block;width:100%;min-height:44px;text-align:left;background:none;border:0;border-top:1px solid var(--border);padding:8px 0;color:var(--text);cursor:pointer;font:inherit">' +
+          '<b>' + esc(n.id) + '</b> ' + (n.same_property ? '<span style="color:var(--accent);font-size:12px">Same building</span> ' : '') +
+          '<span style="color:var(--muted)">' + esc(n.address || '') + (n.distance_km != null ? ' · ' + n.distance_km + ' km' : '') + '</span>' +
+          '<div style="color:var(--muted);font-size:12px">' + esc(sub) + '</div></button>';
+      }).join('') +
+      (more > 0 ? '<div style="padding:8px 0;color:var(--muted);font-size:12px">+' + more + ' more</div>' : '') +
+      '</div></details>';
+  }
+  if (noLoc) out += '<div style="' + (list.length ? 'margin-top:6px;' : '') + 'color:var(--muted);font-size:12px">No location set for this property · <a href="cluster-tool.html" target="_blank" rel="noopener" style="color:var(--info)">Set it</a></div>';
+  return out;
+}
+function openNearbyJob(woId, modalId) { closeModal(modalId); setTimeout(function(){ openWODetail(woId); }, 100); }
+function loadNearbyStrip(holderId, modalId, woId) {
+  var el = document.getElementById(holderId); if (!el || !woId) return;
+  var seq = _nearbyStripSeq[holderId] = (_nearbyStripSeq[holderId] || 0) + 1;
+  el.style.display = ''; el.innerHTML = '<div style="color:var(--muted);font-size:12px;min-height:20px">Checking nearby jobs…</div>';
+  api('GET', '/nearby-wos?wo_id=' + encodeURIComponent(woId)).then(function(res) {
+    if (seq !== _nearbyStripSeq[holderId]) return;   // window was reopened for another job
+    var html = nearbyStripHtml(res, holderId, modalId);
+    if (!html) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    el.innerHTML = html;
+  }).catch(function(e) {
+    if (seq !== _nearbyStripSeq[holderId]) return;
+    logError('Nearby jobs', (e && e.message) || String(e));
+    el.innerHTML = '<div style="color:var(--danger);font-size:12px;min-height:44px;display:flex;align-items:center;gap:8px">Could not check nearby jobs. ' +
+      '<button type="button" class="btn small secondary" onclick="loadNearbyStrip(\'' + holderId + '\',\'' + modalId + '\',\'' + String(woId).replace(/[^A-Za-z0-9_-]/g, '') + '\')">Retry</button></div>';
+  });
 }
 function closeSchedModal(id) { closeModal(id); }
 function schedWindowChanged(modalId) {

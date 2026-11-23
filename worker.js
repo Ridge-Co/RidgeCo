@@ -15304,20 +15304,33 @@ function calcTieredEstimate(rawCost, pc) {
 
 // ── LOCATION / CLUSTER ───────────────────────────────────────
 
+// Queue #166: one shared distance helper (was nested inside clusterSuggestions) and one radius setting.
+function haversineKm(lat1,lng1,lat2,lng2) { const R=6371,d2r=Math.PI/180,dLat=(lat2-lat1)*d2r,dLng=(lng2-lng1)*d2r,a=Math.sin(dLat/2)**2+Math.cos(lat1*d2r)*Math.cos(lat2*d2r)*Math.sin(dLng/2)**2; return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)); }
+function nearbyRadiusKm(cfg) { const v = parseFloat(cfg && cfg.nearby_radius_km); return Number.isFinite(v) && v > 0 ? v : 2.5; }
+
 async function listNearbyWOs(env, url) {
   const woId = url.searchParams.get('wo_id')||'', vendorId = url.searchParams.get('vendor_id')||'';
   if (!woId) return json({ error: 'wo_id required' }, 400);
-  const [wos, props, tenants] = await fetchTabs(env, ['Work_Orders','Properties','Tenants']);
+  const [wos, props, tenants, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Tenants','Vendors']);
   const wo = wos.find(w => w.ID === woId); if (!wo) return json({ error: 'WO not found' }, 404);
   const prop = props.find(p => String(p.ID) === String(wo.Property_ID)); if (!prop) return json({ nearby: [], message: 'Property not found' });
+  const cfg = await fetchConfig(env), radiusKm = nearbyRadiusKm(cfg);   // queue #166
   const primary = (prop.Location_Cluster||'').trim(), overlap = (prop.Location_Overlap||'').split(',').map(s=>s.trim()).filter(Boolean), allTags = [primary, ...overlap].filter(Boolean);
-  if (!allTags.length) return json({ nearby: [], message: 'no_tags', primary_cluster: null });
-  const nearbyPropIds = new Set();
-  props.forEach(p => { if (String(p.ID) === String(wo.Property_ID)) return; const pTags = [(p.Location_Cluster||'').trim(), ...(p.Location_Overlap||'').split(',').map(s=>s.trim())].filter(Boolean); if (pTags.some(t => allTags.includes(t))) nearbyPropIds.add(String(p.ID)); });
-  if (!nearbyPropIds.size) return json({ nearby: [], message: 'no_nearby', primary_cluster: primary });
+  // Queue #166: jobs at the SAME property always count (same building); other properties match by area tag, or by map distance when this property has no tag.
+  const myLat = parseFloat(prop.Lat), myLng = parseFloat(prop.Lng), haveCoords = Number.isFinite(myLat) && Number.isFinite(myLng) && !(myLat === 0 && myLng === 0);
+  const nearbyPropIds = new Set(), distKm = new Map();
+  let message = null;
+  if (allTags.length) {
+    props.forEach(p => { if (String(p.ID) === String(wo.Property_ID)) return; const pTags = [(p.Location_Cluster||'').trim(), ...(p.Location_Overlap||'').split(',').map(s=>s.trim())].filter(Boolean); if (pTags.some(t => allTags.includes(t))) nearbyPropIds.add(String(p.ID)); });
+  } else if (haveCoords) {
+    props.forEach(p => { if (String(p.ID) === String(wo.Property_ID)) return; const la = parseFloat(p.Lat), ln = parseFloat(p.Lng); if (!Number.isFinite(la) || !Number.isFinite(ln)) return; const d = haversineKm(myLat, myLng, la, ln); if (d <= radiusKm) { nearbyPropIds.add(String(p.ID)); distKm.set(String(p.ID), Math.round(d * 100) / 100); } });
+  } else message = 'no_location';
+  nearbyPropIds.add(String(wo.Property_ID));
   const OPEN = new Set(WOStatus.sets.FIELD_OPEN);
-  const nearby = wos.filter(w => w.ID !== woId && w.Voided !== 'TRUE' && nearbyPropIds.has(String(w.Property_ID)) && OPEN.has(w.Status) && (!vendorId || w.Vendor_ID === vendorId)).map(w => { const wProp = props.find(p => String(p.ID) === String(w.Property_ID)), t = tenants.find(t => String(t.ID) === String(w.Tenant_ID)); return { id: w.ID, property_id: w.Property_ID, address: (wProp&&wProp.Address)||'', city: (wProp&&wProp.City)||'', description: w.Description, trade: w.Trade, priority: w.Priority, status: w.Status, vendor_id: w.Vendor_ID, tenant_name: t ? `${t.First_Name||''} ${t.Last_Name||''}`.trim() : '', tenant_phone: isTenantCurrent(t) ? (t.Phone||'') : '' }; });
-  return json({ nearby, primary_cluster: primary, overlap_clusters: overlap });
+  const nearby = wos.filter(w => w.ID !== woId && w.Voided !== 'TRUE' && nearbyPropIds.has(String(w.Property_ID)) && OPEN.has(w.Status) && (!vendorId || w.Vendor_ID === vendorId)).map(w => { const vend = vendors.find(v => String(v.ID) === String(w.Vendor_ID)), wProp = props.find(p => String(p.ID) === String(w.Property_ID)), t = tenants.find(t => String(t.ID) === String(w.Tenant_ID)); return { same_property: String(w.Property_ID) === String(wo.Property_ID), distance_km: distKm.has(String(w.Property_ID)) ? distKm.get(String(w.Property_ID)) : null, vendor_name: (vend&&vend.Name)||'', scheduled_date: w.Scheduled_Date||'', scheduled_window: w.Scheduled_Window||'', id: w.ID, property_id: w.Property_ID, address: (wProp&&wProp.Address)||'', city: (wProp&&wProp.City)||'', description: w.Description, trade: w.Trade, priority: w.Priority, status: w.Status, vendor_id: w.Vendor_ID, tenant_name: t ? `${t.First_Name||''} ${t.Last_Name||''}`.trim() : '', tenant_phone: isTenantCurrent(t) ? (t.Phone||'') : '' }; });
+  nearby.sort((a, b) => (b.same_property - a.same_property) || ((a.distance_km == null ? 1e9 : a.distance_km) - (b.distance_km == null ? 1e9 : b.distance_km)));
+  if (!nearby.length && !message) message = allTags.length ? 'no_nearby' : 'no_nearby_distance';
+  return json({ nearby, primary_cluster: primary || null, overlap_clusters: overlap, message, radius_km: allTags.length ? null : radiusKm });
 }
 
 async function geocodeProperty(env, body) {
@@ -15333,7 +15346,6 @@ async function clusterSuggestions(env, url) {
   if (isNaN(lat)||isNaN(lng)) return json({ error: 'lat and lng required' }, 400);
   const props = await fetchTab(env, 'Properties'), tagged = props.filter(p => p.Location_Cluster && p.Lat && p.Lng);
   if (!tagged.length) return json({ suggestions: { primary: null, overlap: [] }, nearby: [], message: 'No tagged properties with coordinates yet' });
-  function haversineKm(lat1,lng1,lat2,lng2) { const R=6371,d2r=Math.PI/180,dLat=(lat2-lat1)*d2r,dLng=(lng2-lng1)*d2r,a=Math.sin(dLat/2)**2+Math.cos(lat1*d2r)*Math.cos(lat2*d2r)*Math.sin(dLng/2)**2; return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)); }
   const nearby = tagged.map(p => ({ id:p.ID, address:p.Address, cluster:p.Location_Cluster, overlap:p.Location_Overlap, dist_km:haversineKm(lat,lng,parseFloat(p.Lat),parseFloat(p.Lng)) })).filter(p => p.dist_km<=maxKm).sort((a,b)=>a.dist_km-b.dist_km);
   const counts={}; nearby.slice(0,5).forEach(p => { counts[p.cluster]=(counts[p.cluster]||0)+1; });
   const primary = Object.entries(counts).sort((a,b)=>b[1]-a[1])[0]?.[0]||null;
