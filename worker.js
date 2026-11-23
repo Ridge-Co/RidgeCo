@@ -15316,10 +15316,16 @@ async function listNearbyWOs(env, url) {
   const prop = props.find(p => String(p.ID) === String(wo.Property_ID)); if (!prop) return json({ nearby: [], message: 'Property not found' });
   const cfg = await fetchConfig(env), radiusKm = nearbyRadiusKm(cfg);   // queue #166
   const primary = (prop.Location_Cluster||'').trim(), overlap = (prop.Location_Overlap||'').split(',').map(s=>s.trim()).filter(Boolean), allTags = [primary, ...overlap].filter(Boolean);
-  if (!allTags.length) return json({ nearby: [], message: 'no_tags', primary_cluster: null });
-  const nearbyPropIds = new Set();
-  props.forEach(p => { if (String(p.ID) === String(wo.Property_ID)) return; const pTags = [(p.Location_Cluster||'').trim(), ...(p.Location_Overlap||'').split(',').map(s=>s.trim())].filter(Boolean); if (pTags.some(t => allTags.includes(t))) nearbyPropIds.add(String(p.ID)); });
-  if (!nearbyPropIds.size) return json({ nearby: [], message: 'no_nearby', primary_cluster: primary });
+  // Queue #166: jobs at the SAME property always count (same building); other properties match by area tag, or by map distance when this property has no tag.
+  const myLat = parseFloat(prop.Lat), myLng = parseFloat(prop.Lng), haveCoords = Number.isFinite(myLat) && Number.isFinite(myLng) && !(myLat === 0 && myLng === 0);
+  const nearbyPropIds = new Set(), distKm = new Map();
+  let message = null;
+  if (allTags.length) {
+    props.forEach(p => { if (String(p.ID) === String(wo.Property_ID)) return; const pTags = [(p.Location_Cluster||'').trim(), ...(p.Location_Overlap||'').split(',').map(s=>s.trim())].filter(Boolean); if (pTags.some(t => allTags.includes(t))) nearbyPropIds.add(String(p.ID)); });
+  } else if (haveCoords) {
+    props.forEach(p => { if (String(p.ID) === String(wo.Property_ID)) return; const la = parseFloat(p.Lat), ln = parseFloat(p.Lng); if (!Number.isFinite(la) || !Number.isFinite(ln)) return; const d = haversineKm(myLat, myLng, la, ln); if (d <= radiusKm) { nearbyPropIds.add(String(p.ID)); distKm.set(String(p.ID), Math.round(d * 100) / 100); } });
+  } else message = 'no_location';
+  nearbyPropIds.add(String(wo.Property_ID));
   const OPEN = new Set(WOStatus.sets.FIELD_OPEN);
   const nearby = wos.filter(w => w.ID !== woId && w.Voided !== 'TRUE' && nearbyPropIds.has(String(w.Property_ID)) && OPEN.has(w.Status) && (!vendorId || w.Vendor_ID === vendorId)).map(w => { const wProp = props.find(p => String(p.ID) === String(w.Property_ID)), t = tenants.find(t => String(t.ID) === String(w.Tenant_ID)); return { id: w.ID, property_id: w.Property_ID, address: (wProp&&wProp.Address)||'', city: (wProp&&wProp.City)||'', description: w.Description, trade: w.Trade, priority: w.Priority, status: w.Status, vendor_id: w.Vendor_ID, tenant_name: t ? `${t.First_Name||''} ${t.Last_Name||''}`.trim() : '', tenant_phone: isTenantCurrent(t) ? (t.Phone||'') : '' }; });
   return json({ nearby, primary_cluster: primary, overlap_clusters: overlap });
