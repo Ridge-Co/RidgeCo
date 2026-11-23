@@ -15346,7 +15346,6 @@ async function clusterSuggestions(env, url) {
   if (isNaN(lat)||isNaN(lng)) return json({ error: 'lat and lng required' }, 400);
   const props = await fetchTab(env, 'Properties'), tagged = props.filter(p => p.Location_Cluster && p.Lat && p.Lng);
   if (!tagged.length) return json({ suggestions: { primary: null, overlap: [] }, nearby: [], message: 'No tagged properties with coordinates yet' });
-  function haversineKm(lat1,lng1,lat2,lng2) { const R=6371,d2r=Math.PI/180,dLat=(lat2-lat1)*d2r,dLng=(lng2-lng1)*d2r,a=Math.sin(dLat/2)**2+Math.cos(lat1*d2r)*Math.cos(lat2*d2r)*Math.sin(dLng/2)**2; return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a)); }
   const nearby = tagged.map(p => ({ id:p.ID, address:p.Address, cluster:p.Location_Cluster, overlap:p.Location_Overlap, dist_km:haversineKm(lat,lng,parseFloat(p.Lat),parseFloat(p.Lng)) })).filter(p => p.dist_km<=maxKm).sort((a,b)=>a.dist_km-b.dist_km);
   const counts={}; nearby.slice(0,5).forEach(p => { counts[p.cluster]=(counts[p.cluster]||0)+1; });
   const primary = Object.entries(counts).sort((a,b)=>b[1]-a[1])[0]?.[0]||null;
