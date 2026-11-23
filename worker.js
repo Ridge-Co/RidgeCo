@@ -15311,9 +15311,10 @@ function nearbyRadiusKm(cfg) { const v = parseFloat(cfg && cfg.nearby_radius_km)
 async function listNearbyWOs(env, url) {
   const woId = url.searchParams.get('wo_id')||'', vendorId = url.searchParams.get('vendor_id')||'';
   if (!woId) return json({ error: 'wo_id required' }, 400);
-  const [wos, props, tenants] = await fetchTabs(env, ['Work_Orders','Properties','Tenants']);
+  const [wos, props, tenants, vendors] = await fetchTabs(env, ['Work_Orders','Properties','Tenants','Vendors']);
   const wo = wos.find(w => w.ID === woId); if (!wo) return json({ error: 'WO not found' }, 404);
   const prop = props.find(p => String(p.ID) === String(wo.Property_ID)); if (!prop) return json({ nearby: [], message: 'Property not found' });
+  const cfg = await fetchConfig(env), radiusKm = nearbyRadiusKm(cfg);   // queue #166
   const primary = (prop.Location_Cluster||'').trim(), overlap = (prop.Location_Overlap||'').split(',').map(s=>s.trim()).filter(Boolean), allTags = [primary, ...overlap].filter(Boolean);
   if (!allTags.length) return json({ nearby: [], message: 'no_tags', primary_cluster: null });
   const nearbyPropIds = new Set();
