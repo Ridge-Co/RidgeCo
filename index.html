@@ -3640,6 +3640,7 @@ function openAssignModal(woId) {
   document.getElementById('assign-preview').textContent = '';
   closeModal('modal-wo-detail');
   openModal('modal-assign');
+  loadNearbyStrip('assign-nearby', 'modal-assign', woId);
   // Focus search box after modal opens
   setTimeout(function(){ var el = document.getElementById('assign-vendor-search'); if(el) el.focus(); }, 100);
 }
