@@ -15327,7 +15327,7 @@ async function listNearbyWOs(env, url) {
   } else message = 'no_location';
   nearbyPropIds.add(String(wo.Property_ID));
   const OPEN = new Set(WOStatus.sets.FIELD_OPEN);
-  const nearby = wos.filter(w => w.ID !== woId && w.Voided !== 'TRUE' && nearbyPropIds.has(String(w.Property_ID)) && OPEN.has(w.Status) && (!vendorId || w.Vendor_ID === vendorId)).map(w => { const wProp = props.find(p => String(p.ID) === String(w.Property_ID)), t = tenants.find(t => String(t.ID) === String(w.Tenant_ID)); return { id: w.ID, property_id: w.Property_ID, address: (wProp&&wProp.Address)||'', city: (wProp&&wProp.City)||'', description: w.Description, trade: w.Trade, priority: w.Priority, status: w.Status, vendor_id: w.Vendor_ID, tenant_name: t ? `${t.First_Name||''} ${t.Last_Name||''}`.trim() : '', tenant_phone: isTenantCurrent(t) ? (t.Phone||'') : '' }; });
+  const nearby = wos.filter(w => w.ID !== woId && w.Voided !== 'TRUE' && nearbyPropIds.has(String(w.Property_ID)) && OPEN.has(w.Status) && (!vendorId || w.Vendor_ID === vendorId)).map(w => { const vend = vendors.find(v => String(v.ID) === String(w.Vendor_ID)), wProp = props.find(p => String(p.ID) === String(w.Property_ID)), t = tenants.find(t => String(t.ID) === String(w.Tenant_ID)); return { id: w.ID, property_id: w.Property_ID, address: (wProp&&wProp.Address)||'', city: (wProp&&wProp.City)||'', description: w.Description, trade: w.Trade, priority: w.Priority, status: w.Status, vendor_id: w.Vendor_ID, tenant_name: t ? `${t.First_Name||''} ${t.Last_Name||''}`.trim() : '', tenant_phone: isTenantCurrent(t) ? (t.Phone||'') : '' }; });
   return json({ nearby, primary_cluster: primary, overlap_clusters: overlap });
 }
 
