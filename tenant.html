@@ -452,6 +452,7 @@ function onLoginSuccess(data, persist){
   if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
 }
 (function restoreTenantSession(){
+  if (window.RC_ADMIN_VIEW) { window.RCAdminView.bar(); try { onLoginSuccess(window.RC_ADMIN_VIEW, false); } catch (e) { if (window.hubReportFailure) window.hubReportFailure('admin_view_open', 'Open-as view failed to draw: ' + ((e && e.message) || e)); } return; }
   try { var raw=localStorage.getItem(SESS_KEY); if(raw){ var d=JSON.parse(raw); if(d&&d.token) onLoginSuccess(d,false); } } catch(e){}
 })();
 
