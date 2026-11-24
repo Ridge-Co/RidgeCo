@@ -2488,13 +2488,64 @@ async function ownerByPin(env, url) {
     { const _dg = await demoLoginGate(env, 'Owners', owner); if (_dg) return _dg; }   // demo login: refuses after the 10 days, starts the clock on the first login
     _m.login = { tab: 'Owners', id: owner.ID, row: owner };
     return json({
-      owner_id: owner.ID, owner_name: `${owner.First_Name} ${owner.Last_Name||''}`.trim(),
-      owner_company: owner.Company||'', owner_phone: owner.Phone||'',
-      user_name: `${owner.First_Name} ${owner.Last_Name||''}`.trim(), is_sub_user: false,
+      ...ownerSessionFields(owner),
       token: await makeSessionToken({ role: 'owner', id: owner.ID, ...demoTokenClaim(owner) }, env.WORKER_SECRET),
       ...(demoTrue(owner.Is_Demo) ? { demo: true } : {}),   // the owner page shows its DEMO banner from this
     });
   });
+}
+// The owner portal's session fields for a main owner login. Shared by the PIN login and the admin "Open as owner" view.
+function ownerSessionFields(owner) {
+  return {
+    owner_id: owner.ID, owner_name: `${owner.First_Name||''} ${owner.Last_Name||''}`.trim(),
+    owner_company: owner.Company||'', owner_phone: owner.Phone||'',
+    user_name: `${owner.First_Name||''} ${owner.Last_Name||''}`.trim(), is_sub_user: false,
+  };
+}
+// Admin "Open as tenant" / "Open as owner" (Nov 24 2026, Brett: "anytime I'm trying to demonstrate something to tenants or
+// owners ... I can go straight to their specific page"). Same rules as adminVendorViewSession: admin secret only (staging
+// test token on staging), an ordinary role session marked av:1 with a 4-hour life, no PIN read or returned, no lockout row,
+// never counts as that person using the portal, never starts a demo login's 10-day clock. Same allow-lists and money
+// firewall as their own login, so Brett sees exactly what they see.
+async function adminPortalViewSession(env, request, callerRole, viaHubTestToken, staging, role) {
+  if (callerRole) return json({ error: 'Unauthorized' }, 401);
+  const tok = request.headers.get('X-Auth-Token') || '';
+  const isAdmin = !!env.WORKER_SECRET && tok === env.WORKER_SECRET;
+  if (!isAdmin && !(staging && viaHubTestToken)) return json({ error: 'Only the Hub admin can open a portal as someone else' }, 403);
+  const parsed = await safeJson(request);
+  if (!parsed.ok) return json({ error: 'Send JSON with the id' }, 400);
+  const body = parsed.body || {};
+  if (role === 'tenant') {
+    const tid = String(body.tenant_id || '').trim();
+    if (!tid) return json({ error: 'tenant_id is required' }, 400);
+    const tenant = (await fetchTab(env, 'Tenants')).find(t => String(t.ID) === tid);
+    if (!tenant) return json({ error: 'No tenant with ID ' + tid }, 404);
+    const tname = `${tenant.First_Name||''} ${tenant.Last_Name||''}`.trim() || 'This tenant';
+    if (tenant.Active === 'FALSE') return json({ error: tname + ' is deactivated, so their portal is closed.' }, 409);
+    if (tenant.Move_Out_Date && new Date(tenant.Move_Out_Date + 'T23:59:59') < new Date()) return json({ error: tname + ' moved out on ' + tenant.Move_Out_Date + ', so their portal is closed.' }, 409);
+    return json({
+      ...(await tenantSessionFields(env, tenant)),
+      ...(demoTrue(tenant.Is_Demo) ? { demo: true } : {}),
+      admin_view: true, admin_view_role: 'tenant', admin_view_name: tname, expires_in_s: ADMIN_VIEW_TTL_S,
+      token: await makeSessionToken({ role: 'tenant', id: tenant.ID, av: 1, ...demoTokenClaim(tenant) }, env.WORKER_SECRET, ADMIN_VIEW_TTL_S),
+    });
+  }
+  if (role === 'owner') {
+    const oid = String(body.owner_id || '').trim();
+    if (!oid) return json({ error: 'owner_id is required' }, 400);
+    const owner = (await fetchTab(env, 'Owners')).find(o => String(o.ID) === oid);
+    if (!owner) return json({ error: 'No owner with ID ' + oid }, 404);
+    const f = ownerSessionFields(owner);
+    const oname = f.owner_name || owner.Company || 'This owner';
+    if (owner.Active === 'FALSE') return json({ error: oname + ' is deactivated, so their portal is closed.' }, 409);
+    return json({
+      ...f,
+      ...(demoTrue(owner.Is_Demo) ? { demo: true } : {}),
+      admin_view: true, admin_view_role: 'owner', admin_view_name: oname, expires_in_s: ADMIN_VIEW_TTL_S,
+      token: await makeSessionToken({ role: 'owner', id: owner.ID, av: 1, ...demoTokenClaim(owner) }, env.WORKER_SECRET, ADMIN_VIEW_TTL_S),
+    });
+  }
+  return json({ error: 'Unknown portal' }, 400);
 }
 
 async function getOwnerUsers(env, url) {
