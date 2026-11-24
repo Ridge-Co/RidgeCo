@@ -17,6 +17,9 @@ assert.ok(constLine, 'ATTACHMENT_COST_DOC_TYPES constant exists');
 // Nov 16 2026 (owner allow-list): getAttachments now also uses these two lists and ownerPick, so the sandbox needs them.
 const ownerConstLines = ['OWNER_ATTACHMENT_FIELDS', 'OWNER_ATTACHMENT_TYPES'].map(n => { const l = src.split('\n').find(x => x.startsWith('const ' + n + ' = ')); assert.ok(l, n + ' constant exists'); return l; }).join('\n');
 
+// Nov 24 2026: getAttachments now returns through scrubPortalMoney (the portal money firewall's patterns), so the sandbox needs them.
+const moneyConstLines = ['PORTAL_MARKUP_KEYS', 'PORTAL_PRICE_KEYS', 'PORTAL_PRICE_KEYS_PASCAL', 'PORTAL_VENDOR_COST_KEYS'].map(n => { const l = src.split('\n').find(x => x.startsWith('const ' + n + ' = ')); assert.ok(l, n + ' constant exists'); return l; }).join('\n');
+
 let n = 0; const ok = (c, m) => { assert.ok(c, m); n++; };
 
 // ---- build a sandbox with the real functions + stubbed I/O --------------------------------
