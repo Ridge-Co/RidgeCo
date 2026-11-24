@@ -12585,8 +12585,29 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
 //     vendor survive; a line is only dropped when it reads as money. The admin Hub reads Work_Orders directly and
 //     still sees the full Notes. Max_Price stays (vendor-only, the vendor's own ceiling) and Vendor_Paid_Date stays
 //     (a date, no amount — it drives the vendor's own "Paid" badge).
-const EXTERNAL_HIDDEN_WO_FIELDS = ['Customer_Charge', 'Invoice_ID', 'Invoice_Number', 'Invoice_Date', 'Invoice_Total', 'Vendor_Cost', 'Vendor_Bill_ID', 'Vendor_Bill_Number', 'Markup', 'Margin'];
-const EXTERNAL_HIDDEN_WO_PREFIXES = ['Deposit_', 'QB_'];
+// Pass 2 (same day, full audit of all 256 live WOs): Invoice_Memo (customer invoice text, 104 WOs) and QBO_Invoice_Number
+// (118) were still going out, and 6 Descriptions carried vendor cost ("Consolidated vendor bill ($809.63 ...)", "Vendor
+// quote $650 ...") that owners and tenants read. Descriptions now lose any sentence / " — " segment that names a dollar
+// amount or vendor cost, in every external view; the rest of the job text stays.
+const EXTERNAL_HIDDEN_WO_FIELDS = ['Customer_Charge', 'Invoice_ID', 'Invoice_Number', 'Invoice_Date', 'Invoice_Total', 'Invoice_Memo', 'Vendor_Cost', 'Vendor_Bill_ID', 'Vendor_Bill_Number', 'Markup', 'Margin'];
+const EXTERNAL_HIDDEN_WO_PREFIXES = ['Deposit_', 'QB_', 'QBO_'];
+// Two audiences: a vendor / tenant / shared link loses EVERY dollar figure (a customer price tells a vendor the margin).
+// An owner keeps Brett's prices to them (their own quote, e.g. "$175 if it matches my diagnosis") and loses only what
+// shows vendor cost or internal billing ("vendor bill ($809.63 ...)", "Vendor quote $650", "full $150.00 carried here").
+const EXTERNAL_DESC_MONEY_RE = /\$\s?\d|\d\s?(usd|dollars)\b|\bvendor (?:bill|quote|cost|price|paid|rate|pay)\b|markup|mark-up|margin|quickbooks|\bprofit\b|instant[- ]?pay/i;
+const OWNER_DESC_COST_RE = /\bvendor (?:bill|quote|cost|price|paid|rate|pay)\b|vendor.{0,40}\$\s?\d|\$\s?\d.{0,40}\bvendor\b|markup|mark-up|margin|quickbooks|\bprofit\b|instant[- ]?pay|carried here|booked on this work order|payout/i;
+function externalSafeText(text, ownerView) {
+  const src = String(text == null ? '' : text);
+  const RE = ownerView ? OWNER_DESC_COST_RE : EXTERNAL_DESC_MONEY_RE;
+  if (!RE.test(src)) return src;
+  const out = [];
+  for (const line of src.split('\n')) {
+    if (!line.trim()) { out.push(line); continue; }
+    const parts = line.split(/ (?:—|--) /).map(p => p.split(/(?<=[.!?])\s+(?=[A-Z0-9(\[$])/).filter(s => !RE.test(s)).join(' ')).filter(p => p.trim());
+    if (parts.length) out.push(parts.join(' — '));
+  }
+  return out.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
 const EXTERNAL_NOTE_MONEY_RE = /\$\s?\d|\d\s?(usd|dollars)\b|invoic|\bbilled\b|\bbilling\b|\bbill #|vendor (?:was )?paid|\bpaid \$|deposit|instant[- ]?pay|quickbooks|\bqb\b|markup|mark-up|margin|payout|pay run|customer charge|\bfee\b|\bfees\b|scope proposal billed|review bills/i;
 function externalSafeNotes(notes) {
   return String(notes == null ? '' : notes).split('\n').filter(l => !EXTERNAL_NOTE_MONEY_RE.test(l)).join('\n').trim();
