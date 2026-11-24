@@ -27020,7 +27020,7 @@ async function scrubResponseForProdReadToken(request, env, res) {
 //   PRICE       — what the customer is charged: never to a vendor, tenant or shared link (a vendor who sees the price
 //                 sees the margin). Owners ARE the customer and keep their own invoice amounts.
 //   VENDOR_COST — what the vendor is paid: never to an owner or tenant (an owner who sees it sees the margin).
-const PORTAL_MARKUP_KEYS = /^(markup.*|mark_?up.*|margin.*|profit.*|gross_?profit.*|net_?profit.*|materials_?fee.*|rc_?fee.*)$/i;
+const PORTAL_MARKUP_KEYS = /^(markup.*|mark_?up.*|margin.*|profit.*|gross_?profit.*|net_?profit.*|materials_?fee.*|rc_?fee.*|billing_?log)$/i;   // billing_log (Nov 24): Hub-only billing history, carries price AND vendor pay
 const PORTAL_PRICE_KEYS = /^(customer_?charge|customer_?price|customer_?total|customer_?amount|customer_?invoice.*|sell_?price|owner_?price|owner_?total|price_?override|invoice_?total|invoice_?amount|invoice_?memo|invoice_?balance|qbo_?invoice.*|qb_?invoice.*|processing_?fee.*|billed_?amount|amount_?billed)$/i;
 const PORTAL_PRICE_KEYS_PASCAL = /^(Invoice_ID|Invoice_Number|Invoice_Date)$/;   // Work_Orders' customer-invoice columns (case-sensitive: the vendor's OWN bill uses lowercase invoice_number / invoice_date)
 const PORTAL_VENDOR_COST_KEYS = /^(vendor_?cost.*|vendor_?pay.*|vendor_?paid_?amount|vendor_?total|vendor_?amount|vendor_?bill_?(amount|total).*|vendor_?rate|labor_?cost.*|max_?price|hourly_?rate|instant_?(pay_?)?fee.*|deposit_?fee.*|payout.*)$/i;
