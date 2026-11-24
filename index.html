@@ -3275,6 +3275,8 @@ function openWODetail(woId) {
   addBtn(wo.Vendor_ID ? '🔄 Change Vendor' : 'Assign Vendor', wo.Vendor_ID ? 'secondary' : '', function(){openAssignModal(woId);});
   addBtn('📤 Send to Vendor','secondary',function(){openShareWO(woId);});
   addBtn('🚚 Create delivery','secondary',function(){openCreateDelivery(wo);});
+  if (wo.Tenant_ID) addBtn('👁 See as tenant','secondary',function(){openPortalAs('tenant', wo.Tenant_ID, woId);});   // Nov 24 2026
+  { var _woProp = safeArray(state.properties).find(function(p){ return p.ID === wo.Property_ID; }); if (_woProp && _woProp.Owner_ID) addBtn('👁 See as owner','secondary',function(){openPortalAs('owner', _woProp.Owner_ID, woId);}); }   // Nov 24 2026
   if (wo.Vendor_ID) {
     addBtn('👁 See as vendor','secondary',function(){openVendorPortalAs(wo.Vendor_ID, woId);});   // Nov 24 2026: this job in the vendor's own portal, as they see it
     addBtn('📷 Request Photos','secondary',function(){requestFromVendor(woId,wo.Vendor_ID,'photos');});
