@@ -5331,6 +5331,7 @@ function openUnitDetail(propId, unitId) {
           '</div>' +
           '<div style="display:flex;flex-direction:column;gap:4px">' +
             '<button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
+            '<button class="btn small" style="background:#b45309;color:#fff" onclick="openPortalAs(\'tenant\',\''+t.ID+'\')" title="Open this tenant\'s portal exactly as they see it, no PIN needed (4 hours, admin only)">👁 Open as</button>' +
             '<button class="btn small secondary" onclick="closeModal(\'modal-unit-detail\');openScheduleMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')">📅 Schedule Move-Out</button>' +
             '<button class="btn small" style="background:var(--danger)20;border:1px solid var(--danger);color:var(--danger);font-size:10px" onclick="closeModal(\'modal-unit-detail\');openMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')">Move Out</button>' +
           '</div>' +
