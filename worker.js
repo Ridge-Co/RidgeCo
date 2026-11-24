@@ -748,6 +748,7 @@ const _hubWorkerCore = {
         if (path === '/fi/list')                return await fiRoute(env, 'list', () => fiList(env));
         if (path === '/fi/inspection')          return await fiRoute(env, 'inspection', () => fiGetInspection(env, url));
         if (path === '/fi/photo-sizes')         return await fiRoute(env, 'photo-sizes', () => fiPhotoSizes(env, url));
+        if (path === '/fi/compare')             return await fiRoute(env, 'compare', () => fiCompare(env, url));   // queue #117 phase 1, admin only, read-only
         if (path === '/fi/report')              return await fiRoute(env, 'report', () => fiReport(env, request, url));
         if (path === '/fi/photo/view')          return await fiRoute(env, 'photo-view', () => fiPhotoView(env, url));
         if (path === '/fi/issue-types')         return await fiRoute(env, 'issue-types', () => fiTypesList(env));
