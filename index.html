@@ -5642,7 +5642,7 @@ function openPortalAs(role, id, woId) {
   }).catch(function(e) {
     if (w && !w.closed) w.close();
     var msg = 'Could not open the ' + role + ' portal: ' + ((e && e.message) || e);
-    if (typeof toast === 'function') toast(msg, 'error'); else alert(msg);
+    if (typeof toast === 'function') toast(msg, 'error');
     if (typeof window.hubReportFailure === 'function') { try { window.hubReportFailure('open_portal_as', msg); } catch (e2) { console.error('failure report failed', e2); /* silent-ok: Brett already sees the toast above */ } }
   });
 }
