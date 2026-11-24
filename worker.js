@@ -2570,7 +2570,13 @@ async function vendorByPin(env, url) {
     const loginName = ((vendor.First_Name||'').trim() || (vendor.Name||'').split(' ')[0]).toLowerCase();
     if (loginName !== name && !loginName.startsWith(name)) return null;
     _m.login = { tab: 'Vendors', id: vendor.ID, row: vendor };
-    return json({
+    return json({ ...vendorSessionFields(vendor), token: await makeSessionToken({ role: 'vendor', id: vendor.ID }, env.WORKER_SECRET) });
+  });
+}
+// Fields the vendor portal keeps on its session (display only; every write is re-checked server-side against the live
+// Vendors row). Shared by the PIN login and the admin "Open as vendor" view so the two can never drift apart.
+function vendorSessionFields(vendor) {
+    return {
       vendor_id: vendor.ID, vendor_name: vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim(),
       vendor_phone: vendor.Phone||'', vendor_trade: vendor.Trade||'',
       vendor_trades: vendor.Trades||vendor.Trade||'', vendor_rate: vendor.Hourly_Rate||'', language: vendor.Language||'en',
