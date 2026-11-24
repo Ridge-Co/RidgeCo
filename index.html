@@ -3276,6 +3276,7 @@ function openWODetail(woId) {
   addBtn('📤 Send to Vendor','secondary',function(){openShareWO(woId);});
   addBtn('🚚 Create delivery','secondary',function(){openCreateDelivery(wo);});
   if (wo.Vendor_ID) {
+    addBtn('👁 See as vendor','secondary',function(){openVendorPortalAs(wo.Vendor_ID, woId);});   // Nov 24 2026: this job in the vendor's own portal, as they see it
     addBtn('📷 Request Photos','secondary',function(){requestFromVendor(woId,wo.Vendor_ID,'photos');});
     addBtn('🧾 Request Invoice','secondary',function(){requestFromVendor(woId,wo.Vendor_ID,'invoice');});
   }
