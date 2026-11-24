@@ -80,7 +80,6 @@
   .thumb.chk{border-color:var(--accent)}
   .thumb.chk::after{content:"✓";position:absolute;left:4px;top:4px;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center}
   .thumbs.big .thumb{width:104px;height:104px}
-  .cmp{display:grid;grid-template-columns:1fr;gap:12px;margin-top:10px} @media(min-width:700px){.cmp{grid-template-columns:1fr 1fr}}
   .selbar{position:sticky;top:0;z-index:5;border-color:var(--accent);background:#eaf1fd}
   .mv{display:flex;gap:8px;flex:none}
   .mv button{width:44px;height:44px;border:1px solid var(--border);border-radius:10px;background:var(--surface);font-size:18px;font-weight:700;cursor:pointer;color:var(--text)}
@@ -790,6 +789,7 @@ function render(){
   else if (S.view==='insp') h = viewInsp();
   else if (S.view==='area') h = viewArea();
   else if (S.view==='review') h = viewReview();
+  else if (S.view==='compare') h = viewCompare();
   else if (S.view==='brands') h = viewBrands();
   else if (S.view==='voice') h = viewVoice();
   else if (S.view==='route') h = viewRoute();
