@@ -27000,7 +27000,9 @@ async function firewallPortalMoney(request, env, ctx, res) {
   if (!audience) return res;
   if (!/json/i.test(res.headers.get('Content-Type') || '')) return res;
   try {
-    const data = JSON.parse(await res.clone().text());
+    const txt = await res.clone().text();
+    if (!txt.trim()) return res;   // empty body: nothing to leak
+    const data = JSON.parse(txt);
     const { data: clean, removed } = scrubPortalMoney(data, audience);
     if (!removed.length) return res;
     const rep = reportFailure(env, { system: 'hub', source: 'worker', where: 'portal_money_firewall', ref: path, severity: 'P1',
