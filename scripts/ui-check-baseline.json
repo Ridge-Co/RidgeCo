@@ -20,7 +20,7 @@
   "field-inspect.html": {"static":{"small_font":1,"fixed_column":1},"detector":{},"overflow":[]},
   "fix-check.html": {"static":{"small_font":1,"native_dialog":1,"label_file_input":1,"fixed_column":1},"detector":{},"overflow":[]},
   "importer.html": {"static":{"small_font":15,"nowrap_chip":1},"detector":{"low-contrast":3,"tiny-text":3,"undersized-ui-text":4},"overflow":[]},
-  "index.html": {"static":{"small_font":757,"native_dialog":100,"nowrap_chip":1},"detector":{"tiny-text":36,"wide-tracking":23,"undersized-ui-text":23,"all-caps-body":7,"pulsing-dot":1},"overflow":[]},
+  "index.html": {"static":{"small_font":757,"native_dialog":99,"nowrap_chip":1},"detector":{"tiny-text":36,"wide-tracking":23,"undersized-ui-text":23,"all-caps-body":7,"pulsing-dot":1},"overflow":[]},
   "inspect-book.html": {"static":{"small_font":1,"native_dialog":6,"fixed_column":1},"detector":{},"overflow":[]},
   "inspect-change.html": {"static":{"fixed_column":1},"detector":{},"overflow":[]},
   "inspect.html": {"static":{"small_font":2,"native_dialog":46,"fixed_column":1},"detector":{"low-contrast":1},"overflow":[]},
