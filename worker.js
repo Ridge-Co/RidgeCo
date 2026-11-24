@@ -3057,7 +3057,7 @@ async function getAttachments(env, url, callerRole, callerSessionId) {
   if (callerRole === 'tenant') visible = visible.filter(a => !ATTACHMENT_COST_DOC_TYPES.includes(String(a.File_Type || '').toLowerCase()));
   // Owner allow-list (Nov 16 2026): photos and receipts only, and only the named columns. Vendor bill / invoice file rows never reach an owner.
   if (callerRole === 'owner') visible = visible.filter(a => OWNER_ATTACHMENT_TYPES.includes(String(a.File_Type || 'photo').toLowerCase())).map(a => ownerPick(a, OWNER_ATTACHMENT_FIELDS));
-  return json(visible);
+  return json(scrubPortalMoney(visible, callerRole).data);   // Nov 24 2026: Invoice_ID (the customer invoice) never reaches a vendor or tenant; fixed at the source after the money firewall's P1
 }
 
 // Stream the bytes of a receipt/bill/invoice file (the INTERNAL_TYPES that are deliberately
