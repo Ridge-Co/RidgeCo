@@ -1,6 +1,6 @@
 {
  "_about": "Counts recorded by scripts/ui-check.mjs --update-baseline. A PR fails only when a number gets worse. Never raise a number without saying so in the PR and getting Brett's OK.",
- "recorded": "2026-11-16",
+ "recorded": "2026-11-24",
  "detector_version": "4.9.2",
  "pages": {
   "action-center.html": {"static":{"small_font":4,"fixed_column":1},"detector":{"tiny-text":1},"overflow":[]},
