@@ -477,6 +477,7 @@ label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font
 var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
 var SECRET = '';                // session token from PIN login — NO hardcoded admin secret (SEC-1)
 var SESS_KEY = 'mh_owner_sess'; // persisted so a reload / auto-refresh stays logged in
+if (window.RC_ADMIN_VIEW) SESS_KEY = window.RCAdminView.shadowKey;   // Nov 24 2026 admin "Open as": never touch this person's real saved login on this device
 var session = null;
 var ownerProps = [];
 var allWOs = [];
