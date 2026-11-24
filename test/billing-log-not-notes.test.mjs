@@ -19,5 +19,5 @@ assert.deepStrictEqual(offenders, [], 'a Notes write builds a dollar amount into
 ok(true, 'no Notes write anywhere builds a dollar amount into the note');
 ok(src.includes("'Markup', 'Margin', 'Billing_Log'];"), 'enrichWO strips Billing_Log from every external work order');
 ok(/const PORTAL_MARKUP_KEYS = [^\n]*billing_\?log/.test(src), 'the portal money firewall removes Billing_Log for every audience');
-ok(/wo\.Billing_Log \? '<div[^\n]*/.test(ih) && ih.includes('BILLING LOG'), 'the Hub work order shows the billing log');
+ok(/wo\.Billing_Log \? '<div[^\n]*/.test(ih) && ih.includes('Billing log (only you see this)'), 'the Hub work order shows the billing log');
 console.log(`billing-log-not-notes: ${n}/${n} passing`);
