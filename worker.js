@@ -748,6 +748,7 @@ const _hubWorkerCore = {
         if (path === '/fi/list')                return await fiRoute(env, 'list', () => fiList(env));
         if (path === '/fi/inspection')          return await fiRoute(env, 'inspection', () => fiGetInspection(env, url));
         if (path === '/fi/photo-sizes')         return await fiRoute(env, 'photo-sizes', () => fiPhotoSizes(env, url));
+        if (path === '/fi/compare')             return await fiRoute(env, 'compare', () => fiCompare(env, url));   // queue #117 phase 1, admin only, read-only
         if (path === '/fi/report')              return await fiRoute(env, 'report', () => fiReport(env, request, url));
         if (path === '/fi/photo/view')          return await fiRoute(env, 'photo-view', () => fiPhotoView(env, url));
         if (path === '/fi/issue-types')         return await fiRoute(env, 'issue-types', () => fiTypesList(env));
@@ -47205,6 +47206,69 @@ async function fiPhotoSizes(env, url) {
     photos[r.o.ID] = { b: Number(r.o.Bytes) || 0, o: Number(r.o.Orig_Bytes) || 0 };
   }
   return json({ ok: true, photos });
+}
+// Queue #117 phase 1 (Nov 24 2026): move-in vs move-out side by side. READ-ONLY: two inspection rows and one FI_Photos read, nothing written.
+// Pure. Area names pair up after lower-casing and dropping punctuation ("Kitchen", "kitchen." and "KITCHEN" are one area). Two areas with the same
+// name inside ONE inspection get "#2", "#3"... so nothing is merged or lost. Areas that exist on one side only are returned, never dropped.
+function fiAreaKey(name) { return String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
+function fiCompareSide(a, photoDates) {
+  const ids = [];
+  const add = list => { for (const p of (list || [])) { const id = String(p); if (!ids.includes(id)) ids.push(id); } };
+  add(a.photo_ids);
+  for (const is of (a.issues || [])) add(is.photo_ids);
+  return {
+    area_id: String(a.id || ''), name: String(a.name || ''), condition: String(a.condition || ''),
+    photos: ids.map(id => ({ id, date: String((photoDates && photoDates[id]) || '').slice(0, 10) })),
+    issues: (a.issues || []).map(is => ({ id: String(is.id || ''), title: String(is.title || ''), trade: String(is.trade || ''), severity: String(is.severity || ''), photo_count: (is.photo_ids || []).length })),
+  };
+}
+function fiCompareDocs(inDoc, outDoc, photoDates) {
+  const index = doc => {
+    const seen = {}, map = new Map(), order = [];
+    for (const a of ((doc && doc.areas) || [])) {
+      if (!a || a.excluded) continue;
+      const base = fiAreaKey(a.name) || 'area';
+      seen[base] = (seen[base] || 0) + 1;
+      const key = seen[base] > 1 ? base + '#' + seen[base] : base;
+      map.set(key, a); order.push(key);
+    }
+    return { map, order };
+  };
+  const I = index(inDoc), O = index(outDoc);
+  const pairs = [];
+  for (const key of O.order) {
+    const o = O.map.get(key), i = I.map.get(key);
+    pairs.push({ key, name: String(o.name || ''), in: i ? fiCompareSide(i, photoDates) : null, out: fiCompareSide(o, photoDates) });
+  }
+  for (const key of I.order) if (!O.map.has(key)) { const i = I.map.get(key); pairs.push({ key, name: String(i.name || ''), in: fiCompareSide(i, photoDates), out: null }); }
+  return { pairs, counts: { paired: pairs.filter(p => p.in && p.out).length, only_move_in: pairs.filter(p => p.in && !p.out).length, only_move_out: pairs.filter(p => !p.in && p.out).length } };
+}
+// GET /fi/compare?move_in=<id>&move_out=<id> (admin only). The two must be a Move-in and a Move-out of the SAME property (and the same unit when both name one).
+async function fiCompare(env, url) {
+  const inId = url.searchParams.get('move_in') || '', outId = url.searchParams.get('move_out') || '';
+  if (!FI_ID_RE.test(inId) || !FI_ID_RE.test(outId) || inId === outId) return fiErr(400, 'bad_id', 'Pick one move-in inspection and one different move-out inspection.');
+  await fiEnsureTabs(env);
+  const [fi, fo] = [await fiFindInspection(env, inId), await fiFindInspection(env, outId)];
+  if (!fi.row) return fiErr(404, 'not_found', 'The move-in inspection was not found.');
+  if (!fo.row) return fiErr(404, 'not_found', 'The move-out inspection was not found.');
+  if (fi.row.o.Inspection_Type !== 'move_in') return fiErr(400, 'not_move_in', 'The first inspection is not a Move-in.');
+  if (fo.row.o.Inspection_Type !== 'move_out') return fiErr(400, 'not_move_out', 'The second inspection is not a Move-out.');
+  let dIn, dOut;
+  try { dIn = JSON.parse(fiJoinRow(fi.row.o)); dOut = JSON.parse(fiJoinRow(fo.row.o)); }
+  catch (e) { return fiErr(500, 'corrupt_doc', 'A saved inspection could not be read. Do not overwrite it. Contact Brett.'); }
+  const pIn = String((dIn.property && dIn.property.id) || fi.row.o.Property_ID || ''), pOut = String((dOut.property && dOut.property.id) || fo.row.o.Property_ID || '');
+  const sameProp = pIn && pOut ? pIn === pOut : fiDupKey(fi.row.o.Address, '') === fiDupKey(fo.row.o.Address, '');
+  if (!sameProp) return fiErr(400, 'different_property', 'These two inspections are for different addresses.');
+  const uIn = String((dIn.property && dIn.property.unit_label) || '').trim().toLowerCase(), uOut = String((dOut.property && dOut.property.unit_label) || '').trim().toLowerCase();
+  if (uIn && uOut && uIn !== uOut) return fiErr(400, 'different_unit', 'These two inspections are for different units.');
+  const pt = await fiReadFresh(env, 'FI_Photos');
+  const want = new Set([...fiPhotoIds(dIn), ...fiPhotoIds(dOut)]);
+  const photoDates = {};
+  for (const r of pt.rows) if (r.o.Active !== 'FALSE' && want.has(r.o.ID)) photoDates[r.o.ID] = r.o.Created_At || '';
+  const cmp = fiCompareDocs(dIn, dOut, photoDates);
+  const side = (row, doc) => ({ id: row.o.ID, date: String(row.o.Inspection_Date || doc.date || '').slice(0, 10), address: row.o.Address, unit: String((doc.property && doc.property.unit_label) || ''), token: row.o.Report_Token || '' });
+  const mi = side(fi.row, dIn), mo = side(fo.row, dOut);
+  return json({ ok: true, move_in: mi, move_out: mo, order_warning: mi.date && mo.date && mi.date > mo.date ? 'The move-in is dated after the move-out. Check the dates.' : '', pairs: cmp.pairs, counts: cmp.counts });
 }
 async function fiGetInspection(env, url) {
   const id = url.searchParams.get('id') || '';
