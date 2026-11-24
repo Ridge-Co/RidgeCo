@@ -22916,6 +22916,7 @@ const JOB_ROUTES = {
   qb_reconcile:        'REASON',
   tenant_message:      'REASON',
   final_classification:'REASON',
+  invoice_summary:     'REASON',   // queue #266: customer-facing words on an invoice (pinned to REASON anyway)
 };
 
 // job = { type, tier?, prompt, input?, schema?, maxTokens?, customerFacing?, moneyFacing?, media?, source? }
