@@ -38352,6 +38352,7 @@ async function qbSendInvoice(env, body) {
                     loan_deduction: +previewLoanDeduction.toFixed(2), loan_balance: +previewLoanBalance.toFixed(2) },
         photo_link: photoFolderUrl,
         already:  { invoice: haveInv ? ir.QB_Invoice_ID : '', bill: haveBill ? ir.QB_Bill_ID : '' },
+        can_draft_summary: invoiceSummaryNeeded(_inEn.billRow, _inEn.timeEntries, wo, env),   // queue #266: the Hub shows "Draft a summary" under the generic-text warning
         warnings,
       }});
     }
