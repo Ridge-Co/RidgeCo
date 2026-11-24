@@ -32,7 +32,7 @@
   "owner-onboard.html": {"static":{"fixed_column":1},"detector":{},"overflow":[]},
   "owner-setup.html": {"static":{"small_font":12,"native_dialog":1,"fixed_column":1},"detector":{"low-contrast":2,"tiny-text":2,"undersized-ui-text":7},"overflow":[]},
   "owner-submit.html": {"static":{"small_font":13},"detector":{"low-contrast":2,"tiny-text":2},"overflow":[]},
-  "owner.html": {"static":{"small_font":60,"native_dialog":3,"fixed_column":1},"detector":{"undersized-ui-text":6,"tiny-text":10},"overflow":[]},
+  "owner.html": {"static":{"small_font":60,"native_dialog":3,"fixed_column":1},"detector":{},"overflow":[]},
   "patch-importer.html": {"static":{"small_font":11,"fixed_column":1},"detector":{"low-contrast":2,"tiny-text":3,"undersized-ui-text":5},"overflow":[]},
   "privacy-policy.html": {"static":{"fixed_column":1},"detector":{},"overflow":[]},
   "privacy.html": {"static":{"fixed_column":1},"detector":{"low-contrast":1},"overflow":[]},
