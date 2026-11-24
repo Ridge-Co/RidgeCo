@@ -12573,7 +12573,7 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
   // the vendor relationship mediated through Brett rather than owners going around him.
   if (opts.ownerView)  { delete base.Invoice_ID; base.Display_Status = base.Status === 'Pending Invoice' ? 'Complete' : base.Status; base.vendor_phone = ''; }
   if (opts.tenantView || opts.ownerView || opts.vendorView || opts.sharedView || opts.viewingVendorId) { for (const k of Object.keys(base)) if (k.startsWith('Triage_')) delete base[k]; }   // queue #142: triage is Brett's, never tenant / owner / vendor facing
-  return stripExternalMoney(base);
+  return stripExternalMoney(base, opts);
 }
 
 // Nov 24 2026 (Brett: "Vendor page shows payment info! This is never supposed to be possible."): WO-1253's vendor
