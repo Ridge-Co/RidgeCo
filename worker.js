@@ -12573,6 +12573,29 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
   // the vendor relationship mediated through Brett rather than owners going around him.
   if (opts.ownerView)  { delete base.Invoice_ID; base.Display_Status = base.Status === 'Pending Invoice' ? 'Complete' : base.Status; base.vendor_phone = ''; }
   if (opts.tenantView || opts.ownerView || opts.vendorView || opts.sharedView || opts.viewingVendorId) { for (const k of Object.keys(base)) if (k.startsWith('Triage_')) delete base[k]; }   // queue #142: triage is Brett's, never tenant / owner / vendor facing
+  return stripExternalMoney(base);
+}
+
+// Nov 24 2026 (Brett: "Vendor page shows payment info! This is never supposed to be possible."): WO-1253's vendor
+// portal showed "Scope Proposal billed — $830.00 invoiced (1774); vendor paid $460.00 ... instant-pay fee" because
+// enrichWO spreads every Work_Orders column (`...wo`), and the billing code appends those lines to Notes. enrichWO is
+// ONLY used for external views (vendor, tenant, owner, shared link), so EVERY one of them goes through this:
+//   • money/billing columns are dropped (Customer_Charge, Invoice_*, every Deposit_* column, QB_* ids);
+//   • any Notes line that mentions a dollar amount or billing/payment words is removed. Brett's own notes to the
+//     vendor survive; a line is only dropped when it reads as money. The admin Hub reads Work_Orders directly and
+//     still sees the full Notes. Max_Price stays (vendor-only, the vendor's own ceiling) and Vendor_Paid_Date stays
+//     (a date, no amount — it drives the vendor's own "Paid" badge).
+const EXTERNAL_HIDDEN_WO_FIELDS = ['Customer_Charge', 'Invoice_ID', 'Invoice_Number', 'Invoice_Date', 'Invoice_Total', 'Vendor_Cost', 'Vendor_Bill_ID', 'Vendor_Bill_Number', 'Markup', 'Margin'];
+const EXTERNAL_HIDDEN_WO_PREFIXES = ['Deposit_', 'QB_'];
+const EXTERNAL_NOTE_MONEY_RE = /\$\s?\d|\d\s?(usd|dollars)\b|invoic|\bbilled\b|\bbilling\b|\bbill #|vendor (?:was )?paid|\bpaid \$|deposit|instant[- ]?pay|quickbooks|\bqb\b|markup|mark-up|margin|payout|pay run|customer charge|\bfee\b|\bfees\b|scope proposal billed|review bills/i;
+function externalSafeNotes(notes) {
+  return String(notes == null ? '' : notes).split('\n').filter(l => !EXTERNAL_NOTE_MONEY_RE.test(l)).join('\n').trim();
+}
+function stripExternalMoney(base) {
+  for (const k of Object.keys(base)) {
+    if (EXTERNAL_HIDDEN_WO_FIELDS.includes(k) || EXTERNAL_HIDDEN_WO_PREFIXES.some(p => k.startsWith(p))) delete base[k];
+  }
+  if ('Notes' in base) base.Notes = externalSafeNotes(base.Notes);
   return base;
 }
 
