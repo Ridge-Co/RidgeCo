@@ -7744,6 +7744,7 @@ function renderOwnersPage() {
       '<td style="color:'+(o.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(o.PIN||'—')+'</td>' +
       '<td style="display:flex;gap:4px">' +
       '<button class="btn small secondary" onclick="openEditOwnerModal(\''+o.ID+'\')">Edit</button>' +
+      (isInactive ? '' : '<button class="btn small" style="background:#b45309;color:#fff" onclick="openPortalAs(\'owner\',\''+o.ID+'\')" title="Open this owner\'s portal exactly as they see it, no PIN needed (4 hours, admin only)">👁 Open as</button>') +
       '<button class="btn small secondary" onclick="openLinkPropertyModal(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="Assign an existing property to this owner">+ Property</button>' +
       '<button class="btn small secondary" onclick="goToQBMapping(\''+esc((nm || o.Company || '').replace(/\'/g,''))+'\')" title="View/link this owner\'s properties and units to QuickBooks">🔗</button>' +
       '<button class="btn small" onclick="addOwnerContact(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="A second person at this company who needs their own login">+ Contact</button>' +
