@@ -2416,6 +2416,69 @@ function openArea(id){
 }
 function backToInsp(){ stopDictation(); S.selMode=false; S.sel={}; S.view='insp'; render(); }
 
+// ---- move-in vs move-out comparison (queue #117 phase 1: read-only, nothing is saved) ----
+function addrKey(a){ return String(a||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim().split(' ').slice(0,3).join(' '); }
+function compareCardHtml(rec){
+  if ((rec.meta.inspection_type||'') !== 'move_out') return '';
+  return '<div class="card"><div class="row"><b>Compare with move-in</b><button class="btn sm" onclick="openCompare()">Compare ›</button></div><div class="muted">See the move-in photos next to this move-out, area by area.</div></div>';
+}
+function cmpCandidates(){
+  var rec = S.rec, pr = rec.doc.property || {}, ak = addrKey(pr.address);
+  return (S.list||[]).filter(function(x){
+    if (x.id===rec.id || x.type!=='move_in') return false;
+    return (pr.id && x.property_id) ? String(x.property_id)===String(pr.id) : addrKey(x.address)===ak;
+  }).sort(function(a,b){ return String(b.date||'').localeCompare(String(a.date||'')); });
+}
+function openCompare(){
+  var rec = S.rec;
+  if (!rec.base_rev){ toast('Save this inspection to the server first'); return; }
+  var c = cmpCandidates();
+  if (!c.length){ openSheet('<h2>Compare with move-in</h2><div class="muted">No move-in inspection on file for this address.</div><div class="btns"><button class="btn" onclick="closeSheet()">Close</button></div>'); return; }
+  var od = String(rec.doc.date || rec.meta.inspection_date || ''), pick = c[0];
+  for (var i=0;i<c.length;i++){ if (!od || String(c[i].date||'') <= od){ pick = c[i]; break; } }
+  openSheet('<h2>Compare with move-in</h2><div class="muted">Pick the move-in to compare with.</div>'+c.map(function(x){
+    return '<button class="btn block'+(x.id===pick.id?' primary':'')+'" style="margin-top:8px;min-height:48px" onclick="startCompare(\''+x.id+'\')">'+esc(x.date||'no date')+' · '+esc(x.address||'')+(x.id===pick.id?' (suggested)':'')+'</button>';
+  }).join('')+'<div class="btns"><button class="btn" onclick="closeSheet()">Cancel</button></div>');
+}
+function startCompare(inId){ closeSheet(); S.cmp = { state:'loading', inId:inId, data:null, err:'', idx:0 }; S.view='compare'; render(); loadCompare(); }
+function loadCompare(){
+  var c = S.cmp; c.state='loading'; c.err=''; if (S.view==='compare') render();
+  api('GET','/fi/compare?move_in='+encodeURIComponent(c.inId)+'&move_out='+encodeURIComponent(S.rec.id)).then(function(d){
+    if (S.cmp!==c) return; c.data=d; c.state='ready'; c.idx=0; if (S.view==='compare') render();
+  }).catch(function(e){ if (S.cmp!==c) return; c.state='error'; c.err=e.message||'unknown error'; if (S.view==='compare') render(); });
+}
+function cmpPick(i){ S.cmp.idx = parseInt(i,10)||0; render(); }
+function cmpPhotoSrc(token, id){ return token ? WORKER+'/fi/photo/view?r='+encodeURIComponent(token)+'&p='+encodeURIComponent(id) : ''; }
+function cmpPhoto(which, id){
+  var d = S.cmp.data, m = which==='in' ? d.move_in : d.move_out;
+  openSheet('<h2>'+(which==='in'?'Move-in':'Move-out')+' photo</h2><img src="'+esc(cmpPhotoSrc(m.token,id))+'" alt="photo" style="width:100%;border-radius:10px" onerror="this.style.display=\'none\';this.insertAdjacentHTML(\'afterend\',\'<div class=&quot;banner err&quot;>Photo could not be loaded.</div>\')"><div class="btns"><button class="btn" onclick="closeSheet()">Close</button></div>');
+}
+function cmpSide(which, meta, side, emptyText){
+  var h = '<div class="card"><div class="row"><b>'+(which==='in'?'Move-in':'Move-out')+'</b><span class="muted">'+esc(meta.date||'')+'</span></div>';
+  if (!side) return h+'<div class="muted" style="margin-top:8px">'+esc(emptyText)+'</div></div>';
+  if (side.condition) h += '<div class="muted">Condition: '+esc(side.condition.replace(/_/g,' '))+'</div>';
+  h += side.photos.length ? '<div class="thumbs">'+side.photos.map(function(p){
+    return '<button class="thumb" onclick="cmpPhoto(\''+which+'\',\''+esc(p.id)+'\')" aria-label="photo"><img src="'+esc(cmpPhotoSrc(meta.token,p.id))+'" alt="photo" loading="lazy" onerror="this.parentNode.title=\'Photo could not be loaded\';this.style.display=\'none\'">'+(p.date?'<span class="b">'+esc(p.date.slice(5))+'</span>':'')+'</button>';
+  }).join('')+'</div>' : '<div class="muted" style="margin-top:8px">No photos in this area.</div>';
+  if (side.issues.length) h += side.issues.map(function(is){ return '<div class="issue '+esc(is.severity)+'" style="cursor:default"><div class="t">'+esc(is.title)+'</div><div class="f"><span class="pill">'+esc(TRADE_LABEL[is.trade]||is.trade)+'</span></div></div>'; }).join('');
+  else h += '<div class="muted">No issues recorded.</div>';
+  return h+'</div>';
+}
+function viewCompare(){
+  var c = S.cmp || {}, h = '<div class="row"><button class="btn sm ghost" onclick="backToInsp()">‹ Back</button></div><h1 style="margin-bottom:2px">Move-in vs move-out</h1>';
+  if (c.state==='loading') return h+'<div class="muted">Loading the comparison…</div>';
+  if (c.state==='error') return h+'<div class="banner err">Could not load the comparison: '+esc(c.err)+'</div><div class="btns"><button class="btn primary" onclick="loadCompare()">Retry</button></div>';
+  var d = c.data, pairs = d.pairs || [];
+  h += '<div class="muted">'+esc(d.move_out.address||'')+(d.move_out.unit?' · '+esc(unitText(d.move_out.unit)):'')+'<br>Move-in '+esc(d.move_in.date||'no date')+' · Move-out '+esc(d.move_out.date||'no date')+'</div>';
+  if (d.order_warning) h += '<div class="banner warn" style="margin-top:8px">'+esc(d.order_warning)+'</div>';
+  if (!pairs.length) return h+'<div class="muted" style="margin-top:10px">Neither inspection has any areas yet.</div>';
+  h += '<label class="fld" for="cmp-area">Area</label><select id="cmp-area" style="font-size:16px;width:100%;min-height:44px" onchange="cmpPick(this.value)">'+pairs.map(function(p,i){
+    return '<option value="'+i+'"'+(i===c.idx?' selected':'')+'>'+esc(p.name)+(p.in&&p.out?'':(p.in?' (move-in only)':' (move-out only)'))+'</option>';
+  }).join('')+'</select>';
+  var p = pairs[c.idx] || pairs[0];
+  return h+'<div class="cmp">'+cmpSide('in', d.move_in, p.in, 'Not inspected at move-in')+cmpSide('out', d.move_out, p.out, 'Not inspected at move-out')+'</div>';
+}
+
 // ---- area ----
 function viewArea(){
   var a = curArea(); var doc = S.rec.doc, idx = doc.areas.filter(function(x){return !x.excluded;}).map(function(x){return x.id;}).indexOf(a.id);
