@@ -1242,6 +1242,7 @@ function submitOneOffJob() {
 // applyTranslations -- has already run. Fix: defer the restore itself until DOMContentLoaded,
 // by which point the whole document (every <script> tag) has executed.
 function restoreVendorSession(){
+  if (ADMIN_VIEW) { showAdminViewBar(); try { onLoginSuccess(ADMIN_VIEW, false); } catch (e) { if (window.hubReportFailure) window.hubReportFailure('vendor_admin_view_open', 'Open-as-vendor view failed to draw: ' + ((e && e.message) || e)); } return; }
   try { var raw = localStorage.getItem(SESS_KEY);
     if (raw) { var d = JSON.parse(raw); if (d && d.token) onLoginSuccess(d, false); }
   } catch(e){}
