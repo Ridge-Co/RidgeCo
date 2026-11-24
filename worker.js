@@ -2425,10 +2425,7 @@ async function tenantSessionFields(env, tenant) {
       // the request form; POST /workorder re-checks this same resolver server-side so the
       // gate can't be bypassed by skipping the UI.
       can_submit_wo:    resolveTenantWOAccess(prop, owner, tenant.Unit_ID||''),
-      token:            await makeSessionToken({ role: 'tenant', id: tenant.ID, ...demoTokenClaim(tenant) }, env.WORKER_SECRET),
-      ...(demoTrue(tenant.Is_Demo) ? { demo: true } : {}),   // the tenant page shows its DEMO banner from this
-    });
-  });
+    };
 }
 
 // Lightweight re-derive of the tenant-by-pin payload for an ALREADY-logged-in tenant, off the
