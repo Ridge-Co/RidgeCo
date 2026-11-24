@@ -351,6 +351,47 @@ if (WORKER.indexOf('staging') !== -1) {
 }
 var SECRET = '';                 // session token, set on PIN login — NO hardcoded admin secret (SEC-1)
 var SESS_KEY = 'mh_vendor_sess'; // persisted {…, token} so a reload / auto-refresh stays logged in
+// Admin "Open as vendor" (Nov 24 2026). The Hub opens vendor.html#av=<session> after minting a 4-hour vendor session
+// (POST /admin/vendor-view-session). That session lives ONLY in this tab (sessionStorage), is never written to the
+// vendor's normal saved login key, and the hash is wiped from the address bar straight away. The Worker treats it
+// exactly like the vendor's own login (same allow-list, same money stripping), except it never counts as the vendor
+// having used the portal.
+var AV_KEY = 'mh_vendor_admin_view';
+var ADMIN_VIEW = null;
+(function(){
+  try {
+    var m = /[#&]av=([^&]+)/.exec(location.hash || '');
+    if (m) {
+      var s = decodeURIComponent(m[1]).replace(/-/g, '+').replace(/_/g, '/');
+      while (s.length % 4) s += '=';
+      var d = JSON.parse(decodeURIComponent(escape(atob(s))));
+      if (d && d.token && d.admin_view) sessionStorage.setItem(AV_KEY, JSON.stringify(d));
+      history.replaceState(null, '', location.pathname + location.search);
+    }
+    var raw = sessionStorage.getItem(AV_KEY);
+    if (raw) { var a = JSON.parse(raw); if (a && a.token) ADMIN_VIEW = a; }
+  } catch (e) { if (window.hubReportFailure) window.hubReportFailure('vendor_admin_view_handoff', 'Open-as-vendor link could not be read: ' + ((e && e.message) || e)); }
+  if (ADMIN_VIEW) SESS_KEY = 'mh_vendor_admin_view_shadow';   // never touch the vendor's real saved login on this device
+})();
+function exitAdminView() {
+  try { sessionStorage.removeItem(AV_KEY); localStorage.removeItem('mh_vendor_admin_view_shadow'); } catch (e) {} // silent-ok: storage blocked, the 4-hour session expires on its own
+  window.close();
+  setTimeout(function(){ location.href = location.pathname; }, 150);
+}
+function showAdminViewBar() {
+  if (!ADMIN_VIEW || document.getElementById('adminViewBar')) return;
+  var b = document.createElement('div');
+  b.id = 'adminViewBar';
+  b.style.cssText = 'position:sticky;top:0;left:0;right:0;z-index:99998;background:#b45309;color:#fff;font:600 13px/1.35 system-ui,sans-serif;padding:8px 10px;display:flex;gap:10px;align-items:center;justify-content:space-between';
+  var t = document.createElement('span');
+  t.textContent = 'ADMIN VIEW: you are seeing ' + (ADMIN_VIEW.vendor_name || 'this vendor') + '’s portal exactly as they do. Anything you save here is saved as them.';
+  var x = document.createElement('button');
+  x.textContent = 'Exit';
+  x.style.cssText = 'background:#fff;color:#b45309;border:0;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer';
+  x.onclick = exitAdminView;
+  b.appendChild(t); b.appendChild(x);
+  document.body.insertBefore(b, document.body.firstChild);
+}
 var session = null;
 var currentTab = 'open';
 var paidRange = 0;                       // PAID tab quick filter: 0 = all, else paid within the last N days
@@ -589,6 +630,11 @@ function doLogout() {
   show('screenDash', false);
   show('screenLogin', true);
   SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
+  if (ADMIN_VIEW) {   // admin view ended (Exit, sign out, or its 4 hours ran out): drop it and say so, never fall into the vendor's own login
+    ADMIN_VIEW = null; try { sessionStorage.removeItem(AV_KEY); } catch(e){} // silent-ok: storage blocked, the session expires on its own
+    var _avb = document.getElementById('adminViewBar'); if (_avb) _avb.remove();
+    showLoginMsg('Admin view ended. Open it again from the Vendors page in the Hub.', 'error');
+  }
 }
 
 // Vendor Task Requests (CAP-036 #12, Sep 24 2026) -- "Needs Your Attention". A dedicated,
@@ -1196,6 +1242,7 @@ function submitOneOffJob() {
 // applyTranslations -- has already run. Fix: defer the restore itself until DOMContentLoaded,
 // by which point the whole document (every <script> tag) has executed.
 function restoreVendorSession(){
+  if (ADMIN_VIEW) { showAdminViewBar(); try { onLoginSuccess(ADMIN_VIEW, false); } catch (e) { if (window.hubReportFailure) window.hubReportFailure('vendor_admin_view_open', 'Open-as-vendor view failed to draw: ' + ((e && e.message) || e)); } return; }
   try { var raw = localStorage.getItem(SESS_KEY);
     if (raw) { var d = JSON.parse(raw); if (d && d.token) onLoginSuccess(d, false); }
   } catch(e){}

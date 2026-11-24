@@ -213,6 +213,7 @@ const _hubWorkerCore = {
     // own signed session instead, so a valid tenant session can't submit a WO tagged to a
     // different property/unit/tenant than their own.
     let callerSessionId = null;
+    let callerAdminView = false;   // Nov 24 2026: session minted by POST /admin/vendor-view-session (Brett looking, not the vendor)
     let callerDemoSlot = '';
     // Set true only when this request was authenticated via HUB_TEST_TOKEN (test-infrastructure
     // build, Sep 19 2026) — the narrow, staging-only token that lets a Cowork session run real
@@ -551,6 +552,7 @@ const _hubWorkerCore = {
           if (_session.stg && !isStaging(env, url)) return json({ error: 'Unauthorized' }, 401);
           callerRole = _session.role;
           callerSessionId = _session.id;
+          callerAdminView = _session.av === 1;
           if (_session.demo) { callerDemoSlot = String(_session.demo); const _dd = await demoSessionDenied(env, _session); if (_dd) return _dd; }   // a demo session dies the moment its slot is cleared or expires
         }
       }
@@ -560,7 +562,7 @@ const _hubWorkerCore = {
       if (callerRole) {
         const _mm = sessionIdentityMismatch(callerRole, callerSessionId, url, null);
         if (_mm) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mm);
-        { const _act = stampPortalActivity(env, callerRole, callerSessionId, path); if (ctx && ctx.waitUntil) ctx.waitUntil(_act); }   // Oct 23 2026: doing anything in the portal = proof of use (never blocks, never throws)
+        if (!callerAdminView) { const _act = stampPortalActivity(env, callerRole, callerSessionId, path); if (ctx && ctx.waitUntil) ctx.waitUntil(_act); }   // admin "Open as vendor" never counts as the vendor using the portal   // Oct 23 2026: doing anything in the portal = proof of use (never blocks, never throws)
         if (request.method === 'GET') {
           url.searchParams.set(SESSION_IDENTITY_PARAM[callerRole], String(callerSessionId));
           if (WO_KEYED_READ_PATHS.includes(path)) {
@@ -778,6 +780,7 @@ const _hubWorkerCore = {
         if (path === '/tenant-wo-settings')     return await tenantWOSettingsSummary(env);
       }
       if (request.method === 'POST') {
+        if (path === '/admin/vendor-view-session') return await adminVendorViewSession(env, request, callerRole, _viaHubTestToken, isStaging(env, url));
         if (path === '/upload-photo') {
           // Runs before the body-level guard below (multipart), so the test-token guard is applied here:
           // a HUB_TEST_TOKEN / ui-test-window upload may only target a TEST- work order.
@@ -1415,7 +1418,7 @@ export class ReadMeterStore {
 // login PINs / named Config secrets (see scrubResponseForProdReadToken). Everything else passes through.
 export default {
   async fetch(request, env, ctx) {
-    const res = await scrubResponseForProdReadToken(request, env, await _hubWorkerCore.fetch(request, env, ctx));
+    const res = await firewallPortalMoney(request, env, ctx, await scrubResponseForProdReadToken(request, env, await _hubWorkerCore.fetch(request, env, ctx)));   // Nov 24 2026: no portal response ever carries markup / price / vendor cost
     if (ctx && ctx.waitUntil) { if (__meter.pending) ctx.waitUntil(__meterFlushAlarm(env)); if (__meter.dirty) ctx.waitUntil(__meterPersist(env)); }   // quota-pressure evidence -> failure ledger (never blocks the response)
     return res;
   },
@@ -2570,7 +2573,13 @@ async function vendorByPin(env, url) {
     const loginName = ((vendor.First_Name||'').trim() || (vendor.Name||'').split(' ')[0]).toLowerCase();
     if (loginName !== name && !loginName.startsWith(name)) return null;
     _m.login = { tab: 'Vendors', id: vendor.ID, row: vendor };
-    return json({
+    return json({ ...vendorSessionFields(vendor), token: await makeSessionToken({ role: 'vendor', id: vendor.ID }, env.WORKER_SECRET) });
+  });
+}
+// Fields the vendor portal keeps on its session (display only; every write is re-checked server-side against the live
+// Vendors row). Shared by the PIN login and the admin "Open as vendor" view so the two can never drift apart.
+function vendorSessionFields(vendor) {
+    return {
       vendor_id: vendor.ID, vendor_name: vendor.Name || `${vendor.First_Name||''} ${vendor.Last_Name||''}`.trim(),
       vendor_phone: vendor.Phone||'', vendor_trade: vendor.Trade||'',
       vendor_trades: vendor.Trades||vendor.Trade||'', vendor_rate: vendor.Hourly_Rate||'', language: vendor.Language||'en',
@@ -2583,8 +2592,38 @@ async function vendorByPin(env, url) {
       can_bill_no_wo: String(vendor.Can_Bill_No_WO || '').toUpperCase() === 'TRUE',
       can_create_own_wo: String(vendor.Can_Create_Own_WO || '').toUpperCase() === 'TRUE',
       billing_property_access: vendor.Billing_Property_Access || '',
-      token: await makeSessionToken({ role: 'vendor', id: vendor.ID }, env.WORKER_SECRET),
-    });
+    };
+}
+// Admin "Open as vendor" (Nov 24 2026, Brett: "log into any vendor's portal ... as if I was them" so he can show a
+// vendor exactly where things go). Mints a normal vendor-role session for one vendor, so the portal shows exactly what
+// that vendor sees: same role, same path allow-list, same money stripping (stripExternalMoney) as a real PIN login.
+// Differences, all deliberate:
+//   - av:1 on the token: the Worker never stamps First_Login / Login_Evidence for it, so Brett looking does not count
+//     as the vendor having used the portal.
+//   - 4-hour expiry instead of 90 days.
+//   - Never goes through pinLookup, so no PIN is read, shown, sent or counted, and no lockout row is written.
+// Only the real admin secret may call it (or the staging test token on staging). A portal session is refused even
+// though the path allow-list would already refuse it.
+const ADMIN_VIEW_TTL_S = 4 * 60 * 60;
+async function adminVendorViewSession(env, request, callerRole, viaHubTestToken, staging) {
+  if (callerRole) return json({ error: 'Unauthorized' }, 401);
+  const tok = request.headers.get('X-Auth-Token') || '';
+  const isAdmin = !!env.WORKER_SECRET && tok === env.WORKER_SECRET;
+  if (!isAdmin && !(staging && viaHubTestToken)) return json({ error: 'Only the Hub admin can open a vendor portal as the vendor' }, 403);
+  const parsed = await safeJson(request);
+  if (!parsed.ok) return json({ error: 'Send JSON: {"vendor_id":"4"}' }, 400);
+  const body = parsed.body;
+  const vid = String((body && body.vendor_id) || '').trim();
+  if (!vid) return json({ error: 'vendor_id is required' }, 400);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v => String(v.ID) === vid);
+  if (!vendor) return json({ error: 'No vendor with ID ' + vid }, 404);
+  if (String(vendor.Active || '').toUpperCase() === 'FALSE') return json({ error: (vendor.Name || 'This vendor') + ' is deactivated, so their portal is closed. Reactivate them first.' }, 409);
+  return json({
+    ...vendorSessionFields(vendor),
+    admin_view: true,
+    expires_in_s: ADMIN_VIEW_TTL_S,
+    token: await makeSessionToken({ role: 'vendor', id: vendor.ID, av: 1 }, env.WORKER_SECRET, ADMIN_VIEW_TTL_S),
   });
 }
 // ── KEYS ─────────────────────────────────────────────────────
@@ -26894,6 +26933,88 @@ async function scrubResponseForProdReadToken(request, env, res) {
     return new Response(JSON.stringify(scrubSecretsDeep(data, 0)), { status: res.status, statusText: res.statusText, headers });
   } catch (e) {
     return new Response(JSON.stringify({ error: 'response redaction failed' }), { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } });
+  }
+}
+
+// ── PORTAL MONEY FIREWALL (Nov 24 2026) ───────────────────────────────────────────────────────────────────────────
+// Brett: "I definitely, absolutely, positively want no possibility of sharing markup information with anyone. Ever."
+// stripExternalMoney cleans work orders inside enrichWO, but that only protects the endpoints that remember to call it.
+// This is the second, structural wall: EVERY JSON response to a vendor / tenant / owner portal session, and to the
+// no-login shared work order link (/wo/shared*), is deep-walked on its way out and any field that carries the customer
+// price, the markup, or (for owners and tenants) the vendor's cost is removed, whatever endpoint produced it. When it
+// has to remove something it also files a P1 failure naming the endpoint and the fields, because that means some
+// endpoint is leaking and must be fixed at the source. test/portal-money-firewall.test.mjs fails the build if this
+// wall is removed, bypassed, or a portal page starts reading a forbidden field.
+// Keys are matched on the WHOLE key name. Vendor-side fields the vendor portal legitimately shows (their own bill
+// amounts, Max_Price, vendor_rate, lowercase invoice_number / invoice_date of THEIR invoice) are deliberately not here.
+// Three groups, by who must never see them:
+//   MARKUP      — nobody outside the Hub (markup, margin, profit, the hidden materials fee).
+//   PRICE       — what the customer is charged: never to a vendor, tenant or shared link (a vendor who sees the price
+//                 sees the margin). Owners ARE the customer and keep their own invoice amounts.
+//   VENDOR_COST — what the vendor is paid: never to an owner or tenant (an owner who sees it sees the margin).
+const PORTAL_MARKUP_KEYS = /^(markup.*|mark_?up.*|margin.*|profit.*|gross_?profit.*|net_?profit.*|materials_?fee.*|rc_?fee.*)$/i;
+const PORTAL_PRICE_KEYS = /^(customer_?charge|customer_?price|customer_?total|customer_?amount|customer_?invoice.*|sell_?price|owner_?price|owner_?total|price_?override|invoice_?total|invoice_?amount|invoice_?memo|invoice_?balance|qbo_?invoice.*|qb_?invoice.*|processing_?fee.*|billed_?amount|amount_?billed)$/i;
+const PORTAL_PRICE_KEYS_PASCAL = /^(Invoice_ID|Invoice_Number|Invoice_Date)$/;   // Work_Orders' customer-invoice columns (case-sensitive: the vendor's OWN bill uses lowercase invoice_number / invoice_date)
+const PORTAL_VENDOR_COST_KEYS = /^(vendor_?cost.*|vendor_?pay.*|vendor_?paid_?amount|vendor_?total|vendor_?amount|vendor_?bill_?(amount|total).*|vendor_?rate|labor_?cost.*|max_?price|hourly_?rate|instant_?(pay_?)?fee.*|deposit_?fee.*|payout.*)$/i;
+function portalMoneyKeyForbidden(key, audience) {
+  const k = String(key);
+  if (PORTAL_MARKUP_KEYS.test(k)) return true;
+  if (audience !== 'owner' && (PORTAL_PRICE_KEYS.test(k) || PORTAL_PRICE_KEYS_PASCAL.test(k))) return true;
+  if (audience === 'owner' || audience === 'tenant') return PORTAL_VENDOR_COST_KEYS.test(k);
+  return false;
+}
+// Pure. Returns { data, removed: [key paths] } — never mutates the input.
+function scrubPortalMoneyDeep(node, audience, path, removed, depth) {
+  if (depth > 14 || node == null) return node;
+  if (Array.isArray(node)) return node.map(n => scrubPortalMoneyDeep(n, audience, (path ? path.replace(/\.$/, '') : '') + '[].', removed, depth + 1));
+  if (typeof node === 'object') {
+    const o = {};
+    for (const k of Object.keys(node)) {
+      if (portalMoneyKeyForbidden(k, audience)) { if (removed.length < 40 && !removed.includes(path + k)) removed.push(path + k); continue; }
+      o[k] = scrubPortalMoneyDeep(node[k], audience, path + k + '.', removed, depth + 1);
+    }
+    return o;
+  }
+  return node;
+}
+function scrubPortalMoney(data, audience) {
+  const removed = [];
+  const out = scrubPortalMoneyDeep(data, audience, '', removed, 0);
+  return { data: out, removed };
+}
+async function portalAudienceOf(request, env, path) {
+  if (path.startsWith('/wo/shared')) return 'vendor';   // shared link = whoever holds it; treat like a vendor (no customer price)
+  const tok = request.headers.get('X-Auth-Token') || '';
+  if (!tok || tok === env.WORKER_SECRET) return '';
+  if (tok.indexOf('.') < 0) return '';
+  try {
+    const s = await verifySessionToken(tok, env.WORKER_SECRET);
+    if (s && (s.role === 'vendor' || s.role === 'tenant' || s.role === 'owner')) return s.role;
+  } catch (e) { console.error('portal money firewall: session check failed', String((e && e.message) || e)); }
+  return '';
+}
+async function firewallPortalMoney(request, env, ctx, res) {
+  let path = '';
+  try { path = new URL(request.url).pathname; } catch (e) { return res; }
+  const audience = await portalAudienceOf(request, env, path);
+  if (!audience) return res;
+  if (!/json/i.test(res.headers.get('Content-Type') || '')) return res;
+  try {
+    const txt = await res.clone().text();
+    if (!txt.trim()) return res;   // empty body: nothing to leak
+    const data = JSON.parse(txt);
+    const { data: clean, removed } = scrubPortalMoney(data, audience);
+    if (!removed.length) return res;
+    const rep = reportFailure(env, { system: 'hub', source: 'worker', where: 'portal_money_firewall', ref: path, severity: 'P1',
+      message: `A ${audience} portal response from ${path} carried money fields; the firewall removed them before they left. Fix the endpoint at the source.`,
+      context: removed.join(', ').slice(0, 900) });
+    if (ctx && ctx.waitUntil) ctx.waitUntil(rep); else await rep;
+    const headers = new Headers(res.headers); headers.delete('Content-Length');
+    return new Response(JSON.stringify(clean), { status: res.status, statusText: res.statusText, headers });
+  } catch (e) {
+    // Fail CLOSED: if the body cannot be checked, the portal gets an error, never an unchecked body.
+    console.error('portal money firewall could not check a response', path, String((e && e.message) || e));
+    return new Response(JSON.stringify({ error: 'This page could not be loaded safely. Please try again.' }), { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } });
   }
 }
 

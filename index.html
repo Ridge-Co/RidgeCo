@@ -3276,6 +3276,7 @@ function openWODetail(woId) {
   addBtn('📤 Send to Vendor','secondary',function(){openShareWO(woId);});
   addBtn('🚚 Create delivery','secondary',function(){openCreateDelivery(wo);});
   if (wo.Vendor_ID) {
+    addBtn('👁 See as vendor','secondary',function(){openVendorPortalAs(wo.Vendor_ID, woId);});   // Nov 24 2026: this job in the vendor's own portal, as they see it
     addBtn('📷 Request Photos','secondary',function(){requestFromVendor(woId,wo.Vendor_ID,'photos');});
     addBtn('🧾 Request Invoice','secondary',function(){requestFromVendor(woId,wo.Vendor_ID,'invoice');});
   }
@@ -5581,6 +5582,7 @@ function renderVendorsPage() {
         '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Create_Own_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanCreateOwnWO(\''+v.ID+'\',this.checked)" title="Can log their own One-Off Job Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="display:flex;gap:4px;flex-wrap:wrap">' +
         '<button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button>' +
+        (isInactive ? '' : '<button class="btn small" style="background:#b45309;color:#fff" onclick="openVendorPortalAs(\''+v.ID+'\')" title="Open this vendor\'s portal exactly as they see it, no PIN needed (4 hours, admin only)">👁 Open as</button>') +
         '<button class="btn small secondary" onclick="openVendorLoanModal(\''+v.ID+'\',\''+esc(nm)+'\')" title="Loan/advance ledger">$ Loan</button>' +
         (isInactive
           ? '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="toggleVendorActive(\''+v.ID+'\',\''+esc(nm)+'\',true)" title="Reactivate this vendor">Reactivate</button>'
@@ -5591,6 +5593,27 @@ function renderVendorsPage() {
         '<button class="btn small secondary" onclick="openSendMessageModal(\'vendor\',\''+v.ID+'\',\''+esc(nm)+'\',\''+esc(v.Phone||'')+'\')" title="Send a one-off message">✉️</button>' +
         '</td></tr>';
     }).join('') + '</tbody></table></div>';
+}
+
+// ── Open a vendor's portal as them (Nov 24 2026) ──
+// Brett: "log into any vendor's portal ... I just go in and open the page as if I was them" so he can show a vendor
+// exactly where to put things. The Worker mints a 4-hour vendor session (POST /admin/vendor-view-session, admin secret
+// only); it is handed to vendor.html in the #hash (never sent to any server, wiped from the address bar on arrival)
+// and kept only in that tab. Same view, same money stripping as the vendor's own login. Pass woId to land on one job.
+function openVendorPortalAs(vendorId, woId) {
+  var w = window.open('', '_blank');   // opened now, inside the tap, so the phone/browser does not block it as a pop-up
+  if (w) { try { w.document.write('<p style="font:16px system-ui;padding:20px">Opening the vendor portal…</p>'); } catch (e) {} } // silent-ok: placeholder text only, the real page loads next
+  api('POST', '/admin/vendor-view-session', { vendor_id: String(vendorId) }).then(function(d) {
+    if (!d || !d.token || d.error) throw new Error((d && d.error) || 'No session came back');
+    var b64 = btoa(unescape(encodeURIComponent(JSON.stringify(d)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    var url = 'vendor.html' + (woId ? '?wo=' + encodeURIComponent(woId) : '') + '#av=' + b64;
+    if (w && !w.closed) w.location.href = url; else location.href = url;
+  }).catch(function(e) {
+    if (w && !w.closed) w.close();
+    var msg = 'Could not open the vendor portal: ' + ((e && e.message) || e);
+    if (typeof toast === 'function') toast(msg, 'error'); else alert(msg);
+    if (typeof window.hubReportFailure === 'function') { try { window.hubReportFailure('open_vendor_portal_as', msg); } catch (e2) { console.error('failure report failed', e2); /* silent-ok: Brett already sees the toast above */ } }
+  });
 }
 
 // ── Vendor Performance (B-012) — read-only, fetch-on-open like Who To Pay/Review Bills ──
