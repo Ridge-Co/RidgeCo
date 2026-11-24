@@ -682,7 +682,7 @@ const _hubWorkerCore = {
         if (path === '/wo-snippets')            return await listWOSnippets(env);
         if (path === '/materials')              return await listMaterials(env, url);
         if (path === '/returns')                return await getSheet(env, 'Returns');
-        if (path === '/vendor-bills')           return await listVendorBills(env, url);
+        if (path === '/vendor-bills')           return await listVendorBills(env, url, callerRole);
         if (path === '/vendor-loan')            return await vendorLoanGet(env, url);
         if (path === '/vendor-fee-credit')      return await vendorFeeCreditGet(env, url);
         if (path === '/vendor-bills/truck-stock') return await vendorBillsTruckStock(env);
