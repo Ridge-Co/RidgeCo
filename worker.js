@@ -1418,7 +1418,7 @@ export class ReadMeterStore {
 // login PINs / named Config secrets (see scrubResponseForProdReadToken). Everything else passes through.
 export default {
   async fetch(request, env, ctx) {
-    const res = await scrubResponseForProdReadToken(request, env, await _hubWorkerCore.fetch(request, env, ctx));
+    const res = await firewallPortalMoney(request, env, ctx, await scrubResponseForProdReadToken(request, env, await _hubWorkerCore.fetch(request, env, ctx)));   // Nov 24 2026: no portal response ever carries markup / price / vendor cost
     if (ctx && ctx.waitUntil) { if (__meter.pending) ctx.waitUntil(__meterFlushAlarm(env)); if (__meter.dirty) ctx.waitUntil(__meterPersist(env)); }   // quota-pressure evidence -> failure ledger (never blocks the response)
     return res;
   },
