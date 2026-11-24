@@ -781,6 +781,8 @@ const _hubWorkerCore = {
       }
       if (request.method === 'POST') {
         if (path === '/admin/vendor-view-session') return await adminVendorViewSession(env, request, callerRole, _viaHubTestToken, isStaging(env, url));
+        if (path === '/admin/tenant-view-session') return await adminPortalViewSession(env, request, callerRole, _viaHubTestToken, isStaging(env, url), 'tenant');
+        if (path === '/admin/owner-view-session')  return await adminPortalViewSession(env, request, callerRole, _viaHubTestToken, isStaging(env, url), 'owner');
         if (path === '/upload-photo') {
           // Runs before the body-level guard below (multipart), so the test-token guard is applied here:
           // a HUB_TEST_TOKEN / ui-test-window upload may only target a TEST- work order.
