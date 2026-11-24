@@ -215,6 +215,12 @@ body{font-size:15px}
 .logo-sub,label,.btn-sm,.msg,.header-left .role,.badge,.tab,.wo-count,.wo-fold>summary,.paid-quick button,.wo-paid-date,.wo-id,.wo-trade,.wo-desc,.detail-label,.detail-val,.lb-loc,.action-title,.status-btn,.file-label,.toggle-closed,.sched-today-btn,.sched-notify-row,.sched-urgent-banner,[style*="size:11px"],[style*="size:11.5px"],[style*="size:12px"],[style*="size:12.5px"]{font-size:13px !important}
 label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font-size:13px}
 @media (hover:hover){textarea{font-size:13px !important}}
+/* Nov 24 2026 (Brett: label and value columns pressed together, looked bad): long text (Issue, Notes) stacks under its label,
+   left-aligned, full width, keeping line breaks. Short rows keep label-left / value-right but with real breathing room. */
+.detail-row{gap:16px}
+.detail-row .detail-val{min-width:0}
+.detail-row.stack{flex-direction:column;align-items:stretch;gap:4px;margin-bottom:12px}
+.detail-row.stack .detail-val{text-align:left !important;width:100%;line-height:1.5;white-space:pre-line}
 </style>
 <style id="vh-style">
 /* New vendor home list (vendor-home.js, Nov 18 2026). Only used when the new layout is switched on. Tokens only; 13/15/17px; 44px targets. */
