@@ -157,6 +157,12 @@ it without my direct intervention."* Treat that as the standing bar for anything
 shaped, not staging-specific — diagnose with the tools already in the session before naming an
 issue to Brett, and when it does need him, name the exact narrow gap, not the whole symptom.
 
+## NO MONEY IN ANY PORTAL, EVER — BUILD FAILS OTHERWISE (permanent, Brett, Nov 24 2026)
+- Vendors, tenants, owners and shared work-order links never see markup, margin, profit or the hidden materials fee. Vendors, tenants and shared links never see what the customer is charged. Owners and tenants never see what the vendor is paid. Brett: "no possibility of sharing markup information with anyone. Ever, ever, ever. ... Make that a part of every single build ... or else the build fails."
+- Two walls, both required: (1) `stripExternalMoney` inside `enrichWO` for work orders; (2) `firewallPortalMoney` at the Worker's front door, which deep-scrubs EVERY JSON response to a portal session or `/wo/shared*`, files a P1 `portal_money_firewall` failure naming the leaking endpoint, and fails closed.
+- `test/portal-money-firewall.test.mjs` + `test/external-money-strip.test.mjs` run in the Unit tests workflow on every PR and every push to main. Never skip, weaken or delete them, never move a portal response around the firewall, and never add a forbidden field to a portal page. A new field a portal needs that the firewall blocks = ask Brett first; do not loosen the pattern on your own.
+- Every build review (ridgeco-validate) checks this explicitly. An open `portal_money_firewall` failure is fixed at the source endpoint before any other work.
+
 ## NO CRON ANYWHERE (permanent, Brett, Oct 12 2026)
 - Never add a Cloudflare Cron Trigger, a wrangler.toml `crons` entry, or a GitHub Actions `schedule:` for anything that must run. Keep `[triggers] crons = []`.
 - The only clock is the Apps Script trigger that calls POST /cron/run. Add jobs to SCHED_JOBS in worker.js; never a new trigger.
