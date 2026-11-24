@@ -2915,6 +2915,11 @@ function openWODetail(woId) {
     '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">NOTES</div>' +
     '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow-y:auto;color:var(--muted)">' +
     linkify(wo.Notes) + '</div></div>' : '') +
+    // Nov 24 2026: billing history lives here now, never in Notes (portals read Notes). Hub only; every portal strips Billing_Log.
+    (wo.Billing_Log ? '<div style="margin-bottom:14px">' +
+    '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">BILLING LOG <span style="text-transform:none;letter-spacing:0">(only you see this)</span></div>' +
+    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow-y:auto;color:var(--muted)">' +
+    esc(wo.Billing_Log) + '</div></div>' : '') +
     '<table class="data-table" style="margin-bottom:16px">' +
     '<tr><td style="color:var(--muted);width:120px">Status</td><td><span class="badge '+sc+'">'+(wo.Status||'New')+'</span>'+(wo.Status==='On Hold'&&wo.Hold_Reason?hubHoldBadge(wo.Hold_Reason):'')+'</td></tr>' +
     (wo.Turnover_Group_ID ? '<tr><td style="color:var(--muted)">Turnover</td><td>🔄 '+esc(wo.Turnover_Group_ID)+' · '+esc(wo.Turnover_Role||'')+(wo.Turnover_Release_Date?' · releases by '+esc(wo.Turnover_Release_Date):'')+'</td></tr>' : '') +
