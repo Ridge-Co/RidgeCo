@@ -7924,7 +7924,10 @@ async function scopeProposalBillMilestones(env, body) {
           ? ('vendor paid $' + vendTotal.toFixed(2) + ' this round' + (depCredit ? ' (less the $' + depCredit.amount.toFixed(2) + ' deposit already paid)' : '') + (adj.fee > 0 ? ' (send $' + adj.bill_total.toFixed(2) + ' after the $' + adj.fee.toFixed(2) + ' instant-pay fee)' : ''))
           : ('vendor not paid this round' + (billSkipReason ? (' — ' + billSkipReason) : ''));
         const noteLine = '[' + ts + '] Scope Proposal billed — ' + labelList + ' — $' + custTotal.toFixed(2) + ' invoiced (' + (invoiceNumber || invoiceId) + '); ' + vendorNote + '.';
-        const fields = { Customer_Charge: String(newCharge), Notes: woRow.Notes ? (woRow.Notes + '\n' + noteLine) : noteLine };
+        // Nov 24 2026: the billing line goes to Billing_Log (Hub-only), NEVER to Notes. Notes are read by vendors, tenants and
+        // owners; this line carries the invoiced amount, invoice number, vendor pay and instant-pay fee (the WO-1253 leak).
+        await ensureColumns(env, 'Work_Orders', ['Billing_Log']);
+        const fields = { Customer_Charge: String(newCharge), Billing_Log: woRow.Billing_Log ? (woRow.Billing_Log + '\n' + noteLine) : noteLine };
         if (stillPending) fields.Status = 'Invoiced';
         await updateWOFields(env, s.WO_ID, fields);
       }
