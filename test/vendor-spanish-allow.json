@@ -57,5 +57,12 @@
  "✓ Job logged",
  "✓ Status updated to",
  "📋 Flat: $",
- "🧪 STAGING — pointed at the test Worker/Sheet, not production. QB/SMS/email are stubbed."
+ "🧪 STAGING — pointed at the test Worker/Sheet, not production. QB/SMS/email are stubbed.",
+ "ADMIN VIEW: you are seeing",
+ "Admin view ended. Open it again from the Vendors page in the Hub.",
+ "Open as vendor",
+ "Open-as-vendor link could not be read:",
+ "Open-as-vendor view failed to draw:",
+ "this vendor",
+ "’s portal exactly as they do. Anything you save here is saved as them."
 ]
