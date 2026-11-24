@@ -630,6 +630,11 @@ function doLogout() {
   show('screenDash', false);
   show('screenLogin', true);
   SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
+  if (ADMIN_VIEW) {   // admin view ended (Exit, sign out, or its 4 hours ran out): drop it and say so, never fall into the vendor's own login
+    ADMIN_VIEW = null; try { sessionStorage.removeItem(AV_KEY); } catch(e){} // silent-ok: storage blocked, the session expires on its own
+    var _avb = document.getElementById('adminViewBar'); if (_avb) _avb.remove();
+    showLoginMsg('Admin view ended. Open it again from the Vendors page in the Hub.', 'error');
+  }
 }
 
 // Vendor Task Requests (CAP-036 #12, Sep 24 2026) -- "Needs Your Attention". A dedicated,
