@@ -22,6 +22,9 @@ const code = [
   grabLine('const EXTERNAL_HIDDEN_WO_FIELDS'),
   grabLine('const EXTERNAL_HIDDEN_WO_PREFIXES'),
   grabLine('const EXTERNAL_NOTE_MONEY_RE'),
+  grabLine('const EXTERNAL_DESC_MONEY_RE'),
+  grabLine('const OWNER_DESC_COST_RE'),
+  grabFn('function externalSafeText('),
   grabFn('function externalSafeNotes('),
   grabFn('function stripExternalMoney('),
 ].join('\n') + '\nreturn { externalSafeNotes, stripExternalMoney };';
@@ -63,11 +66,39 @@ t('money columns stripped, job fields kept', () => {
 // 5. Every external view path goes through it: enrichWO returns stripExternalMoney(base).
 t('enrichWO returns through stripExternalMoney', () => {
   const enrich = grabFn('function enrichWO(');
-  assert.ok(/return stripExternalMoney\(base\);\s*\}$/.test(enrich), 'enrichWO must end with return stripExternalMoney(base)');
+  assert.ok(/return stripExternalMoney\(base, opts\);\s*\}$/.test(enrich), 'enrichWO must end with return stripExternalMoney(base, opts)');
   assert.ok(!/\n\s*return base;/.test(enrich), 'enrichWO must not return base unstripped anywhere');
 });
 
 // 6. Empty / missing notes stay harmless.
 t('empty notes', () => { assert.strictEqual(externalSafeNotes(''), ''); assert.strictEqual(externalSafeNotes(undefined), ''); });
+
+// 7. Pass 2: Invoice_Memo and QBO_* columns never leave the Hub.
+t('Invoice_Memo and QBO_ columns stripped', () => {
+  const out = stripExternalMoney({ ID: 'WO-1093', Invoice_Memo: 'Incl $475 materials: roof cement', QBO_Invoice_Number: '1774', Description: 'Patch roof' }, { vendorView: true });
+  assert.ok(!('Invoice_Memo' in out) && !('QBO_Invoice_Number' in out));
+  assert.strictEqual(out.Description, 'Patch roof');
+});
+
+// 8. Real descriptions from the live audit of all 256 WOs (Nov 24 2026).
+const consolidated = 'Cleaning - 928 N Calvert St (Andreas Cleaning inv #24). Consolidated #24 vendor bill ($809.63 for 928/1214/151/153) is booked on this work order.';
+t('vendor-bill sentence removed for vendor AND owner, rest kept', () => {
+  for (const opts of [{ vendorView: true }, { ownerView: true }]) assert.strictEqual(stripExternalMoney({ Description: consolidated }, opts).Description, 'Cleaning - 928 N Calvert St (Andreas Cleaning inv #24).');
+});
+const quoteLine = 'Re-hang closet door — currently mounted upside-down [General] — Vendor quote $650 for this full punch list (lump sum, not per item).';
+t('"Vendor quote $650" segment removed for owner', () => assert.strictEqual(stripExternalMoney({ Description: quoteLine }, { ownerView: true }).Description, 'Re-hang closet door — currently mounted upside-down [General]'));
+const carried = "Cleaning - 151 W Lanvale St combined (Andreas Cleaning inv #111). NO per-property split given by vendor this cycle -- full $150.00 carried here pending Brett's split decision.";
+t('"$150.00 carried here" removed for owner', () => assert.ok(!/\$/.test(stripExternalMoney({ Description: carried }, { ownerView: true }).Description)));
+const ownQuote = 'Electric:\n1 hour diagnose. Likely 2 bad outlets. $175 if it matches my diagnosis.\nHand rail: relocate hardware $85.';
+t("Brett's own price to the owner stays for the owner", () => assert.strictEqual(stripExternalMoney({ Description: ownQuote }, { ownerView: true }).Description, ownQuote));
+t('...but a vendor / tenant never sees a $ figure', () => {
+  for (const opts of [{ vendorView: true }, { tenantView: true }, {}]) {
+    const d = stripExternalMoney({ Description: ownQuote }, opts).Description;
+    assert.ok(!/\$/.test(d), JSON.stringify(opts)); assert.ok(/^Electric:/.test(d)); assert.ok(/1 hour diagnose\. Likely 2 bad outlets\./.test(d));
+  }
+});
+t('Spanish description filtered too', () => assert.ok(!/\$/.test(stripExternalMoney({ Description_ES: 'Puerta — Vendor quote $650 for this list.' }, { vendorView: true }).Description_ES)));
+t('plain job text untouched', () => assert.strictEqual(stripExternalMoney({ Description: 'Replace air filter.\nCheck smoke detectors.' }, { tenantView: true }).Description, 'Replace air filter.\nCheck smoke detectors.'));
+t('vendor invoice number with no amount is kept', () => assert.strictEqual(stripExternalMoney({ Description: 'Cleaning - Sweet & Neat invoice #9908.' }, { vendorView: true }).Description, 'Cleaning - Sweet & Neat invoice #9908.'));
 
 console.log(pass + ' passed');
