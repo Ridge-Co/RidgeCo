@@ -2303,6 +2303,7 @@ function viewInsp(){
   h += '<div class="card" style="margin-top:10px"><div class="row"><b>'+c.done+' of '+c.total+' areas done</b><button class="btn sm" onclick="openReview()">Review &amp; report ›</button></div></div>';
   h += urgentCardHtml(doc);
   h += ownerCardHtml(doc);
+  h += compareCardHtml(rec);
   h += doc.booking ? bookingCardHtml(doc.booking) : bookingLinkHtml(doc);
   h += visitCardHtml(doc);
   h += routeResumeHtml();
