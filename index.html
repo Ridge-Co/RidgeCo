@@ -5595,6 +5595,27 @@ function renderVendorsPage() {
     }).join('') + '</tbody></table></div>';
 }
 
+// ── Open a vendor's portal as them (Nov 24 2026) ──
+// Brett: "log into any vendor's portal ... I just go in and open the page as if I was them" so he can show a vendor
+// exactly where to put things. The Worker mints a 4-hour vendor session (POST /admin/vendor-view-session, admin secret
+// only); it is handed to vendor.html in the #hash (never sent to any server, wiped from the address bar on arrival)
+// and kept only in that tab. Same view, same money stripping as the vendor's own login. Pass woId to land on one job.
+function openVendorPortalAs(vendorId, woId) {
+  var w = window.open('', '_blank');   // opened now, inside the tap, so the phone/browser does not block it as a pop-up
+  if (w) { try { w.document.write('<p style="font:16px system-ui;padding:20px">Opening the vendor portal…</p>'); } catch (e) {} } // silent-ok: placeholder text only, the real page loads next
+  api('POST', '/admin/vendor-view-session', { vendor_id: String(vendorId) }).then(function(d) {
+    if (!d || !d.token || d.error) throw new Error((d && d.error) || 'No session came back');
+    var b64 = btoa(unescape(encodeURIComponent(JSON.stringify(d)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    var url = 'vendor.html' + (woId ? '?wo=' + encodeURIComponent(woId) : '') + '#av=' + b64;
+    if (w && !w.closed) w.location.href = url; else location.href = url;
+  }).catch(function(e) {
+    if (w && !w.closed) w.close();
+    var msg = 'Could not open the vendor portal: ' + ((e && e.message) || e);
+    if (typeof toast === 'function') toast(msg, 'error'); else alert(msg);
+    if (typeof window.hubReportFailure === 'function') { try { window.hubReportFailure('open_vendor_portal_as', msg); } catch (e2) { console.error('failure report failed', e2); /* silent-ok: Brett already sees the toast above */ } }
+  });
+}
+
 // ── Vendor Performance (B-012) — read-only, fetch-on-open like Who To Pay/Review Bills ──
 var _vendorPerfRows = null;
 var _vendorPerfSort = { key: 'jobs_total', dir: -1 };
