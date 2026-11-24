@@ -460,6 +460,7 @@ function doLogout() {
   session = null; allWOs = [];
   demoBanner(false);
   SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
+  if (window.RCAdminView && window.RCAdminView.end()) setTimeout(function(){ showLoginMsg('Admin view ended. Open it again from the Hub.', 'error'); }, 0);   // admin view ended (Exit, sign out, or its 4 hours ran out)
   document.getElementById('pinInput').value = '';
   var ni = document.getElementById('nameInput'); if(ni) ni.value = '';
   document.getElementById('pinInput').disabled = false;
