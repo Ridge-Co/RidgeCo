@@ -13792,11 +13792,11 @@ async function listVendorBills(env, url, callerRole) {
       // /vendor-bills?status=submitted got EVERY vendor's bills. A vendor session now always carries
       // its own vendor_id here (forced by the router), so the filter applies; admin calls send none.
       const byStatus = results.filter(b => (b.Status || '').toLowerCase() === statusFilter.toLowerCase());
-      return json(vendorId ? byStatus.filter(b => b.Vendor_ID === vendorId) : byStatus);
+      return json(vendorBillsOut(vendorId ? byStatus.filter(b => b.Vendor_ID === vendorId) : byStatus, callerRole));
     }
     if (woId)     results = results.filter(b => b.WO_ID     === woId);
     if (vendorId) results = results.filter(b => b.Vendor_ID === vendorId);
-    return json(results);
+    return json(vendorBillsOut(results, callerRole));
   } catch(e) { return json([]); }
 }
 
