@@ -12696,7 +12696,7 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
 // (118) were still going out, and 6 Descriptions carried vendor cost ("Consolidated vendor bill ($809.63 ...)", "Vendor
 // quote $650 ...") that owners and tenants read. Descriptions now lose any sentence / " — " segment that names a dollar
 // amount or vendor cost, in every external view; the rest of the job text stays.
-const EXTERNAL_HIDDEN_WO_FIELDS = ['Customer_Charge', 'Invoice_ID', 'Invoice_Number', 'Invoice_Date', 'Invoice_Total', 'Invoice_Memo', 'Vendor_Cost', 'Vendor_Bill_ID', 'Vendor_Bill_Number', 'Markup', 'Margin'];
+const EXTERNAL_HIDDEN_WO_FIELDS = ['Customer_Charge', 'Invoice_ID', 'Invoice_Number', 'Invoice_Date', 'Invoice_Total', 'Invoice_Memo', 'Vendor_Cost', 'Vendor_Bill_ID', 'Vendor_Bill_Number', 'Markup', 'Margin', 'Billing_Log'];
 const EXTERNAL_HIDDEN_WO_PREFIXES = ['Deposit_', 'QB_', 'QBO_'];
 // Two audiences: a vendor / tenant / shared link loses EVERY dollar figure (a customer price tells a vendor the margin).
 // An owner keeps Brett's prices to them (their own quote, e.g. "$175 if it matches my diagnosis") and loses only what
