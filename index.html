@@ -5582,6 +5582,7 @@ function renderVendorsPage() {
         '<td style="text-align:center"><input type="checkbox"'+(String(v.Can_Create_Own_WO||'').toUpperCase()==='TRUE'?' checked':'')+' onchange="toggleVendorCanCreateOwnWO(\''+v.ID+'\',this.checked)" title="Can log their own One-Off Job Work Order" style="width:16px;height:16px;cursor:pointer"></td>' +
         '<td style="display:flex;gap:4px;flex-wrap:wrap">' +
         '<button class="btn small secondary" onclick="openEditVendorModal(\''+v.ID+'\')">Edit</button>' +
+        (isInactive ? '' : '<button class="btn small" style="background:#b45309;color:#fff" onclick="openVendorPortalAs(\''+v.ID+'\')" title="Open this vendor\'s portal exactly as they see it, no PIN needed (4 hours, admin only)">👁 Open as</button>') +
         '<button class="btn small secondary" onclick="openVendorLoanModal(\''+v.ID+'\',\''+esc(nm)+'\')" title="Loan/advance ledger">$ Loan</button>' +
         (isInactive
           ? '<button class="btn small" style="background:var(--accent2);color:#fff" onclick="toggleVendorActive(\''+v.ID+'\',\''+esc(nm)+'\',true)" title="Reactivate this vendor">Reactivate</button>'
