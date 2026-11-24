@@ -5619,6 +5619,29 @@ function openVendorPortalAs(vendorId, woId) {
   });
 }
 
+// Open a tenant's or owner's portal as them (Nov 24 2026) — same pattern as openVendorPortalAs above.
+// role: 'tenant' | 'owner'. Brett: "anytime I'm trying to demonstrate something to tenants or owners ... go straight to their
+// specific page". The Worker mints a 4-hour session (admin secret only); tenant.html / owner.html pick it up from the #hash
+// through admin-view.js and keep it in that tab only.
+function openPortalAs(role, id, woId) {
+  var page = role === 'tenant' ? 'tenant.html' : role === 'owner' ? 'owner.html' : '';
+  if (!page) return;
+  var w = window.open('', '_blank');   // opened inside the tap so it is not blocked as a pop-up
+  if (w) { try { w.document.write('<p style="font:16px system-ui;padding:20px">Opening the ' + role + ' portal…</p>'); } catch (e) {} } // silent-ok: placeholder text only, the real page loads next
+  var body = role === 'tenant' ? { tenant_id: String(id) } : { owner_id: String(id) };
+  api('POST', '/admin/' + role + '-view-session', body).then(function(d) {
+    if (!d || !d.token || d.error) throw new Error((d && d.error) || 'No session came back');
+    var b64 = btoa(unescape(encodeURIComponent(JSON.stringify(d)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    var url = page + (woId ? '?wo=' + encodeURIComponent(woId) : '') + '#av=' + b64;
+    if (w && !w.closed) w.location.href = url; else location.href = url;
+  }).catch(function(e) {
+    if (w && !w.closed) w.close();
+    var msg = 'Could not open the ' + role + ' portal: ' + ((e && e.message) || e);
+    if (typeof toast === 'function') toast(msg, 'error'); else alert(msg);
+    if (typeof window.hubReportFailure === 'function') { try { window.hubReportFailure('open_portal_as', msg); } catch (e2) { console.error('failure report failed', e2); /* silent-ok: Brett already sees the toast above */ } }
+  });
+}
+
 // ── Vendor Performance (B-012) — read-only, fetch-on-open like Who To Pay/Review Bills ──
 var _vendorPerfRows = null;
 var _vendorPerfSort = { key: 'jobs_total', dir: -1 };
