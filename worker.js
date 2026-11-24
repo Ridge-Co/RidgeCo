@@ -31943,6 +31943,10 @@ async function hubTestWriteAllowed(env, path, body) {
     const _v = (await fetchTab(env, 'Vendor_Bills')).find(r => String(r.ID) === String(_b.id));
     return !!_v && await isTestWO(env, _v.WO_ID);
   }
+  if (path === '/invoice/draft-summary/use') {   // queue #266: staging may only save a description onto a bill of a TEST- work order
+    const _ir = (await fetchTab(env, 'Invoice_Review')).find(r => String(r.ID) === String(_b.ir_id));
+    return !!_ir && await isTestWO(env, _ir.WO_ID);
+  }
   if (path === '/tenant/update') return await isTestRecord(env, 'Tenants', _b.id);
   if (path === '/vendor/update') return await isTestRecord(env, 'Vendors', _b.id);
   if (path === '/owner/update') return await isTestRecord(env, 'Owners', _b.id);
