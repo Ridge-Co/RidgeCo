@@ -14876,6 +14876,7 @@ function previewQBSend(id, justApproved) {
   _qbSendJustApproved = justApproved ? id : null;
   _qbNet = { decision: '', scope_id: '', job_complete: false, override_overbill: false, instant_pay: undefined };
   _qbPrev = null;
+  _qbDraft = { state: 'idle', text: '', draft: '', note: '', busy: false };
   document.getElementById('qb-send-title-sub').textContent = 'IR ' + id;
   document.getElementById('qb-send-msg').innerHTML = '';
   openModal('modal-qb-send');
