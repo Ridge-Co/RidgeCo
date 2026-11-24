@@ -3,6 +3,7 @@
 <head>
 <script src="test-login.js"></script>
 <script src="failure-reporter.js"></script>
+<script src="admin-view.js"></script>
 <script src="wo-status.js"></script>
 <script src="tenant-roster.js"></script>
 <script data-wo-status-guard>if (typeof WOStatus === 'undefined') { document.addEventListener('DOMContentLoaded', function () { document.body.insertAdjacentHTML('afterbegin', '<div style="background:#b42318;color:#fff;padding:12px;font:14px sans-serif;position:relative;z-index:99999">The status list (wo-status.js) did not load, so work orders will not show correctly. Reload the page. If this stays, tell Brett.</div>'); }); }</script>
@@ -476,6 +477,7 @@ label,.detail-label,.action-title{text-transform:none;letter-spacing:normal;font
 var WORKER = 'https://maintenance-hub.brett-2f8.workers.dev';
 var SECRET = '';                // session token from PIN login — NO hardcoded admin secret (SEC-1)
 var SESS_KEY = 'mh_owner_sess'; // persisted so a reload / auto-refresh stays logged in
+if (window.RC_ADMIN_VIEW) SESS_KEY = window.RCAdminView.shadowKey;   // Nov 24 2026 admin "Open as": never touch this person's real saved login on this device
 var session = null;
 var ownerProps = [];
 var allWOs = [];
@@ -624,6 +626,7 @@ function onLoginSuccess(data, persist){
   if (persist && data.token) { try { localStorage.setItem(SESS_KEY, JSON.stringify(data)); } catch(e){} }
 }
 (function restoreOwnerSession(){
+  if (window.RC_ADMIN_VIEW) { window.RCAdminView.bar(); try { onLoginSuccess(window.RC_ADMIN_VIEW, false); } catch (e) { if (window.hubReportFailure) window.hubReportFailure('admin_view_open', 'Open-as view failed to draw: ' + ((e && e.message) || e)); } return; }
   try { var raw=localStorage.getItem(SESS_KEY); if(raw){ var d=JSON.parse(raw); if(d&&d.token) onLoginSuccess(d,false); } } catch(e){}
 })();
 
@@ -631,6 +634,7 @@ function doLogout() {
   session = null; ownerProps = []; allWOs = [];
   demoBanner(false);
   SECRET = ''; try { localStorage.removeItem(SESS_KEY); } catch(e){}
+  if (window.RCAdminView && window.RCAdminView.end()) setTimeout(function(){ showLoginMsg('Admin view ended. Open it again from the Hub.', 'error'); }, 0);   // admin view ended (Exit, sign out, or its 4 hours ran out)
   document.getElementById('pinInput').value = '';
   var ni = document.getElementById('nameInput'); if(ni) ni.value = '';
   document.getElementById('pinInput').disabled = false;

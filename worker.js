@@ -781,6 +781,8 @@ const _hubWorkerCore = {
       }
       if (request.method === 'POST') {
         if (path === '/admin/vendor-view-session') return await adminVendorViewSession(env, request, callerRole, _viaHubTestToken, isStaging(env, url));
+        if (path === '/admin/tenant-view-session') return await adminPortalViewSession(env, request, callerRole, _viaHubTestToken, isStaging(env, url), 'tenant');
+        if (path === '/admin/owner-view-session')  return await adminPortalViewSession(env, request, callerRole, _viaHubTestToken, isStaging(env, url), 'owner');
         if (path === '/upload-photo') {
           // Runs before the body-level guard below (multipart), so the test-token guard is applied here:
           // a HUB_TEST_TOKEN / ui-test-window upload may only target a TEST- work order.
@@ -2399,11 +2401,20 @@ async function tenantByPin(env, url) {
     if (tFirst !== name && !tFirst.startsWith(name)) return null;
     { const _dg = await demoLoginGate(env, 'Tenants', tenant); if (_dg) return _dg; }   // demo login: refuses after the 10 days, starts the clock on the first login
     _m.login = { tab: 'Tenants', id: tenant.ID, row: tenant };
+    return json({
+      ...(await tenantSessionFields(env, tenant)),
+      token:            await makeSessionToken({ role: 'tenant', id: tenant.ID, ...demoTokenClaim(tenant) }, env.WORKER_SECRET),
+      ...(demoTrue(tenant.Is_Demo) ? { demo: true } : {}),   // the tenant page shows its DEMO banner from this
+    });
+  });
+}
+// The tenant portal's session fields. Shared by the PIN login and the admin "Open as tenant" view (Nov 24 2026) so the two never drift.
+async function tenantSessionFields(env, tenant) {
     const [props, units, owners] = await fetchTabs(env, ['Properties','Units','Owners']);
     const unit = units.find(u => u.ID === tenant.Unit_ID) || {};
     const prop = props.find(pr => pr.ID === (tenant.Property_ID || unit.Property_ID)) || {};
     const owner = prop.Owner_ID ? owners.find(o => o.ID === prop.Owner_ID) : null;
-    return json({
+    return {
       tenant_id:        tenant.ID,
       tenant_name:      `${tenant.First_Name} ${tenant.Last_Name||''}`.trim(),
       property_id:      prop.ID||'',
@@ -2416,10 +2427,7 @@ async function tenantByPin(env, url) {
       // the request form; POST /workorder re-checks this same resolver server-side so the
       // gate can't be bypassed by skipping the UI.
       can_submit_wo:    resolveTenantWOAccess(prop, owner, tenant.Unit_ID||''),
-      token:            await makeSessionToken({ role: 'tenant', id: tenant.ID, ...demoTokenClaim(tenant) }, env.WORKER_SECRET),
-      ...(demoTrue(tenant.Is_Demo) ? { demo: true } : {}),   // the tenant page shows its DEMO banner from this
-    });
-  });
+    };
 }
 
 // Lightweight re-derive of the tenant-by-pin payload for an ALREADY-logged-in tenant, off the
@@ -2482,13 +2490,64 @@ async function ownerByPin(env, url) {
     { const _dg = await demoLoginGate(env, 'Owners', owner); if (_dg) return _dg; }   // demo login: refuses after the 10 days, starts the clock on the first login
     _m.login = { tab: 'Owners', id: owner.ID, row: owner };
     return json({
-      owner_id: owner.ID, owner_name: `${owner.First_Name} ${owner.Last_Name||''}`.trim(),
-      owner_company: owner.Company||'', owner_phone: owner.Phone||'',
-      user_name: `${owner.First_Name} ${owner.Last_Name||''}`.trim(), is_sub_user: false,
+      ...ownerSessionFields(owner),
       token: await makeSessionToken({ role: 'owner', id: owner.ID, ...demoTokenClaim(owner) }, env.WORKER_SECRET),
       ...(demoTrue(owner.Is_Demo) ? { demo: true } : {}),   // the owner page shows its DEMO banner from this
     });
   });
+}
+// The owner portal's session fields for a main owner login. Shared by the PIN login and the admin "Open as owner" view.
+function ownerSessionFields(owner) {
+  return {
+    owner_id: owner.ID, owner_name: `${owner.First_Name||''} ${owner.Last_Name||''}`.trim(),
+    owner_company: owner.Company||'', owner_phone: owner.Phone||'',
+    user_name: `${owner.First_Name||''} ${owner.Last_Name||''}`.trim(), is_sub_user: false,
+  };
+}
+// Admin "Open as tenant" / "Open as owner" (Nov 24 2026, Brett: "anytime I'm trying to demonstrate something to tenants or
+// owners ... I can go straight to their specific page"). Same rules as adminVendorViewSession: admin secret only (staging
+// test token on staging), an ordinary role session marked av:1 with a 4-hour life, no PIN read or returned, no lockout row,
+// never counts as that person using the portal, never starts a demo login's 10-day clock. Same allow-lists and money
+// firewall as their own login, so Brett sees exactly what they see.
+async function adminPortalViewSession(env, request, callerRole, viaHubTestToken, staging, role) {
+  if (callerRole) return json({ error: 'Unauthorized' }, 401);
+  const tok = request.headers.get('X-Auth-Token') || '';
+  const isAdmin = !!env.WORKER_SECRET && tok === env.WORKER_SECRET;
+  if (!isAdmin && !(staging && viaHubTestToken)) return json({ error: 'Only the Hub admin can open a portal as someone else' }, 403);
+  const parsed = await safeJson(request);
+  if (!parsed.ok) return json({ error: 'Send JSON with the id' }, 400);
+  const body = parsed.body || {};
+  if (role === 'tenant') {
+    const tid = String(body.tenant_id || '').trim();
+    if (!tid) return json({ error: 'tenant_id is required' }, 400);
+    const tenant = (await fetchTab(env, 'Tenants')).find(t => String(t.ID) === tid);
+    if (!tenant) return json({ error: 'No tenant with ID ' + tid }, 404);
+    const tname = `${tenant.First_Name||''} ${tenant.Last_Name||''}`.trim() || 'This tenant';
+    if (tenant.Active === 'FALSE') return json({ error: tname + ' is deactivated, so their portal is closed.' }, 409);
+    if (tenant.Move_Out_Date && new Date(tenant.Move_Out_Date + 'T23:59:59') < new Date()) return json({ error: tname + ' moved out on ' + tenant.Move_Out_Date + ', so their portal is closed.' }, 409);
+    return json({
+      ...(await tenantSessionFields(env, tenant)),
+      ...(demoTrue(tenant.Is_Demo) ? { demo: true } : {}),
+      admin_view: true, admin_view_role: 'tenant', admin_view_name: tname, expires_in_s: ADMIN_VIEW_TTL_S,
+      token: await makeSessionToken({ role: 'tenant', id: tenant.ID, av: 1, ...demoTokenClaim(tenant) }, env.WORKER_SECRET, ADMIN_VIEW_TTL_S),
+    });
+  }
+  if (role === 'owner') {
+    const oid = String(body.owner_id || '').trim();
+    if (!oid) return json({ error: 'owner_id is required' }, 400);
+    const owner = (await fetchTab(env, 'Owners')).find(o => String(o.ID) === oid);
+    if (!owner) return json({ error: 'No owner with ID ' + oid }, 404);
+    const f = ownerSessionFields(owner);
+    const oname = f.owner_name || owner.Company || 'This owner';
+    if (owner.Active === 'FALSE') return json({ error: oname + ' is deactivated, so their portal is closed.' }, 409);
+    return json({
+      ...f,
+      ...(demoTrue(owner.Is_Demo) ? { demo: true } : {}),
+      admin_view: true, admin_view_role: 'owner', admin_view_name: oname, expires_in_s: ADMIN_VIEW_TTL_S,
+      token: await makeSessionToken({ role: 'owner', id: owner.ID, av: 1, ...demoTokenClaim(owner) }, env.WORKER_SECRET, ADMIN_VIEW_TTL_S),
+    });
+  }
+  return json({ error: 'Unknown portal' }, 400);
 }
 
 async function getOwnerUsers(env, url) {
@@ -7865,7 +7924,10 @@ async function scopeProposalBillMilestones(env, body) {
           ? ('vendor paid $' + vendTotal.toFixed(2) + ' this round' + (depCredit ? ' (less the $' + depCredit.amount.toFixed(2) + ' deposit already paid)' : '') + (adj.fee > 0 ? ' (send $' + adj.bill_total.toFixed(2) + ' after the $' + adj.fee.toFixed(2) + ' instant-pay fee)' : ''))
           : ('vendor not paid this round' + (billSkipReason ? (' — ' + billSkipReason) : ''));
         const noteLine = '[' + ts + '] Scope Proposal billed — ' + labelList + ' — $' + custTotal.toFixed(2) + ' invoiced (' + (invoiceNumber || invoiceId) + '); ' + vendorNote + '.';
-        const fields = { Customer_Charge: String(newCharge), Notes: woRow.Notes ? (woRow.Notes + '\n' + noteLine) : noteLine };
+        // Nov 24 2026: the billing line goes to Billing_Log (Hub-only), NEVER to Notes. Notes are read by vendors, tenants and
+        // owners; this line carries the invoiced amount, invoice number, vendor pay and instant-pay fee (the WO-1253 leak).
+        await ensureColumns(env, 'Work_Orders', ['Billing_Log']);
+        const fields = { Customer_Charge: String(newCharge), Billing_Log: woRow.Billing_Log ? (woRow.Billing_Log + '\n' + noteLine) : noteLine };
         if (stillPending) fields.Status = 'Invoiced';
         await updateWOFields(env, s.WO_ID, fields);
       }
@@ -12495,7 +12557,13 @@ function ownerAuditView(rows) {
       continue;
     }
     if (!OWNER_AUDIT_FIELDS.includes(field)) continue;
-    out.push(ownerPick(a, OWNER_AUDIT_ROW_FIELDS));
+    const row = ownerPick(a, OWNER_AUDIT_ROW_FIELDS);
+    // Nov 24 2026: an old Notes / Description value in the history must not carry the billing text the live field no longer
+    // shows (the WO-1253 kind: "$830.00 invoiced ... vendor paid $460.00"). Same filters as the live field.
+    if (field === 'Notes') { row.Old_Value = externalSafeNotes(row.Old_Value); row.New_Value = externalSafeNotes(row.New_Value); }
+    if (field === 'Description') { row.Old_Value = externalSafeText(row.Old_Value, true); row.New_Value = externalSafeText(row.New_Value, true); }
+    if ('Notes' in row) row.Notes = externalSafeNotes(row.Notes);
+    out.push(row);
   }
   return out;
 }
@@ -12628,7 +12696,7 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
 // (118) were still going out, and 6 Descriptions carried vendor cost ("Consolidated vendor bill ($809.63 ...)", "Vendor
 // quote $650 ...") that owners and tenants read. Descriptions now lose any sentence / " — " segment that names a dollar
 // amount or vendor cost, in every external view; the rest of the job text stays.
-const EXTERNAL_HIDDEN_WO_FIELDS = ['Customer_Charge', 'Invoice_ID', 'Invoice_Number', 'Invoice_Date', 'Invoice_Total', 'Invoice_Memo', 'Vendor_Cost', 'Vendor_Bill_ID', 'Vendor_Bill_Number', 'Markup', 'Margin'];
+const EXTERNAL_HIDDEN_WO_FIELDS = ['Customer_Charge', 'Invoice_ID', 'Invoice_Number', 'Invoice_Date', 'Invoice_Total', 'Invoice_Memo', 'Vendor_Cost', 'Vendor_Bill_ID', 'Vendor_Bill_Number', 'Markup', 'Margin', 'Billing_Log'];
 const EXTERNAL_HIDDEN_WO_PREFIXES = ['Deposit_', 'QB_', 'QBO_'];
 // Two audiences: a vendor / tenant / shared link loses EVERY dollar figure (a customer price tells a vendor the margin).
 // An owner keeps Brett's prices to them (their own quote, e.g. "$175 if it matches my diagnosis") and loses only what
@@ -26952,7 +27020,7 @@ async function scrubResponseForProdReadToken(request, env, res) {
 //   PRICE       — what the customer is charged: never to a vendor, tenant or shared link (a vendor who sees the price
 //                 sees the margin). Owners ARE the customer and keep their own invoice amounts.
 //   VENDOR_COST — what the vendor is paid: never to an owner or tenant (an owner who sees it sees the margin).
-const PORTAL_MARKUP_KEYS = /^(markup.*|mark_?up.*|margin.*|profit.*|gross_?profit.*|net_?profit.*|materials_?fee.*|rc_?fee.*)$/i;
+const PORTAL_MARKUP_KEYS = /^(markup.*|mark_?up.*|margin.*|profit.*|gross_?profit.*|net_?profit.*|materials_?fee.*|rc_?fee.*|billing_?log)$/i;   // billing_log (Nov 24): Hub-only billing history, carries price AND vendor pay
 const PORTAL_PRICE_KEYS = /^(customer_?charge|customer_?price|customer_?total|customer_?amount|customer_?invoice.*|sell_?price|owner_?price|owner_?total|price_?override|invoice_?total|invoice_?amount|invoice_?memo|invoice_?balance|qbo_?invoice.*|qb_?invoice.*|processing_?fee.*|billed_?amount|amount_?billed)$/i;
 const PORTAL_PRICE_KEYS_PASCAL = /^(Invoice_ID|Invoice_Number|Invoice_Date)$/;   // Work_Orders' customer-invoice columns (case-sensitive: the vendor's OWN bill uses lowercase invoice_number / invoice_date)
 const PORTAL_VENDOR_COST_KEYS = /^(vendor_?cost.*|vendor_?pay.*|vendor_?paid_?amount|vendor_?total|vendor_?amount|vendor_?bill_?(amount|total).*|vendor_?rate|labor_?cost.*|max_?price|hourly_?rate|instant_?(pay_?)?fee.*|deposit_?fee.*|payout.*)$/i;

@@ -2915,6 +2915,11 @@ function openWODetail(woId) {
     '<div style="color:var(--muted);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">NOTES</div>' +
     '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow-y:auto;color:var(--muted)">' +
     linkify(wo.Notes) + '</div></div>' : '') +
+    // Nov 24 2026: billing history lives here now, never in Notes (portals read Notes). Hub only; every portal strips Billing_Log.
+    (wo.Billing_Log ? '<div style="margin-bottom:14px">' +
+    '<div style="color:var(--muted);font-size:13px;font-weight:600;margin-bottom:6px">Billing log (only you see this)</div>' +
+    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:160px;overflow-y:auto;color:var(--muted)">' +
+    esc(wo.Billing_Log) + '</div></div>' : '') +
     '<table class="data-table" style="margin-bottom:16px">' +
     '<tr><td style="color:var(--muted);width:120px">Status</td><td><span class="badge '+sc+'">'+(wo.Status||'New')+'</span>'+(wo.Status==='On Hold'&&wo.Hold_Reason?hubHoldBadge(wo.Hold_Reason):'')+'</td></tr>' +
     (wo.Turnover_Group_ID ? '<tr><td style="color:var(--muted)">Turnover</td><td>🔄 '+esc(wo.Turnover_Group_ID)+' · '+esc(wo.Turnover_Role||'')+(wo.Turnover_Release_Date?' · releases by '+esc(wo.Turnover_Release_Date):'')+'</td></tr>' : '') +
@@ -3275,6 +3280,8 @@ function openWODetail(woId) {
   addBtn(wo.Vendor_ID ? '🔄 Change Vendor' : 'Assign Vendor', wo.Vendor_ID ? 'secondary' : '', function(){openAssignModal(woId);});
   addBtn('📤 Send to Vendor','secondary',function(){openShareWO(woId);});
   addBtn('🚚 Create delivery','secondary',function(){openCreateDelivery(wo);});
+  if (wo.Tenant_ID) addBtn('👁 See as tenant','secondary',function(){openPortalAs('tenant', wo.Tenant_ID, woId);});   // Nov 24 2026
+  { var _woProp = safeArray(state.properties).find(function(p){ return p.ID === wo.Property_ID; }); if (_woProp && _woProp.Owner_ID) addBtn('👁 See as owner','secondary',function(){openPortalAs('owner', _woProp.Owner_ID, woId);}); }   // Nov 24 2026
   if (wo.Vendor_ID) {
     addBtn('👁 See as vendor','secondary',function(){openVendorPortalAs(wo.Vendor_ID, woId);});   // Nov 24 2026: this job in the vendor's own portal, as they see it
     addBtn('📷 Request Photos','secondary',function(){requestFromVendor(woId,wo.Vendor_ID,'photos');});
@@ -5329,6 +5336,7 @@ function openUnitDetail(propId, unitId) {
           '</div>' +
           '<div style="display:flex;flex-direction:column;gap:4px">' +
             '<button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
+            '<button class="btn small" style="background:#b45309;color:#fff" onclick="openPortalAs(\'tenant\',\''+t.ID+'\')" title="Open this tenant\'s portal exactly as they see it, no PIN needed (4 hours, admin only)">👁 Open as</button>' +
             '<button class="btn small secondary" onclick="closeModal(\'modal-unit-detail\');openScheduleMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')">📅 Schedule Move-Out</button>' +
             '<button class="btn small" style="background:var(--danger)20;border:1px solid var(--danger);color:var(--danger);font-size:10px" onclick="closeModal(\'modal-unit-detail\');openMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')">Move Out</button>' +
           '</div>' +
@@ -5611,8 +5619,31 @@ function openVendorPortalAs(vendorId, woId) {
   }).catch(function(e) {
     if (w && !w.closed) w.close();
     var msg = 'Could not open the vendor portal: ' + ((e && e.message) || e);
-    if (typeof toast === 'function') toast(msg, 'error'); else alert(msg);
+    if (typeof toast === 'function') toast(msg, 'error');
     if (typeof window.hubReportFailure === 'function') { try { window.hubReportFailure('open_vendor_portal_as', msg); } catch (e2) { console.error('failure report failed', e2); /* silent-ok: Brett already sees the toast above */ } }
+  });
+}
+
+// Open a tenant's or owner's portal as them (Nov 24 2026) — same pattern as openVendorPortalAs above.
+// role: 'tenant' | 'owner'. Brett: "anytime I'm trying to demonstrate something to tenants or owners ... go straight to their
+// specific page". The Worker mints a 4-hour session (admin secret only); tenant.html / owner.html pick it up from the #hash
+// through admin-view.js and keep it in that tab only.
+function openPortalAs(role, id, woId) {
+  var page = role === 'tenant' ? 'tenant.html' : role === 'owner' ? 'owner.html' : '';
+  if (!page) return;
+  var w = window.open('', '_blank');   // opened inside the tap so it is not blocked as a pop-up
+  if (w) { try { w.document.write('<p style="font:16px system-ui;padding:20px">Opening the ' + role + ' portal…</p>'); } catch (e) {} } // silent-ok: placeholder text only, the real page loads next
+  var body = role === 'tenant' ? { tenant_id: String(id) } : { owner_id: String(id) };
+  api('POST', '/admin/' + role + '-view-session', body).then(function(d) {
+    if (!d || !d.token || d.error) throw new Error((d && d.error) || 'No session came back');
+    var b64 = btoa(unescape(encodeURIComponent(JSON.stringify(d)))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    var url = page + (woId ? '?wo=' + encodeURIComponent(woId) : '') + '#av=' + b64;
+    if (w && !w.closed) w.location.href = url; else location.href = url;
+  }).catch(function(e) {
+    if (w && !w.closed) w.close();
+    var msg = 'Could not open the ' + role + ' portal: ' + ((e && e.message) || e);
+    if (typeof toast === 'function') toast(msg, 'error');
+    if (typeof window.hubReportFailure === 'function') { try { window.hubReportFailure('open_portal_as', msg); } catch (e2) { console.error('failure report failed', e2); /* silent-ok: Brett already sees the toast above */ } }
   });
 }
 
@@ -5850,6 +5881,7 @@ function renderTenantsPage() {
         '<td>'+paBadge('tenant', t.ID)+'</td>' +
         '<td style="display:flex;gap:4px">' +
         '<button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
+        '<button class="btn small" style="background:#b45309;color:#fff" onclick="openPortalAs(\'tenant\',\''+t.ID+'\')" title="Open this tenant\'s portal exactly as they see it, no PIN needed (4 hours, admin only)">👁 Open as</button>' +
         '<button class="btn small secondary" onclick="openScheduleMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')">📅</button>' +
         '<button class="btn small secondary" onclick="openMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')" style="background:var(--danger)20;border-color:var(--danger);color:var(--danger)">Move Out</button>' +
         '<button class="btn small secondary" onclick="setTenantPin(\''+t.ID+'\',\''+esc(t.Phone||'')+'\')" title="Set PIN">PIN</button>' +
@@ -7717,6 +7749,7 @@ function renderOwnersPage() {
       '<td style="color:'+(o.PIN?'var(--accent2)':'var(--danger)')+';font-weight:bold;letter-spacing:.08em">'+(o.PIN||'—')+'</td>' +
       '<td style="display:flex;gap:4px">' +
       '<button class="btn small secondary" onclick="openEditOwnerModal(\''+o.ID+'\')">Edit</button>' +
+      (isInactive ? '' : '<button class="btn small" style="background:#b45309;color:#fff" onclick="openPortalAs(\'owner\',\''+o.ID+'\')" title="Open this owner\'s portal exactly as they see it, no PIN needed (4 hours, admin only)">👁 Open as</button>') +
       '<button class="btn small secondary" onclick="openLinkPropertyModal(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="Assign an existing property to this owner">+ Property</button>' +
       '<button class="btn small secondary" onclick="goToQBMapping(\''+esc((nm || o.Company || '').replace(/\'/g,''))+'\')" title="View/link this owner\'s properties and units to QuickBooks">🔗</button>' +
       '<button class="btn small" onclick="addOwnerContact(\''+o.ID+'\',\''+esc(nm || o.Company || 'this owner')+'\')" title="A second person at this company who needs their own login">+ Contact</button>' +
