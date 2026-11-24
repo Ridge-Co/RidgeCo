@@ -13777,7 +13777,11 @@ async function editVendorBillReceipts(env, body) {
   });
 }
 
-async function listVendorBills(env, url) {
+// Nov 24 2026: a PORTAL session (a vendor reading their own bills) gets the rows without the customer-side columns
+// (Markup, Profit, Customer_Total, Processing_Fee ...). The portal money firewall caught these going out on its first day
+// (P1 portal_money_firewall /vendor-bills); this fixes it at the source. Admin calls (callerRole null) are unchanged.
+function vendorBillsOut(rows, callerRole) { return callerRole ? scrubPortalMoney(rows, callerRole).data : rows; }
+async function listVendorBills(env, url, callerRole) {
   const woId = url.searchParams.get('wo_id') || '', vendorId = url.searchParams.get('vendor_id') || '', statusFilter = url.searchParams.get('status') || '';
   try {
     const bills = await fetchTab(env, 'Vendor_Bills', { stale: !!vendorId });
