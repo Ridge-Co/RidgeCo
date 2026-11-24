@@ -33,6 +33,10 @@ const factory = new Function('json', 'fetchTab', 'fetchTabs', 'logTelemetry', 'f
   ${grab('function', 'isHiddenBidCopy')}
   ${grab('function', 'tenantCanSeeWO')}
   ${grab('function', 'attachmentScopeAllows')}
+  ${moneyConstLines}
+  ${grab('function', 'portalMoneyKeyForbidden')}
+  ${grab('function', 'scrubPortalMoneyDeep')}
+  ${grab('function', 'scrubPortalMoney')}
   ${grab('async function', 'getAttachments')}
   return { getAttachments, attachmentScopeAllows, tenantCanSeeWO };
 `);
