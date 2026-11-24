@@ -12612,11 +12612,12 @@ const EXTERNAL_NOTE_MONEY_RE = /\$\s?\d|\d\s?(usd|dollars)\b|invoic|\bbilled\b|\
 function externalSafeNotes(notes) {
   return String(notes == null ? '' : notes).split('\n').filter(l => !EXTERNAL_NOTE_MONEY_RE.test(l)).join('\n').trim();
 }
-function stripExternalMoney(base) {
+function stripExternalMoney(base, opts) {
   for (const k of Object.keys(base)) {
     if (EXTERNAL_HIDDEN_WO_FIELDS.includes(k) || EXTERNAL_HIDDEN_WO_PREFIXES.some(p => k.startsWith(p))) delete base[k];
   }
   if ('Notes' in base) base.Notes = externalSafeNotes(base.Notes);
+  for (const k of ['Description', 'Description_ES']) if (k in base) base[k] = externalSafeText(base[k], !!(opts && opts.ownerView));
   return base;
 }
 
