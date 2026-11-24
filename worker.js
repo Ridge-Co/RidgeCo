@@ -562,7 +562,7 @@ const _hubWorkerCore = {
       if (callerRole) {
         const _mm = sessionIdentityMismatch(callerRole, callerSessionId, url, null);
         if (_mm) return await denySessionIdentity(env, path, callerRole, callerSessionId, _mm);
-        { const _act = stampPortalActivity(env, callerRole, callerSessionId, path); if (ctx && ctx.waitUntil) ctx.waitUntil(_act); }   // Oct 23 2026: doing anything in the portal = proof of use (never blocks, never throws)
+        if (!callerAdminView) { const _act = stampPortalActivity(env, callerRole, callerSessionId, path); if (ctx && ctx.waitUntil) ctx.waitUntil(_act); }   // admin "Open as vendor" never counts as the vendor using the portal   // Oct 23 2026: doing anything in the portal = proof of use (never blocks, never throws)
         if (request.method === 'GET') {
           url.searchParams.set(SESSION_IDENTITY_PARAM[callerRole], String(callerSessionId));
           if (WO_KEYED_READ_PATHS.includes(path)) {
