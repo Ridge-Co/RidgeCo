@@ -12554,7 +12554,13 @@ function ownerAuditView(rows) {
       continue;
     }
     if (!OWNER_AUDIT_FIELDS.includes(field)) continue;
-    out.push(ownerPick(a, OWNER_AUDIT_ROW_FIELDS));
+    const row = ownerPick(a, OWNER_AUDIT_ROW_FIELDS);
+    // Nov 24 2026: an old Notes / Description value in the history must not carry the billing text the live field no longer
+    // shows (the WO-1253 kind: "$830.00 invoiced ... vendor paid $460.00"). Same filters as the live field.
+    if (field === 'Notes') { row.Old_Value = externalSafeNotes(row.Old_Value); row.New_Value = externalSafeNotes(row.New_Value); }
+    if (field === 'Description') { row.Old_Value = externalSafeText(row.Old_Value, true); row.New_Value = externalSafeText(row.New_Value, true); }
+    if ('Notes' in row) row.Notes = externalSafeNotes(row.Notes);
+    out.push(row);
   }
   return out;
 }
