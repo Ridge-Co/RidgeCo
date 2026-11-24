@@ -26936,6 +26936,86 @@ async function scrubResponseForProdReadToken(request, env, res) {
   }
 }
 
+// ── PORTAL MONEY FIREWALL (Nov 24 2026) ───────────────────────────────────────────────────────────────────────────
+// Brett: "I definitely, absolutely, positively want no possibility of sharing markup information with anyone. Ever."
+// stripExternalMoney cleans work orders inside enrichWO, but that only protects the endpoints that remember to call it.
+// This is the second, structural wall: EVERY JSON response to a vendor / tenant / owner portal session, and to the
+// no-login shared work order link (/wo/shared*), is deep-walked on its way out and any field that carries the customer
+// price, the markup, or (for owners and tenants) the vendor's cost is removed, whatever endpoint produced it. When it
+// has to remove something it also files a P1 failure naming the endpoint and the fields, because that means some
+// endpoint is leaking and must be fixed at the source. test/portal-money-firewall.test.mjs fails the build if this
+// wall is removed, bypassed, or a portal page starts reading a forbidden field.
+// Keys are matched on the WHOLE key name. Vendor-side fields the vendor portal legitimately shows (their own bill
+// amounts, Max_Price, vendor_rate, lowercase invoice_number / invoice_date of THEIR invoice) are deliberately not here.
+// Three groups, by who must never see them:
+//   MARKUP      — nobody outside the Hub (markup, margin, profit, the hidden materials fee).
+//   PRICE       — what the customer is charged: never to a vendor, tenant or shared link (a vendor who sees the price
+//                 sees the margin). Owners ARE the customer and keep their own invoice amounts.
+//   VENDOR_COST — what the vendor is paid: never to an owner or tenant (an owner who sees it sees the margin).
+const PORTAL_MARKUP_KEYS = /^(markup.*|mark_?up.*|margin.*|profit.*|gross_?profit.*|net_?profit.*|materials_?fee.*|rc_?fee.*)$/i;
+const PORTAL_PRICE_KEYS = /^(customer_?charge|customer_?price|customer_?total|customer_?amount|customer_?invoice.*|sell_?price|owner_?price|owner_?total|price_?override|invoice_?total|invoice_?amount|invoice_?memo|invoice_?balance|qbo_?invoice.*|qb_?invoice.*|processing_?fee.*|billed_?amount|amount_?billed)$/i;
+const PORTAL_PRICE_KEYS_PASCAL = /^(Invoice_ID|Invoice_Number|Invoice_Date)$/;   // Work_Orders' customer-invoice columns (case-sensitive: the vendor's OWN bill uses lowercase invoice_number / invoice_date)
+const PORTAL_VENDOR_COST_KEYS = /^(vendor_?cost.*|vendor_?pay.*|vendor_?paid_?amount|vendor_?total|vendor_?amount|vendor_?bill_?(amount|total).*|vendor_?rate|labor_?cost.*|max_?price|hourly_?rate|instant_?(pay_?)?fee.*|deposit_?fee.*|payout.*)$/i;
+function portalMoneyKeyForbidden(key, audience) {
+  const k = String(key);
+  if (PORTAL_MARKUP_KEYS.test(k)) return true;
+  if (audience !== 'owner' && (PORTAL_PRICE_KEYS.test(k) || PORTAL_PRICE_KEYS_PASCAL.test(k))) return true;
+  if (audience === 'owner' || audience === 'tenant') return PORTAL_VENDOR_COST_KEYS.test(k);
+  return false;
+}
+// Pure. Returns { data, removed: [key paths] } — never mutates the input.
+function scrubPortalMoneyDeep(node, audience, path, removed, depth) {
+  if (depth > 14 || node == null) return node;
+  if (Array.isArray(node)) return node.map(n => scrubPortalMoneyDeep(n, audience, (path ? path.replace(/\.$/, '') : '') + '[].', removed, depth + 1));
+  if (typeof node === 'object') {
+    const o = {};
+    for (const k of Object.keys(node)) {
+      if (portalMoneyKeyForbidden(k, audience)) { if (removed.length < 40 && !removed.includes(path + k)) removed.push(path + k); continue; }
+      o[k] = scrubPortalMoneyDeep(node[k], audience, path + k + '.', removed, depth + 1);
+    }
+    return o;
+  }
+  return node;
+}
+function scrubPortalMoney(data, audience) {
+  const removed = [];
+  const out = scrubPortalMoneyDeep(data, audience, '', removed, 0);
+  return { data: out, removed };
+}
+async function portalAudienceOf(request, env, path) {
+  if (path.startsWith('/wo/shared')) return 'vendor';   // shared link = whoever holds it; treat like a vendor (no customer price)
+  const tok = request.headers.get('X-Auth-Token') || '';
+  if (!tok || tok === env.WORKER_SECRET) return '';
+  if (tok.indexOf('.') < 0) return '';
+  try {
+    const s = await verifySessionToken(tok, env.WORKER_SECRET);
+    if (s && (s.role === 'vendor' || s.role === 'tenant' || s.role === 'owner')) return s.role;
+  } catch (e) { console.error('portal money firewall: session check failed', String((e && e.message) || e)); }
+  return '';
+}
+async function firewallPortalMoney(request, env, ctx, res) {
+  let path = '';
+  try { path = new URL(request.url).pathname; } catch (e) { return res; }
+  const audience = await portalAudienceOf(request, env, path);
+  if (!audience) return res;
+  if (!/json/i.test(res.headers.get('Content-Type') || '')) return res;
+  try {
+    const data = JSON.parse(await res.clone().text());
+    const { data: clean, removed } = scrubPortalMoney(data, audience);
+    if (!removed.length) return res;
+    const rep = reportFailure(env, { system: 'hub', source: 'worker', where: 'portal_money_firewall', ref: path, severity: 'P1',
+      message: `A ${audience} portal response from ${path} carried money fields; the firewall removed them before they left. Fix the endpoint at the source.`,
+      context: removed.join(', ').slice(0, 900) });
+    if (ctx && ctx.waitUntil) ctx.waitUntil(rep); else await rep;
+    const headers = new Headers(res.headers); headers.delete('Content-Length');
+    return new Response(JSON.stringify(clean), { status: res.status, statusText: res.statusText, headers });
+  } catch (e) {
+    // Fail CLOSED: if the body cannot be checked, the portal gets an error, never an unchecked body.
+    console.error('portal money firewall could not check a response', path, String((e && e.message) || e));
+    return new Response(JSON.stringify({ error: 'This page could not be loaded safely. Please try again.' }), { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } });
+  }
+}
+
 function _utf8B64url(str) {
   const bytes = new TextEncoder().encode(str);
   let bin = ''; for (const b of bytes) bin += String.fromCharCode(b);
