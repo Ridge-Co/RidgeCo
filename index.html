@@ -15047,7 +15047,7 @@ function renderQBPreview(p) {
     renderQBBillBlock(p.bill, p.vendor) +
     ((p.bill && !p.bill.skipped && !p.bill.in_house) ? renderQBFeePanel(p.fee, p.vendor && p.vendor.display, true) : '') +
     (p.photo_link ? '<div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:11px;color:var(--muted)">🖼 Customer invoice links job photos</div>' : '') +
-    warns + already;
+    warns + qbDraftBoxHtml(p) + already;
 }
 
 // CAP-036 #14: overridePendingInfo (true only when re-called from the "Send anyway" button
