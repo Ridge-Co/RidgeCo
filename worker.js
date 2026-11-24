@@ -2589,8 +2589,38 @@ function vendorSessionFields(vendor) {
       can_bill_no_wo: String(vendor.Can_Bill_No_WO || '').toUpperCase() === 'TRUE',
       can_create_own_wo: String(vendor.Can_Create_Own_WO || '').toUpperCase() === 'TRUE',
       billing_property_access: vendor.Billing_Property_Access || '',
-      token: await makeSessionToken({ role: 'vendor', id: vendor.ID }, env.WORKER_SECRET),
-    });
+    };
+}
+// Admin "Open as vendor" (Nov 24 2026, Brett: "log into any vendor's portal ... as if I was them" so he can show a
+// vendor exactly where things go). Mints a normal vendor-role session for one vendor, so the portal shows exactly what
+// that vendor sees: same role, same path allow-list, same money stripping (stripExternalMoney) as a real PIN login.
+// Differences, all deliberate:
+//   - av:1 on the token: the Worker never stamps First_Login / Login_Evidence for it, so Brett looking does not count
+//     as the vendor having used the portal.
+//   - 4-hour expiry instead of 90 days.
+//   - Never goes through pinLookup, so no PIN is read, shown, sent or counted, and no lockout row is written.
+// Only the real admin secret may call it (or the staging test token on staging). A portal session is refused even
+// though the path allow-list would already refuse it.
+const ADMIN_VIEW_TTL_S = 4 * 60 * 60;
+async function adminVendorViewSession(env, request, callerRole, viaHubTestToken, staging) {
+  if (callerRole) return json({ error: 'Unauthorized' }, 401);
+  const tok = request.headers.get('X-Auth-Token') || '';
+  const isAdmin = !!env.WORKER_SECRET && tok === env.WORKER_SECRET;
+  if (!isAdmin && !(staging && viaHubTestToken)) return json({ error: 'Only the Hub admin can open a vendor portal as the vendor' }, 403);
+  const parsed = await safeJson(request);
+  if (!parsed.ok) return json({ error: 'Send JSON: {"vendor_id":"4"}' }, 400);
+  const body = parsed.body;
+  const vid = String((body && body.vendor_id) || '').trim();
+  if (!vid) return json({ error: 'vendor_id is required' }, 400);
+  const vendors = await fetchTab(env, 'Vendors');
+  const vendor = vendors.find(v => String(v.ID) === vid);
+  if (!vendor) return json({ error: 'No vendor with ID ' + vid }, 404);
+  if (String(vendor.Active || '').toUpperCase() === 'FALSE') return json({ error: (vendor.Name || 'This vendor') + ' is deactivated, so their portal is closed. Reactivate them first.' }, 409);
+  return json({
+    ...vendorSessionFields(vendor),
+    admin_view: true,
+    expires_in_s: ADMIN_VIEW_TTL_S,
+    token: await makeSessionToken({ role: 'vendor', id: vendor.ID, av: 1 }, env.WORKER_SECRET, ADMIN_VIEW_TTL_S),
   });
 }
 // ── KEYS ─────────────────────────────────────────────────────
