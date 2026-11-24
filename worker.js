@@ -2399,11 +2399,20 @@ async function tenantByPin(env, url) {
     if (tFirst !== name && !tFirst.startsWith(name)) return null;
     { const _dg = await demoLoginGate(env, 'Tenants', tenant); if (_dg) return _dg; }   // demo login: refuses after the 10 days, starts the clock on the first login
     _m.login = { tab: 'Tenants', id: tenant.ID, row: tenant };
+    return json({
+      ...(await tenantSessionFields(env, tenant)),
+      token:            await makeSessionToken({ role: 'tenant', id: tenant.ID, ...demoTokenClaim(tenant) }, env.WORKER_SECRET),
+      ...(demoTrue(tenant.Is_Demo) ? { demo: true } : {}),   // the tenant page shows its DEMO banner from this
+    });
+  });
+}
+// The tenant portal's session fields. Shared by the PIN login and the admin "Open as tenant" view (Nov 24 2026) so the two never drift.
+async function tenantSessionFields(env, tenant) {
     const [props, units, owners] = await fetchTabs(env, ['Properties','Units','Owners']);
     const unit = units.find(u => u.ID === tenant.Unit_ID) || {};
     const prop = props.find(pr => pr.ID === (tenant.Property_ID || unit.Property_ID)) || {};
     const owner = prop.Owner_ID ? owners.find(o => o.ID === prop.Owner_ID) : null;
-    return json({
+    return {
       tenant_id:        tenant.ID,
       tenant_name:      `${tenant.First_Name} ${tenant.Last_Name||''}`.trim(),
       property_id:      prop.ID||'',
