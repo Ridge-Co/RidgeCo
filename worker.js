@@ -1019,6 +1019,8 @@ const _hubWorkerCore = {
         if (path === '/wo/duplicate')             return await woDuplicate(env, body);
         if (path === '/wo/triage-set')            return await woTriageSet(env, body);       // queue #142, admin only (in no ROLE_SCOPES list)
         if (path === '/wo/triage-preview')        return await woTriagePreview(env, body);   // queue #142, admin only, writes nothing
+        if (path === '/invoice/draft-summary')    return await invoiceDraftSummary(env, body);      // queue #266, admin only (in no ROLE_SCOPES list), writes nothing
+        if (path === '/invoice/draft-summary/use') return await invoiceDraftSummaryUse(env, body);  // queue #266, admin only, saves Invoice_Description after a tap
         if (path === '/wo/bid-group/unlink')      return await woBidGroupUnlink(env, body);
         if (path === '/wo/bid-group/cancel')      return await woBidGroupCancel(env, body);
         if (path === '/turnover/start')           return await startTurnoverManual(env, body);
