@@ -1019,6 +1019,8 @@ const _hubWorkerCore = {
         if (path === '/wo/duplicate')             return await woDuplicate(env, body);
         if (path === '/wo/triage-set')            return await woTriageSet(env, body);       // queue #142, admin only (in no ROLE_SCOPES list)
         if (path === '/wo/triage-preview')        return await woTriagePreview(env, body);   // queue #142, admin only, writes nothing
+        if (path === '/invoice/draft-summary')    return await invoiceDraftSummary(env, body);      // queue #266, admin only (in no ROLE_SCOPES list), writes nothing
+        if (path === '/invoice/draft-summary/use') return await invoiceDraftSummaryUse(env, body);  // queue #266, admin only, saves Invoice_Description after a tap
         if (path === '/wo/bid-group/unlink')      return await woBidGroupUnlink(env, body);
         if (path === '/wo/bid-group/cancel')      return await woBidGroupCancel(env, body);
         if (path === '/turnover/start')           return await startTurnoverManual(env, body);
@@ -22914,6 +22916,7 @@ const JOB_ROUTES = {
   qb_reconcile:        'REASON',
   tenant_message:      'REASON',
   final_classification:'REASON',
+  invoice_summary:     'REASON',   // queue #266: customer-facing words on an invoice (pinned to REASON anyway)
 };
 
 // job = { type, tier?, prompt, input?, schema?, maxTokens?, customerFacing?, moneyFacing?, media?, source? }
@@ -31940,6 +31943,10 @@ async function hubTestWriteAllowed(env, path, body) {
     const _v = (await fetchTab(env, 'Vendor_Bills')).find(r => String(r.ID) === String(_b.id));
     return !!_v && await isTestWO(env, _v.WO_ID);
   }
+  if (path === '/invoice/draft-summary/use') {   // queue #266: staging may only save a description onto a bill of a TEST- work order
+    const _ir = (await fetchTab(env, 'Invoice_Review')).find(r => String(r.ID) === String(_b.ir_id));
+    return !!_ir && await isTestWO(env, _ir.WO_ID);
+  }
   if (path === '/tenant/update') return await isTestRecord(env, 'Tenants', _b.id);
   if (path === '/vendor/update') return await isTestRecord(env, 'Vendors', _b.id);
   if (path === '/owner/update') return await isTestRecord(env, 'Owners', _b.id);
@@ -36779,6 +36786,105 @@ function laborDescriptionIsGeneric(billRow, timeEntries) {
   return !list.some(e => laborEntryText(e));
 }
 
+// Nov 24 2026 (queue #266): the narrow gap left after the Nov 2 work-done list. A vendor-bill invoice where the bill has no
+// Invoice_Description, no time entry on it says anything, and the work order has no checklist: the owner would read only the generic
+// work order text. Pure. Standalone invoices are out of scope (they carry their own text).
+function invoiceSummaryNeeded(billRow, timeEntries, wo, env) {
+  const billId = String((billRow && billRow.ID) || '').trim();
+  if (!billId) return false;
+  if (String((billRow && billRow.Standalone) || '').toUpperCase() === 'TRUE') return false;
+  if (englishOnly((billRow && billRow.Invoice_Description) || '').trim()) return false;
+  const list = (Array.isArray(timeEntries) ? timeEntries : []).filter(e => e && e.Active !== 'FALSE' && String(e.Bill_ID || '').trim() === billId);
+  if (list.some(e => laborEntryText(e))) return false;
+  if (workDoneBlock(wo, env)) return false;
+  return true;
+}
+
+// Pure. Only customer-safe facts: the sanitized work order description, the trade, the completion date and what the vendor typed
+// about materials from the truck. Never amounts, vendor cost or name, tenant name or phone, internal notes, access details.
+function invoiceSummaryInputs(wo, billRow) {
+  const description = sanitizeCustomerText((wo && (wo.Invoice_Memo || wo.Description)) || '').slice(0, 600);
+  const truck = sanitizeCustomerText(englishOnly((billRow && billRow.Truck_Desc) || '')).slice(0, 300);
+  const done = String((wo && wo.Completed_Date) || '').split('T')[0];
+  const facts = { description, trade: String((wo && wo.Trade) || '').trim(), completed: /^\d{4}-\d{2}-\d{2}$/.test(done) ? done : '', materials_from_truck: truck };
+  // Thin = nothing beyond a one-line description. No AI call is made for thin input (it would only invent detail).
+  const lineCount = description ? description.split('\n').length : 0;
+  const thin = !(truck || lineCount > 1 || description.length >= 120);
+  return { facts, thin };
+}
+
+// Pure. Strips markdown, caps at 400 characters at a sentence or word end, and refuses anything that looks like an access detail,
+// a price or a phone number. Returns { text, reason }.
+function invoiceSummaryClean(text) {
+  let t = String(text == null ? '' : text).replace(/```[a-z]*|```/gi, ' ').replace(/[*_#>`~]+/g, '').replace(/^\s*[-•]\s*/gm, '').replace(/\s*\n+\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  t = t.replace(/^(summary|draft)\s*:\s*/i, '').trim();
+  if (t.length > 400) {
+    const cut = t.slice(0, 400);
+    const stop = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('.'));
+    t = stop > 120 ? cut.slice(0, stop + 1) : cut.replace(/\s+\S*$/, '') + '…';
+  }
+  if (!t) return { text: '', reason: 'The draft came back empty.' };
+  if (/\$\s*\d|\b\d{3}[-.\s]\d{3,4}[-.\s]?\d{0,4}\b/.test(t)) return { text: '', reason: 'The draft carried a price or phone number, so it was thrown away. Type the summary instead.' };
+  if (looksLikeAccessDetail(t)) return { text: '', reason: 'The draft looked like it carried an access detail, so it was thrown away. Type the summary instead.' };
+  return { text: t, reason: '' };
+}
+
+// POST /invoice/draft-summary { ir_id } (admin only, writes nothing). One routeAI call at most; a paused AI or a failed call answers calmly
+// and never blocks sending the invoice.
+async function invoiceDraftSummary(env, body) {
+  const irId = String((body && (body.ir_id || body.id)) || '').trim();
+  if (!irId) return json({ ok: false, error: 'ir_id is required' }, 400);
+  const [irRows, wos, bills, entries] = await fetchTabs(env, ['Invoice_Review', 'Work_Orders', 'Vendor_Bills', 'Time_Entries']);
+  const ir = irRows.find(r => String(r.ID) === irId);
+  if (!ir) return json({ ok: false, error: 'Invoice_Review row not found' }, 404);
+  const billRow = bills.find(b => String(b.ID) === String(ir.Bill_ID));
+  if (!billRow) return json({ ok: false, error: 'No vendor bill is linked to this invoice review row, so there is nothing to describe.' }, 404);
+  const wo = findWO(wos, ir.WO_ID) || {};
+  const woEntries = entries.filter(e => String(e.WO_ID) === String(ir.WO_ID));
+  if (!invoiceSummaryNeeded(billRow, woEntries, wo, env)) return json({ ok: true, needed: false, draft: '', reason: 'This invoice already says what was done.' });
+  const inp = invoiceSummaryInputs(wo, billRow);
+  if (inp.thin) return json({ ok: true, needed: true, draft: '', reason: 'Not enough detail on the work order to draft a summary. Type one below.' });
+  const prompt = 'Write 1 to 3 short sentences, in plain past tense, telling a property owner what work was done on their property. '
+    + 'Use ONLY the facts below. Do not add anything that is not stated. Do not mention prices, names, phone numbers, codes, or promises. English only. No lists, no markdown.\n\nFACTS (JSON):\n' + JSON.stringify(inp.facts);
+  let out;
+  try {
+    out = await routeAI(env, { type: 'invoice_summary', prompt, maxTokens: 250, customerFacing: true, source: 'invoice-draft-summary' });
+  } catch (e) {
+    if (aiCreditIsPausedError(e)) return json({ ok: true, needed: true, draft: '', paused: true, reason: 'AI drafting is paused right now. Type the summary below; sending the invoice is not affected.' });
+    await logTelemetry(env, { Source: 'invoice-draft-summary', Job_Type: 'invoice_summary_failed', Skill_Or_Endpoint: '/invoice/draft-summary', Success: 'FALSE', Notes: 'ir=' + irId + ' bill=' + String(billRow.ID) + ' ' + String((e && e.message) || e).slice(0, 180) });
+    return json({ ok: true, needed: true, draft: '', error: 'Could not draft a summary (' + String((e && e.message) || e).slice(0, 120) + '). Type one below; sending the invoice is not affected.' });
+  }
+  const c = invoiceSummaryClean(out && out.result);
+  if (!c.text) return json({ ok: true, needed: true, draft: '', reason: c.reason });
+  return json({ ok: true, needed: true, draft: c.text, reason: '', model_used: out.model_used });
+}
+
+// POST /invoice/draft-summary/use { ir_id, text, draft? } (admin only). Saves the approved text onto the bill's Invoice_Description with a
+// verified write. Never overwrites a description that is already there. Nothing is sent to QuickBooks.
+async function invoiceDraftSummaryUse(env, body) {
+  const irId = String((body && (body.ir_id || body.id)) || '').trim();
+  const text = String((body && body.text) || '').trim();
+  if (!irId) return json({ ok: false, error: 'ir_id is required' }, 400);
+  if (!text) return json({ ok: false, error: 'The summary is empty, so nothing was saved.' }, 400);
+  if (text.length > 600) return json({ ok: false, error: 'The summary is ' + text.length + ' characters; keep it under 600.' }, 400);
+  if (looksLikeAccessDetail(text)) return json({ ok: false, error: 'That text looks like it has an access code or lockbox detail. Take it out; it would print on the owner invoice.' }, 400);
+  const irRows = await fetchTab(env, 'Invoice_Review');
+  const ir = irRows.find(r => String(r.ID) === irId);
+  if (!ir || !String(ir.Bill_ID || '').trim()) return json({ ok: false, error: 'No vendor bill is linked to this invoice review row.' }, 404);
+  const billRow = (await fetchTab(env, 'Vendor_Bills')).find(b => String(b.ID) === String(ir.Bill_ID));
+  if (!billRow) return json({ ok: false, error: 'Vendor bill ' + ir.Bill_ID + ' was not found.' }, 404);
+  if (englishOnly(billRow.Invoice_Description || '').trim()) return json({ ok: false, error: 'This bill already has an Invoice Description, so nothing was changed. Reload the preview.' }, 409);
+  await ensureColumns(env, 'Vendor_Bills', ['Invoice_Description']);
+  try { await updateRowVerified(env, 'Vendor_Bills', billRow.ID, { Invoice_Description: text }); }
+  catch (e) {
+    await logTelemetry(env, { Source: 'invoice-draft-summary', Job_Type: 'invoice_summary_used', Skill_Or_Endpoint: '/invoice/draft-summary/use', Success: 'FALSE', Notes: 'bill=' + billRow.ID + ' ' + String((e && e.message) || e).slice(0, 180) });
+    return json({ ok: false, error: 'The summary was not saved: ' + String((e && e.message) || e).slice(0, 160) }, 500);
+  }
+  const edited = body.draft !== undefined && String(body.draft || '').trim() !== text;
+  await logTelemetry(env, { Source: 'invoice-draft-summary', Job_Type: 'invoice_summary_used', Skill_Or_Endpoint: '/invoice/draft-summary/use', Success: 'TRUE', Notes: 'bill=' + billRow.ID + ' chars=' + text.length + ' edited=' + (edited ? 'yes' : 'no') + (body.draft ? '' : ' typed_by_hand') });
+  return json({ ok: true, saved: true, bill_id: billRow.ID, chars: text.length, edited });
+}
+
 // Async pre-pass for the invoice builders (Sep 28 2026): returns COPIES of the bill row and time
 // entries in which any customer-facing free text that is still Spanish (a vendor-portal bill or
 // time entry is not translated at write time) is replaced by its English translation, in memory
@@ -38246,6 +38352,7 @@ async function qbSendInvoice(env, body) {
                     loan_deduction: +previewLoanDeduction.toFixed(2), loan_balance: +previewLoanBalance.toFixed(2) },
         photo_link: photoFolderUrl,
         already:  { invoice: haveInv ? ir.QB_Invoice_ID : '', bill: haveBill ? ir.QB_Bill_ID : '' },
+        can_draft_summary: invoiceSummaryNeeded(_inEn.billRow, _inEn.timeEntries, wo, env),   // queue #266: the Hub shows "Draft a summary" under the generic-text warning
         warnings,
       }});
     }
