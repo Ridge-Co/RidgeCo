@@ -682,7 +682,7 @@ const _hubWorkerCore = {
         if (path === '/wo-snippets')            return await listWOSnippets(env);
         if (path === '/materials')              return await listMaterials(env, url);
         if (path === '/returns')                return await getSheet(env, 'Returns');
-        if (path === '/vendor-bills')           return await listVendorBills(env, url);
+        if (path === '/vendor-bills')           return await listVendorBills(env, url, callerRole);
         if (path === '/vendor-loan')            return await vendorLoanGet(env, url);
         if (path === '/vendor-fee-credit')      return await vendorFeeCreditGet(env, url);
         if (path === '/vendor-bills/truck-stock') return await vendorBillsTruckStock(env);
@@ -3057,7 +3057,7 @@ async function getAttachments(env, url, callerRole, callerSessionId) {
   if (callerRole === 'tenant') visible = visible.filter(a => !ATTACHMENT_COST_DOC_TYPES.includes(String(a.File_Type || '').toLowerCase()));
   // Owner allow-list (Nov 16 2026): photos and receipts only, and only the named columns. Vendor bill / invoice file rows never reach an owner.
   if (callerRole === 'owner') visible = visible.filter(a => OWNER_ATTACHMENT_TYPES.includes(String(a.File_Type || 'photo').toLowerCase())).map(a => ownerPick(a, OWNER_ATTACHMENT_FIELDS));
-  return json(visible);
+  return json(scrubPortalMoney(visible, callerRole).data);   // Nov 24 2026: Invoice_ID (the customer invoice) never reaches a vendor or tenant; fixed at the source after the money firewall's P1
 }
 
 // Stream the bytes of a receipt/bill/invoice file (the INTERNAL_TYPES that are deliberately
@@ -13777,7 +13777,11 @@ async function editVendorBillReceipts(env, body) {
   });
 }
 
-async function listVendorBills(env, url) {
+// Nov 24 2026: a PORTAL session (a vendor reading their own bills) gets the rows without the customer-side columns
+// (Markup, Profit, Customer_Total, Processing_Fee ...). The portal money firewall caught these going out on its first day
+// (P1 portal_money_firewall /vendor-bills); this fixes it at the source. Admin calls (callerRole null) are unchanged.
+function vendorBillsOut(rows, callerRole) { return callerRole ? scrubPortalMoney(rows, callerRole).data : rows; }
+async function listVendorBills(env, url, callerRole) {
   const woId = url.searchParams.get('wo_id') || '', vendorId = url.searchParams.get('vendor_id') || '', statusFilter = url.searchParams.get('status') || '';
   try {
     const bills = await fetchTab(env, 'Vendor_Bills', { stale: !!vendorId });
@@ -13788,11 +13792,11 @@ async function listVendorBills(env, url) {
       // /vendor-bills?status=submitted got EVERY vendor's bills. A vendor session now always carries
       // its own vendor_id here (forced by the router), so the filter applies; admin calls send none.
       const byStatus = results.filter(b => (b.Status || '').toLowerCase() === statusFilter.toLowerCase());
-      return json(vendorId ? byStatus.filter(b => b.Vendor_ID === vendorId) : byStatus);
+      return json(vendorBillsOut(vendorId ? byStatus.filter(b => b.Vendor_ID === vendorId) : byStatus, callerRole));
     }
     if (woId)     results = results.filter(b => b.WO_ID     === woId);
     if (vendorId) results = results.filter(b => b.Vendor_ID === vendorId);
-    return json(results);
+    return json(vendorBillsOut(results, callerRole));
   } catch(e) { return json([]); }
 }
 

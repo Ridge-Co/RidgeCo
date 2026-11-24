@@ -97,3 +97,16 @@ for (const [aud, files] of Object.entries(PAGES)) {
   ok(/return stripExternalMoney\(base, opts\);\s*\}$/.test(enrich), 'enrichWO still returns through stripExternalMoney');
 }
 console.log(`portal-money-firewall: ${n}/${n} passing`);
+
+// ── 6. endpoints the firewall caught on day one are fixed at the source (Nov 24 2026) ────────────────────────────
+{
+  ok(src.includes("if (path === '/vendor-bills')           return await listVendorBills(env, url, callerRole);"), '/vendor-bills gets the caller role');
+  const lvb = grabFn('async function listVendorBills(');
+  ok((lvb.match(/vendorBillsOut\(/g) || []).length === 2, 'both /vendor-bills return paths scrub for a portal session');
+  const ga = grabFn('async function getAttachments(');
+  ok(/return json\(scrubPortalMoney\(visible, callerRole\)\.data\);/.test(ga), '/attachments scrubs for a portal session');
+  const bill = { ID: 'B1', Vendor_ID: '4', Labor_Total: 300, Markup: 0.35, Profit: 105, Customer_Total: 405, Processing_Fee: 12, invoice_number: 'V-77' };
+  const v = scrubPortalMoney([bill], 'vendor').data[0];
+  ok(v.Labor_Total === 300 && v.invoice_number === 'V-77' && !('Markup' in v) && !('Profit' in v) && !('Customer_Total' in v) && !('Processing_Fee' in v), 'a vendor bill row keeps the vendor\'s own figures and loses the customer side');
+}
+console.log(`portal-money-firewall (with source fixes): ${n} checks`);
