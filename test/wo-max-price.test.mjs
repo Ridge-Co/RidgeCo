@@ -153,7 +153,7 @@ ok(/if \(path === '\/wo\/max-price'\)\s+return await setWoMaxPrice\(env, body\)/
 {
   const e0 = worker.indexOf('function enrichWO('), e1 = worker.indexOf('\n}\n', e0), body = worker.slice(e0, e1);
   ok(/if \(!opts\.vendorView\) delete base\.Max_Price;/.test(body), 'enrichWO strips it unless this is the vendor portal view');
-  ok(body.indexOf('delete base.Max_Price') > body.indexOf('...wo,') && body.indexOf('delete base.Max_Price') < body.indexOf('return stripExternalMoney(base);'), 'and strips it after the whole row is copied in');
+  ok(body.indexOf('delete base.Max_Price') > body.indexOf('...wo,') && body.indexOf('delete base.Max_Price') < body.indexOf('return stripExternalMoney(base, opts);'), 'and strips it after the whole row is copied in');
   ok(/const e = enrichWO\(wo, properties, units, tenants, keys, \{ tradeAccessDefaults, vendors, viewingVendorId: vendorRec\.ID \}/.test(worker), 'the shared link does not ask for vendorView');
   ok(/auth\.vid && String\(auth\.vid\) === String\(wo\.Vendor_ID/.test(worker), 'the shared link adds it only for the assigned vendor\'s own link');
   ok(/enrichWO\(wo, properties, units, tenants, keys, \{ omitLockbox: true, tenantView: true, vendors \}\)/.test(worker) && /ownerView: true, vendors \}\)/.test(worker), 'tenant and owner lists go through enrichWO (so they never carry it)');
