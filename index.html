@@ -5876,6 +5876,7 @@ function renderTenantsPage() {
         '<td>'+paBadge('tenant', t.ID)+'</td>' +
         '<td style="display:flex;gap:4px">' +
         '<button class="btn small secondary" onclick="openEditTenantModal(\''+t.ID+'\')">Edit</button>' +
+        '<button class="btn small" style="background:#b45309;color:#fff" onclick="openPortalAs(\'tenant\',\''+t.ID+'\')" title="Open this tenant\'s portal exactly as they see it, no PIN needed (4 hours, admin only)">👁 Open as</button>' +
         '<button class="btn small secondary" onclick="openScheduleMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')">📅</button>' +
         '<button class="btn small secondary" onclick="openMoveOutModal(\''+t.ID+'\',\''+esc(nm)+'\')" style="background:var(--danger)20;border-color:var(--danger);color:var(--danger)">Move Out</button>' +
         '<button class="btn small secondary" onclick="setTenantPin(\''+t.ID+'\',\''+esc(t.Phone||'')+'\')" title="Set PIN">PIN</button>' +
