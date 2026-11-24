@@ -14915,6 +14915,60 @@ function qbNetToggle(key, val) { _qbNet[key] = val; if (_qbPrev) { document.getE
 function qbFeeToggle(on) { _qbNet.instant_pay = !!on; qbLoadPreview(); }
 function qbMoney(n) { return '$' + (parseFloat(n)||0).toFixed(2); }
 
+// Queue #266: "Draft a summary" under the generic-description warning. Brett only. The AI drafts, Brett edits and approves,
+// "Use this on the invoice" saves it to the bill's Invoice_Description (verified on the Worker) and reloads the preview.
+// Nothing goes to QuickBooks until the normal Send button is tapped. The AI being paused or failing never blocks sending.
+var _qbDraft = { state: 'idle', text: '', draft: '', note: '', busy: false };
+function qbDraftBoxHtml(p) {
+  if (!p || !p.can_draft_summary) return '';
+  return '<div id="qb-draft-box" style="margin-top:8px">' + qbDraftInner() + '</div>';
+}
+function qbDraftInner() {
+  var d = _qbDraft, btn = 'min-height:44px;width:100%;margin-top:8px';
+  if (d.state === 'idle') {
+    return '<button class="btn secondary" style="' + btn + '" onclick="qbDraftStart()">Draft a summary</button>' +
+      '<div style="color:var(--muted);font-size:12px;margin-top:4px">Writes 1 to 3 plain sentences about the work for the owner. You edit it before it goes on the invoice.</div>';
+  }
+  if (d.state === 'loading') {
+    return '<button class="btn secondary" style="' + btn + '" disabled>Drafting…</button>';
+  }
+  var note = d.note ? '<div style="color:' + (d.state === 'error' ? 'var(--danger)' : 'var(--muted)') + ';font-size:12px;margin-bottom:6px">' + (d.state === 'error' ? '⚠ ' : '') + esc(d.note) + '</div>' : '';
+  return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px">' + note +
+    '<label style="font-size:12px;color:var(--muted)" for="qb-draft-text">What the owner will read on the invoice</label>' +
+    '<textarea id="qb-draft-text" rows="4" maxlength="600" style="width:100%;box-sizing:border-box;font-size:16px;margin-top:4px;resize:vertical" oninput="_qbDraft.text=this.value">' + esc(d.text) + '</textarea>' +
+    '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">' +
+      '<button class="btn" style="min-height:44px;flex:1 1 200px" ' + (d.busy ? 'disabled' : '') + ' onclick="qbDraftUse()">' + (d.busy ? 'Saving…' : 'Use this on the invoice') + '</button>' +
+      '<button class="btn secondary" style="min-height:44px;flex:1 1 120px" ' + (d.busy ? 'disabled' : '') + ' onclick="qbDraftDiscard()">Discard</button>' +
+    '</div></div>';
+}
+function qbDraftPaint() { var el = document.getElementById('qb-draft-box'); if (el) el.innerHTML = qbDraftInner(); }
+function qbDraftStart() {
+  var id = _qbCurrent; if (!id || _qbDraft.state === 'loading') return;
+  _qbDraft = { state: 'loading', text: '', draft: '', note: '', busy: false }; qbDraftPaint();
+  api('POST', '/invoice/draft-summary', { ir_id: id }, 60000).then(function(res){
+    if (_qbCurrent !== id) return;
+    if (!res || res.ok === false) { _qbDraft = { state: 'error', text: '', draft: '', note: (res && res.error) || 'Could not draft a summary. Type one below.', busy: false }; }
+    else if (res.draft) { _qbDraft = { state: 'ready', text: res.draft, draft: res.draft, note: 'Check this reads right. Change anything you like.', busy: false }; }
+    else { _qbDraft = { state: res.error ? 'error' : 'ready', text: '', draft: '', note: res.error || res.reason || 'Type a summary below.', busy: false }; }
+    qbDraftPaint();
+  }).catch(function(e){
+    if (_qbCurrent !== id) return;
+    _qbDraft = { state: 'error', text: '', draft: '', note: 'Could not draft a summary (' + (e.message || '?') + '). Type one below; sending is not affected.', busy: false }; qbDraftPaint();
+  });
+}
+function qbDraftDiscard() { _qbDraft = { state: 'idle', text: '', draft: '', note: '', busy: false }; qbDraftPaint(); }
+function qbDraftUse() {
+  var id = _qbCurrent, d = _qbDraft; if (!id || d.busy) return;
+  var ta = document.getElementById('qb-draft-text'); if (ta) d.text = ta.value;
+  if (!String(d.text || '').trim()) { d.note = 'Type a summary first, or Discard.'; d.state = 'error'; qbDraftPaint(); return; }
+  d.busy = true; qbDraftPaint();
+  api('POST', '/invoice/draft-summary/use', { ir_id: id, text: d.text, draft: d.draft }).then(function(res){
+    if (_qbCurrent !== id) return;
+    if (!res || !res.ok) { d.busy = false; d.state = 'error'; d.note = (res && res.error) || 'Not saved. Try again.'; qbDraftPaint(); return; }
+    qbLoadPreview();   // shows the exact final invoice line; the box is gone because the bill now has a description
+  }).catch(function(e){ if (_qbCurrent !== id) return; d.busy = false; d.state = 'error'; d.note = 'Not saved (' + (e.message || '?') + '). Try again.'; qbDraftPaint(); });
+}
+
 // Signed-proposal panel: suggest the matching proposal, show what was already billed, ask Brett to confirm.
 function renderQBNettingPanel(n) {
   if (!n || !n.found) return '';
