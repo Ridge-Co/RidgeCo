@@ -22461,6 +22461,7 @@ function formatDigestText(d) {
   L.push(''); L.push('▶ MONEY');
   if (d.pendingBills.length) { L.push(`${d.pendingBills.length} vendor bills to review ($${d.billsTotal.toFixed(2)}):`); d.pendingBills.forEach(x=>L.push('· '+x)); }
   else L.push('· No vendor bills awaiting review.');
+  if (d.vendorDocs && d.vendorDocs.length) { L.push(''); L.push('▶ VENDOR DOCUMENTS'); d.vendorDocs.forEach(x=>L.push('· '+x)); }
   L.push(''); L.push('▶ WINS (last 4 days)');
   if (d.wins.length) d.wins.forEach(x=>L.push('· '+x)); else L.push('· —');
   L.push(''); L.push(`▶ PULSE  ${d.pulse.properties} properties · ${d.pulse.tenants} tenants · ${d.pulse.vendors} vendors · ${d.pulse.open_wos} open WOs`);
