@@ -14,8 +14,8 @@ function grabFn(sig) {
 const stripInternalNotes = new Function(grabFn('function stripInternalNotes(') + '\nreturn stripInternalNotes;')();
 const row = () => ({ ID: 'WO-1', Description: 'Leaky tap', Admin_Notes: 'tenant is behind on rent', Owner_Notes: 'owner wants cheapest', Entry_Notes: 'dog in unit', Vendor_Admin_Notes: 'call before arriving', WO_Contact_Name: 'Pat Doe', tenant_name: 'Pat Doe', tenant_record_name: 'Pat Doe' });
 
-test('every external view loses Admin_Notes and Owner_Notes, keeps Vendor_Admin_Notes', () => {
-  for (const opts of [{ vendorView: true }, { tenantView: true }, { ownerView: true }, { sharedView: true }, { viewingVendorId: '7' }]) {
+test('every vendor, tenant and shared view loses Admin_Notes and Owner_Notes, keeps Vendor_Admin_Notes', () => {
+  for (const opts of [{ vendorView: true }, { tenantView: true }, { sharedView: true }, { viewingVendorId: '7' }]) {
     const r = stripInternalNotes(row(), opts, false);
     assert.ok(!('Admin_Notes' in r) && !('Owner_Notes' in r), JSON.stringify(opts));
     assert.strictEqual(r.Vendor_Admin_Notes, 'call before arriving');
@@ -33,10 +33,14 @@ test('a vendor who accepted keeps Entry_Notes and the tenant name', () => {
   const r = stripInternalNotes(row(), { vendorView: true }, false);
   assert.strictEqual(r.Entry_Notes, 'dog in unit'); assert.strictEqual(r.tenant_name, 'Pat Doe');
 });
+test('the owner route is left to the owner allow-list (admin preview keeps the whole row)', () => {
+  const r = stripInternalNotes(row(), { ownerView: true }, false);
+  assert.strictEqual(r.Admin_Notes, 'tenant is behind on rent');
+});
 test('the admin path (no external flag) is untouched', () => {
   const r = stripInternalNotes(row(), {}, false);
   assert.strictEqual(r.Admin_Notes, 'tenant is behind on rent'); assert.strictEqual(r.Owner_Notes, 'owner wants cheapest');
 });
 test('enrichWO runs every view through it, before the money strip', () => {
-  assert.ok(/return stripExternalMoney\(stripInternalNotes\(base, opts, accessGated\), opts\);/.test(wsrc));
+  assert.ok(/stripInternalNotes\(base, opts, accessGated\);[^\n]*\n  return stripExternalMoney\(base, opts\);/.test(wsrc));
 });
