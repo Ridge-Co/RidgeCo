@@ -12693,7 +12693,9 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
 // PURE. Returns the same object with the fields removed.
 function stripInternalNotes(base, opts, accessGated) {
   const o = opts || {};
-  const external = !!(o.tenantView || o.ownerView || o.vendorView || o.sharedView || o.viewingVendorId);
+  // Owner views are not listed: an owner SESSION is cut down by the owner allow-list (ownerPick), and the admin secret previewing the
+  // owner route keeps the whole row on purpose (test/owner-allowlist.test.mjs).
+  const external = !!(o.tenantView || o.vendorView || o.sharedView || o.viewingVendorId);
   if (!external) return base;
   delete base.Admin_Notes; delete base.Owner_Notes;
   if (o.vendorView && accessGated) {
