@@ -931,7 +931,7 @@ const _hubWorkerCore = {
         if (path === '/owner/tenant-roster/preview') return await ownerRosterPreview(env, callerRole, callerSessionId, body);
         if (path === '/owner/tenant-roster/apply')   return await ownerRosterApply(env, callerRole, callerSessionId, body);
         if (path === '/owner/approval/respond')      return await ownerApprovalRespond(env, callerRole, callerSessionId, body);   // queue #138: decline / question; saved + read back before Brett is texted
-        if (path === '/assign')                   return await assignVendor(env, body);
+        if (path === '/assign')                   return await assignVendorWithDocCheck(env, body);
         if (path === '/status')                   return await callWithFailureAlert(env, 'wo_status', '/status', () => updateStatus(env, body));
         if (path === '/wo/checklist')             return await saveChecklist(env, body);
         if (path === '/wo/tenant-update-manual')  return await tenantManualUpdate(env, body);
@@ -981,8 +981,8 @@ const _hubWorkerCore = {
         // hit on Vendor_Bills). ensureColumns first, every time, so it's a no-op once the header exists.
         // VENDOR_ONBOARDING_COLS (Sep 23 2026, Phase 1) folded into the same ensureColumns call
         // every vendor add/update already makes — additive, no-op once the headers exist.
-        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address', 'Language'].concat(VENDOR_ONBOARDING_COLS)); if (body.Bank_Info_Status === undefined || body.Bank_Info_Status === '') body.Bank_Info_Status = 'not_started'; const _addRes = await addRow(env, 'Vendors', body); try { const _nv = await _addRes.clone().json(); if (_nv && _nv.id) await autoMatchVendorToQbo(env, _nv.id, '/vendor/add'); } catch (e) { /* never blocks vendor creation */ } return _addRes; }
-        if (path === '/vendor/update')            { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address', 'Language'].concat(VENDOR_ONBOARDING_COLS)); return await updateRow(env, 'Vendors', body.id, body.fields); }
+        if (path === '/vendor/add')               { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address', 'Language'].concat(VENDOR_ONBOARDING_COLS, VENDOR_DOC_COLS)); if (body.Bank_Info_Status === undefined || body.Bank_Info_Status === '') body.Bank_Info_Status = 'not_started'; const _addRes = await addRow(env, 'Vendors', body); try { const _nv = await _addRes.clone().json(); if (_nv && _nv.id) await autoMatchVendorToQbo(env, _nv.id, '/vendor/add'); } catch (e) { /* never blocks vendor creation */ } return _addRes; }
+        if (path === '/vendor/update')            { await ensureColumns(env, 'Vendors', ['Vendor_Type', 'Payment_Address', 'Language'].concat(VENDOR_ONBOARDING_COLS, VENDOR_DOC_COLS)); return await vendorUpdateLoggingDocs(env, body); }
         if (path === '/vendor/complete-onboarding') return await vendorCompleteOnboarding(env, body);
         // Contact-card upload (Sept 2 2026) — business-card/contact-photo OCR shared by the
         // Add Tenant / Add Owner / Add Vendor contact-card buttons in index.html. Admin-gated
@@ -22409,6 +22409,7 @@ async function buildDigest(env) {
     wins: wins.map(w=>`WO-${w.ID} · ${w.Property_Address||('prop '+(w.Property_ID||'?'))} · ${w.Status} · ${String(w.Description||'').slice(0,45)}`),
     pulse: { properties: activeRows(props).length, tenants: activeRows(tenants).length, vendors: activeRows(vendors).length, open_wos: open.length, pending_bills: pendingBills.length },
     healthAlerts, stuckReceipts,
+    vendorDocs: vendorDocDigestLines(activeRows(vendors), today),
   };
 }
 
@@ -22460,6 +22461,7 @@ function formatDigestText(d) {
   L.push(''); L.push('▶ MONEY');
   if (d.pendingBills.length) { L.push(`${d.pendingBills.length} vendor bills to review ($${d.billsTotal.toFixed(2)}):`); d.pendingBills.forEach(x=>L.push('· '+x)); }
   else L.push('· No vendor bills awaiting review.');
+  if (d.vendorDocs && d.vendorDocs.length) { L.push(''); L.push('▶ VENDOR DOCUMENTS'); d.vendorDocs.forEach(x=>L.push('· '+x)); }
   L.push(''); L.push('▶ WINS (last 4 days)');
   if (d.wins.length) d.wins.forEach(x=>L.push('· '+x)); else L.push('· —');
   L.push(''); L.push(`▶ PULSE  ${d.pulse.properties} properties · ${d.pulse.tenants} tenants · ${d.pulse.vendors} vendors · ${d.pulse.open_wos} open WOs`);
@@ -25796,6 +25798,125 @@ function vendorOnboardingComplete(vendor) {
   const required = linked ? VENDOR_ONBOARDING_REQUIRED_FIELDS.filter(f => f !== 'Tax_ID') : VENDOR_ONBOARDING_REQUIRED_FIELDS;
   const missing = required.filter(f => !String(vendor[f] || '').trim());
   return { complete: missing.length === 0, missing };
+}
+
+// ── VENDOR INSURANCE + LICENSE EXPIRY (queue #113, Phase 1: record it, see it, warn on it) ─────────────────────────
+// Brett Oct 14: WARN, never block. Nothing here stops an assignment, a dispatch or a bill, and nothing here sends a message.
+// Insurance_Cert_URL and Insurance_Expiry already exist on Vendors (VENDOR_ONBOARDING_COLS); the rest are added by ensureColumns.
+// Phase 2 (reminders, digest email, scheduler job) and Phase 3 (calendar, vendor self-upload) are NOT built.
+const VENDOR_DOC_COLS = ['License_Number', 'License_Expiry', 'License_Doc_URL', 'WC_Waiver_On_File', 'WC_Waiver_Doc_URL', 'WC_Waiver_Date', 'Doc_Reminder_SMS'];
+const VENDOR_DOC_WARN_DAYS = 30;   // "expiring" = inside this many days (the brief's reminder thresholds start at 60; the yellow warning uses the nearest one)
+// PURE. A date cell as a UTC day number, or null when it cannot be read. Accepts YYYY-MM-DD (with a time after it) and M/D/YYYY.
+function vendorDocDayNumber(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  let y, m, d, mt;
+  if ((mt = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:$|[T\s])/.exec(s))) { y = +mt[1]; m = +mt[2]; d = +mt[3]; }
+  else if ((mt = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s))) { m = +mt[1]; d = +mt[2]; y = +mt[3]; }
+  else return null;
+  const t = Date.UTC(y, m - 1, d);
+  const chk = new Date(t);
+  if (chk.getUTCFullYear() !== y || chk.getUTCMonth() !== m - 1 || chk.getUTCDate() !== d) return null;
+  return Math.round(t / 86400000);
+}
+function vendorDocDateWords(raw) {
+  const n = vendorDocDayNumber(raw); if (n == null) return '';
+  const dt = new Date(n * 86400000);
+  return ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][dt.getUTCMonth()] + ' ' + dt.getUTCDate() + ' ' + dt.getUTCFullYear();
+}
+// PURE. One document: state ok | expiring | expired | missing, days_left (null when no readable date), expiry (as typed).
+// A blank date is "missing"; a date that cannot be read is ALSO "missing" and says so (never treated as fine).
+function vendorDocOne(rawExpiry, todayISO, warnDays) {
+  const raw = String(rawExpiry == null ? '' : rawExpiry).trim();
+  if (!raw) return { state: 'missing', expiry: '', days_left: null, unreadable: false };
+  const day = vendorDocDayNumber(raw), today = vendorDocDayNumber(todayISO);
+  if (day == null || today == null) return { state: 'missing', expiry: raw, days_left: null, unreadable: true };
+  const left = day - today;
+  return { state: left < 0 ? 'expired' : (left <= warnDays ? 'expiring' : 'ok'), expiry: raw, days_left: left, unreadable: false };
+}
+// PURE. { insurance, license, waiver_on_file, warnings:[yellow sentences], notes:[quiet grey sentences], level }.
+// level: 'problem' (something expired) | 'soon' (something expiring) | 'missing' (nothing on file, nothing wrong) | 'ok'.
+// A workers' comp waiver is its own line and never replaces liability insurance.
+function vendorDocStatus(vendor, todayISO, opts) {
+  const v = vendor || {};
+  const warnDays = (opts && opts.warnDays) || VENDOR_DOC_WARN_DAYS;
+  const insurance = vendorDocOne(v.Insurance_Expiry, todayISO, warnDays);
+  const license = vendorDocOne(v.License_Expiry, todayISO, warnDays);
+  const waiver = String(v.WC_Waiver_On_File || '').trim().toUpperCase() === 'TRUE';
+  const name = String(v.Name || v.Company || 'This vendor').trim();
+  const warnings = [], notes = [];
+  for (const [label, d] of [['insurance', insurance], ['license', license]]) {
+    if (d.state === 'expired') warnings.push(`${name} - ${label} expired ${vendorDocDateWords(d.expiry) || d.expiry}`);
+    else if (d.state === 'expiring') warnings.push(`${name} - ${label} expires ${vendorDocDateWords(d.expiry) || d.expiry} (${d.days_left === 0 ? 'today' : 'in ' + d.days_left + ' day' + (d.days_left === 1 ? '' : 's')})`);
+    else if (d.state === 'missing' && d.unreadable) warnings.push(`${name} - ${label} date on file could not be read (${d.expiry})`);
+    else if (d.state === 'missing') notes.push(label === 'insurance' ? 'No insurance on file' : 'No license on file');
+  }
+  const level = (insurance.state === 'expired' || license.state === 'expired' || insurance.unreadable || license.unreadable) ? 'problem'
+    : (insurance.state === 'expiring' || license.state === 'expiring') ? 'soon'
+    : (insurance.state === 'missing' && license.state === 'missing') ? 'missing' : 'ok';
+  return { insurance, license, waiver_on_file: waiver, warnings, notes, level };
+}
+// PURE. Daily digest lines: one per ACTIVE vendor with an expired / expiring / unreadable document, plus ONE count line for vendors with
+// nothing on file (every vendor starts as "missing", so listing them all would bury the real problems on day one).
+function vendorDocDigestLines(vendors, todayISO) {
+  const lines = []; let missing = 0;
+  for (const v of (vendors || [])) {
+    if (String(v.Active || '').toUpperCase() === 'FALSE') continue;
+    const st = vendorDocStatus(v, todayISO);
+    if (st.warnings.length) lines.push(st.warnings.join('; '));
+    else if (st.level === 'missing') missing++;
+  }
+  if (missing) lines.push(`${missing} active vendor${missing === 1 ? ' has' : 's have'} no insurance or license date on file yet (Edit Vendor to add)`);
+  return lines;
+}
+// POST /assign. Same call as before, plus: the answer carries doc_warnings / doc_notes for the vendor picked, and a warning is
+// written to the work order history. NEVER blocks or changes the assignment; a failure of the check is reported, not hidden.
+async function assignVendorWithDocCheck(env, body) {
+  const res = await assignVendor(env, body);
+  if (!res || res.status >= 400) return res;
+  let data = null;
+  try { data = await res.clone().json(); }
+  catch (e) { await softFail(env, 'assign:doc-check:parse', e, { severity: 'P2' }); return res; }   // the assignment answer is returned untouched
+  if (!data || data.success !== true) return res;
+  try {
+    const vendors = await fetchTab(env, 'Vendors');
+    const vendor = vendors.find(x => String(x.ID) === String(body.vendor_id));
+    if (!vendor) throw new Error('vendor ' + body.vendor_id + ' not found when checking documents');
+    const st = vendorDocStatus(vendor, etTodayISO());
+    data.doc_warnings = st.warnings; data.doc_notes = st.notes;
+    if (st.warnings.length) {
+      await logWOAudit(env, body.wo_id, 'admin', 'admin', 'Vendor_Docs', '', st.warnings.join('; ').slice(0, 400), 'Assigned with warning (insurance / license). Assignment was not blocked.');
+    }
+  } catch (e) {
+    await softFail(env, 'assign:doc-check', e, { severity: 'P2' });
+    data.doc_check_error = 'Could not check this vendor\'s insurance / license dates: ' + String((e && e.message) || e).slice(0, 160);
+  }
+  return json(data, res.status);
+}
+// POST /vendor/update. Same write as before; when an insurance / license field is in the change, who / when / old / new is logged
+// (Ops_Telemetry, Job_Type vendor_doc_change). A failed log is reported in the answer, never hidden, and never undoes the save.
+const VENDOR_DOC_WATCHED = ['Insurance_Expiry', 'Insurance_Cert_URL', 'License_Number', 'License_Expiry', 'License_Doc_URL', 'WC_Waiver_On_File', 'WC_Waiver_Doc_URL', 'WC_Waiver_Date', 'Doc_Reminder_SMS'];
+async function vendorUpdateLoggingDocs(env, body) {
+  const fields = (body && body.fields) || {};
+  const touched = VENDOR_DOC_WATCHED.filter(k => Object.prototype.hasOwnProperty.call(fields, k));
+  let before = null, readErr = '';
+  if (touched.length) {
+    try { before = (await fetchTab(env, 'Vendors')).find(x => String(x.ID) === String(body.id)) || null; }
+    catch (e) { readErr = String((e && e.message) || e).slice(0, 160); await softFail(env, 'vendor-update:doc-before', e, { severity: 'P2' }); }
+  }
+  const res = await updateRow(env, 'Vendors', body.id, fields);
+  if (!touched.length || !res || res.status >= 400) return res;
+  const changes = touched.map(k => ({ k, from: before ? String(before[k] == null ? '' : before[k]) : '?', to: String(fields[k] == null ? '' : fields[k]) })).filter(c => c.from !== c.to);
+  if (!changes.length && !readErr) return res;
+  let data = null;
+  try { data = await res.clone().json(); } catch (e) { await softFail(env, 'vendor-update:doc-parse', e, { severity: 'P2' }); return res; }
+  try {
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'vendor_doc_change', Skill_Or_Endpoint: '/vendor/update', Success: 'TRUE',
+      Notes: ('vendor ' + body.id + ' by admin: ' + (changes.map(c => `${c.k}: "${c.from}" -> "${c.to}"`).join('; ') || 'old values unreadable (' + readErr + ')')).slice(0, 480) });
+  } catch (e) {
+    await softFail(env, 'vendor-update:doc-log', e, { severity: 'P2' });
+    return json(Object.assign({}, data, { doc_log_error: 'Saved, but the change could not be logged: ' + String((e && e.message) || e).slice(0, 160) }), res.status);
+  }
+  return res;
 }
 
 // ── QUICKBOOKS → HUB VENDOR SYNC (Oct 5 2026) ───────────────────────────────────────────

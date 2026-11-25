@@ -23,6 +23,7 @@ const world = {
   computeTelemetryMetrics: () => ({ byJob: {} }),
   fetchConfig: async () => { if (CFG_THROW) throw new Error('config down'); return CFG; },
   fuDigestLines: async () => ({ lines: [], error: null }),
+  vendorDocDigestLines: () => [],   // queue #113: pure helper, tested in test/vendor-doc-expiry.test.mjs
 };
 const names = Object.keys(world);
 const F = new Function(...names, helpers + '\n' + activeRows + '\n' + build + '\n' + fmt + '\nreturn { buildDigest, formatDigestText };')(...names.map(n => world[n]));

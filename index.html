@@ -1288,6 +1288,7 @@ window.addEventListener('pageshow', function(e){
         <select id="assign-vendor-select" onchange="updateAssignPreview()" size="6" style="height:auto;min-height:120px;font-size:13px;cursor:pointer;width:100%"><option value="">Select vendor...</option></select>
       </div>
     </div>
+    <div id="assign-doc-warning" role="status" style="display:none"></div>
     <div id="assign-preview" style="margin-top:12px;color:var(--muted);font-size:12px"></div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-assign')">Cancel</button><button class="btn" id="assign-submit-btn" onclick="submitAssign()">Assign + Send SMS</button></div>
   </div>
@@ -1684,6 +1685,15 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Billing Address</label><input type="text" id="ev-billing-address"></div>
       <div class="form-group"><label>Tax ID (EIN or SSN)</label><input type="text" id="ev-tax-id"></div>
       <div class="form-group"><label>Tax ID Document URL <span style="font-weight:normal;color:var(--muted)">(Drive link, optional)</span></label><input type="text" id="ev-tax-doc-url"></div>
+      <div style="grid-column:1/-1;border-top:1px solid var(--border);margin:8px 0;padding-top:10px"><div style="color:var(--muted);font-size:12px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px">Insurance and license</div><div style="color:var(--muted);font-size:13px">Warning only. An expired or missing document never stops a job from being assigned.</div></div>
+      <div class="form-group"><label>Insurance expires</label><input type="date" id="ev-ins-expiry"></div>
+      <div class="form-group"><label>Insurance certificate link <span style="font-weight:normal;color:var(--muted)">(Drive link)</span></label><input type="text" id="ev-ins-url"></div>
+      <div class="form-group"><label>License number</label><input type="text" id="ev-lic-number"></div>
+      <div class="form-group"><label>License expires</label><input type="date" id="ev-lic-expiry"></div>
+      <div class="form-group"><label>License document link <span style="font-weight:normal;color:var(--muted)">(Drive link)</span></label><input type="text" id="ev-lic-url"></div>
+      <div class="form-group"><label style="display:flex;align-items:center;gap:8px;min-height:44px"><input type="checkbox" id="ev-wc-waiver"> Workers' comp waiver on file</label></div>
+      <div class="form-group"><label>Waiver signed on</label><input type="date" id="ev-wc-waiver-date"></div>
+      <div class="form-group"><label>Waiver document link <span style="font-weight:normal;color:var(--muted)">(Drive link)</span></label><input type="text" id="ev-wc-waiver-url"></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="ev-rates"></textarea></div>
       <div class="form-group full" style="border-top:1px solid var(--border);padding-top:10px">
         <label>Loan / Advance Balance</label>
@@ -3679,9 +3689,35 @@ function filterEWOVendors() {
     '<option value="">— Unassigned —</option>' +
     vendors.map(function(v){ return '<option value="'+v.ID+'"'+(v.ID===currentVal?' selected':'')+'>'+v.Name+' — '+v.Trade+'</option>'; }).join('');
 }
+// Queue #113: insurance / license dates as a date-input value (YYYY-MM-DD), '' when blank or not readable.
+function evDocDateValue(raw) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(raw||'').trim()); if (m) return m[1]+'-'+m[2]+'-'+m[3];
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(raw||'').trim());
+  return m ? m[3]+'-'+('0'+m[1]).slice(-2)+'-'+('0'+m[2]).slice(-2) : '';
+}
+// Queue #113: the warning line shown above the Assign button. Same rules as the Worker's vendorDocStatus (expired / expiring in 30 days /
+// date unreadable = yellow; nothing on file = quiet grey). The server repeats the check and writes the history line; this only shows it.
+function vendorDocWarningLines(v) {
+  var out = {warn:[], note:[]}; if (!v) return out;
+  var now = new Date(), today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  [['insurance', v.Insurance_Expiry], ['license', v.License_Expiry]].forEach(function(pair) {
+    var raw = String(pair[1]||'').trim(), iso = evDocDateValue(raw);
+    if (!raw) { out.note.push(pair[0]==='insurance' ? 'No insurance on file' : 'No license on file'); return; }
+    if (!iso) { out.warn.push(pair[0]+' date on file could not be read ('+raw+')'); return; }
+    var p = iso.split('-'), t = Date.UTC(+p[0], +p[1]-1, +p[2]), left = Math.round((t-today)/86400000);
+    var words = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+p[1]-1]+' '+(+p[2])+' '+p[0];
+    if (left < 0) out.warn.push(pair[0]+' expired '+words);
+    else if (left <= 30) out.warn.push(pair[0]+' expires '+words+(left===0?' (today)':' (in '+left+' day'+(left===1?'':'s')+')'));
+  });
+  return out;
+}
 function updateAssignPreview() {
   var v = state.vendors.find(function(x){return x.ID===document.getElementById('assign-vendor-select').value;});
   document.getElementById('assign-preview').textContent = v ? 'SMS will be sent to '+v.Name+' ('+v.Phone+') with job details and access info.' : '';
+  var box = document.getElementById('assign-doc-warning'), w = vendorDocWarningLines(v);
+  if (w.warn.length) { box.style.cssText = 'display:block;margin-top:12px;padding:8px 12px;border-radius:6px;background:var(--warn-bg);color:var(--warn-text);border:1px solid var(--warn);font-size:13px'; box.textContent = 'Warning: '+v.Name+' - '+w.warn.join('; ')+'. You can still assign.'; }
+  else if (v && w.note.length) { box.style.cssText = 'display:block;margin-top:12px;font-size:13px;color:var(--muted)'; box.textContent = w.note.join('. ')+'.'; }
+  else { box.style.display = 'none'; box.textContent = ''; }
 }
 function submitAssign() {
   var vendorId = document.getElementById('assign-vendor-select').value;
@@ -3689,6 +3725,8 @@ function submitAssign() {
   api('POST','/assign',{wo_id:assignWOId,vendor_id:vendorId}).then(function(res){
     if (res.success) {
       toast('Assigned. Vendor SMS: '+(res.vendor_sms?'✅':'❌')+' | Tenant SMS: '+(res.tenant_sms?'✅':'—'),'success');
+      if (res.doc_warnings && res.doc_warnings.length) toast('Assigned with warning: '+res.doc_warnings.join('; '),'warn');
+      if (res.doc_check_error) toast(res.doc_check_error,'warn');
       closeModal('modal-assign');
       // Optimistically update state so vendor shows immediately even if loadAll hits quota
       var wo = safeArray(state.workorders).find(function(w){return w.ID===assignWOId;});
@@ -6260,6 +6298,9 @@ function openEditVendorModal(id) {
   document.getElementById('ev-language').value=(String(v.Language||'').toLowerCase()==='es')?'es':'en';
   document.getElementById('ev-billing-email').value=v.Billing_Email||''; document.getElementById('ev-billing-address').value=v.Billing_Address||'';
   document.getElementById('ev-tax-id').value=v.Tax_ID||''; document.getElementById('ev-tax-doc-url').value=v.Tax_ID_Document_URL||'';
+  document.getElementById('ev-ins-expiry').value=evDocDateValue(v.Insurance_Expiry); document.getElementById('ev-ins-url').value=v.Insurance_Cert_URL||'';
+  document.getElementById('ev-lic-number').value=v.License_Number||''; document.getElementById('ev-lic-expiry').value=evDocDateValue(v.License_Expiry); document.getElementById('ev-lic-url').value=v.License_Doc_URL||'';
+  document.getElementById('ev-wc-waiver').checked=String(v.WC_Waiver_On_File||'').toUpperCase()==='TRUE'; document.getElementById('ev-wc-waiver-date').value=evDocDateValue(v.WC_Waiver_Date); document.getElementById('ev-wc-waiver-url').value=v.WC_Waiver_Doc_URL||'';
   document.getElementById('ev-active').value=v.Active==='FALSE'?'FALSE':'TRUE';
   document.getElementById('ev-loan-balance').textContent = '…';
   api('GET','/vendor-loan?vendor_id='+encodeURIComponent(v.ID)).then(function(res){
@@ -6395,9 +6436,10 @@ function submitVendorLoanEntry() {
 function submitEditVendor() {
   var id=document.getElementById('ev-id').value;
   var billingProps = Array.from(document.querySelectorAll('.ev-billprop-check:checked')).map(function(c){return c.value;});
-  var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Vendor_Type:document.getElementById('ev-type').value||'labor',Language:document.getElementById('ev-language').value==='es'?'es':'en',Payment_Address:document.getElementById('ev-payaddr').value.trim(),Rate_Notes:document.getElementById('ev-rates').value,Billing_Email:document.getElementById('ev-billing-email').value.trim(),Billing_Address:document.getElementById('ev-billing-address').value.trim(),Tax_ID:document.getElementById('ev-tax-id').value.trim(),Tax_ID_Document_URL:document.getElementById('ev-tax-doc-url').value.trim(),Active:document.getElementById('ev-active').value==='FALSE'?'FALSE':'TRUE'};
+  var fields={Name:document.getElementById('ev-name').value,First_Name:document.getElementById('ev-first-name').value.trim(),Company:document.getElementById('ev-company').value,Phone:document.getElementById('ev-phone').value,Email:document.getElementById('ev-email').value,Trade:document.getElementById('ev-trade').value,Markets:document.getElementById('ev-markets').value,Vendor_Type:document.getElementById('ev-type').value||'labor',Language:document.getElementById('ev-language').value==='es'?'es':'en',Payment_Address:document.getElementById('ev-payaddr').value.trim(),Rate_Notes:document.getElementById('ev-rates').value,Billing_Email:document.getElementById('ev-billing-email').value.trim(),Billing_Address:document.getElementById('ev-billing-address').value.trim(),Tax_ID:document.getElementById('ev-tax-id').value.trim(),Tax_ID_Document_URL:document.getElementById('ev-tax-doc-url').value.trim(),Active:document.getElementById('ev-active').value==='FALSE'?'FALSE':'TRUE',Insurance_Expiry:document.getElementById('ev-ins-expiry').value,Insurance_Cert_URL:document.getElementById('ev-ins-url').value.trim(),License_Number:document.getElementById('ev-lic-number').value.trim(),License_Expiry:document.getElementById('ev-lic-expiry').value,License_Doc_URL:document.getElementById('ev-lic-url').value.trim(),WC_Waiver_On_File:document.getElementById('ev-wc-waiver').checked?'TRUE':'',WC_Waiver_Date:document.getElementById('ev-wc-waiver-date').value,WC_Waiver_Doc_URL:document.getElementById('ev-wc-waiver-url').value.trim()};
   api('POST','/vendor/update',{id:id,fields:fields}).then(function(res){
     if(res.error){logError('Edit vendor',res.error);toast('Error: '+res.error,'error');return;}
+    if(res.doc_log_error){toast(res.doc_log_error,'warn');}
     return api('POST','/vendor/set-billing-property-access',{id:id,property_ids:billingProps});
   }).then(function(res2){
     if(res2&&res2.error){toast('Vendor updated, but billing-property access failed: '+res2.error,'warn');closeModal('modal-edit-vendor');loadAll();return;}
