@@ -1288,6 +1288,7 @@ window.addEventListener('pageshow', function(e){
         <select id="assign-vendor-select" onchange="updateAssignPreview()" size="6" style="height:auto;min-height:120px;font-size:13px;cursor:pointer;width:100%"><option value="">Select vendor...</option></select>
       </div>
     </div>
+    <div id="assign-doc-warning" role="status" style="display:none"></div>
     <div id="assign-preview" style="margin-top:12px;color:var(--muted);font-size:12px"></div>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-assign')">Cancel</button><button class="btn" id="assign-submit-btn" onclick="submitAssign()">Assign + Send SMS</button></div>
   </div>
