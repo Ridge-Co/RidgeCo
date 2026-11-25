@@ -3725,6 +3725,8 @@ function submitAssign() {
   api('POST','/assign',{wo_id:assignWOId,vendor_id:vendorId}).then(function(res){
     if (res.success) {
       toast('Assigned. Vendor SMS: '+(res.vendor_sms?'✅':'❌')+' | Tenant SMS: '+(res.tenant_sms?'✅':'—'),'success');
+      if (res.doc_warnings && res.doc_warnings.length) toast('Assigned with warning: '+res.doc_warnings.join('; '),'warn');
+      if (res.doc_check_error) toast(res.doc_check_error,'warn');
       closeModal('modal-assign');
       // Optimistically update state so vendor shows immediately even if loadAll hits quota
       var wo = safeArray(state.workorders).find(function(w){return w.ID===assignWOId;});
