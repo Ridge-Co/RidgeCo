@@ -3688,9 +3688,35 @@ function filterEWOVendors() {
     '<option value="">— Unassigned —</option>' +
     vendors.map(function(v){ return '<option value="'+v.ID+'"'+(v.ID===currentVal?' selected':'')+'>'+v.Name+' — '+v.Trade+'</option>'; }).join('');
 }
+// Queue #113: insurance / license dates as a date-input value (YYYY-MM-DD), '' when blank or not readable.
+function evDocDateValue(raw) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(raw||'').trim()); if (m) return m[1]+'-'+m[2]+'-'+m[3];
+  m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(raw||'').trim());
+  return m ? m[3]+'-'+('0'+m[1]).slice(-2)+'-'+('0'+m[2]).slice(-2) : '';
+}
+// Queue #113: the warning line shown above the Assign button. Same rules as the Worker's vendorDocStatus (expired / expiring in 30 days /
+// date unreadable = yellow; nothing on file = quiet grey). The server repeats the check and writes the history line; this only shows it.
+function vendorDocWarningLines(v) {
+  var out = {warn:[], note:[]}; if (!v) return out;
+  var now = new Date(), today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  [['insurance', v.Insurance_Expiry], ['license', v.License_Expiry]].forEach(function(pair) {
+    var raw = String(pair[1]||'').trim(), iso = evDocDateValue(raw);
+    if (!raw) { out.note.push(pair[0]==='insurance' ? 'No insurance on file' : 'No license on file'); return; }
+    if (!iso) { out.warn.push(pair[0]+' date on file could not be read ('+raw+')'); return; }
+    var p = iso.split('-'), t = Date.UTC(+p[0], +p[1]-1, +p[2]), left = Math.round((t-today)/86400000);
+    var words = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+p[1]-1]+' '+(+p[2])+' '+p[0];
+    if (left < 0) out.warn.push(pair[0]+' expired '+words);
+    else if (left <= 30) out.warn.push(pair[0]+' expires '+words+(left===0?' (today)':' (in '+left+' day'+(left===1?'':'s')+')'));
+  });
+  return out;
+}
 function updateAssignPreview() {
   var v = state.vendors.find(function(x){return x.ID===document.getElementById('assign-vendor-select').value;});
   document.getElementById('assign-preview').textContent = v ? 'SMS will be sent to '+v.Name+' ('+v.Phone+') with job details and access info.' : '';
+  var box = document.getElementById('assign-doc-warning'), w = vendorDocWarningLines(v);
+  if (w.warn.length) { box.style.cssText = 'display:block;margin-top:12px;padding:8px 12px;border-radius:6px;background:var(--warn-bg);color:var(--warn-text);border:1px solid var(--warn);font-size:13px'; box.textContent = 'Warning: '+v.Name+' - '+w.warn.join('; ')+'. You can still assign.'; }
+  else if (v && w.note.length) { box.style.cssText = 'display:block;margin-top:12px;font-size:13px;color:var(--muted)'; box.textContent = w.note.join('. ')+'.'; }
+  else { box.style.display = 'none'; box.textContent = ''; }
 }
 function submitAssign() {
   var vendorId = document.getElementById('assign-vendor-select').value;
