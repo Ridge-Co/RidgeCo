@@ -6269,6 +6269,9 @@ function openEditVendorModal(id) {
   document.getElementById('ev-language').value=(String(v.Language||'').toLowerCase()==='es')?'es':'en';
   document.getElementById('ev-billing-email').value=v.Billing_Email||''; document.getElementById('ev-billing-address').value=v.Billing_Address||'';
   document.getElementById('ev-tax-id').value=v.Tax_ID||''; document.getElementById('ev-tax-doc-url').value=v.Tax_ID_Document_URL||'';
+  document.getElementById('ev-ins-expiry').value=evDocDateValue(v.Insurance_Expiry); document.getElementById('ev-ins-url').value=v.Insurance_Cert_URL||'';
+  document.getElementById('ev-lic-number').value=v.License_Number||''; document.getElementById('ev-lic-expiry').value=evDocDateValue(v.License_Expiry); document.getElementById('ev-lic-url').value=v.License_Doc_URL||'';
+  document.getElementById('ev-wc-waiver').checked=String(v.WC_Waiver_On_File||'').toUpperCase()==='TRUE'; document.getElementById('ev-wc-waiver-date').value=evDocDateValue(v.WC_Waiver_Date); document.getElementById('ev-wc-waiver-url').value=v.WC_Waiver_Doc_URL||'';
   document.getElementById('ev-active').value=v.Active==='FALSE'?'FALSE':'TRUE';
   document.getElementById('ev-loan-balance').textContent = '…';
   api('GET','/vendor-loan?vendor_id='+encodeURIComponent(v.ID)).then(function(res){
