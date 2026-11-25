@@ -12687,7 +12687,7 @@ function enrichWO(wo, properties, units, tenants, keys, opts={}, masterKeys=[], 
 // Queue #231 slice (a) (Nov 24 2026): internal notes never reach an external view. enrichWO spreads every Work_Orders column
 // (`...wo`), and a bid-group copy carries Admin_Notes, Owner_Notes and Entry_Notes from the source job (WO_DUP_COPY_FIELDS), so a
 // vendor who was only asked to bid could read Brett's private notes and the owner's notes. Admin_Notes and Owner_Notes are Brett's
-// and the owner's: no vendor, tenant or shared-link view ever shows them (no page reads them; Vendor_Admin_Notes is the field
+// and the owner's: no vendor, tenant or shared-link view ever shows them (owner sessions are handled by the owner allow-list) (no page reads them; Vendor_Admin_Notes is the field
 // written FOR vendors and stays). Until the vendor has accepted the job (accessGated), Entry_Notes and the tenant's name are held
 // back too, the same rule as the lockbox and tenant phone (brief default for question 3: hidden until awarded).
 // PURE. Returns the same object with the fields removed.
