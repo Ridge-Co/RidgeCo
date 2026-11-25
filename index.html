@@ -1684,6 +1684,15 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group"><label>Billing Address</label><input type="text" id="ev-billing-address"></div>
       <div class="form-group"><label>Tax ID (EIN or SSN)</label><input type="text" id="ev-tax-id"></div>
       <div class="form-group"><label>Tax ID Document URL <span style="font-weight:normal;color:var(--muted)">(Drive link, optional)</span></label><input type="text" id="ev-tax-doc-url"></div>
+      <div style="grid-column:1/-1;border-top:1px solid var(--border);margin:8px 0;padding-top:10px"><div style="color:var(--muted);font-size:12px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:4px">Insurance and license</div><div style="color:var(--muted);font-size:13px">Warning only. An expired or missing document never stops a job from being assigned.</div></div>
+      <div class="form-group"><label>Insurance expires</label><input type="date" id="ev-ins-expiry"></div>
+      <div class="form-group"><label>Insurance certificate link <span style="font-weight:normal;color:var(--muted)">(Drive link)</span></label><input type="text" id="ev-ins-url"></div>
+      <div class="form-group"><label>License number</label><input type="text" id="ev-lic-number"></div>
+      <div class="form-group"><label>License expires</label><input type="date" id="ev-lic-expiry"></div>
+      <div class="form-group"><label>License document link <span style="font-weight:normal;color:var(--muted)">(Drive link)</span></label><input type="text" id="ev-lic-url"></div>
+      <div class="form-group"><label style="display:flex;align-items:center;gap:8px;min-height:44px"><input type="checkbox" id="ev-wc-waiver"> Workers' comp waiver on file</label></div>
+      <div class="form-group"><label>Waiver signed on</label><input type="date" id="ev-wc-waiver-date"></div>
+      <div class="form-group"><label>Waiver document link <span style="font-weight:normal;color:var(--muted)">(Drive link)</span></label><input type="text" id="ev-wc-waiver-url"></div>
       <div class="form-group full"><label>Rate Notes</label><textarea id="ev-rates"></textarea></div>
       <div class="form-group full" style="border-top:1px solid var(--border);padding-top:10px">
         <label>Loan / Advance Balance</label>
