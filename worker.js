@@ -21624,6 +21624,7 @@ const SCHED_PF_WHAT = {
   ar_report_mon: 'builds and delivers the Monday AR aging report',
   hub_impr_mon: 'pulls new items from the Google Tasks list "RidgeCo Hub Improvements" into the Optimizer queue as proposed, then updates the ledger',
   hub_impr_thu: 'pulls new items from the Google Tasks list "RidgeCo Hub Improvements" into the Optimizer queue as proposed, then updates the ledger',
+  activity_flush: 'writes the Hub actions waiting in the Activity Log buffer (who, which action, which record, worked or not; never values) to the Activity_Log tab in one batch, reads them back, and only then clears the buffer',
   queue_sync: 'checks the pull request behind every build in flight and moves the queue row on (PR open, merged, live once the Hub has deployed); files a Needs Attention row if a merge has no deploy after 30 minutes',
   hub_impr_daily: 'checks which Hub Improvements items were built (queue item done / PR merged) so Google Tasks can be completed; reports anything stuck',
   str_cleaning: 'Milam Ridge cleaning scheduler: reads bookings, offers open turnovers to the cleaner queue, updates the cleaning calendar, alerts Brett (idle until STR_ENGINE_ENABLED is TRUE)',
