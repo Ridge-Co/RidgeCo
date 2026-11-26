@@ -821,7 +821,7 @@ const _hubWorkerCore = {
         // this only removes the uncaught-parse-error class of failure, not real validation.
         let body = {};
         try { body = await request.json(); } catch (e) { body = {}; }
-        try { const _ar = __actReq.get(request); if (_ar) { _ar.bodyKeys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : []; _ar.entity = activityEntityFrom(body, url.searchParams); } } catch (e) { /* observation only (queue #283) */ }
+        try { const _ar = __actReq.get(request); if (_ar) { _ar.bodyKeys = body && typeof body === 'object' && !Array.isArray(body) ? Object.keys(body) : []; _ar.entity = activityEntityFrom(body, url.searchParams); } } catch (e) { if (ctx && ctx.waitUntil) ctx.waitUntil(__activityFault(env, 'body', e)); }   // queue #283: observation only, fault filed
         // Max price (Nov 5 2026): only the admin can set or change it. A tenant / owner / vendor session can never create or edit it, whatever they put in the body.
         if (callerRole && body && typeof body === 'object') { delete body.max_price; delete body.Max_Price; if (body.fields && typeof body.fields === 'object') delete body.fields.Max_Price; }
         if (callerRole) {
