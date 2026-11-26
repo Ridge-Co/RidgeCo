@@ -51,6 +51,18 @@ class_name = "ReadMeterStore"
 tag = "v1"
 new_sqlite_classes = ["ReadMeterStore"]
 
+# ── Activity Log buffer (queue #283, Nov 25 2026) ──
+# Rows describing Hub actions (who / which route / which record / ok or error, never values) wait here until the scheduler job
+# activity_flush writes them to the Activity_Log tab. SQLite-kind Durable Object (Workers Free plan), same as the Read Meter store.
+# Migration v1 above is NEVER edited: v2 only adds the new class. Without this binding the Hub works normally and files one P2 per 30 minutes.
+[[durable_objects.bindings]]
+name = "ACTIVITY_BUFFER"
+class_name = "ActivityBuffer"
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["ActivityBuffer"]
+
 # Git auto-deploy connected via Cloudflare Workers Builds (July 19, 2026).
 
 # ── Environment variables & secrets (managed in the Cloudflare dashboard) ──
