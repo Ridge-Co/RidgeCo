@@ -1497,7 +1497,7 @@ async function __activityFault(env, where, e) {
 }
 function __activityStub(env) {
   try { const ns = env && env.ACTIVITY_BUFFER; return ns && typeof ns.idFromName === 'function' ? ns.get(ns.idFromName('activity-v1')) : null; }
-  catch (e) { return null; }
+  catch (e) { return null; }   // silent-ok: a null stub is reported by schedRunActivityFlush (P2 'not bound'), which runs every 14 min
 }
 async function activityBufferPush(env, row) {
   try {
