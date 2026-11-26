@@ -1418,6 +1418,97 @@ export class ReadMeterStore {
   }
 }
 
+// ── ACTIVITY LOG, Phase 1 (queue #283, Nov 25 2026) ─────────────────────────────────────────────────────────────────────
+// One metadata-only row per Hub request that CHANGES something: who (role / id / how they got in), which route, which record, did it work.
+// NEVER values: field NAMES only, never message text, PINs, tokens, phones, emails or names. Pure observation: the hook below sits after the
+// response exists, runs in ctx.waitUntil, never reads the response body and never throws. Rows wait in a small Durable Object (ActivityBuffer,
+// SQLite kind, no KV) and the scheduler job `activity_flush` writes them to the Activity_Log tab in ONE batched append, then READS IT BACK
+// and only then deletes them from the buffer. Kill switch: Config activity_log_enabled=FALSE (checked at flush, so zero Sheets reads per request).
+const ACTIVITY_TAB = 'Activity_Log';
+const ACTIVITY_COLS = ['ID','Timestamp','Actor_Role','Actor_ID','Source','Session_Id','Event_Type','Action','Entity_Type','Entity_ID','Fields_Changed','Outcome','Duration_ms','Method','Request_Id','Request_Text','Notes'];
+const ACTIVITY_BUFFER_CAP = 5000, ACTIVITY_TAKE = 200;
+const __actReq = new WeakMap();                       // request -> { role, id, who, via, bodyKeys } (set in the core, read by the wrapper)
+const __act = { faults: 0, lastFaultAt: 0, lastFault: '', pushes: 0 };
+// Route -> plain action name. Anything not listed is still recorded as 'post:/path' (IDs folded to :id), so nothing is lost; the list only makes names readable.
+const ACTIVITY_ACTIONS = { 'POST /status': 'wo_status_change', 'POST /workorder': 'wo_create', 'POST /assign': 'wo_assign', 'POST /schedule': 'wo_schedule', 'POST /property/add': 'property_add', 'POST /tenant/add': 'tenant_add', 'POST /owner/add': 'owner_add', 'POST /key/add': 'key_add', 'POST /key/update': 'key_update', 'POST /ops-queue-stage': 'queue_stage', 'POST /cron/run': 'scheduler_tick' };
+// POSTs that only read or only log: never recorded (they are not people changing things, or recording them would only add noise / loops).
+const ACTIVITY_SKIP_EXACT = ['/failure/report', '/telemetry/log', '/cron/sweep', '/ops-queue/risk-check', '/read-meter'];
+const ACTIVITY_ID_KEYS = [['wo_id', 'work_order'], ['work_order_id', 'work_order'], ['vendor_id', 'vendor'], ['tenant_id', 'tenant'], ['owner_id', 'owner'], ['property_id', 'property'], ['id', 'record']];
+function __actEq(a, b) {                              // constant-time string compare; labels only, a token is never logged
+  a = String(a || ''); b = String(b || '');
+  if (!a || a.length !== b.length) return false;
+  let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
+// Which kind of credential came in. Returns a LABEL only. The scheduler token lives in Config (not env) so /cron/run is tagged by its path instead.
+function activityViaFromToken(env, tok) {
+  if (!tok || !env) return '';
+  const pairs = [['admin', env.WORKER_SECRET], ['prod_write', env.HUB_PROD_WRITE_TOKEN], ['prod_ro', env.HUB_PROD_RO_TOKEN], ['hub_test', env.HUB_TEST_TOKEN], ['ops_queue', env.OPS_QUEUE_TOKEN], ['scout', env.SCOUT_QUEUE_TOKEN], ['intake', env.INTAKE_TOKEN]];
+  for (const [label, secret] of pairs) if (secret && __actEq(tok, secret)) return label;
+  return '';
+}
+function activityNormalizePath(path) {
+  return String(path || '').replace(/\/(?:\d{2,}|[0-9a-f]{8}-[0-9a-f-]{20,}|[A-Za-z]{1,6}-[A-Za-z0-9-]{3,})(?=\/|$)/g, '/:id').slice(0, 120);
+}
+function activityLooksLikeId(v) {                     // an ID, not a phone / email / name / sentence
+  const s = String(v == null ? '' : v);
+  return s.length > 0 && s.length <= 40 && /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/.test(s) && !/^\d{10,}$/.test(s);
+}
+// Entity from the URL query first, then the known id keys of the body. Returns { type, id }; ID values only, never any other value.
+function activityEntityFrom(body, params) {
+  for (const [k, type] of ACTIVITY_ID_KEYS) {
+    const fromUrl = params && typeof params.get === 'function' ? params.get(k) : null;
+    if (activityLooksLikeId(fromUrl)) return { type, id: String(fromUrl) };
+    const fromBody = body && typeof body === 'object' ? body[k] : null;
+    if (activityLooksLikeId(fromBody)) return { type, id: String(fromBody) };
+  }
+  return { type: '', id: '' };
+}
+// Pure: the buffered event for one finished request, or null when it is not a change. a = { method, path, status, role, id, via, ms, bodyKeys, entity, now }
+function activityRowFor(a) {
+  const method = String(a.method || '').toUpperCase(), path = String(a.path || '');
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS' || !path) return null;
+  if (ACTIVITY_SKIP_EXACT.includes(path)) return null;
+  if (path.startsWith('/cron/') && path !== '/cron/run') return null;
+  const st = Number(a.status) || 0;
+  const outcome = st >= 500 ? 'error' : st >= 400 ? 'refused' : 'ok';
+  const isCron = path === '/cron/run';
+  const roleIn = String(a.role || '');
+  const via = String(a.via || '');
+  const narrow = ['prod_write', 'prod_ro', 'hub_test', 'ops_queue', 'scout', 'intake'].includes(via);
+  const source = isCron ? 'scheduler' : roleIn ? 'portal' : narrow ? 'claude_session' : via === 'admin' ? 'hub_ui' : 'unauthenticated';
+  const actorRole = isCron ? 'scheduler' : roleIn ? roleIn : narrow ? via : via === 'admin' ? 'brett' : '';
+  const key = method + ' ' + path;
+  const action = ACTIVITY_ACTIONS[key] || (method.toLowerCase() + ':' + activityNormalizePath(path));
+  const names = Array.isArray(a.bodyKeys) ? a.bodyKeys.map(k => String(k).slice(0, 40)).filter(k => /^[A-Za-z0-9_.-]+$/.test(k)).slice(0, 20) : [];
+  const ent = a.entity || { type: '', id: '' };
+  return { Timestamp: new Date(a.now || Date.now()).toISOString(), Actor_Role: actorRole, Actor_ID: (roleIn && activityLooksLikeId(a.id)) ? String(a.id) : '', Source: source, Session_Id: '', Event_Type: 'write', Action: action, Entity_Type: ent.type || '', Entity_ID: ent.id || '', Fields_Changed: names.join('|'), Outcome: outcome, Duration_ms: String(Math.max(0, Math.round(Number(a.ms) || 0))), Method: '', Request_Id: '', Request_Text: '', Notes: outcome === 'ok' ? '' : 'HTTP ' + st };
+}
+// At most one P2 per 30 minutes for hook / buffer problems (never silent, never a flood). Never throws.
+async function __activityFault(env, where, e) {
+  __act.faults++; __act.lastFault = where + ': ' + String((e && e.message) || e).slice(0, 160);
+  const now = Date.now();
+  if (now - __act.lastFaultAt < 30 * 60 * 1000) return;
+  __act.lastFaultAt = now;
+  try {
+    const r = await reportFailure(env, { system: 'hub', source: 'activity-log', where: 'activity_' + where, ref: where, severity: 'P2', message: 'The Activity Log could not record Hub actions (' + __act.lastFault + '). The Hub itself kept working; some actions are missing from the log until this is fixed.', context: { faults: __act.faults } });
+    if (!r || r.ok === false) console.error('[activity-log] fault could not be saved to the failure ledger:', JSON.stringify(r || {}).slice(0, 200));
+  } catch (e2) { console.error('[activity-log] fault could not be saved:', String((e2 && e2.message) || e2).slice(0, 200)); }
+}
+function __activityStub(env) {
+  try { const ns = env && env.ACTIVITY_BUFFER; return ns && typeof ns.idFromName === 'function' ? ns.get(ns.idFromName('activity-v1')) : null; }
+  catch (e) { return null; }
+}
+async function activityBufferPush(env, row) {
+  try {
+    const stub = __activityStub(env);
+    if (!stub) return;                                  // not bound: the Hub works normally; the flush job (schedRunActivityFlush) files the P2 so a request never writes to the failure ledger
+    const res = await stub.fetch('https://activity.internal/push', { method: 'POST', body: JSON.stringify(row) });
+    if (!res.ok) throw new Error('buffer answered HTTP ' + res.status);
+    __act.pushes++;
+  } catch (e) { await __activityFault(env, 'push', e); }
+}
+
 // Thin wrapper (Sep 29 2026): every response to the read-only PRODUCTION token is scrubbed of
 // login PINs / named Config secrets (see scrubResponseForProdReadToken). Everything else passes through.
 export default {
