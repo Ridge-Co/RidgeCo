@@ -1424,6 +1424,11 @@ export default {
   async fetch(request, env, ctx) {
     const res = await firewallPortalMoney(request, env, ctx, await scrubResponseForProdReadToken(request, env, await _hubWorkerCore.fetch(request, env, ctx)));   // Nov 24 2026: no portal response ever carries markup / price / vendor cost
     if (ctx && ctx.waitUntil) { if (__meter.pending) ctx.waitUntil(__meterFlushAlarm(env)); if (__meter.dirty) ctx.waitUntil(__meterPersist(env)); }   // quota-pressure evidence -> failure ledger (never blocks the response)
+    try {   // Activity Log (queue #283): OBSERVE ONLY. Reads res.status, never the body; never throws; never awaited before the response is returned.
+      const _a = __actReq.get(request) || {};
+      const _row = activityRowFor({ method: request.method, path: _a.path || new URL(request.url).pathname, status: res.status, role: _a.role, id: _a.id, via: _a.via, ms: Date.now() - (_a.t0 || Date.now()), bodyKeys: _a.bodyKeys, entity: _a.entity });
+      if (_row && ctx && ctx.waitUntil) ctx.waitUntil(activityBufferPush(env, _row));
+    } catch (e) { if (ctx && ctx.waitUntil) ctx.waitUntil(__activityFault(env, 'hook', e)); }
     return res;
   },
   async scheduled(event, env, ctx) { return await _hubWorkerCore.scheduled(event, env, ctx); },
