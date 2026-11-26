@@ -715,7 +715,7 @@ for (const N of [2, 5, 8]) {
 // SEEDED as done (the old crons / a person already ran them), 15-minute jobs run at once, and later slots run normally.
 const DAILY5 = ['daily_digest', 'daily_receipts', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'twilio_balance_log'];   // (name kept; six dailies at 07:00 ET. daily_receipts_post is NOT here: since Nov 17 2026 it runs at 00:00 ET, see MIDNIGHT below)
 const DAILY_SEEDED = ['daily_digest', 'daily_receipts', 'daily_receipts_post', 'daily_turnover', 'daily_qb_sync', 'sms_delivery_check', 'twilio_balance_log'];   // registry order, incl. the midnight QuickBooks batch
-const INTERVAL5 = ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep', 'insp_shift_reminders', 'queue_sync'];
+const INTERVAL5 = ['door_watchdog', 'sweep', 'sweep_work', 'sweep_checks', 'insp_guard', 'str_cleaning', 'followup_sweep', 'insp_shift_reminders', 'queue_sync', 'activity_flush'];
 // Drain one "tick" the way the Apps Script does: call until more=false. Returns { ran, first } (first = the first response).
 const drain = async (L, c, extra) => {
   const ran = []; let first = null;
