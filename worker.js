@@ -1509,6 +1509,91 @@ async function activityBufferPush(env, row) {
   } catch (e) { await __activityFault(env, 'push', e); }
 }
 
+// Buffer for events waiting to be written to the sheet. take = oldest N WITHOUT deleting; ack deletes exactly those keys (after the sheet read-back).
+export class ActivityBuffer {
+  constructor(state, env) { this.state = state; this.env = env; }
+  async fetch(request) {
+    const url = new URL(request.url), st = this.state.storage;
+    try {
+      if (request.method === 'POST' && url.pathname === '/push') {
+        const _pj = await safeJson(request); const row = _pj.ok ? _pj.body : null;
+        if (!row || typeof row !== 'object') return new Response('bad row', { status: 400 });
+        const seq = ((await st.get('meta:seq')) || 0) + 1;
+        await st.put('meta:seq', seq);
+        await st.put('r:' + String(seq).padStart(12, '0'), row);
+        const keys = Array.from((await st.list({ prefix: 'r:', limit: ACTIVITY_BUFFER_CAP + 50 })).keys());
+        if (keys.length > ACTIVITY_BUFFER_CAP) {                       // over the cap: drop the oldest and count it, the flush reports the number
+          const drop = keys.slice(0, keys.length - ACTIVITY_BUFFER_CAP);
+          await st.delete(drop);
+          await st.put('meta:dropped', ((await st.get('meta:dropped')) || 0) + drop.length);
+        }
+        return new Response('ok');
+      }
+      if (request.method === 'GET' && url.pathname === '/take') {
+        const limit = Math.max(1, Math.min(ACTIVITY_TAKE, Number(url.searchParams.get('limit')) || ACTIVITY_TAKE));
+        const m = await st.list({ prefix: 'r:', limit });
+        const rows = [], keys = [];
+        for (const [k, v] of m) { keys.push(k); rows.push(v); }
+        return new Response(JSON.stringify({ keys, rows, dropped: (await st.get('meta:dropped')) || 0, last_push_seq: (await st.get('meta:seq')) || 0 }), { headers: { 'content-type': 'application/json' } });
+      }
+      if (request.method === 'POST' && url.pathname === '/ack') {
+        const j = (await safeJson(request)).body;
+        const keys = Array.isArray(j && j.keys) ? j.keys.filter(k => typeof k === 'string' && k.startsWith('r:')).slice(0, 500) : [];
+        if (keys.length) await st.delete(keys);
+        if (j && j.reset_dropped) await st.put('meta:dropped', 0);
+        return new Response('ok');
+      }
+      return new Response('not found', { status: 404 });
+    } catch (e) { return new Response('buffer error: ' + String((e && e.message) || e).slice(0, 200), { status: 500 }); }
+  }
+}
+// Scheduler job (every 14 min): buffer -> Activity_Log. ensureTab + ensureColumns on every run (Activity_Log is new, never an existing tab).
+async function schedRunActivityFlush(env) {
+  const errors = [];
+  const stub = __activityStub(env);
+  if (!stub) { errors.push({ step: 'activity_flush', error: 'ACTIVITY_BUFFER Durable Object is not bound to this Worker' }); await __activityFault(env, 'binding', new Error(errors[0].error)); return { ok: false, errors }; }
+  let taken;
+  try {
+    const res = await stub.fetch('https://activity.internal/take?limit=' + ACTIVITY_TAKE);
+    if (!res.ok) throw new Error('buffer answered HTTP ' + res.status);
+    taken = await res.json();
+  } catch (e) { errors.push({ step: 'take', error: String((e && e.message) || e).slice(0, 200) }); await __activityFault(env, 'take', e); return { ok: false, errors }; }
+  const rows = Array.isArray(taken.rows) ? taken.rows : [], keys = Array.isArray(taken.keys) ? taken.keys : [];
+  const dropped = Number(taken.dropped) || 0;
+  if (dropped > 0) {
+    errors.push({ step: 'buffer_cap', error: dropped + ' activity event(s) were dropped because the buffer was full (' + ACTIVITY_BUFFER_CAP + ' cap)' });
+    await __activityFault(env, 'dropped', new Error(errors[errors.length - 1].error));
+  }
+  if (!rows.length) return { ok: !errors.length, errors, detail: { flushed: 0, dropped } };
+  let enabled = true;
+  try { const cfg = await fetchConfig(env); enabled = String(cfg.activity_log_enabled == null ? 'TRUE' : cfg.activity_log_enabled).trim().toUpperCase() !== 'FALSE'; }
+  catch (e) { errors.push({ step: 'config', error: String((e && e.message) || e).slice(0, 200) }); }
+  if (!enabled) {                                       // kill switch: discard on purpose, say so in the result
+    try { await stub.fetch('https://activity.internal/ack', { method: 'POST', body: JSON.stringify({ keys, reset_dropped: true }) }); } catch (e) { errors.push({ step: 'ack_disabled', error: String((e && e.message) || e).slice(0, 200) }); }
+    return { ok: !errors.length, errors, detail: { flushed: 0, discarded: rows.length, kill_switch: true } };
+  }
+  try {
+    await ensureTab(env, ACTIVITY_TAB, ACTIVITY_COLS);
+    await ensureColumns(env, ACTIVITY_TAB, ACTIVITY_COLS);
+    const stamp = Date.now().toString(36);
+    const ids = rows.map((r, i) => 'ACT-' + stamp + '-' + String(i + 1).padStart(3, '0'));
+    const values = rows.map((r, i) => ACTIVITY_COLS.map(c => c === 'ID' ? ids[i] : (r && r[c] != null ? String(r[c]) : '')));
+    const ap = await sheetsRequest(env, 'POST', `/values/${ACTIVITY_TAB}:append?valueInputOption=RAW`, { values });
+    const rng = ap && ap.updates && typeof ap.updates.updatedRange === 'string' ? ap.updates.updatedRange : '';       // read back ONLY the rows just written (the tab grows without limit)
+    const back = await sheetsRequest(env, 'GET', rng ? `/values/${encodeURIComponent(rng)}` : `/values/${ACTIVITY_TAB}`);          // the read-back: the rows must really be there
+    const have = new Set((back && back.values ? back.values : []).map(r => String(r[0] || '')));
+    const missing = ids.filter(id => !have.has(id));
+    if (missing.length) throw new Error(missing.length + ' of ' + ids.length + ' rows did not land in ' + ACTIVITY_TAB + ' (read-back); kept in the buffer for the next run');
+    const ack = await stub.fetch('https://activity.internal/ack', { method: 'POST', body: JSON.stringify({ keys, reset_dropped: true }) });
+    if (!ack.ok) throw new Error('rows landed but the buffer would not clear (HTTP ' + ack.status + '); they may be written twice next run');
+    return { ok: !errors.length, errors, detail: { flushed: rows.length, dropped } };
+  } catch (e) {
+    errors.push({ step: 'append', error: String((e && e.message) || e).slice(0, 240) });
+    await __activityFault(env, 'flush', e);             // rows stay in the buffer (no ack) and land on the next good run
+    return { ok: false, errors };
+  }
+}
+
 // Thin wrapper (Sep 29 2026): every response to the read-only PRODUCTION token is scrubbed of
 // login PINs / named Config secrets (see scrubResponseForProdReadToken). Everything else passes through.
 export default {
