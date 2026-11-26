@@ -558,7 +558,7 @@ const _hubWorkerCore = {
       }
     }
     __meterIdentify(env, callerRole || (PUBLIC_PATHS.includes(path) ? 'public' : 'admin/service'), callerRole ? callerSessionId : '');
-    try { __actReq.set(request, { path, t0: Date.now(), role: callerRole || '', id: callerRole ? callerSessionId : '', via: callerRole ? '' : activityViaFromToken(env, request.headers.get('X-Auth-Token')), bodyKeys: null, entity: null }); } catch (e) { /* Activity Log is observation only; a fault here shows up as a missing row, filed by the hook */ }   // queue #283
+    try { __actReq.set(request, { path, t0: Date.now(), role: callerRole || '', id: callerRole ? callerSessionId : '', via: callerRole ? '' : activityViaFromToken(env, request.headers.get('X-Auth-Token')), bodyKeys: null, entity: null }); } catch (e) { if (ctx && ctx.waitUntil) ctx.waitUntil(__activityFault(env, 'identify', e)); }   // queue #283: observation only, but a fault is filed (P2, max 1 per 30 min), never swallowed
     try {
       if (callerRole) {
         const _mm = sessionIdentityMismatch(callerRole, callerSessionId, url, null);
