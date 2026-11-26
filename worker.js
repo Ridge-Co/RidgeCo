@@ -20670,6 +20670,7 @@ const SCHED_JOBS = [
   { name: 'ai_credit_probe',    kind: 'interval', every_min: 59, gate: 'ai_paused', run: (env) => schedRunAiCreditProbe(env) },
   // Queue v2 (Nov 16 2026): checks the PR behind every in-flight build and moves the row on (PR open -> merged -> live once /version shows a newer deploy).
   { name: 'queue_sync',         kind: 'interval', every_min: 14, run: (env) => schedRunQueueSync(env) },
+  { name: 'activity_flush',     kind: 'interval', every_min: 14, run: (env) => schedRunActivityFlush(env) },   // queue #283: Activity Log buffer -> sheet (one batched append, read back before clearing)
   { name: 'daily_digest',       kind: 'daily',    at: '07:00', run: (env) => schedRunDailyDigest(env) },
   { name: 'daily_receipts',     kind: 'daily',    at: '07:00', run: (env) => schedRunDailyReceipts(env) },
   { name: 'daily_receipts_post', kind: 'daily',   at: '00:00', run: (env) => schedRunDailyReceiptsPost(env) },
