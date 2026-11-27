@@ -32322,6 +32322,7 @@ async function hubTestWriteAllowed(env, path, body) {
     return !!_v && await isTestWO(env, _v.WO_ID);
   }
   if (path === '/tenant/update') return await isTestRecord(env, 'Tenants', _b.id);
+  if (path === '/tenant/insurance-cert') return await isTestRecord(env, 'Tenants', _b.tenant_id);
   if (path === '/vendor/update') return await isTestRecord(env, 'Vendors', _b.id);
   if (path === '/owner/update') return await isTestRecord(env, 'Owners', _b.id);
   if (path === '/unit/update') return await isTestRecord(env, 'Units', _b.id);
