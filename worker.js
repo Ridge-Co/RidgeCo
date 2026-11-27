@@ -16187,6 +16187,72 @@ async function findOrCreateFolder(token, name, parentId, sharedDriveId) {
   return existing || await createDriveFolder(token, name, parentId);
 }
 
+// ── Drive folder convention (queue #115 Phase 1, Nov 26 2026) — written down in context/DRIVE_FOLDER_CONVENTION_v1.0.md ──
+// Standard file name for a NEW upload: <YYYY-MM-DD>_WO-<id>_<type>_<HHMMSS>-<4 random>.<ext>, Eastern time. Pure.
+// Never carries an address, tenant, owner or vendor name. The portal keeps showing the ORIGINAL name (Attachments.File_Name).
+const DRIVE_STD_TYPES = ['before', 'after', 'receipt', 'invoice', 'bill', 'report', 'photo', 'video', 'other'];
+const DRIVE_MIME_EXT = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/heic': 'heic', 'image/heif': 'heif', 'image/webp': 'webp', 'image/gif': 'gif', 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm', 'application/pdf': 'pdf' };
+function driveStdFileName(o) {
+  o = o || {};
+  const now = o.now instanceof Date ? o.now : new Date();
+  const parts = {}; for (const x of new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }).formatToParts(now)) parts[x.type] = x.value;
+  const date = parts.year + '-' + parts.month + '-' + parts.day, time = parts.hour + parts.minute + parts.second;
+  const mime = String(o.mimeType || '').toLowerCase();
+  let type = String(o.fileType || '').toLowerCase().replace(/[^a-z_]/g, ''); if (!DRIVE_STD_TYPES.includes(type)) type = 'other';
+  if (type === 'photo' && mime.startsWith('video/')) type = 'video';
+  const wo = String(o.woId || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
+  let ext = ''; const m = /\.([A-Za-z0-9]{1,5})$/.exec(String(o.originalName || '').trim()); if (m) ext = m[1].toLowerCase();
+  if (!ext) ext = DRIVE_MIME_EXT[mime] || 'bin';
+  const rand = String(o.rand != null ? o.rand : Math.random().toString(36).slice(2, 6).padEnd(4, '0')).replace(/[^a-z0-9]/gi, '').slice(0, 4).toLowerCase().padEnd(4, '0');
+  return date + '_' + (wo ? 'WO-' + wo : 'upload') + '_' + type + '_' + time + '-' + rand + '.' + ext;
+}
+// The ONE folder for a property: the id stored on Properties.Drive_Folder_ID, else found/created by the address on the Properties tab
+// (never the browser's text) and stored. If no property can be resolved it falls back to today's behaviour (browser address) and logs one
+// telemetry row. A failed save of the id never fails the upload; it is logged. Returns { id, webViewLink, source }.
+async function drivePropertyFolder(env, token, propsRoot, o) {
+  o = o || {};
+  const fb = String(o.fallbackAddr || 'Unknown Property').trim() || 'Unknown Property';
+  let prop = null, why = '';
+  try {
+    const [wos, props] = await fetchTabs(env, ['Work_Orders', 'Properties']);
+    let pid = String(o.propertyId || '').trim();
+    if (!pid && o.woId) { const wo = findWO(wos, o.woId); if (wo) pid = String(wo.Property_ID || '').trim(); }
+    if (pid) prop = props.find(p => String(p.ID) === pid) || null;
+    if (!prop) why = pid ? 'property ' + pid + ' is not on the Properties tab' : 'no property found for WO ' + (o.woId || '(none)');
+    else if (!String(prop.Address || '').trim()) { why = 'property ' + pid + ' has no address'; prop = null; }
+  } catch (e) { why = 'lookup failed: ' + String((e && e.message) || e).slice(0, 120); }
+  if (!prop) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'drive_folder_fallback', Skill_Or_Endpoint: '/create-upload-session', Success: 'FALSE', Notes: ('wo=' + (o.woId || '') + ' ' + why + ' -> used "' + fb + '"').slice(0, 480) }); }
+    catch (le) { await softFail(env, 'drivePropertyFolder:fallbackLog', le, { severity: 'P2', ref: String(o.woId || ''), source: 'write', context: 'the Drive folder fallback could not be logged' }); }
+    const f = await findOrCreateFolder(token, fb, propsRoot, propsRoot);
+    return f && f.id ? Object.assign({}, f, { source: 'fallback' }) : f;
+  }
+  const storedId = String(prop.Drive_Folder_ID || '').trim();
+  if (storedId) {
+    // One cheap check that the stored folder still exists and is not in the trash; a stale id must never stop uploads.
+    try {
+      const r = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(storedId) + '?fields=id,trashed,mimeType,webViewLink&supportsAllDrives=true', { headers: { Authorization: 'Bearer ' + token } });
+      if (r.ok) { const j = await r.json(); if (j && j.id && !j.trashed && j.mimeType === 'application/vnd.google-apps.folder') return { id: j.id, webViewLink: j.webViewLink || String(prop.Drive_Folder_URL || ''), source: 'stored' }; }
+      await logTelemetry(env, { Source: 'worker', Job_Type: 'drive_folder_stale', Skill_Or_Endpoint: '/create-upload-session', Success: 'FALSE', Notes: ('property=' + prop.ID + ' stored folder ' + storedId + ' check status ' + r.status + '; looking it up by address again').slice(0, 480) });
+    } catch (e) { await softFail(env, 'drivePropertyFolder:verifyStored', e, { severity: 'P2', ref: String(prop.ID), source: 'read', context: 'the stored Drive folder could not be checked; the address lookup was used instead' }); }
+  }
+  // First use (or a stale id): look for the sheet's address, then for the browser's spelling an older upload may have used, else create.
+  const addr = String(prop.Address).trim();
+  let folder = await findDriveFolder(token, addr, propsRoot, propsRoot);
+  if (!folder && fb !== addr && fb !== 'Unknown Property') folder = await findDriveFolder(token, fb, propsRoot, propsRoot);
+  if (!folder) folder = await createDriveFolder(token, addr, propsRoot);
+  if (!folder || !folder.id) return folder;
+  const url = folder.webViewLink || ('https://drive.google.com/drive/folders/' + folder.id);
+  try {
+    await ensureColumns(env, 'Properties', ['Drive_Folder_ID', 'Drive_Folder_URL']);
+    await updateRowVerified(env, 'Properties', prop.ID, { Drive_Folder_ID: folder.id, Drive_Folder_URL: url });
+  } catch (e) {
+    try { await logTelemetry(env, { Source: 'worker', Job_Type: 'drive_folder_id_not_saved', Skill_Or_Endpoint: '/create-upload-session', Success: 'FALSE', Notes: ('property=' + prop.ID + ' folder=' + folder.id + ' ' + String((e && e.message) || e)).slice(0, 480) }); }
+    catch (le) { await softFail(env, 'drivePropertyFolder:idSaveLog', le, { severity: 'P2', ref: String(prop.ID), source: 'write', context: 'the Drive folder id was not saved on the property and that could not be logged' }); }
+  }
+  return { id: folder.id, webViewLink: url, source: 'found' };
+}
+
 async function uploadFileToDrive(token, arrayBuffer, filename, mimeType, folderId, sharedDriveId) {
   const metadata=JSON.stringify({name:filename,parents:[folderId]}), boundary='ridgeco_boundary_xyz', enc=new TextEncoder();
   const metaPart=enc.encode(`--${boundary}\nContent-Type: application/json\n\n${metadata}\n--${boundary}\nContent-Type: ${mimeType}\n\n`);
@@ -16859,7 +16925,13 @@ async function createUploadSession(env, body) {
   const fileType=(body.file_type||'other').toLowerCase(); // before | after | receipt | invoice | report | other
   try {
     const token=await getAccessToken(env), propsRoot=env.DRIVE_PROPERTIES_ROOT; if(!propsRoot) return json({error:'DRIVE_PROPERTIES_ROOT not configured'},500);
-    const propFolder=await findOrCreateFolder(token,propAddr,propsRoot,propsRoot); if(!propFolder?.id) return json({error:'Cannot create property folder',addr:propAddr},500);
+    // Queue #115: the property folder comes from the id stored on the property (see drivePropertyFolder); a later file of the same
+    // batch that already carries the WO folder id (body.folder_id) does not need the property folder at all.
+    const needsPropFolder = fileType==='invoice' || fileType==='bill' || !body.folder_id;
+    const propFolder = needsPropFolder ? await drivePropertyFolder(env,token,propsRoot,{woId,propertyId:body.property_id,fallbackAddr:propAddr}) : null;
+    if(needsPropFolder && !propFolder?.id) return json({error:'Cannot create property folder',addr:propAddr},500);
+    // Standard Drive file name for new uploads. The ORIGINAL name still goes back as file_name (what each page lists and logs).
+    const driveName = body.keep_name ? fileName : driveStdFileName({woId,fileType,originalName:fileName,mimeType});
 
     // Vendor invoices/bills go to a separate internal folder — never inside the customer WO folder
     if (fileType === 'invoice' || fileType === 'bill') {
@@ -16868,9 +16940,9 @@ async function createUploadSession(env, body) {
       const woLabel = woId||`upload_${Date.now()}`;
       const billsWOFolder = await findOrCreateFolder(token,woLabel,internalRoot.id);
       if(!billsWOFolder?.id) return json({error:'Cannot create WO bills folder'},500);
-      const sessionResp=await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,webViewLink',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','X-Upload-Content-Type':mimeType,'Origin':body.origin||'https://ridge-co.github.io'},body:JSON.stringify({name:fileName,parents:[billsWOFolder.id]})});
+      const sessionResp=await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,webViewLink',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','X-Upload-Content-Type':mimeType,'Origin':body.origin||'https://ridge-co.github.io'},body:JSON.stringify({name:driveName,parents:[billsWOFolder.id]})});
       const uploadUrl=sessionResp.headers.get('Location'); if(!uploadUrl){const errBody=await sessionResp.text();return json({error:'Drive did not return upload URL',status:sessionResp.status,detail:errBody},500);}
-      return json({success:true,upload_url:uploadUrl,wo_folder_id:billsWOFolder.id,wo_folder_url:billsWOFolder.webViewLink||'',file_name:fileName});
+      return json({success:true,upload_url:uploadUrl,wo_folder_id:billsWOFolder.id,wo_folder_url:billsWOFolder.webViewLink||'',file_name:fileName,drive_name:driveName});
     }
 
     // All other file types go into the customer-facing WO folder with subfolders
@@ -16887,9 +16959,9 @@ async function createUploadSession(env, body) {
     }
     // report and other go flat in WO folder
 
-    const sessionResp=await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,webViewLink',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','X-Upload-Content-Type':mimeType,'Origin':body.origin||'https://ridge-co.github.io'},body:JSON.stringify({name:fileName,parents:[targetFolderId]})});
+    const sessionResp=await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,webViewLink',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','X-Upload-Content-Type':mimeType,'Origin':body.origin||'https://ridge-co.github.io'},body:JSON.stringify({name:driveName,parents:[targetFolderId]})});
     const uploadUrl=sessionResp.headers.get('Location'); if(!uploadUrl){const errBody=await sessionResp.text();return json({error:'Drive did not return upload URL',status:sessionResp.status,detail:errBody},500);}
-    return json({success:true,upload_url:uploadUrl,wo_folder_id:woFolder.id,wo_folder_url:woFolder.webViewLink||'',file_name:fileName});
+    return json({success:true,upload_url:uploadUrl,wo_folder_id:woFolder.id,wo_folder_url:woFolder.webViewLink||'',file_name:fileName,drive_name:driveName});
   } catch(e){return json({error:e.message,step:'create_upload_session'},500);}
 }
 
@@ -16902,7 +16974,10 @@ async function logAttachment(env, body) {
     // below is a FIXED object, so the column must exist first and the value must be named here.
     const _addonItem = (body.addon_item === undefined || body.addon_item === null) ? '' : String(body.addon_item).trim();
     if (_addonItem !== '') { try { await ensureColumns(env, 'Attachments', ['Addon_Item']); } catch(_){} } // silent-ok: ensureColumns reports its own failure to the ledger
-    await addRow(env,'Attachments',{WO_ID:body.wo_id||'',File_Name:body.file_name||'',File_Type:body.file_type||'photo',Drive_File_ID:body.file_id||'',Drive_URL:body.file_url||'',Mime_Type:body.mime_type||'',Created_Date:new Date().toISOString().split('T')[0],Active:'TRUE',Addon_Item:_addonItem});
+    // Queue #115: the standard Drive name the upload session chose, kept beside the original File_Name (which lists and search still use).
+    let _driveName = String(body.drive_name||'').trim().slice(0,200);
+    if (_driveName) { try { await ensureColumns(env, 'Attachments', ['Drive_Name']); } catch(e) { _driveName = ''; await softFail(env, 'logAttachment:driveNameColumn', e, { severity: 'P2', ref: String(body.wo_id||''), source: 'write', context: 'the attachment was logged without its Drive file name' }); } }
+    await addRow(env,'Attachments',Object.assign({WO_ID:body.wo_id||'',File_Name:body.file_name||'',File_Type:body.file_type||'photo',Drive_File_ID:body.file_id||'',Drive_URL:body.file_url||'',Mime_Type:body.mime_type||'',Created_Date:new Date().toISOString().split('T')[0],Active:'TRUE',Addon_Item:_addonItem}, _driveName ? {Drive_Name:_driveName} : {}));
     // Share the just-uploaded job media anyone-with-link so it opens in the portal without a Google
     // login. This is the resumable-upload path the vendor portal uses (createUploadSession → PUT → here).
     const ft=(body.file_type||'').toLowerCase();
@@ -28848,7 +28923,7 @@ async function woSharedLogAttachment(env, body){
   return await logAttachment(env, {
     wo_id: auth.wo, file_id: body.file_id, file_url: body.file_url,
     file_name: body.file_name, file_type: allowed.includes(ft) ? ft : 'other',
-    mime_type: body.mime_type, wo_folder_id: body.wo_folder_id, wo_folder_url: body.wo_folder_url,
+    mime_type: body.mime_type, wo_folder_id: body.wo_folder_id, wo_folder_url: body.wo_folder_url, drive_name: body.drive_name,
   });
 }
 
@@ -29701,7 +29776,7 @@ async function fixUploadSession(env, body) {
   const [wos, props] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Properties')]);
   const wo = findWO(wos, fuS(row.WO_ID)); if (!wo) return json({ ok: false, error: 'Work order not found' }, 404);
   const prop = props.find(p => String(p.ID) === fuS(wo.Property_ID)) || {};
-  return await createUploadSession(env, { wo_id: fuS(row.WO_ID), property: prop.Address || 'Unknown Property', file_name: 'FixCheck-' + row.ID + '-' + fuClip(body.file_name, 80).replace(/[^\w.\- ]/g, '_'), mime_type: mime, file_type: 'photo', origin: body.origin });
+  return await createUploadSession(env, { wo_id: fuS(row.WO_ID), property: prop.Address || 'Unknown Property', keep_name: true, file_name: 'FixCheck-' + row.ID + '-' + fuClip(body.file_name, 80).replace(/[^\w.\- ]/g, '_'), mime_type: mime, file_type: 'photo', origin: body.origin });
 }
 async function fixLogAttachment(env, body) {
   body = body || {};
