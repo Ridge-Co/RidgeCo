@@ -5845,6 +5845,8 @@ function renderTenantsPage() {
   var onlyUnwelcomed = !!((document.getElementById('tenant-filter-unwelcomed')||{}).checked);
   var allTenants = safeArray(state.tenants).filter(function(t){return t.Active!=='FALSE';});
   if (onlyUnwelcomed) allTenants = allTenants.filter(function(t){ return t.Welcome_Sent !== 'TRUE'; });
+  var insF = ((document.getElementById('tenant-filter-ins')||{}).value)||'';
+  if (insF) allTenants = allTenants.filter(function(t){ return tenantInsState(t)===insF; });
   loadPortalAccess();
   var onlyStuckT = !!((document.getElementById('tenant-filter-stuck')||{}).checked);
   if (onlyStuckT) allTenants = allTenants.filter(function(t){ return paNeedsFollowUp('tenant', t.ID); });
