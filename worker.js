@@ -292,7 +292,7 @@ const _hubWorkerCore = {
       // replacement) so it can't carry a custom header — accept the same session token as a
       // ?t= query param for this one path, same convention already used by the WO share link
       // (wo.html?wo=...&t=...). Every other endpoint still requires the header.
-      const _tok = request.headers.get('X-Auth-Token') || ((path === '/vendor-file/view' || path === '/owner-file/view') ? (url.searchParams.get('t') || '') : '');
+      const _tok = request.headers.get('X-Auth-Token') || ((path === '/vendor-file/view' || path === '/owner-file/view' || path === '/tenant/insurance-cert') ? (url.searchParams.get('t') || '') : '');
       if (_tok !== env.WORKER_SECRET) {
         // Dedicated contacts-sync token (Google Contacts sync). Accepted ONLY for:
         //   • GET on the list endpoints the sync reads, and
@@ -632,6 +632,7 @@ const _hubWorkerCore = {
         if (path === '/keys-by-unit')           return await keysByUnit(env, url);
         if (path === '/attachments')            return await getAttachments(env, url, callerRole, callerSessionId);
         if (path === '/vendor-file/view')       return await viewInternalFile(env, url, callerRole, callerSessionId);
+        if (path === '/tenant/insurance-cert')  return await tenantInsuranceCertView(env, url, callerRole);   // queue #136, ADMIN-ONLY
         if (path === '/owner-file/view')        return await viewOwnerReceiptFile(env, url, callerRole, callerSessionId);
         if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
         if (path === '/wo-audit')               return await getWOAudit(env, url, callerRole);
@@ -953,6 +954,7 @@ const _hubWorkerCore = {
         if (path === '/unit/update')              return await updateRow(env, 'Units', body.id, body.fields);
         if (path === '/tenant/add')               return await tenantAddGuarded(env, body);
         if (path === '/tenant/update')            return await tenantUpdateGuarded(env, body);
+        if (path === '/tenant/insurance-cert')    return await tenantInsuranceCert(env, body);   // queue #136, ADMIN-ONLY (in no ROLE_SCOPES list)
         // Billing_* already exist on the live sheet; ensureColumns keeps a fresh/staging sheet from silently dropping them (addRow/updateRow map by existing header only).
         if (path === '/owner/add')                { await ensureColumns(env, 'Owners', OWNER_BILLING_COLS); return await addOwnerWithQBSync(env, body); }
         if (path === '/owner/update')             { await ensureColumns(env, 'Owners', OWNER_BILLING_COLS); return await updateRow(env, 'Owners', body.id, body.fields); }
@@ -9237,6 +9239,62 @@ async function tenantAddGuarded(env, body) {
   if (String(body.Move_Out_Date || '').trim()) body.Move_Out_Date = rosterNormDate(body.Move_Out_Date);
   return await addRow(env, 'Tenants', body);
 }
+// ── Renters-insurance record (queue #136, Nov 26 2026) ───────────────────────
+// A keeper only: carrier, expiry, optional policy ref and a certificate file on each tenant. NO requirement, NO reminders,
+// nothing is texted or emailed. Admin-only: /tenant/update, /tenant/insurance-cert and the viewer are in no ROLE_SCOPES list
+// and not in PUBLIC_PATHS, and enrichWO / tenantSessionFields / ownerRosterList copy named fields, so these columns never reach a
+// vendor, tenant or owner. Config keys Renters_Ins_Required and Renters_Ins_Reminders_Enabled are RESERVED and read by nothing.
+const TENANT_INSURANCE_COLS = ['Renters_Ins_Carrier', 'Renters_Ins_Expiry', 'Renters_Ins_Policy_Ref', 'Renters_Ins_Cert_File_ID', 'Renters_Ins_Updated_At', 'Renters_Ins_Updated_By'];
+const TENANT_INSURANCE_EDITABLE = ['Renters_Ins_Carrier', 'Renters_Ins_Expiry', 'Renters_Ins_Policy_Ref'];   // the rest are stamped by the server
+const TENANT_INSURANCE_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'];
+const TENANT_INSURANCE_MAX_BYTES = 10 * 1024 * 1024;
+// Pure. 'none' (nothing on file: no tag), 'on_file' (a carrier or certificate, expiry blank or in the future), 'expired' (expiry before today).
+function tenantInsuranceStatus(t, todayIso) {
+  t = t || {};
+  const carrier = String(t.Renters_Ins_Carrier || '').trim(), file = String(t.Renters_Ins_Cert_File_ID || '').trim(), exp = String(t.Renters_Ins_Expiry || '').trim();
+  if (!carrier && !file && !exp) return { state: 'none', expiry: '' };
+  if (/^\d{4}-\d{2}-\d{2}$/.test(exp) && exp < String(todayIso || '')) return { state: 'expired', expiry: exp };
+  return { state: 'on_file', expiry: exp };
+}
+// Pure. Returns { fields, error }. Only the three editable fields pass; the server-stamped ones are refused from a caller.
+function tenantInsurancePlan(input, actor, nowIso) {
+  const f = {}; const inp = input || {};
+  for (const k of Object.keys(inp)) {
+    if (!k.startsWith('Renters_Ins_')) continue;
+    if (!TENANT_INSURANCE_EDITABLE.includes(k)) return { error: k + ' is set by the server and cannot be edited directly.' };
+  }
+  if (Object.prototype.hasOwnProperty.call(inp, 'Renters_Ins_Carrier')) {
+    const c = String(inp.Renters_Ins_Carrier == null ? '' : inp.Renters_Ins_Carrier).trim();
+    if (c.length > 120) return { error: 'Carrier name is too long (120 characters max).' };
+    f.Renters_Ins_Carrier = c;
+  }
+  if (Object.prototype.hasOwnProperty.call(inp, 'Renters_Ins_Policy_Ref')) {
+    const r = String(inp.Renters_Ins_Policy_Ref == null ? '' : inp.Renters_Ins_Policy_Ref).trim();
+    if (r.length > 80) return { error: 'Policy reference is too long (80 characters max).' };
+    f.Renters_Ins_Policy_Ref = r;
+  }
+  if (Object.prototype.hasOwnProperty.call(inp, 'Renters_Ins_Expiry')) {
+    const e = String(inp.Renters_Ins_Expiry == null ? '' : inp.Renters_Ins_Expiry).trim();
+    if (e) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(e); const d = m && new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+      if (!m || d.getUTCFullYear() !== +m[1] || d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) return { error: 'Insurance expiry "' + e + '" is not a real date (use YYYY-MM-DD).' };
+    }
+    f.Renters_Ins_Expiry = e;
+  }
+  if (Object.keys(f).length) { f.Renters_Ins_Updated_At = nowIso; f.Renters_Ins_Updated_By = actor || 'admin'; }
+  return { fields: f };
+}
+// Pure. One line for the change history. Never carries the policy reference itself.
+function tenantInsuranceChangeNote(tenantId, before, after) {
+  const bits = [];
+  for (const k of ['Renters_Ins_Carrier', 'Renters_Ins_Expiry']) if (Object.prototype.hasOwnProperty.call(after, k) && String(before[k] || '') !== String(after[k] || '')) bits.push(k.replace('Renters_Ins_', '') + ': "' + String(before[k] || '') + '" -> "' + String(after[k] || '') + '"');
+  if (Object.prototype.hasOwnProperty.call(after, 'Renters_Ins_Policy_Ref') && String(before.Renters_Ins_Policy_Ref || '') !== String(after.Renters_Ins_Policy_Ref || '')) bits.push('policy ref changed');
+  if (Object.prototype.hasOwnProperty.call(after, 'Renters_Ins_Cert_File_ID') && String(before.Renters_Ins_Cert_File_ID || '') !== String(after.Renters_Ins_Cert_File_ID || '')) bits.push(after.Renters_Ins_Cert_File_ID ? 'certificate added' : 'certificate removed');
+  return ('tenant=' + tenantId + ' ' + bits.join('; ')).slice(0, 480);
+}
+async function tenantInsuranceLog(env, tenantId, before, after, ok, extra) {
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_insurance_change', Skill_Or_Endpoint: '/tenant/update', Success: ok ? 'TRUE' : 'FALSE', Notes: (tenantInsuranceChangeNote(tenantId, before, after) + (extra ? ' ' + extra : '')).slice(0, 480) });
+}
 // /tenant/update must not be a back door: it can change a date but never blank the move-in of a tenant.
 async function tenantUpdateGuarded(env, body) {
   const f = body && body.fields;
@@ -9246,7 +9304,92 @@ async function tenantUpdateGuarded(env, body) {
     if (!mi) return json({ error: 'The move-in date cannot be cleared. Without it the tenant would see the previous tenant\'s work orders.', code: 'tenant_dates_required' }, 400);
     f.Move_In_Date = mi;
   }
+  if (f && Object.keys(f).some(k => k.startsWith('Renters_Ins_'))) return await tenantInsuranceUpdate(env, body);
   return await updateRow(env, 'Tenants', body && body.id, f);
+}
+// The insurance fields travel with any other tenant fields in the same save: validate, ensureColumns, write once, read back, log the change.
+async function tenantInsuranceUpdate(env, body) {
+  const id = body && body.id, f = Object.assign({}, body.fields);
+  const plan = tenantInsurancePlan(f, 'admin', new Date().toISOString());
+  if (plan.error) return json({ error: plan.error, code: 'tenant_insurance_invalid' }, 400);
+  const tenant = (await fetchTab(env, 'Tenants')).find(t => String(t.ID) === String(id));
+  if (!tenant) return json({ error: 'Tenant ' + id + ' not found', code: 'tenant_not_found' }, 404);
+  for (const k of Object.keys(f)) if (k.startsWith('Renters_Ins_')) delete f[k];
+  await ensureColumns(env, 'Tenants', TENANT_INSURANCE_COLS);
+  invalidateTabCache('Tenants');
+  const changed = Object.keys(plan.fields).some(k => !/_Updated_/.test(k) && String(tenant[k] || '') !== String(plan.fields[k] || ''));
+  const toWrite = Object.assign({}, f, changed ? plan.fields : {});
+  if (!Object.keys(toWrite).length) return json({ success: true, message: 'No change' });
+  try { await updateRowVerified(env, 'Tenants', id, toWrite); }
+  catch (e) {
+    try { await tenantInsuranceLog(env, id, tenant, plan.fields, false, String((e && e.message) || e).slice(0, 120)); } catch (le) { await softFail(env, 'tenantInsurance:log', le, { severity: 'P2', ref: String(id), source: 'write', context: 'the insurance change could not be written to telemetry' }); }
+    return json({ error: 'Insurance details were not saved: ' + String((e && e.message) || e), code: 'tenant_insurance_write_failed' }, 500);
+  }
+  if (changed) await tenantInsuranceLog(env, id, tenant, plan.fields, true, '');
+  return json({ success: true });
+}
+// POST /tenant/insurance-cert  { tenant_id, file_name, mime_type, data_base64 }  or  { tenant_id, remove: true }   (admin only)
+async function tenantInsuranceCert(env, body) {
+  body = body || {}; const id = body.tenant_id;
+  if (!id) return json({ error: 'tenant_id required' }, 400);
+  const tenant = (await fetchTab(env, 'Tenants')).find(t => String(t.ID) === String(id));
+  if (!tenant) return json({ error: 'Tenant ' + id + ' not found', code: 'tenant_not_found' }, 404);
+  await ensureColumns(env, 'Tenants', TENANT_INSURANCE_COLS);
+  invalidateTabCache('Tenants');
+  const now = new Date().toISOString();
+  if (body.remove === true) {
+    // "Remove" keeps the Drive file and only clears the link, so it can be restored by hand.
+    const fields = { Renters_Ins_Cert_File_ID: '', Renters_Ins_Updated_At: now, Renters_Ins_Updated_By: 'admin' };
+    try { await updateRowVerified(env, 'Tenants', id, fields); }
+    catch (e) { try { await tenantInsuranceLog(env, id, tenant, { Renters_Ins_Cert_File_ID: '' }, false, 'remove'); } catch (le) { await softFail(env, 'tenantInsurance:log', le, { severity: 'P2', ref: String(id), source: 'write', context: 'the insurance change could not be written to telemetry' }); } return json({ error: 'Certificate was not removed: ' + String((e && e.message) || e), code: 'tenant_insurance_write_failed' }, 500); }
+    await tenantInsuranceLog(env, id, tenant, { Renters_Ins_Cert_File_ID: '' }, true, '');
+    return json({ success: true, removed: true, kept_file_id: tenant.Renters_Ins_Cert_File_ID || '' });
+  }
+  const mime = String(body.mime_type || '').toLowerCase();
+  if (!TENANT_INSURANCE_MIME.includes(mime)) return json({ error: 'Add a photo (JPG, PNG, HEIC, WebP) or a PDF.', code: 'tenant_insurance_bad_type' }, 400);
+  const b64 = String(body.data_base64 || '');
+  if (!b64) return json({ error: 'No file data', code: 'tenant_insurance_no_file' }, 400);
+  if (b64.length > Math.ceil(TENANT_INSURANCE_MAX_BYTES * 4 / 3) + 8) return json({ error: 'That file is over 10 MB. Use a smaller photo or PDF.', code: 'tenant_insurance_too_big' }, 413);
+  let bytes;
+  try { const bin = atob(b64); bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); }
+  catch (e) { return json({ error: 'The file data was not valid.', code: 'tenant_insurance_bad_data' }, 400); }
+  if (bytes.length > TENANT_INSURANCE_MAX_BYTES) return json({ error: 'That file is over 10 MB. Use a smaller photo or PDF.', code: 'tenant_insurance_too_big' }, 413);
+  const propsRoot = env.DRIVE_PROPERTIES_ROOT;
+  if (!propsRoot) return json({ error: 'DRIVE_PROPERTIES_ROOT env var not set', code: 'drive_not_configured' }, 500);
+  const token = await getAccessToken(env);
+  if (!token) return json({ error: 'Failed to get Google access token', code: 'drive_token' }, 500);
+  // A private folder, never shared anyone-with-link (same rule as vendor bills, FEATURE_LOG rule 13).
+  const folder = await findOrCreateFolder(token, '_Internal — Tenant Insurance', propsRoot, propsRoot);
+  if (!folder || !folder.id) return json({ error: 'Could not find/create the private insurance folder', code: 'drive_folder' }, 500);
+  const ext = mime === 'application/pdf' ? 'pdf' : (mime.split('/')[1] || 'bin').replace('jpeg', 'jpg');
+  const name = ('tenant-' + id + '-renters-insurance-' + now.slice(0, 10) + '.' + ext).replace(/[^\w.\-]/g, '_');
+  const up = await uploadFileToDrive(token, bytes.buffer, name, mime, folder.id, propsRoot);
+  if (!up || !up.id) { try { await tenantInsuranceLog(env, id, tenant, {}, false, 'drive upload failed'); } catch (le) { await softFail(env, 'tenantInsurance:log', le, { severity: 'P2', ref: String(id), source: 'write', context: 'the insurance change could not be written to telemetry' }); } return json({ error: 'The certificate did not upload to Drive. Nothing was saved.', code: 'drive_upload' }, 502); }
+  const fields = { Renters_Ins_Cert_File_ID: up.id, Renters_Ins_Updated_At: now, Renters_Ins_Updated_By: 'admin' };
+  try { await updateRowVerified(env, 'Tenants', id, fields); }
+  catch (e) { try { await tenantInsuranceLog(env, id, tenant, fields, false, 'orphan drive file ' + up.id); } catch (le) { await softFail(env, 'tenantInsurance:log', le, { severity: 'P2', ref: String(id), source: 'write', context: 'the insurance change could not be written to telemetry' }); } return json({ error: 'The file uploaded but could not be linked to the tenant: ' + String((e && e.message) || e) + ' (Drive file ' + up.id + ')', code: 'tenant_insurance_write_failed' }, 500); }
+  await tenantInsuranceLog(env, id, tenant, fields, true, '');
+  return json({ success: true, file_id: up.id });
+}
+// GET /tenant/insurance-cert?tenant_id=  (admin only; streams the private file, never shares it)
+async function tenantInsuranceCertView(env, url, callerRole) {
+  if (callerRole) return json({ error: 'Not found' }, 404);   // a vendor / tenant / owner session can never reach this
+  const id = url.searchParams.get('tenant_id') || '';
+  if (!id) return json({ error: 'tenant_id required' }, 400);
+  try {
+    const tenant = (await fetchTab(env, 'Tenants')).find(t => String(t.ID) === String(id));
+    const fileId = tenant && String(tenant.Renters_Ins_Cert_File_ID || '').trim();
+    if (!fileId) return json({ error: 'No certificate on file for this tenant' }, 404);
+    const token = await getAccessToken(env);
+    const meta = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileId) + '?fields=mimeType&supportsAllDrives=true', { headers: { Authorization: 'Bearer ' + token } });
+    const driveRes = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(fileId) + '?alt=media&supportsAllDrives=true', { headers: { Authorization: 'Bearer ' + token } });
+    if (!driveRes.ok || !driveRes.body) { await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_insurance_view_failed', Skill_Or_Endpoint: '/tenant/insurance-cert', Success: 'FALSE', Notes: ('tenant=' + id + ' drive_status=' + driveRes.status).slice(0, 200) }); return json({ error: 'Could not load the certificate from Drive' }, 502); }
+    let mime = 'application/octet-stream'; try { if (meta.ok) mime = (await meta.json()).mimeType || mime; } catch (_) { /* generic type is fine for a viewer */ mime = mime; }   // silent-ok: generic type is fine for a viewer
+    return new Response(driveRes.body, { status: 200, headers: { ...CORS, 'Content-Type': mime, 'Cache-Control': 'private, no-store', 'Content-Disposition': 'inline; filename="renters-insurance-' + String(id).replace(/[^\w.\-]/g, '_') + '"' } });
+  } catch (e) {
+    await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_insurance_view_failed', Skill_Or_Endpoint: '/tenant/insurance-cert', Success: 'FALSE', Notes: ('tenant=' + id + ' ' + String((e && e.message) || e)).slice(0, 200) });
+    return json({ error: 'Could not load the certificate' }, 502);
+  }
 }
 
 // ── Tenant work-order-submission toggle (Aug 20, 2026) ──────────────────────
@@ -32179,6 +32322,7 @@ async function hubTestWriteAllowed(env, path, body) {
     return !!_v && await isTestWO(env, _v.WO_ID);
   }
   if (path === '/tenant/update') return await isTestRecord(env, 'Tenants', _b.id);
+  if (path === '/tenant/insurance-cert') return await isTestRecord(env, 'Tenants', _b.tenant_id);
   if (path === '/vendor/update') return await isTestRecord(env, 'Vendors', _b.id);
   if (path === '/owner/update') return await isTestRecord(env, 'Owners', _b.id);
   if (path === '/unit/update') return await isTestRecord(env, 'Units', _b.id);

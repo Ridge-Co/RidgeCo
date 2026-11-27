@@ -600,6 +600,7 @@ window.addEventListener('pageshow', function(e){
       <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px"><input type="checkbox" id="tenant-filter-owner-exclude" onchange="renderTenantsPage()"> Exclude this owner instead of showing only them</label>
     </div>
     <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="tenant-filter-stuck" onchange="renderTenantsPage()"> Only show tenants sent a link+PIN who never logged in (follow-ups)</label>
+    <div style="margin-bottom:10px"><label for="tenant-filter-ins" style="color:var(--muted);font-size:13px">Insurance </label><select id="tenant-filter-ins" onchange="renderTenantsPage()" style="font-size:16px"><option value="">All</option><option value="on_file">On file</option><option value="expired">Expired</option><option value="none">None on file</option></select></div>
     <label style="display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px;margin-bottom:10px"><input type="checkbox" id="tenant-filter-unwelcomed" onchange="renderTenantsPage()"> Only show tenants who haven't received a welcome message</label>
     <div id="tenants-action-bar" style="display:none;background:var(--surface2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 14px;margin-bottom:10px;align-items:center;gap:10px;flex-wrap:wrap">
       <span class="pin-count-label" style="color:var(--accent);font-size:12px;font-weight:bold">0 selected</span>
@@ -1754,6 +1755,25 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group full" id="et-unit-row"><label>Unit <span style="font-weight:normal;color:var(--muted)">— reassign within this property; moving to a different property isn't supported here yet</span></label><select id="et-unit"><option value="">Whole property / no unit</option></select></div>
       <div class="form-group full"><label>Status</label><select id="et-active"><option value="TRUE">Active</option><option value="FALSE">Inactive / Moved Out</option></select></div>
     </div>
+    <details id="et-ins-block" style="margin:8px 0 12px">
+      <summary style="cursor:pointer;font-weight:600;min-height:44px;display:flex;align-items:center">Renters insurance (optional)</summary>
+      <div style="color:var(--muted);font-size:13px;margin:4px 0 8px">A record only. Nothing is required and nothing is sent to the tenant. Only you can see this.</div>
+      <div class="form-grid">
+        <div class="form-group"><label for="et-ins-carrier">Carrier</label><input type="text" id="et-ins-carrier" maxlength="120" style="font-size:16px"></div>
+        <div class="form-group"><label for="et-ins-expiry">Expires</label><input type="date" id="et-ins-expiry" style="font-size:16px"></div>
+        <div class="form-group full"><label for="et-ins-ref">Policy reference (optional)</label><input type="text" id="et-ins-ref" maxlength="80" style="font-size:16px"></div>
+        <div class="form-group full">
+          <label>Certificate</label>
+          <div id="et-ins-cert-status" style="color:var(--muted);font-size:13px;margin-bottom:6px">None on file</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" class="btn small secondary" id="et-ins-add" onclick="document.getElementById('et-ins-file').click()">Add certificate</button>
+            <button type="button" class="btn small secondary" id="et-ins-view" onclick="etInsView()" style="display:none">View certificate</button>
+            <button type="button" class="btn small secondary" id="et-ins-remove" onclick="etInsRemove()" style="display:none">Remove</button>
+          </div>
+          <input type="file" id="et-ins-file" accept="image/*,application/pdf" style="display:none" onchange="etInsPicked(this)">
+        </div>
+      </div>
+    </details>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-tenant')">Cancel</button><button class="btn" onclick="submitEditTenant()">Save Changes</button></div>
   </div>
 </div>
@@ -5826,6 +5846,8 @@ function renderTenantsPage() {
   var onlyUnwelcomed = !!((document.getElementById('tenant-filter-unwelcomed')||{}).checked);
   var allTenants = safeArray(state.tenants).filter(function(t){return t.Active!=='FALSE';});
   if (onlyUnwelcomed) allTenants = allTenants.filter(function(t){ return t.Welcome_Sent !== 'TRUE'; });
+  var insF = ((document.getElementById('tenant-filter-ins')||{}).value)||'';
+  if (insF) allTenants = allTenants.filter(function(t){ return tenantInsState(t)===insF; });
   loadPortalAccess();
   var onlyStuckT = !!((document.getElementById('tenant-filter-stuck')||{}).checked);
   if (onlyStuckT) allTenants = allTenants.filter(function(t){ return paNeedsFollowUp('tenant', t.ID); });
@@ -5871,7 +5893,7 @@ function renderTenantsPage() {
       else if (t.SMS_Consent === 'attested' && t.Welcome_Sent !== 'TRUE') welcomeBadge += '<div style="color:var(--info);font-size:10px;font-weight:700" title="The owner ticked that these tenants agreed to maintenance texts. No welcome has gone out yet.">✓ owner says agreed · no welcome yet</div>';
       return '<tr>' +
         '<td><input type="checkbox" class="pin-check" data-id="'+t.ID+'" data-type="tenant" data-name="'+nm+'" data-phone="'+(t.Phone||'')+'" onchange="updatePinActionBar(\'tenants-action-bar\')"></td>' +
-        '<td>'+esc(nm)+'</td>' +
+        '<td>'+esc(nm)+tenantInsTag(t)+'</td>' +
         '<td><a href="tel:'+esc(t.Phone||'')+'" style="color:var(--accent);text-decoration:none">'+(t.Phone||'—')+'</a></td>' +
         '<td style="color:var(--muted)">'+(unit?esc(unit.Unit_Label):'—')+'</td>' +
         '<td style="font-size:11px;color:var(--muted)">'+(prop?esc(prop.Address):'—')+'</td>' +
@@ -6418,12 +6440,71 @@ function openEditTenantModal(id) {
     propUnits.map(function(u){ return '<option value="'+u.ID+'"'+(u.ID===_etOriginalUnitId?' selected':'')+'>'+esc(u.Unit_Label||('Unit '+u.ID))+'</option>'; }).join('') +
     (!propUnits.length ? '' : '');
   document.getElementById('et-unit-row').style.display = propUnits.length ? 'block' : (t.Unit_ID ? 'block' : 'none');
+  document.getElementById('et-ins-carrier').value=t.Renters_Ins_Carrier||''; document.getElementById('et-ins-expiry').value=t.Renters_Ins_Expiry||'';
+  document.getElementById('et-ins-ref').value=t.Renters_Ins_Policy_Ref||'';
+  etInsShowCert(!!t.Renters_Ins_Cert_File_ID);
+  document.getElementById('et-ins-block').open = !!(t.Renters_Ins_Carrier||t.Renters_Ins_Expiry||t.Renters_Ins_Cert_File_ID);
   openModal('modal-edit-tenant');
+}
+// Renters insurance (queue #136): a record only. Admin-only endpoints; nothing here texts or emails anyone.
+function etInsShowCert(has) {
+  document.getElementById('et-ins-cert-status').textContent = has ? 'Certificate on file' : 'None on file';
+  document.getElementById('et-ins-view').style.display = has ? '' : 'none';
+  document.getElementById('et-ins-remove').style.display = has ? '' : 'none';
+}
+function etInsRefreshTenant() {
+  return api('GET','/tenants').then(function(rows){ if (Array.isArray(rows)) state.tenants = rows; else throw new Error('tenant list did not load'); }).catch(function(e){ logError('Insurance certificate',e.message); toast('Saved, but the tenant list did not refresh. Reload the page.','warn'); });
+}
+function etInsPicked(input) {
+  var f = input.files && input.files[0]; var id = document.getElementById('et-id').value;
+  if (!f) return;
+  if (f.size > 10*1024*1024) { toast('That file is over 10 MB. Use a smaller photo or PDF.','error'); input.value=''; return; }
+  var btn = document.getElementById('et-ins-add'); btn.disabled = true; btn.textContent = 'Uploading...';
+  var rd = new FileReader();
+  rd.onerror = function(){ btn.disabled=false; btn.textContent='Add certificate'; logError('Insurance certificate','could not read the file'); toast('Could not read that file. Try again.','error'); };
+  rd.onload = function(){
+    var b64 = String(rd.result).split(',')[1] || '';
+    api('POST','/tenant/insurance-cert',{tenant_id:id,file_name:f.name,mime_type:f.type||'',data_base64:b64}).then(function(res){
+      btn.disabled=false; btn.textContent='Add certificate'; input.value='';
+      if (res.error) { logError('Insurance certificate',res.error); toast('Not saved: '+res.error,'error'); return; }
+      toast('Certificate saved','success'); etInsShowCert(true); return etInsRefreshTenant();
+    }).catch(function(e){ btn.disabled=false; btn.textContent='Add certificate'; logError('Insurance certificate',e.message); toast('Not saved: '+e.message,'error'); });
+  };
+  rd.readAsDataURL(f);
+}
+function etInsView() {
+  var id = document.getElementById('et-id').value;
+  window.open(WORKER + '/tenant/insurance-cert?tenant_id=' + encodeURIComponent(id) + '&t=' + encodeURIComponent(AUTH_TOKEN), '_blank');
+}
+function etInsRemove() {
+  var id = document.getElementById('et-id').value;
+  var rb=document.getElementById('et-ins-remove');
+  if (rb.getAttribute('data-armed')!=='1') { rb.setAttribute('data-armed','1'); rb.textContent='Tap again to remove (file stays in Drive)'; setTimeout(function(){ rb.removeAttribute('data-armed'); rb.textContent='Remove'; },5000); return; }
+  rb.removeAttribute('data-armed'); rb.textContent='Remove';
+  api('POST','/tenant/insurance-cert',{tenant_id:id,remove:true}).then(function(res){
+    if (res.error) { logError('Insurance certificate',res.error); toast('Not removed: '+res.error,'error'); return; }
+    toast('Certificate removed','success'); etInsShowCert(false); return etInsRefreshTenant();
+  }).catch(function(e){ logError('Insurance certificate',e.message); toast('Not removed: '+e.message,'error'); });
+}
+// Pure display helper (mirrors tenantInsuranceStatus in worker.js): 'none' | 'on_file' | 'expired'.
+function tenantInsState(t) {
+  var carrier=String((t&&t.Renters_Ins_Carrier)||'').trim(), file=String((t&&t.Renters_Ins_Cert_File_ID)||'').trim(), exp=String((t&&t.Renters_Ins_Expiry)||'').trim();
+  if (!carrier && !file && !exp) return 'none';
+  var today=new Date().toISOString().slice(0,10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(exp) && exp < today) return 'expired';
+  return 'on_file';
+}
+function tenantInsTag(t) {
+  var st=tenantInsState(t);
+  if (st==='on_file') return '<div style="color:var(--accent2);font-size:13px">Ins. on file'+(t.Renters_Ins_Expiry?' (exp. '+esc(t.Renters_Ins_Expiry)+')':'')+'</div>';
+  if (st==='expired') return '<div style="color:var(--warn);font-size:13px;font-weight:600">Ins. expired '+esc(t.Renters_Ins_Expiry)+'</div>';
+  return '';
 }
 function submitEditTenant() {
   var id=document.getElementById('et-id').value;
   var newUnitId = document.getElementById('et-unit').value;
-  var fields={First_Name:document.getElementById('et-first').value,Last_Name:document.getElementById('et-last').value,Phone:document.getElementById('et-phone').value,Email:document.getElementById('et-email').value,Active:document.getElementById('et-active').value};
+  var fields={First_Name:document.getElementById('et-first').value,Last_Name:document.getElementById('et-last').value,Phone:document.getElementById('et-phone').value,Email:document.getElementById('et-email').value,Active:document.getElementById('et-active').value,
+    Renters_Ins_Carrier:document.getElementById('et-ins-carrier').value,Renters_Ins_Expiry:document.getElementById('et-ins-expiry').value,Renters_Ins_Policy_Ref:document.getElementById('et-ins-ref').value};
   var unitChanged = newUnitId !== _etOriginalUnitId;
   if (unitChanged) {
     var newUnit = safeArray(state.units).find(function(u){ return u.ID===newUnitId; });
