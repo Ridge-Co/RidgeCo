@@ -632,6 +632,7 @@ const _hubWorkerCore = {
         if (path === '/keys-by-unit')           return await keysByUnit(env, url);
         if (path === '/attachments')            return await getAttachments(env, url, callerRole, callerSessionId);
         if (path === '/vendor-file/view')       return await viewInternalFile(env, url, callerRole, callerSessionId);
+        if (path === '/tenant/insurance-cert')  return await tenantInsuranceCertView(env, url, callerRole);   // queue #136, ADMIN-ONLY
         if (path === '/owner-file/view')        return await viewOwnerReceiptFile(env, url, callerRole, callerSessionId);
         if (path === '/selftest/vendor-file-view') return await selfTestVendorFileView(env, url);
         if (path === '/wo-audit')               return await getWOAudit(env, url, callerRole);
