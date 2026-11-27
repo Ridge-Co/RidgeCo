@@ -28923,7 +28923,7 @@ async function woSharedLogAttachment(env, body){
   return await logAttachment(env, {
     wo_id: auth.wo, file_id: body.file_id, file_url: body.file_url,
     file_name: body.file_name, file_type: allowed.includes(ft) ? ft : 'other',
-    mime_type: body.mime_type, wo_folder_id: body.wo_folder_id, wo_folder_url: body.wo_folder_url,
+    mime_type: body.mime_type, wo_folder_id: body.wo_folder_id, wo_folder_url: body.wo_folder_url, drive_name: body.drive_name,
   });
 }
 
