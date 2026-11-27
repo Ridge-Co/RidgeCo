@@ -16942,7 +16942,7 @@ async function createUploadSession(env, body) {
       if(!billsWOFolder?.id) return json({error:'Cannot create WO bills folder'},500);
       const sessionResp=await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,webViewLink',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','X-Upload-Content-Type':mimeType,'Origin':body.origin||'https://ridge-co.github.io'},body:JSON.stringify({name:driveName,parents:[billsWOFolder.id]})});
       const uploadUrl=sessionResp.headers.get('Location'); if(!uploadUrl){const errBody=await sessionResp.text();return json({error:'Drive did not return upload URL',status:sessionResp.status,detail:errBody},500);}
-      return json({success:true,upload_url:uploadUrl,wo_folder_id:billsWOFolder.id,wo_folder_url:billsWOFolder.webViewLink||'',file_name:fileName});
+      return json({success:true,upload_url:uploadUrl,wo_folder_id:billsWOFolder.id,wo_folder_url:billsWOFolder.webViewLink||'',file_name:fileName,drive_name:driveName});
     }
 
     // All other file types go into the customer-facing WO folder with subfolders
