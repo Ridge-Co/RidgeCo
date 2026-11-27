@@ -1754,6 +1754,25 @@ window.addEventListener('pageshow', function(e){
       <div class="form-group full" id="et-unit-row"><label>Unit <span style="font-weight:normal;color:var(--muted)">— reassign within this property; moving to a different property isn't supported here yet</span></label><select id="et-unit"><option value="">Whole property / no unit</option></select></div>
       <div class="form-group full"><label>Status</label><select id="et-active"><option value="TRUE">Active</option><option value="FALSE">Inactive / Moved Out</option></select></div>
     </div>
+    <details id="et-ins-block" style="margin:8px 0 12px">
+      <summary style="cursor:pointer;font-weight:600;min-height:44px;display:flex;align-items:center">Renters insurance (optional)</summary>
+      <div style="color:var(--muted);font-size:13px;margin:4px 0 8px">A record only. Nothing is required and nothing is sent to the tenant. Only you can see this.</div>
+      <div class="form-grid">
+        <div class="form-group"><label for="et-ins-carrier">Carrier</label><input type="text" id="et-ins-carrier" maxlength="120" style="font-size:16px"></div>
+        <div class="form-group"><label for="et-ins-expiry">Expires</label><input type="date" id="et-ins-expiry" style="font-size:16px"></div>
+        <div class="form-group full"><label for="et-ins-ref">Policy reference (optional)</label><input type="text" id="et-ins-ref" maxlength="80" style="font-size:16px"></div>
+        <div class="form-group full">
+          <label>Certificate</label>
+          <div id="et-ins-cert-status" style="color:var(--muted);font-size:13px;margin-bottom:6px">None on file</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" class="btn small secondary" id="et-ins-add" onclick="document.getElementById('et-ins-file').click()">Add certificate</button>
+            <button type="button" class="btn small secondary" id="et-ins-view" onclick="etInsView()" style="display:none">View certificate</button>
+            <button type="button" class="btn small secondary" id="et-ins-remove" onclick="etInsRemove()" style="display:none">Remove</button>
+          </div>
+          <input type="file" id="et-ins-file" accept="image/*,application/pdf" style="display:none" onchange="etInsPicked(this)">
+        </div>
+      </div>
+    </details>
     <div class="modal-actions"><button class="btn secondary" onclick="closeModal('modal-edit-tenant')">Cancel</button><button class="btn" onclick="submitEditTenant()">Save Changes</button></div>
   </div>
 </div>
