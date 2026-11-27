@@ -6437,7 +6437,65 @@ function openEditTenantModal(id) {
     propUnits.map(function(u){ return '<option value="'+u.ID+'"'+(u.ID===_etOriginalUnitId?' selected':'')+'>'+esc(u.Unit_Label||('Unit '+u.ID))+'</option>'; }).join('') +
     (!propUnits.length ? '' : '');
   document.getElementById('et-unit-row').style.display = propUnits.length ? 'block' : (t.Unit_ID ? 'block' : 'none');
+  document.getElementById('et-ins-carrier').value=t.Renters_Ins_Carrier||''; document.getElementById('et-ins-expiry').value=t.Renters_Ins_Expiry||'';
+  document.getElementById('et-ins-ref').value=t.Renters_Ins_Policy_Ref||'';
+  etInsShowCert(!!t.Renters_Ins_Cert_File_ID);
+  document.getElementById('et-ins-block').open = !!(t.Renters_Ins_Carrier||t.Renters_Ins_Expiry||t.Renters_Ins_Cert_File_ID);
   openModal('modal-edit-tenant');
+}
+// Renters insurance (queue #136): a record only. Admin-only endpoints; nothing here texts or emails anyone.
+function etInsShowCert(has) {
+  document.getElementById('et-ins-cert-status').textContent = has ? 'Certificate on file' : 'None on file';
+  document.getElementById('et-ins-view').style.display = has ? '' : 'none';
+  document.getElementById('et-ins-remove').style.display = has ? '' : 'none';
+}
+function etInsRefreshTenant() {
+  return api('GET','/tenants').then(function(rows){ if (Array.isArray(rows)) state.tenants = rows; else throw new Error('tenant list did not load'); }).catch(function(e){ logError('Insurance certificate',e.message); toast('Saved, but the tenant list did not refresh. Reload the page.','warn'); });
+}
+function etInsPicked(input) {
+  var f = input.files && input.files[0]; var id = document.getElementById('et-id').value;
+  if (!f) return;
+  if (f.size > 10*1024*1024) { toast('That file is over 10 MB. Use a smaller photo or PDF.','error'); input.value=''; return; }
+  var btn = document.getElementById('et-ins-add'); btn.disabled = true; btn.textContent = 'Uploading...';
+  var rd = new FileReader();
+  rd.onerror = function(){ btn.disabled=false; btn.textContent='Add certificate'; logError('Insurance certificate','could not read the file'); toast('Could not read that file. Try again.','error'); };
+  rd.onload = function(){
+    var b64 = String(rd.result).split(',')[1] || '';
+    api('POST','/tenant/insurance-cert',{tenant_id:id,file_name:f.name,mime_type:f.type||'',data_base64:b64}).then(function(res){
+      btn.disabled=false; btn.textContent='Add certificate'; input.value='';
+      if (res.error) { logError('Insurance certificate',res.error); toast('Not saved: '+res.error,'error'); return; }
+      toast('Certificate saved','success'); etInsShowCert(true); return etInsRefreshTenant();
+    }).catch(function(e){ btn.disabled=false; btn.textContent='Add certificate'; logError('Insurance certificate',e.message); toast('Not saved: '+e.message,'error'); });
+  };
+  rd.readAsDataURL(f);
+}
+function etInsView() {
+  var id = document.getElementById('et-id').value;
+  window.open(WORKER + '/tenant/insurance-cert?tenant_id=' + encodeURIComponent(id) + '&t=' + encodeURIComponent(AUTH_TOKEN), '_blank');
+}
+function etInsRemove() {
+  var id = document.getElementById('et-id').value;
+  var rb=document.getElementById('et-ins-remove');
+  if (rb.getAttribute('data-armed')!=='1') { rb.setAttribute('data-armed','1'); rb.textContent='Tap again to remove (file stays in Drive)'; setTimeout(function(){ rb.removeAttribute('data-armed'); rb.textContent='Remove'; },5000); return; }
+  rb.removeAttribute('data-armed'); rb.textContent='Remove';
+  api('POST','/tenant/insurance-cert',{tenant_id:id,remove:true}).then(function(res){
+    if (res.error) { logError('Insurance certificate',res.error); toast('Not removed: '+res.error,'error'); return; }
+    toast('Certificate removed','success'); etInsShowCert(false); return etInsRefreshTenant();
+  }).catch(function(e){ logError('Insurance certificate',e.message); toast('Not removed: '+e.message,'error'); });
+}
+// Pure display helper (mirrors tenantInsuranceStatus in worker.js): 'none' | 'on_file' | 'expired'.
+function tenantInsState(t) {
+  var carrier=String((t&&t.Renters_Ins_Carrier)||'').trim(), file=String((t&&t.Renters_Ins_Cert_File_ID)||'').trim(), exp=String((t&&t.Renters_Ins_Expiry)||'').trim();
+  if (!carrier && !file && !exp) return 'none';
+  var today=new Date().toISOString().slice(0,10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(exp) && exp < today) return 'expired';
+  return 'on_file';
+}
+function tenantInsTag(t) {
+  var st=tenantInsState(t);
+  if (st==='on_file') return '<div style="color:var(--accent2);font-size:13px">Ins. on file'+(t.Renters_Ins_Expiry?' (exp. '+esc(t.Renters_Ins_Expiry)+')':'')+'</div>';
+  if (st==='expired') return '<div style="color:var(--warn);font-size:13px;font-weight:600">Ins. expired '+esc(t.Renters_Ins_Expiry)+'</div>';
+  return '';
 }
 function submitEditTenant() {
   var id=document.getElementById('et-id').value;
