@@ -645,7 +645,7 @@ function shareUpload(file,fileType){
         .then(function(r){return r.json();})
         .then(function(fd){
           if(!fd||!fd.id) throw new Error('upload');
-          return post('/wo/shared/log-attachment',{st:VIEW,wo:WO,file_id:fd.id,file_url:fd.webViewLink||'',file_name:file.name,file_type:fileType,mime_type:file.type||'',wo_folder_id:res.wo_folder_id,wo_folder_url:res.wo_folder_url})
+          return post('/wo/shared/log-attachment',{st:VIEW,wo:WO,file_id:fd.id,file_url:fd.webViewLink||'',file_name:file.name,file_type:fileType,mime_type:file.type||'',wo_folder_id:res.wo_folder_id,wo_folder_url:res.wo_folder_url,drive_name:res.drive_name||''})
             .then(function(){ return {id:fd.id,url:fd.webViewLink||''}; });
         });
     });
