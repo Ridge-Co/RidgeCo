@@ -29776,7 +29776,7 @@ async function fixUploadSession(env, body) {
   const [wos, props] = await Promise.all([fetchTab(env, 'Work_Orders'), fetchTab(env, 'Properties')]);
   const wo = findWO(wos, fuS(row.WO_ID)); if (!wo) return json({ ok: false, error: 'Work order not found' }, 404);
   const prop = props.find(p => String(p.ID) === fuS(wo.Property_ID)) || {};
-  return await createUploadSession(env, { wo_id: fuS(row.WO_ID), property: prop.Address || 'Unknown Property', file_name: 'FixCheck-' + row.ID + '-' + fuClip(body.file_name, 80).replace(/[^\w.\- ]/g, '_'), mime_type: mime, file_type: 'photo', origin: body.origin });
+  return await createUploadSession(env, { wo_id: fuS(row.WO_ID), property: prop.Address || 'Unknown Property', keep_name: true, file_name: 'FixCheck-' + row.ID + '-' + fuClip(body.file_name, 80).replace(/[^\w.\- ]/g, '_'), mime_type: mime, file_type: 'photo', origin: body.origin });
 }
 async function fixLogAttachment(env, body) {
   body = body || {};
