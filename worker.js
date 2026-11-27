@@ -16925,7 +16925,13 @@ async function createUploadSession(env, body) {
   const fileType=(body.file_type||'other').toLowerCase(); // before | after | receipt | invoice | report | other
   try {
     const token=await getAccessToken(env), propsRoot=env.DRIVE_PROPERTIES_ROOT; if(!propsRoot) return json({error:'DRIVE_PROPERTIES_ROOT not configured'},500);
-    const propFolder=await findOrCreateFolder(token,propAddr,propsRoot,propsRoot); if(!propFolder?.id) return json({error:'Cannot create property folder',addr:propAddr},500);
+    // Queue #115: the property folder comes from the id stored on the property (see drivePropertyFolder); a later file of the same
+    // batch that already carries the WO folder id (body.folder_id) does not need the property folder at all.
+    const needsPropFolder = fileType==='invoice' || fileType==='bill' || !body.folder_id;
+    const propFolder = needsPropFolder ? await drivePropertyFolder(env,token,propsRoot,{woId,propertyId:body.property_id,fallbackAddr:propAddr}) : null;
+    if(needsPropFolder && !propFolder?.id) return json({error:'Cannot create property folder',addr:propAddr},500);
+    // Standard Drive file name for new uploads. The ORIGINAL name still goes back as file_name (what each page lists and logs).
+    const driveName = body.keep_name ? fileName : driveStdFileName({woId,fileType,originalName:fileName,mimeType});
 
     // Vendor invoices/bills go to a separate internal folder — never inside the customer WO folder
     if (fileType === 'invoice' || fileType === 'bill') {
