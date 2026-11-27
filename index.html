@@ -4817,7 +4817,16 @@ function pdSettingsHtml(){
   });
   groups.forEach(function(g){ h+='<div class="pd-sec"><div class="pd-sec-t">'+esc(g.name)+'</div>'+g.items.map(pdToggleRow).join('')+'</div>'; });
   h+=pdCustomerHtml();
+  h+=pdDriveFolderHtml();
   return h;
+}
+// Queue #115: one folder per property. The id is stored on Properties.Drive_Folder_ID by the first upload; the button opens it.
+function pdDriveFolderHtml(){
+  var p=pdProp(PD.id)||{}, url=String(p.Drive_Folder_URL||'');
+  var body=/^https:\/\/drive\.google\.com\//.test(url)
+    ? '<a class="btn secondary pd-btn" href="'+esc(url)+'" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;min-height:44px">Open Drive folder</a>'
+    : '<div class="pd-help">No Drive folder yet. One is made on the first photo upload.</div>';
+  return '<div class="pd-sec"><div class="pd-sec-t">Drive folder</div>'+body+'</div>';
 }
 function pdToggleRow(t){
   var missing=safeArray(PD.data.missing_columns).indexOf(t.col)>=0 && t.key!=='active';
