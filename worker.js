@@ -16974,7 +16974,10 @@ async function logAttachment(env, body) {
     // below is a FIXED object, so the column must exist first and the value must be named here.
     const _addonItem = (body.addon_item === undefined || body.addon_item === null) ? '' : String(body.addon_item).trim();
     if (_addonItem !== '') { try { await ensureColumns(env, 'Attachments', ['Addon_Item']); } catch(_){} } // silent-ok: ensureColumns reports its own failure to the ledger
-    await addRow(env,'Attachments',{WO_ID:body.wo_id||'',File_Name:body.file_name||'',File_Type:body.file_type||'photo',Drive_File_ID:body.file_id||'',Drive_URL:body.file_url||'',Mime_Type:body.mime_type||'',Created_Date:new Date().toISOString().split('T')[0],Active:'TRUE',Addon_Item:_addonItem});
+    // Queue #115: the standard Drive name the upload session chose, kept beside the original File_Name (which lists and search still use).
+    let _driveName = String(body.drive_name||'').trim().slice(0,200);
+    if (_driveName) { try { await ensureColumns(env, 'Attachments', ['Drive_Name']); } catch(e) { _driveName = ''; await softFail(env, 'logAttachment:driveNameColumn', e, { severity: 'P2', ref: String(body.wo_id||''), source: 'write', context: 'the attachment was logged without its Drive file name' }); } }
+    await addRow(env,'Attachments',Object.assign({WO_ID:body.wo_id||'',File_Name:body.file_name||'',File_Type:body.file_type||'photo',Drive_File_ID:body.file_id||'',Drive_URL:body.file_url||'',Mime_Type:body.mime_type||'',Created_Date:new Date().toISOString().split('T')[0],Active:'TRUE',Addon_Item:_addonItem}, _driveName ? {Drive_Name:_driveName} : {}));
     // Share the just-uploaded job media anyone-with-link so it opens in the portal without a Google
     // login. This is the resumable-upload path the vendor portal uses (createUploadSession → PUT → here).
     const ft=(body.file_type||'').toLowerCase();
