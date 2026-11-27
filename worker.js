@@ -9237,6 +9237,62 @@ async function tenantAddGuarded(env, body) {
   if (String(body.Move_Out_Date || '').trim()) body.Move_Out_Date = rosterNormDate(body.Move_Out_Date);
   return await addRow(env, 'Tenants', body);
 }
+// ── Renters-insurance record (queue #136, Nov 26 2026) ───────────────────────
+// A keeper only: carrier, expiry, optional policy ref and a certificate file on each tenant. NO requirement, NO reminders,
+// nothing is texted or emailed. Admin-only: /tenant/update, /tenant/insurance-cert and the viewer are in no ROLE_SCOPES list
+// and not in PUBLIC_PATHS, and enrichWO / tenantSessionFields / ownerRosterList copy named fields, so these columns never reach a
+// vendor, tenant or owner. Config keys Renters_Ins_Required and Renters_Ins_Reminders_Enabled are RESERVED and read by nothing.
+const TENANT_INSURANCE_COLS = ['Renters_Ins_Carrier', 'Renters_Ins_Expiry', 'Renters_Ins_Policy_Ref', 'Renters_Ins_Cert_File_ID', 'Renters_Ins_Updated_At', 'Renters_Ins_Updated_By'];
+const TENANT_INSURANCE_EDITABLE = ['Renters_Ins_Carrier', 'Renters_Ins_Expiry', 'Renters_Ins_Policy_Ref'];   // the rest are stamped by the server
+const TENANT_INSURANCE_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif', 'application/pdf'];
+const TENANT_INSURANCE_MAX_BYTES = 10 * 1024 * 1024;
+// Pure. 'none' (nothing on file: no tag), 'on_file' (a carrier or certificate, expiry blank or in the future), 'expired' (expiry before today).
+function tenantInsuranceStatus(t, todayIso) {
+  t = t || {};
+  const carrier = String(t.Renters_Ins_Carrier || '').trim(), file = String(t.Renters_Ins_Cert_File_ID || '').trim(), exp = String(t.Renters_Ins_Expiry || '').trim();
+  if (!carrier && !file && !exp) return { state: 'none', expiry: '' };
+  if (/^\d{4}-\d{2}-\d{2}$/.test(exp) && exp < String(todayIso || '')) return { state: 'expired', expiry: exp };
+  return { state: 'on_file', expiry: exp };
+}
+// Pure. Returns { fields, error }. Only the three editable fields pass; the server-stamped ones are refused from a caller.
+function tenantInsurancePlan(input, actor, nowIso) {
+  const f = {}; const inp = input || {};
+  for (const k of Object.keys(inp)) {
+    if (!k.startsWith('Renters_Ins_')) continue;
+    if (!TENANT_INSURANCE_EDITABLE.includes(k)) return { error: k + ' is set by the server and cannot be edited directly.' };
+  }
+  if (Object.prototype.hasOwnProperty.call(inp, 'Renters_Ins_Carrier')) {
+    const c = String(inp.Renters_Ins_Carrier == null ? '' : inp.Renters_Ins_Carrier).trim();
+    if (c.length > 120) return { error: 'Carrier name is too long (120 characters max).' };
+    f.Renters_Ins_Carrier = c;
+  }
+  if (Object.prototype.hasOwnProperty.call(inp, 'Renters_Ins_Policy_Ref')) {
+    const r = String(inp.Renters_Ins_Policy_Ref == null ? '' : inp.Renters_Ins_Policy_Ref).trim();
+    if (r.length > 80) return { error: 'Policy reference is too long (80 characters max).' };
+    f.Renters_Ins_Policy_Ref = r;
+  }
+  if (Object.prototype.hasOwnProperty.call(inp, 'Renters_Ins_Expiry')) {
+    const e = String(inp.Renters_Ins_Expiry == null ? '' : inp.Renters_Ins_Expiry).trim();
+    if (e) {
+      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(e); const d = m && new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+      if (!m || d.getUTCFullYear() !== +m[1] || d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) return { error: 'Insurance expiry "' + e + '" is not a real date (use YYYY-MM-DD).' };
+    }
+    f.Renters_Ins_Expiry = e;
+  }
+  if (Object.keys(f).length) { f.Renters_Ins_Updated_At = nowIso; f.Renters_Ins_Updated_By = actor || 'admin'; }
+  return { fields: f };
+}
+// Pure. One line for the change history. Never carries the policy reference itself.
+function tenantInsuranceChangeNote(tenantId, before, after) {
+  const bits = [];
+  for (const k of ['Renters_Ins_Carrier', 'Renters_Ins_Expiry']) if (Object.prototype.hasOwnProperty.call(after, k) && String(before[k] || '') !== String(after[k] || '')) bits.push(k.replace('Renters_Ins_', '') + ': "' + String(before[k] || '') + '" -> "' + String(after[k] || '') + '"');
+  if (Object.prototype.hasOwnProperty.call(after, 'Renters_Ins_Policy_Ref') && String(before.Renters_Ins_Policy_Ref || '') !== String(after.Renters_Ins_Policy_Ref || '')) bits.push('policy ref changed');
+  if (Object.prototype.hasOwnProperty.call(after, 'Renters_Ins_Cert_File_ID') && String(before.Renters_Ins_Cert_File_ID || '') !== String(after.Renters_Ins_Cert_File_ID || '')) bits.push(after.Renters_Ins_Cert_File_ID ? 'certificate added' : 'certificate removed');
+  return ('tenant=' + tenantId + ' ' + bits.join('; ')).slice(0, 480);
+}
+async function tenantInsuranceLog(env, tenantId, before, after, ok, extra) {
+  await logTelemetry(env, { Source: 'worker', Job_Type: 'tenant_insurance_change', Skill_Or_Endpoint: '/tenant/update', Success: ok ? 'TRUE' : 'FALSE', Notes: (tenantInsuranceChangeNote(tenantId, before, after) + (extra ? ' ' + extra : '')).slice(0, 480) });
+}
 // /tenant/update must not be a back door: it can change a date but never blank the move-in of a tenant.
 async function tenantUpdateGuarded(env, body) {
   const f = body && body.fields;
