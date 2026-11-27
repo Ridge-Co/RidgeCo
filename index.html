@@ -6500,7 +6500,8 @@ function tenantInsTag(t) {
 function submitEditTenant() {
   var id=document.getElementById('et-id').value;
   var newUnitId = document.getElementById('et-unit').value;
-  var fields={First_Name:document.getElementById('et-first').value,Last_Name:document.getElementById('et-last').value,Phone:document.getElementById('et-phone').value,Email:document.getElementById('et-email').value,Active:document.getElementById('et-active').value};
+  var fields={First_Name:document.getElementById('et-first').value,Last_Name:document.getElementById('et-last').value,Phone:document.getElementById('et-phone').value,Email:document.getElementById('et-email').value,Active:document.getElementById('et-active').value,
+    Renters_Ins_Carrier:document.getElementById('et-ins-carrier').value,Renters_Ins_Expiry:document.getElementById('et-ins-expiry').value,Renters_Ins_Policy_Ref:document.getElementById('et-ins-ref').value};
   var unitChanged = newUnitId !== _etOriginalUnitId;
   if (unitChanged) {
     var newUnit = safeArray(state.units).find(function(u){ return u.ID===newUnitId; });
