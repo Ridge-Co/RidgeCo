@@ -5890,7 +5890,7 @@ function renderTenantsPage() {
       else if (t.SMS_Consent === 'attested' && t.Welcome_Sent !== 'TRUE') welcomeBadge += '<div style="color:var(--info);font-size:10px;font-weight:700" title="The owner ticked that these tenants agreed to maintenance texts. No welcome has gone out yet.">✓ owner says agreed · no welcome yet</div>';
       return '<tr>' +
         '<td><input type="checkbox" class="pin-check" data-id="'+t.ID+'" data-type="tenant" data-name="'+nm+'" data-phone="'+(t.Phone||'')+'" onchange="updatePinActionBar(\'tenants-action-bar\')"></td>' +
-        '<td>'+esc(nm)+'</td>' +
+        '<td>'+esc(nm)+tenantInsTag(t)+'</td>' +
         '<td><a href="tel:'+esc(t.Phone||'')+'" style="color:var(--accent);text-decoration:none">'+(t.Phone||'—')+'</a></td>' +
         '<td style="color:var(--muted)">'+(unit?esc(unit.Unit_Label):'—')+'</td>' +
         '<td style="font-size:11px;color:var(--muted)">'+(prop?esc(prop.Address):'—')+'</td>' +
