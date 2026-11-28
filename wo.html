@@ -473,7 +473,7 @@ function renderDoc(){
   var dt = wo.Scheduled_Date || (wo.Created_Date||'').split('T')[0] || '';
   document.getElementById('d-date').textContent = dt;
   var sb=document.getElementById('d-status');
-  sb.textContent=t(wo.Status||'—'); sb.style.background=(STATUS_COLORS[wo.Status]||'#6b7280'); sb.style.color='#fff';
+  sb.textContent=t(wo.Status||'—'); sb.style.background=WOStatus.color(wo.Status); sb.style.color='#fff';
   var pr=document.getElementById('d-prio');
   if(wo.Priority){ pr.textContent='• '+t(wo.Priority); pr.style.color=(PRIO_COLORS[wo.Priority]||'#6b7280'); } else pr.textContent='';
   document.getElementById('d-actas').textContent = DATA.vendor_name ? (t('Prepared for')||'Prepared for')+' '+DATA.vendor_name : '';
