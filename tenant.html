@@ -300,7 +300,7 @@ var activeNoteWOId = null;
 var OPEN_STATUSES = WOStatus.sets.TENANT_OPEN;
 // Sep 17 2026 (Brett): tenants don't need or want billing-lifecycle stages exposed — Completed
 // is the last stage a tenant should ever see. STATUS_TIMELINE stops there (kept only for the
-// STATUS_LABELS lookup below; the per-WO detail view computes its own steps in buildDetail).
+// tenantStatusLabel (WOStatus.label) below; the per-WO detail view computes its own steps in buildDetail).
 // Pending Invoice/Invoiced/Paid all fold into a plain "Completed" label rather than surfacing
 // "Invoice submitted" / "Closed" / billing jargon a tenant has no reason to parse.
 var STATUS_TIMELINE = WOStatus.sets.TENANT_TIMELINE;
