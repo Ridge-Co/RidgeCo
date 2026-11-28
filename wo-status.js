@@ -76,6 +76,23 @@ function __makeWOStatus() {
   Object.freeze(sets);
 
   var known = ORDER.concat(SIDE, LEGACY, RESERVED);
+
+  // Queue #140 slice (Nov 27 2026): role-aware label, chip colour and advisory transitions. Additive: no existing
+  // group above changed and no existing call site moved to these except the tenant label and the WO-page chip colour,
+  // whose output is pinned by test/wo-status-helpers.test.mjs. Keep these as OBJECTS keyed by status, never arrays
+  // (test/wo-status-ssot.test.mjs fails on any hand-written array of 2+ status names outside this block).
+  var LABEL_TENANT = {'New': 'Request received', 'Assigned': 'Technician assigned', 'Accepted': 'Technician confirmed',
+    'In Progress': 'Work in progress', 'On Hold': 'On hold', 'Complete': 'Completed', 'Pending Invoice': 'Completed',
+    'Invoiced': 'Completed', 'Paid': 'Completed', 'Declined': 'Request declined', 'Cancelled': 'Cancelled'};
+  var COLOR = {'New': '#6b7280', 'Assigned': '#1d4ed8', 'Accepted': '#1d4ed8', 'In Progress': '#b45309',
+    'On Hold': '#b42318', 'Complete': '#1d4ed8', 'Pending Invoice': '#1d4ed8', 'Invoiced': '#1d4ed8',
+    'Paid': '#1d4ed8', 'Cancelled': '#6b7280', 'Declined': '#b42318'};
+  // ADVISORY ONLY (HUB_UX section 4): nothing enforces this, so no write path changes behaviour.
+  var NEXT = {'New': 'Estimate Requested,Assigned,Cancelled,Declined', 'Estimate Requested': 'Assigned,Cancelled,Declined',
+    'Assigned': 'Accepted,In Progress,On Hold,Cancelled,Declined', 'Accepted': 'In Progress,On Hold,Complete,Cancelled',
+    'In Progress': 'On Hold,Complete,Cancelled', 'On Hold': 'In Progress,Complete,Cancelled',
+    'Complete': 'Pending Invoice,Invoiced,Cancelled', 'Pending Invoice': 'Invoiced,Cancelled', 'Invoiced': 'Paid', 'Paid': ''};
+
   return Object.freeze({
     statuses: Object.freeze(ORDER.concat(SIDE)),
     legacy: Object.freeze(LEGACY.slice()),
