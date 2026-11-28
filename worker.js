@@ -122,6 +122,22 @@ function __makeWOStatus() {
     inSet: function (name, s) {
       if (!sets[name]) throw new Error('WOStatus: no such status group "' + name + '"');
       return sets[name].indexOf(s) >= 0;
+    },
+    // Open = field work not finished (FIELD_OPEN). 'Estimate Requested' counts as open for lists via OPEN_WORK (#175), not here.
+    isOpen: function (s) { return sets.FIELD_OPEN.indexOf(s) >= 0; },
+    isActive: function (s) { return sets.ACTIVE.indexOf(s) >= 0; },
+    isClosed: function (s) { return sets.CLOSED_TERMINAL.indexOf(s) >= 0; },
+    // Text for a role. Tenant: never billing words. Owner: Pending Invoice shows as Complete. Anyone else: unchanged.
+    // An unknown status comes back unchanged (what the old `LABELS[s] || s` did).
+    label: function (s, role) {
+      if (role === 'tenant') return LABEL_TENANT[s] || s;
+      if (role === 'owner' && s === 'Pending Invoice') return 'Complete';
+      return s;
+    },
+    color: function (s) { return COLOR[s] || '#6b7280'; },
+    canTransition: function (from, to) {
+      var n = NEXT[from];
+      return typeof n === 'string' && n !== '' && (',' + n + ',').indexOf(',' + to + ',') >= 0;
     }
   });
 }
