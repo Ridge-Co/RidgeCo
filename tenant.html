@@ -579,7 +579,7 @@ function renderWOs() {
     var pri = (wo.Priority||'normal').toLowerCase();
     var isHeld = wo.Managed_By === 'Owner';
     var sc = 'badge-' + (wo.Status||'new').toLowerCase().replace(/\s+/g,'');
-    var statusLabel = STATUS_LABELS[wo.Status] || wo.Status;
+    var statusLabel = tenantStatusLabel(wo.Status);
     var descPrev = (wo.Description||'').split('\n')[0].substring(0, 65);
     return '<div class="wo-card ' + pri + (isHeld ? ' owner-managed' : '') + '" id="tc-' + idx + '">' +
       '<div class="wo-head" onclick="toggleCard(' + idx + ')">' +
