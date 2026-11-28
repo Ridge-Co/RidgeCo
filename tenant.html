@@ -300,23 +300,11 @@ var activeNoteWOId = null;
 var OPEN_STATUSES = WOStatus.sets.TENANT_OPEN;
 // Sep 17 2026 (Brett): tenants don't need or want billing-lifecycle stages exposed — Completed
 // is the last stage a tenant should ever see. STATUS_TIMELINE stops there (kept only for the
-// STATUS_LABELS lookup below; the per-WO detail view computes its own steps in buildDetail).
+// tenantStatusLabel (WOStatus.label) below; the per-WO detail view computes its own steps in buildDetail).
 // Pending Invoice/Invoiced/Paid all fold into a plain "Completed" label rather than surfacing
 // "Invoice submitted" / "Closed" / billing jargon a tenant has no reason to parse.
 var STATUS_TIMELINE = WOStatus.sets.TENANT_TIMELINE;
-var STATUS_LABELS = {
-  'New':'Request received',
-  'Assigned':'Technician assigned',
-  'Accepted':'Technician confirmed',
-  'In Progress':'Work in progress',
-  'On Hold':'On hold',
-  'Complete':'Completed',
-  'Pending Invoice':'Completed',
-  'Invoiced':'Completed',
-  'Paid':'Completed',
-  'Declined':'Request declined',
-  'Cancelled':'Cancelled',
-};
+function tenantStatusLabel(s) { return WOStatus.label(s, 'tenant'); }
 
 function api(path, opts) {
   // Accept hub-style calls too: api('GET'|'POST', path, body). The photo code below (attachments list,
@@ -591,7 +579,7 @@ function renderWOs() {
     var pri = (wo.Priority||'normal').toLowerCase();
     var isHeld = wo.Managed_By === 'Owner';
     var sc = 'badge-' + (wo.Status||'new').toLowerCase().replace(/\s+/g,'');
-    var statusLabel = STATUS_LABELS[wo.Status] || wo.Status;
+    var statusLabel = tenantStatusLabel(wo.Status);
     var descPrev = (wo.Description||'').split('\n')[0].substring(0, 65);
     return '<div class="wo-card ' + pri + (isHeld ? ' owner-managed' : '') + '" id="tc-' + idx + '">' +
       '<div class="wo-head" onclick="toggleCard(' + idx + ')">' +
