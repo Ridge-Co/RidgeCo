@@ -304,19 +304,7 @@ var OPEN_STATUSES = WOStatus.sets.TENANT_OPEN;
 // Pending Invoice/Invoiced/Paid all fold into a plain "Completed" label rather than surfacing
 // "Invoice submitted" / "Closed" / billing jargon a tenant has no reason to parse.
 var STATUS_TIMELINE = WOStatus.sets.TENANT_TIMELINE;
-var STATUS_LABELS = {
-  'New':'Request received',
-  'Assigned':'Technician assigned',
-  'Accepted':'Technician confirmed',
-  'In Progress':'Work in progress',
-  'On Hold':'On hold',
-  'Complete':'Completed',
-  'Pending Invoice':'Completed',
-  'Invoiced':'Completed',
-  'Paid':'Completed',
-  'Declined':'Request declined',
-  'Cancelled':'Cancelled',
-};
+function tenantStatusLabel(s) { return WOStatus.label(s, 'tenant'); }
 
 function api(path, opts) {
   // Accept hub-style calls too: api('GET'|'POST', path, body). The photo code below (attachments list,
